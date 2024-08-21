@@ -158,9 +158,10 @@
                     <div class="input-group input-group-sm me-2">
                         <span class="input-group-text">日志类型</span>
                         <select class="form-select" id="serial-log-type" style="width: 120px;">
-                            <Option value="hex&ascii">全部</Option>
+                            <Option value="hex&text">Hex和Text</Option>
                             <Option value="hex">Hex</Option>
-                            <Option value="ascii">ASCII</Option>
+                            <Option value="text">Text</Option>
+                            <Option value="ansi">彩色Ansi</Option>
                         </select>
                     </div>
 
@@ -355,6 +356,7 @@ setInterval(function(){
             </div>
         </div>
     </div>
+    <script src="js/ansi_up.min.js"></script>
     <script src="js/common.js"></script>
 
 </body>

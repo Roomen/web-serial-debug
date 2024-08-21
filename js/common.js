@@ -21,7 +21,7 @@
 	//串口缓存数据
 	let serialData = []
 	//文本解码
-	let asciidecoder = new TextDecoder()
+	let textdecoder = new TextDecoder()
 	let currQuickSend = []
 	//快捷发送列表
 	let quickSendList = [
@@ -124,7 +124,7 @@
 		//显示时间 界面未开放
 		showTime: true,
 		//日志类型
-		logType: 'hex&ascii',
+		logType: 'hex&text',
 		//分包合并时间
 		timeOut: 50,
 		//末尾加回车换行
@@ -653,7 +653,7 @@
 		}
 	}
 
-	//发送ASCII到串口
+	//发送文本到串口
 	async function sendText(text) {
 		const encoder = new TextEncoder()
 		writeData(encoder.encode(text))
@@ -716,7 +716,7 @@
 			serialData = []
 		}, toolOptions.timeOut)
 	}
-
+	var ansi_up = new AnsiUp;
 	//添加日志
 	function addLog(data, isReceive = true) {
 		let classname = 'text-primary'
@@ -737,13 +737,18 @@
 			}
 			newmsg += dataHex.join(' ') + '<br/>'
 		}
-		if (toolOptions.logType.includes('ascii')) {
-			let dataAscii = asciidecoder.decode(Uint8Array.from(data))
+		if (toolOptions.logType.includes('text')) {
+			let dataText = textdecoder.decode(Uint8Array.from(data))
 			if (toolOptions.logType.includes('&')) {
-				newmsg += 'TXT:'
+				newmsg += 'TEXT:'
 			}
 			//转义HTML标签,防止内容被当作标签渲染
-			newmsg += HTMLEncode(dataAscii) + '<br/>'
+			newmsg += HTMLEncode(dataText)
+		}
+		if (toolOptions.logType.includes('ansi')) {
+			const dataText = textdecoder.decode(Uint8Array.from(data))
+			const html = ansi_up.ansi_to_html(dataText);
+			newmsg += html 
 		}
 		let time = toolOptions.showTime ? formatDate(new Date()) + '&nbsp;' : ''
 		const template = '<div><span class="' + classname + '">' + time + form + '</span><br>' + newmsg + '</div>'

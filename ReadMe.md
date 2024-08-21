@@ -16,7 +16,7 @@
 
 -   自动重连,设备插拔自动重连
 -   所有串口参数可设置更改,配置自动保存
--   串口日志支持 HEX 和 ASCII,自动滚动
+-   串口日志支持 HEX, TEXT 和 彩色ANSI,自动滚动
 -   分包合并,设定超时时间
 -   快捷发送列表,自定义分组,快捷导入导出
 -   配置文件导入导出,方便迁移
@@ -28,9 +28,9 @@
 
 调整串口参数后打开串口即可开始通讯
 
-中间区域是串口日志,可以选择 HEX 或者 ASCII 显示
+中间区域是串口日志,可以选择 HEX ,TEXT 或者 彩色ANSI 显示
 
-下方是发送区域,可以选择 HEX 或者 ASCII 发送,定时循环发送
+下方是发送区域,可以选择 HEX 或者 TEXT 发送,定时循环发送
 
 右侧可以自己添加一些常用指令,快捷发送
 
@@ -59,7 +59,7 @@ setInterval(function(){
 
 `onmessage`接收到的数据格式如下
 
-```json
+```js
 {
     "type":"uart_receive", //消息类型 String,目前仅支持 uart_receive
     "data":[0,1] //消息内容 Uint8Array
@@ -68,7 +68,7 @@ setInterval(function(){
 
 `postMessage`发送的数据格式如下
 
-```json
+```js
 {
     "type":"uart_send", 
     "data":[0,1]
