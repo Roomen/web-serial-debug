@@ -22,6 +22,10 @@ body {
 	white-space: pre-wrap;
 	word-break: break-all;
 }
+#serial-logs.ansi {
+	background-color: #000;
+	color: #fff;
+}
 #serial-options,
 #serial-tools {
 	position: relative;

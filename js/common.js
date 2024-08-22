@@ -451,6 +451,11 @@
 	})
 	document.getElementById('serial-log-type').addEventListener('change', (e) => {
 		changeOption('logType', e.target.value)
+		if (e.target.value.includes('ansi')) {
+			serialLogs.classList.add('ansi')
+		} else {
+			serialLogs.classList.remove('ansi')
+		}
 	})
 	document.getElementById('serial-auto-scroll').addEventListener('click', function (e) {
 		let autoScroll = this.innerText != '自动滚动'
@@ -716,7 +721,7 @@
 			serialData = []
 		}, toolOptions.timeOut)
 	}
-	var ansi_up = new AnsiUp;
+	var ansi_up = new AnsiUp()
 	//添加日志
 	function addLog(data, isReceive = true) {
 		let classname = 'text-primary'
@@ -747,8 +752,8 @@
 		}
 		if (toolOptions.logType.includes('ansi')) {
 			const dataText = textdecoder.decode(Uint8Array.from(data))
-			const html = ansi_up.ansi_to_html(dataText);
-			newmsg += html 
+			const html = ansi_up.ansi_to_html(dataText)
+			newmsg += html
 		}
 		let time = toolOptions.showTime ? formatDate(new Date()) + '&nbsp;' : ''
 		const template = '<div><span class="' + classname + '">' + time + form + '</span><br>' + newmsg + '</div>'
