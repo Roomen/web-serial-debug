@@ -139,6 +139,14 @@
 		sendContent: '',
 		//快捷发送选中索引
 		quickSendIndex: 0,
+		//第三方协议解析开关
+		skParseEnable: false,
+		//解密模式 auto|always|never
+		skDecryptMode: 'auto',
+		//密钥ASCII
+		skKeyAscii: '',
+		//密钥HEX(优先)
+		skKeyHex: '',
 	}
 
 	//生成快捷发送列表
@@ -362,6 +370,75 @@
 		}
 		reader.readAsText(file)
 	})
+	//第三方协议手动解析
+	document.getElementById('serial-protocol-parse').addEventListener('click', (e) => {
+		const raw = document.getElementById('serial-protocol-input').value
+		if (!raw) {
+			addLogErr('请输入HEX报文')
+			return
+		}
+		let hex = raw.replace(/0x/gi, '').replace(/[\s,;]+/g, '')
+		if (!/^[0-9A-Fa-f]*$/.test(hex) || hex.length % 2 !== 0) {
+			addLogErr('HEX格式错误:' + raw)
+			return
+		}
+		let bytes = new Uint8Array(hex.length / 2)
+		for (let i = 0; i < bytes.length; i++) {
+			bytes[i] = parseInt(hex.substr(i * 2, 2), 16)
+		}
+		try {
+			const r = skParseFrame(bytes, {
+				keyAscii: toolOptions.skKeyAscii || undefined,
+				keyHex: toolOptions.skKeyHex || undefined,
+				decryptMode: toolOptions.skDecryptMode,
+			})
+			const prompt = r.needKey ? '<div class="sk-parse-err">⚠ 加密报文,请在上方「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>' : ''
+			document.getElementById('serial-protocol-output').innerHTML = prompt + skFormatFrame(r)
+		} catch (err) {
+			document.getElementById('serial-protocol-output').innerHTML = '<div class="sk-parse-err">解析异常:' + HTMLEncode(String(err)) + '</div>'
+		}
+	})
+	//生成下发HEX
+	document.getElementById('serial-protocol-build').addEventListener('click', (e) => {
+		let tlv
+		try {
+			tlv = JSON.parse(document.getElementById('serial-protocol-down-tlv').value || '[]')
+		} catch (err) {
+			addLogErr('TLV JSON解析失败:' + err.toString())
+			return
+		}
+		let timeInput = document.getElementById('serial-protocol-down-time').value
+		let time
+		if (!timeInput) {
+			time = new Date()
+		} else {
+			time = timeInput
+		}
+		try {
+			const frame = skBuildDownFrame({
+				funcCode: document.getElementById('serial-protocol-down-func').value,
+				time: time,
+				frameSeq: parseInt(document.getElementById('serial-protocol-down-seq').value) || 1,
+				tlv: tlv,
+			})
+			let hex = []
+			for (const b of frame) {
+				hex.push(('0' + b.toString(16).toUpperCase()).slice(-2))
+			}
+			document.getElementById('serial-protocol-down-preview').value = hex.join(' ')
+		} catch (err) {
+			addLogErr('生成帧失败:' + err.toString())
+		}
+	})
+	//立即下发
+	document.getElementById('serial-protocol-send').addEventListener('click', (e) => {
+		const preview = document.getElementById('serial-protocol-down-preview').value
+		if (!preview) {
+			addLogErr('请先生成HEX再下发')
+			return
+		}
+		sendHex(preview)
+	})
 	const serialCodeContent = document.getElementById('serial-code-content')
 	const serialCodeSelect = document.getElementById('serial-code-select')
 	const code = localStorage.getItem('code')
@@ -441,6 +518,12 @@
 	document.getElementById('serial-loop-send').checked = toolOptions.loopSend
 	document.getElementById('serial-loop-send-time').value = toolOptions.loopSendTime
 	document.getElementById('serial-send-content').value = toolOptions.sendContent
+	document.getElementById('serial-protocol-enable').checked = toolOptions.skParseEnable
+	if (toolOptions.skDecryptMode) {
+		set('serial-protocol-decrypt', toolOptions.skDecryptMode)
+	}
+	document.getElementById('serial-protocol-key-ascii').value = toolOptions.skKeyAscii
+	document.getElementById('serial-protocol-key-hex').value = toolOptions.skKeyHex
 	quickSend.value = toolOptions.quickSendIndex
 	quickSend.dispatchEvent(new Event('change'))
 	resetLoopSend()
@@ -478,6 +561,18 @@
 	document.getElementById('serial-loop-send-time').addEventListener('change', function (e) {
 		changeOption('loopSendTime', parseInt(this.value))
 		resetLoopSend()
+	})
+	document.getElementById('serial-protocol-enable').addEventListener('change', function (e) {
+		changeOption('skParseEnable', this.checked)
+	})
+	document.getElementById('serial-protocol-decrypt').addEventListener('change', function (e) {
+		changeOption('skDecryptMode', this.value)
+	})
+	document.getElementById('serial-protocol-key-ascii').addEventListener('change', function (e) {
+		changeOption('skKeyAscii', this.value)
+	})
+	document.getElementById('serial-protocol-key-hex').addEventListener('change', function (e) {
+		changeOption('skKeyHex', this.value)
 	})
 
 	document.querySelectorAll('#serial-options .input-group input,#serial-options .input-group select').forEach((item) => {
@@ -677,6 +772,7 @@
 		await writer.write(data)
 		writer.releaseLock()
 		addLog(data, false)
+		addParseLog([...data], false)
 	}
 
 	//读串口数据
@@ -707,6 +803,7 @@
 				worker.postMessage({ type: 'uart_receive', data: serialData })
 			}
 			addLog(serialData, true)
+			addParseLog([...serialData], true)
 			serialData = []
 			return
 		}
@@ -718,6 +815,7 @@
 			}
 			//超时发出
 			addLog(serialData, true)
+			addParseLog([...serialData], true)
 			serialData = []
 		}, toolOptions.timeOut)
 	}
@@ -759,6 +857,33 @@
 		const template = '<div><span class="' + classname + '">' + time + form + '</span><br>' + newmsg + '</div>'
 		let tempNode = document.createElement('div')
 		tempNode.innerHTML = template
+		serialLogs.append(tempNode)
+		if (toolOptions.autoScroll) {
+			serialLogs.scrollTop = serialLogs.scrollHeight - serialLogs.clientHeight
+		}
+	}
+	//第三方协议解析日志
+	function addParseLog(data, isReceive) {
+		if (!toolOptions.skParseEnable) {
+			return
+		}
+		let html
+		try {
+			const r = skParseFrame(data, {
+				keyAscii: toolOptions.skKeyAscii || undefined,
+				keyHex: toolOptions.skKeyHex || undefined,
+				decryptMode: toolOptions.skDecryptMode,
+			})
+			const form = isReceive ? '←' : '→'
+			const dirCls = isReceive ? 'sk-parse-up' : 'sk-parse-down'
+			const time = toolOptions.showTime ? formatDate(new Date()) + '&nbsp;' : ''
+			const prompt = r.needKey ? '<div class="sk-parse-err">⚠ 加密报文,请在上方「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>' : ''
+			html = '<div class="sk-parse-block ' + dirCls + '"><span class="text-muted small">' + time + form + ' 解析</span>' + prompt + skFormatFrame(r) + '</div>'
+		} catch (err) {
+			html = '<div class="sk-parse-block sk-parse-err"><span class="text-danger small">第三方协议解析异常:' + HTMLEncode(String(err)) + '</span></div>'
+		}
+		let tempNode = document.createElement('div')
+		tempNode.innerHTML = html
 		serialLogs.append(tempNode)
 		if (toolOptions.autoScroll) {
 			serialLogs.scrollTop = serialLogs.scrollHeight - serialLogs.clientHeight
