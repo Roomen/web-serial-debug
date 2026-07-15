@@ -227,6 +227,9 @@
                             type="button" role="tab" aria-controls="nav-options" aria-selected="false">系统选项</button>
                         <button class="nav-link" id="nav-code-tab" data-bs-toggle="tab" data-bs-target="#nav-code"
                             type="button" role="tab" aria-controls="nav-code" aria-selected="false">代码脚本</button>
+                        <button class="nav-link" id="nav-protocol-tab" data-bs-toggle="tab"
+                            data-bs-target="#nav-protocol" type="button" role="tab" aria-controls="nav-protocol"
+                            aria-selected="false">第三方协议</button>
 
                     </div>
                 </nav>
@@ -311,6 +314,76 @@ setInterval(function(){
                                 运行</button>
                         </div>
                     </div>
+                <div class="tab-pane d-flex flex-column fade" id="nav-protocol" role="tabpanel"
+                        aria-labelledby="nav-protocol-tab">
+                        <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
+                            <div class="input-group input-group-sm" style="width: auto;">
+                                <span class="input-group-text">加解密</span>
+                                <select class="form-select" id="serial-protocol-decrypt">
+                                    <option value="auto">自动</option>
+                                    <option value="always">强制解密</option>
+                                    <option value="never">不解密</option>
+                                </select>
+                            </div>
+                            <div class="input-group input-group-sm" style="width: auto;">
+                                <span class="input-group-text">密钥(ASCII)</span>
+                                <input type="text" class="form-control" id="serial-protocol-key-ascii"
+                                    placeholder="留空则不解密(加密报文需输入密钥)">
+                            </div>
+                            <div class="input-group input-group-sm" style="width: auto;">
+                                <span class="input-group-text">密钥(HEX，优先)</span>
+                                <input type="text" class="form-control" id="serial-protocol-key-hex"
+                                    placeholder="如 0102030405...16字节">
+                            </div>
+                            <div class="form-check form-switch align-self-center">
+                                <input class="form-check-input" type="checkbox" id="serial-protocol-enable">
+                                <label class="form-check-label" for="serial-protocol-enable">串口实时解析</label>
+                            </div>
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label small mb-1">手动解析 HEX 报文</label>
+                            <textarea class="form-control form-control-sm" rows="4" id="serial-protocol-input"
+                                placeholder="粘贴 HEX 报文（空格/换行/0x前缀均可）"></textarea>
+                            <button class="btn btn-sm btn-outline-secondary mt-1" id="serial-protocol-parse">解析</button>
+                        </div>
+                        <div id="serial-protocol-output"
+                            class="flex-grow-1 border border-2 rounded p-2 mb-2 overflow-auto bg-white" style="min-height: 80px;">
+                        </div>
+                        <hr class="my-2">
+                        <div class="mb-2">
+                            <h6 class="mb-2">下行下发</h6>
+                            <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
+                                <div class="input-group input-group-sm" style="width: auto;">
+                                    <span class="input-group-text">功能码</span>
+                                    <select class="form-select" id="serial-protocol-down-func">
+                                        <option value="0x01">参数设置 0x01</option>
+                                        <option value="0x02">终端数据上报 0x02</option>
+                                        <option value="0x03">信息查询 0x03</option>
+                                        <option value="0x04">数据透传 0x04</option>
+                                        <option value="0x11">指令操作 0x11</option>
+                                    </select>
+                                </div>
+                                <div class="input-group input-group-sm" style="width: auto;">
+                                    <span class="input-group-text">时间</span>
+                                    <input type="text" class="form-control" id="serial-protocol-down-time"
+                                        placeholder="留空=当前时间，BCD YYYYMMDDhhmmss">
+                                </div>
+                                <div class="input-group input-group-sm" style="width: auto;">
+                                    <span class="input-group-text">帧序号</span>
+                                    <input type="number" class="form-control" id="serial-protocol-down-seq" value="1"
+                                        min="1" max="65535" style="width: 90px;">
+                                </div>
+                            </div>
+                            <textarea class="form-control form-control-sm" rows="4" id="serial-protocol-down-tlv"
+                                placeholder='TLV JSON，例如：[{"tag":10,"items":[{"id":1,"value":[]}]}]，value 可为空数组(查询) 或 十六进制字符串 或 字节数组'></textarea>
+                            <div class="d-flex gap-2 mt-1">
+                                <button class="btn btn-sm btn-outline-secondary" id="serial-protocol-build">生成HEX</button>
+                                <button class="btn btn-sm btn-primary flex-grow-1" id="serial-protocol-send">立即下发</button>
+                            </div>
+                            <textarea class="form-control form-control-sm mt-1" rows="3" id="serial-protocol-down-preview"
+                                readonly placeholder="待发送的完整 HEX（空格分隔）"></textarea>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -357,6 +430,9 @@ setInterval(function(){
         </div>
     </div>
     <script src="js/ansi_up.min.js"></script>
+    <script src="js/protocol-schema.js"></script>
+    <script src="js/protocol-crypto.js"></script>
+    <script src="js/protocol.js"></script>
     <script src="js/common.js"></script>
 
 </body>

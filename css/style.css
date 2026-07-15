@@ -51,7 +51,17 @@ body {
 	height: 100%;
 }
 #nav-tabContent {
+	display: flex;
+	flex-direction: column;
 	overflow: hidden;
+}
+#nav-protocol {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: auto;
+}
+#serial-protocol-output {
+	flex: 0 0 auto;
 }
 #serial-tools .collapse.show,
 #nav-quick-send.show {
@@ -68,4 +78,94 @@ body {
 .CodeMirror-readonly {
 	background-color: var(--bs-light-rgb);
 	cursor: not-allowed;
+}
+
+.sk-parse-block {
+	border-left: 3px solid #adb5bd;
+	padding: 4px 8px;
+	margin: 2px 0 4px 8px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 0.75rem;
+	background-color: #f8f9fa;
+	border-radius: 0 4px 4px 0;
+}
+.sk-parse-block.sk-parse-up {
+	border-left-color: #198754;
+}
+.sk-parse-block.sk-parse-down {
+	border-left-color: #0d6efd;
+}
+.sk-parse-block.sk-parse-err {
+	border-left-color: #dc3545;
+	background-color: #fff5f5;
+	color: #b02a37;
+}
+.sk-parse {
+	margin-top: 4px;
+}
+.sk-parse-head,
+.sk-parse-arrow,
+.sk-parse-ok,
+.sk-parse-bad,
+.sk-parse-tagname {
+	font-size: 0.75rem;
+	white-space: nowrap;
+}
+.sk-parse-ok {
+	color: #198754;
+}
+.sk-parse-bad {
+	color: #dc3545;
+}
+.sk-parse-dl {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 1px 8px;
+	margin: 4px 0;
+}
+.sk-parse-dl dt {
+	font-weight: 600;
+	color: #495057;
+}
+.sk-parse-dl dd {
+	margin: 0;
+	word-break: break-all;
+}
+.sk-parse-tlvs {
+	margin-top: 4px;
+}
+.sk-parse-tag {
+	border-top: 1px dashed #dee2e6;
+	padding-top: 2px;
+	margin-top: 2px;
+}
+.sk-parse-items {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.7rem;
+}
+.sk-parse-items td {
+	border: 1px solid #e9ecef;
+	padding: 1px 4px;
+	vertical-align: top;
+}
+.sk-parse-items code {
+	color: #0d6efd;
+	word-break: break-all;
+}
+.sk-parse-errors {
+	color: #dc3545;
+	margin-top: 2px;
+}
+.sk-parse-err {
+	color: #dc3545;
+	background-color: #fff5f5;
+	border-left: 3px solid #dc3545;
+	padding: 4px 8px;
+	margin: 2px 0;
+	border-radius: 0 4px 4px 0;
+	font-size: 0.8rem;
+}
+.tab-content .tab-pane:not(.active) {
+	display: none !important;
 }
