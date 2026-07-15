@@ -354,6 +354,12 @@ setInterval(function(){
                             <h6 class="mb-2">下行下发</h6>
                             <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
                                 <div class="input-group input-group-sm" style="width: auto;">
+                                    <span class="input-group-text">常用指令</span>
+                                    <select class="form-select" id="serial-protocol-down-preset" style="max-width: 220px;">
+                                        <option value="">— 选择常用指令 —</option>
+                                    </select>
+                                </div>
+                                <div class="input-group input-group-sm" style="width: auto;">
                                     <span class="input-group-text">功能码</span>
                                     <select class="form-select" id="serial-protocol-down-func">
                                         <option value="0x01">参数设置 0x01</option>
@@ -363,6 +369,15 @@ setInterval(function(){
                                         <option value="0x11">指令操作 0x11</option>
                                     </select>
                                 </div>
+                                <div class="input-group input-group-sm" style="width: auto;">
+                                    <span class="input-group-text">协议版本</span>
+                                    <select class="form-select" id="serial-protocol-down-ver">
+                                        <option value="1">旧版本 0x01</option>
+                                        <option value="2">当前版本 0x02</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
                                 <div class="input-group input-group-sm" style="width: auto;">
                                     <span class="input-group-text">时间</span>
                                     <input type="text" class="form-control" id="serial-protocol-down-time"
@@ -433,6 +448,7 @@ setInterval(function(){
     <script src="js/protocol-schema.js"></script>
     <script src="js/protocol-crypto.js"></script>
     <script src="js/protocol.js"></script>
+    <script src="js/protocol-presets.js"></script>
     <script src="js/common.js"></script>
 
 </body>
