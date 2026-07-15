@@ -417,6 +417,7 @@
 		try {
 			const frame = skBuildDownFrame({
 				funcCode: document.getElementById('serial-protocol-down-func').value,
+				version: parseInt(document.getElementById('serial-protocol-down-ver').value) || 1,
 				time: time,
 				frameSeq: parseInt(document.getElementById('serial-protocol-down-seq').value) || 1,
 				tlv: tlv,
@@ -439,6 +440,77 @@
 		}
 		sendHex(preview)
 	})
+
+	//常用指令(下行下发)初始化
+	const presetSel = document.getElementById('serial-protocol-down-preset')
+	if (presetSel && window.SK_DOWN_PRESETS) {
+		for (const grp of window.SK_DOWN_PRESETS) {
+			const og = document.createElement('optgroup')
+			og.label = grp.group
+			for (const it of grp.items) {
+				const op = document.createElement('option')
+				op.value = it.name
+				op.textContent = it.name
+				og.appendChild(op)
+			}
+			presetSel.appendChild(og)
+		}
+	}
+	function presetItemByName(name) {
+		if (!window.SK_DOWN_PRESETS) return null
+		for (const grp of window.SK_DOWN_PRESETS) {
+			for (const it of grp.items) {
+				if (it.name === name) return it
+			}
+		}
+		return null
+	}
+	function asciiToHexBytes(s, fillLen) {
+		let a = []
+		for (let i = 0; i < s.length; i++) a.push(s.charCodeAt(i) & 0xff)
+		if (fillLen != null) {
+			while (a.length < fillLen) a.push(0x00)
+		}
+		return a
+	}
+	function presetToTlvJson(preset) {
+		const out = []
+		for (const blk of (preset.tlv || [])) {
+			const items = []
+			for (const it of (blk.items || [])) {
+				let value
+				if (it.ascii != null) {
+					value = asciiToHexBytes(it.ascii, it.fillLen).map(b => ('0' + b.toString(16).toUpperCase()).slice(-2)).join('')
+				} else if (it.value != null) {
+					value = it.value.map(b => ('0' + (b & 0xff).toString(16).toUpperCase()).slice(-2)).join('')
+				} else {
+					value = []
+				}
+				const item = { id: it.id, value: value }
+				items.push(item)
+			}
+			out.push({ tag: blk.tag, items: items })
+		}
+		return JSON.stringify(out, null, 0)
+	}
+	if (presetSel) {
+		presetSel.addEventListener('change', (e) => {
+			const name = e.target.value
+			if (!name) return
+			const preset = presetItemByName(name)
+			if (!preset) return
+			document.getElementById('serial-protocol-down-func').value = preset.func
+			const verSel = document.getElementById('serial-protocol-down-ver')
+			if (verSel && preset.version != null) verSel.value = String(preset.version)
+			const tlvStr = presetToTlvJson(preset)
+			document.getElementById('serial-protocol-down-tlv').value = tlvStr
+			const t = document.getElementById('serial-protocol-down-time')
+			if (t) t.value = ''
+			document.getElementById('serial-protocol-build').click()
+			const desc = preset.desc ? ('已载入「' + name + '」 ' + preset.desc) : ('已载入「' + name + '」')
+			addLog(desc, false)
+		})
+	}
 	const serialCodeContent = document.getElementById('serial-code-content')
 	const serialCodeSelect = document.getElementById('serial-code-select')
 	const code = localStorage.getItem('code')

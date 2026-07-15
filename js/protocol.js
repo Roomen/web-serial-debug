@@ -526,10 +526,12 @@
 		}
 		const tlvLen = tlvBuf.length
 
+		const ver = opt.version != null ? (opt.version & 0xff) : 0x02
+
 		const head = []
 		head.push(0xA9, 0x9A)
 		u16leWrite(head, seq & 0xffff)
-		head.push(0x02)
+		head.push(ver)
 		for (let i = 0; i < 7; i++) head.push(timeBytes[i])
 		head.push(funcCode & 0xff)
 		head.push(0x00)
