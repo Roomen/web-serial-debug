@@ -152,26 +152,203 @@
 		return hexbytes(raw)
 	}
 
+	function f32le(b) {
+		const a = new ArrayBuffer(4)
+		const u = new Uint8Array(a)
+		u.set(b.subarray(0, 4))
+		return new DataView(a).getFloat32(0, true)
+	}
+	function uNle(raw, start, len) {
+		let v = 0n
+		for (let i = 0; i < len; i++) v |= BigInt(raw[start + i]) << BigInt(8 * i)
+		return Number(v)
+	}
+	function numUnit(desc) {
+		let m = desc.match(/([\d.]+)([a-zA-Zμ℃%\/]+)/)
+		if (m) return { scale: parseFloat(m[1]), unit: m[2] }
+		const w = desc.match(/(L\/h|us\/cm|mg\/L|uA|kPa|NTU|mAH|pH|℃|L|V|秒|分钟|天|小时|次|us)/)
+		if (w) return { scale: 1, unit: w[1] }
+		return { scale: 1, unit: '' }
+	}
+	function readNum(raw, desc) {
+		if (/int32 LE signed/.test(desc)) return signed32(raw)
+		if (/int16 LE signed/.test(desc)) return signed16(raw)
+		if (/int8/.test(desc)) return signed8(raw)
+		if (raw.length === 4) return u32leRead(raw, 0)
+		if (raw.length === 2) return u16leRead(raw, 0)
+		if (raw.length === 1) return raw[0]
+		return 0
+	}
+	function fmtNum(v, unit) {
+		let s
+		if (typeof v === 'number') {
+			if (Number.isInteger(v)) s = String(v)
+			else s = String(Math.round(v * 1e6) / 1e6)
+		} else s = String(v)
+		return unit ? (s + ' ' + unit) : s
+	}
+	function parseEnumMap(desc) {
+		const map = {}
+		if (/=/.test(desc)) {
+			for (const tok of desc.split(/\s+/)) {
+				const m = tok.match(/^(\d+)=(.*)$/)
+				if (m) map[+m[1]] = m[2]
+			}
+			if (Object.keys(map).length) return map
+		}
+		const re = /(^|\s)(\d+)([关开正常异常报警使能未检测未知]?[\u4e00-\u9fff]+)/g
+		let m
+		while ((m = re.exec(desc)) !== null) map[+m[2]] = m[3]
+		return map
+	}
+	function bcdTimeOrEmpty(raw) {
+		const zero = raw.every(x => x === 0)
+		return zero ? '-----' : bcdTime(raw)
+	}
+	function renderAlarmTime(raw) {
+		const flag = raw[0]
+		return (flag ? '报警' : '不报警') + ' ' + bcdTimeOrEmpty(raw.subarray(1, 8))
+	}
+	function renderAlarmTimeVal(raw, scale, unit) {
+		const flag = raw[0]
+		const v = signed16(raw.subarray(8, 10)) * (scale || 1)
+		return (flag ? '报警' : '不报警') + ' ' + fmtNum(v, unit) + ' ' + bcdTimeOrEmpty(raw.subarray(1, 8))
+	}
+	function renderAlarmObjTime(raw) {
+		const flag = raw[0]
+		const obj = raw[1]
+		const object = (obj >> 4) & 0x0f
+		const medium = obj & 0x0f
+		const objMap = { 1: '数据', 2: '参数' }
+		const medMap = { 1: '内FLASH', 2: '内EEPROM', 3: '外EEPROM', 4: '外部FLASH' }
+		const objTxt = objMap[object] || '其他'
+		const medTxt = medMap[medium] || ('未知' + medium)
+		return (flag ? '报警' : '不报警') + ' 异常对象' + objTxt + '异常介质' + medTxt + ' ' + bcdTimeOrEmpty(raw.subarray(2, 9))
+	}
+	function renderFlowLarge(raw) {
+		const abnormal = raw[0] & 0x01
+		const v = uNle(raw, 1, 7)
+		return fmtNum(v / 1000, '吨') + ' 状态:' + (abnormal ? '异常' : '数据正常')
+	}
+	function renderUtc(raw) {
+		const sec = u32leRead(raw, 0)
+		const d = new Date(sec * 1000)
+		const p = n => String(n).padStart(2, '0')
+		const s = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds())
+		return sec + '(' + s + ')'
+	}
+	function renderBitsHint(fields, raw) {
+		let v = 0n
+		for (let i = 0; i < raw.length; i++) v |= BigInt(raw[i]) << BigInt(8 * i)
+		const parts = []
+		for (const f of fields) {
+			let val
+			if (Array.isArray(f.bits)) {
+				const hi = f.bits[0], lo = f.bits[1]
+				const mask = (1n << BigInt(hi - lo + 1)) - 1n
+				val = Number((v >> BigInt(lo)) & mask)
+			} else val = (v & (1n << BigInt(f.bits))) ? 1 : 0
+			const txt = f.map && f.map[val] != null ? f.map[val] : val
+			parts.push(f.name + ':' + txt)
+		}
+		return parts.join(' ')
+	}
+	function renderBitsFromDesc(raw, desc) {
+		let v = 0n
+		for (let i = 0; i < raw.length; i++) v |= BigInt(raw[i]) << BigInt(8 * i)
+		const map = {}
+		const re = /bit(\d+)[-~]bit(\d+)\s*([^bit]+)/g
+		let m
+		while ((m = re.exec(desc)) !== null) {
+			const hi = +m[1], lo = +m[2]
+			const mask = (1n << BigInt(hi - lo + 1)) - 1n
+			const val = Number((v >> BigInt(lo)) & mask)
+			map[hi] = m[3].trim() + '=' + val
+		}
+		const out = []
+		for (let i = 15; i >= 0; i--) if (map[i]) out.push('bit' + i + ':' + map[i])
+		return out.length ? out.join(' ') : hexbytes(raw)
+	}
 	function renderValue(def, raw) {
 		if (!raw || raw.length === 0) return ''
+		const dec = def && def.dec
 		const desc = def ? (def.desc || '') : ''
-		const unit = unitHint(def)
-		const u = unit ? (' ' + unit) : ''
+		const type = def ? (def.type || '') : ''
+		if (dec) {
+			switch (dec.t) {
+				case 'ascii': return ascii(raw)
+				case 'bcd': return bcdDecode(raw)
+				case 'time7': return bcdTime(raw)
+				case 'pct': return raw[0] + '%'
+				case 'float': { const nu = numUnit(desc); return fmtNum(f32le(raw), nu.unit) }
+				case 'num': {
+					const nu = numUnit(desc)
+					let v = readNum(raw, desc)
+					if (nu.scale !== 1) v = v * nu.scale
+					return fmtNum(v, nu.unit)
+				}
+				case 'enum': return (dec.map[raw[0]] != null) ? (raw[0] + ':' + dec.map[raw[0]]) : hexbytes(raw)
+				case 'bits': return renderBitsHint(dec.fields, raw)
+				case 'alarmTime': return renderAlarmTime(raw)
+				case 'alarmObjTime': return renderAlarmObjTime(raw)
+				case 'alarmTimeVal': { const nu = numUnit(desc); return renderAlarmTimeVal(raw, nu.scale, nu.unit) }
+				case 'flowLarge': return renderFlowLarge(raw)
+				case 'utc': return renderUtc(raw)
+				case 'resetRec': return '复位类型:' + (dec.map && dec.map[raw[0]] != null ? dec.map[raw[0]] : raw[0]) + ' 最近一次复位时间戳:' + renderUtc(raw.subarray(1, 5))
+				case 'resetInfo': return '累计复位' + u16leRead(raw, 0) + ' 看门狗复位' + u16leRead(raw, 2) + ' 低电压复位' + u16leRead(raw, 4)
+				case 'storageErr': {
+					const total = raw[0]
+					const fail = raw[1]
+					const medMap = { 1: '内FLASH', 2: '内EEPROM', 3: '外EEPROM', 4: '外部FLASH' }
+					const med = medMap[raw[2]] || ('未知' + raw[2])
+					return '异常总次数' + total + ' 参数修复失败' + ((fail >> 4) & 0x0f) + ' 数据修复失败' + (fail & 0x0f) + ' 最近一次修复失败的存储介质:' + med + ' 时间' + bcdTimeOrEmpty(raw.subarray(3, 10))
+				}
+				case 'battery': return '总容量' + (u16leRead(raw, 0) * 10) + 'mAH 起始容量' + (u16leRead(raw, 2) * 10) + 'mAH'
+				case 'tempThresh': return '低温' + signed8([raw[0]]) + '℃ 高温' + signed8([raw[1]]) + '℃'
+				case 'reportTime': {
+					const p = n => String(n).padStart(2, '0')
+					return '上报时间' + p(raw[0]) + p(raw[1]) + ' 最大上报时长' + u16leRead(raw, 2) + '分'
+				}
+				case 'range': return (dec.labels ? dec.labels[0] : '起始') + ':' + raw[0] + '点 ' + (dec.labels ? dec.labels[1] : '结束') + ':' + raw[1] + '点'
+				case 'upErr': {
+					const linkMap = { 0: '其他', 1: 'AT失败', 2: '无SIM', 8: '驻网失败', 11: '接入失败', 13: '断网', 99: '上报无应答' }
+					return '最近一次上行异常发生时间:' + bcdTimeOrEmpty(raw.subarray(0, 6)) + ' 最近一次异常发生时的CSQ:' + raw[6] + ' 异常发生的环节:' + (linkMap[raw[7]] != null ? linkMap[raw[7]] : raw[7])
+				}
+			}
+		}
 		if (/YYYYMMDDhhmmss/.test(desc) || (def && def.unit === 'BCD' && raw.length === 7)) return bcdTime(raw)
+		if (desc.indexOf('ASCII') >= 0 || /^char/i.test(type)) return ascii(raw)
+		if (desc.indexOf('%') >= 0 && raw.length === 1) return raw[0] + '%'
+		const blob = desc + ' ' + (def && def.name ? def.name : '')
+		if (/^bit\d+[-~]\d+/.test(desc.trim()) || /(运营商|协议类型|注册|通信|主站|辅助|业务)\s*:/.test(desc)) return renderBitsFromDesc(raw, desc)
+		let sm
+		if ((sm = type.match(/^BYTE\[1\+7\+2\]$/))) { const nu = numUnit(desc); return renderAlarmTimeVal(raw, nu.scale, nu.unit) }
+		if ((sm = type.match(/^BYTE\[1\+1\+7\]$/))) return renderAlarmObjTime(raw)
+		if ((sm = type.match(/^BYTE\[1\+7\]$/))) {
+			if (/大口径/.test(blob)) return renderFlowLarge(raw)
+			if (/时间/.test(blob)) return renderAlarmTime(raw)
+			const v = uNle(raw, 1, Math.min(7, raw.length - 1))
+			return (raw[0] & 0x01 ? '异常 ' : '') + fmtNum(v, numUnit(desc).unit)
+		}
 		if (desc.indexOf('BCD') >= 0) {
 			const s = bcdDecode(raw)
-			return /^0+$/.test(s) ? '(空)' : s + u
+			return /^0+$/.test(s) ? '(空)' : s
 		}
-		if (desc.indexOf('ASCII') >= 0) return ascii(raw)
-		if (desc.indexOf('int32 LE signed') >= 0 && raw.length === 4) return String(signed32(raw)) + u
-		if (desc.indexOf('Uint32 LE') >= 0 && raw.length === 4) return String(u32leRead(raw, 0)) + u
-		if (desc.indexOf('uint16') >= 0 && raw.length === 2) {
-			const v = (desc.indexOf('signed') >= 0) ? signed16(raw) : u16leRead(raw, 0)
-			return String(v) + u
+		if (/[关开正常异常报警使能未检测未知]/.test(desc) || /=/.test(desc)) {
+			const map = parseEnumMap(desc)
+			if (map[raw[0]] != null) return raw[0] + ':' + map[raw[0]]
 		}
-		if (desc.indexOf('int16 LE signed') >= 0 && raw.length === 2) return String(signed16(raw)) + u
-		if (/bit\d/.test(desc) && raw.length <= 4) return renderBits(raw, desc)
-		if (desc.indexOf('0关') >= 0 || desc.indexOf('0正常') >= 0 || /(^|\s)0无($|\s)/.test(desc)) return renderEnum(raw, desc)
+		const nu = numUnit(desc)
+		if (nu.unit || nu.scale !== 1 || /Uint32 LE|uint32 LE|int16 LE signed|uint16 LE|Uint16 LE|int8|int32 LE signed|float/i.test(desc)) {
+			let v = readNum(raw, desc)
+			if (nu.scale !== 1) v = v * nu.scale
+			return fmtNum(v, nu.unit)
+		}
+		if (/^BYTE(\[\d+\])?$/.test(type) && (raw.length === 1 || raw.length === 2 || raw.length === 4)) {
+			if (raw.length === 4) return String(u32leRead(raw, 0))
+			if (raw.length === 2) return String(u16leRead(raw, 0))
+			return String(raw[0])
+		}
 		return hexbytes(raw)
 	}
 
@@ -307,10 +484,13 @@
 		const fields = {
 			帧序号: u16leRead(b, 2),
 			协议版本号: { value: b[4], name: W.SK_PROTOCOL_VERSION[b[4]] || '保留' },
-			厂家编码: { value: b[5], name: W.SK_MANUFACTURER[b[5]] || '其他' },
+			厂家编号: { value: b[5], name: W.SK_MANUFACTURER[b[5]] || '其他' },
 			设备类型: b[6],
 			设备唯一编码: bcdDecode(b.subarray(7, 14)),
-			信号质量: { rsrp: signed16(b.subarray(14, 16)), snr: signed16(b.subarray(16, 18)), ecl: b[18], csq: b[19] },
+			信号强度RSRP: signed16(b.subarray(14, 16)),
+			信噪比SNR: signed16(b.subarray(16, 18)),
+			覆盖等级ECL: b[18],
+			信号质量CSQ: b[19],
 			功能码: { value: b[20], name: (W.SK_FUNC_CODES['0x' + b[20].toString(16).toUpperCase().padStart(2, '0')] || {}).name || '' },
 			控制码: { raw: ctrl, 后续帧: (ctrl & 0x80) === 0x80, 加密: encrypted },
 			数据域字节数: dataLen,
