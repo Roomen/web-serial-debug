@@ -89,16 +89,6 @@ body {
 #nav-quick-send.show {
 	overflow: hidden;
 }
-#nav-code {
-	height: 100%;
-}
-#serial-code-editor .CodeMirror {
-	height: 100%;
-}
-.CodeMirror-readonly {
-	background-color: var(--bs-light-rgb);
-	cursor: not-allowed;
-}
 
 .sk-parse-block {
 	border-left: 3px solid #adb5bd;
