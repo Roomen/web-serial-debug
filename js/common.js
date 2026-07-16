@@ -141,6 +141,8 @@
 		quickSendIndex: 0,
 		//第三方协议解析开关
 		skParseEnable: false,
+		//悬停提示(静默解析)开关
+		skHoverEnable: false,
 		//解密模式 auto|always|never
 		skDecryptMode: 'auto',
 		//密钥ASCII
@@ -591,6 +593,7 @@
 	document.getElementById('serial-loop-send-time').value = toolOptions.loopSendTime
 	document.getElementById('serial-send-content').value = toolOptions.sendContent
 	document.getElementById('serial-protocol-enable').checked = toolOptions.skParseEnable
+	document.getElementById('serial-protocol-hover').checked = toolOptions.skHoverEnable
 	if (toolOptions.skDecryptMode) {
 		set('serial-protocol-decrypt', toolOptions.skDecryptMode)
 	}
@@ -636,6 +639,9 @@
 	})
 	document.getElementById('serial-protocol-enable').addEventListener('change', function (e) {
 		changeOption('skParseEnable', this.checked)
+	})
+	document.getElementById('serial-protocol-hover').addEventListener('change', function (e) {
+		changeOption('skHoverEnable', this.checked)
 	})
 	document.getElementById('serial-protocol-decrypt').addEventListener('change', function (e) {
 		changeOption('skDecryptMode', this.value)
@@ -696,6 +702,62 @@
 
 	const serialToggle = document.getElementById('serial-open-or-close')
 	const serialLogs = document.getElementById('serial-logs')
+
+	//静默解析悬停提示浮层
+	const skHoverTip = document.createElement('div')
+	skHoverTip.id = 'sk-hover-tip'
+	skHoverTip.style.display = 'none'
+	document.body.appendChild(skHoverTip)
+	function showSkHoverTip(span) {
+		const tip = span.getAttribute('data-tip')
+		if (!tip) {
+			skHoverTip.style.display = 'none'
+			return
+		}
+		skHoverTip.textContent = tip
+		skHoverTip.style.display = 'block'
+		const rect = span.getBoundingClientRect()
+		const tw = skHoverTip.offsetWidth
+		const th = skHoverTip.offsetHeight
+		let left = rect.left + window.scrollX
+		let top = rect.bottom + window.scrollY + 4
+		if (left + tw > window.scrollX + document.documentElement.clientWidth) {
+			left = window.scrollX + document.documentElement.clientWidth - tw - 4
+		}
+		if (top + th > window.scrollY + document.documentElement.clientHeight) {
+			top = rect.top + window.scrollY - th - 4
+		}
+		skHoverTip.style.left = left + 'px'
+		skHoverTip.style.top = top + 'px'
+	}
+	function clearSkHoverActive() {
+		const act = serialLogs.querySelectorAll('.sk-hex-byte-active')
+		for (const el of act) el.classList.remove('sk-hex-byte-active')
+	}
+	serialLogs.addEventListener('mouseover', (e) => {
+		if (!e.target || !e.target.closest) return
+		const span = e.target.closest('.sk-hex-byte')
+		if (span) {
+			clearSkHoverActive()
+			const grp = span.getAttribute('data-grp')
+			if (grp) {
+				const peers = serialLogs.querySelectorAll('.sk-hex-byte[data-grp="' + grp + '"]')
+				for (const el of peers) el.classList.add('sk-hex-byte-active')
+			}
+			showSkHoverTip(span)
+		} else {
+			clearSkHoverActive()
+			skHoverTip.style.display = 'none'
+		}
+	})
+	serialLogs.addEventListener('scroll', () => {
+		clearSkHoverActive()
+		skHoverTip.style.display = 'none'
+	})
+	serialLogs.addEventListener('mouseleave', () => {
+		clearSkHoverActive()
+		skHoverTip.style.display = 'none'
+	})
 
 	//选择串口
 	document.getElementById('serial-select-port').addEventListener('click', async () => {
@@ -910,7 +972,31 @@
 			if (toolOptions.logType.includes('&')) {
 				newmsg += 'HEX:'
 			}
-			newmsg += dataHex.join(' ') + '<br/>'
+			if (toolOptions.skHoverEnable && typeof skByteMap === 'function') {
+				try {
+					const bm = skByteMap(skParseFrame(data, {
+						keyAscii: toolOptions.skKeyAscii || undefined,
+						keyHex: toolOptions.skKeyHex || undefined,
+						decryptMode: toolOptions.skDecryptMode,
+					}))
+				let spanHtml = ''
+				for (let i = 0; i < data.length; i++) {
+					const h = dataHex[i]
+					const cell = bm[i]
+					if (cell && cell.tip) {
+						spanHtml += '<span class="sk-hex-byte" data-grp="' + attrEscape(cell.grp) + '" data-tip="' + attrEscape(cell.tip) + '">' + h + '</span>'
+					} else {
+						spanHtml += h
+					}
+					if (i < data.length - 1) spanHtml += ' '
+				}
+					newmsg += spanHtml + '<br/>'
+				} catch (e) {
+					newmsg += dataHex.join(' ') + '<br/>'
+				}
+			} else {
+				newmsg += dataHex.join(' ') + '<br/>'
+			}
 		}
 		if (toolOptions.logType.includes('text')) {
 			let dataText = textdecoder.decode(Uint8Array.from(data))
@@ -976,6 +1062,15 @@
 		var output = temp.innerText || temp.textContent
 		temp = null
 		return output
+	}
+	//属性值转义(用于 data-tip="..." 内)
+	function attrEscape(s) {
+		return String(s)
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#39;')
 	}
 	//系统日志
 	function addLogErr(msg) {

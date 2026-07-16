@@ -160,7 +160,10 @@
 	}
 	function uNle(raw, start, len) {
 		let v = 0n
-		for (let i = 0; i < len; i++) v |= BigInt(raw[start + i]) << BigInt(8 * i)
+		const max = raw.length - start
+		if (max <= 0) return 0
+		const n = Math.min(len, max)
+		for (let i = 0; i < n; i++) v |= BigInt(raw[start + i]) << BigInt(8 * i)
 		return Number(v)
 	}
 	function numUnit(desc) {
@@ -395,6 +398,18 @@
 					items.push({ id, name: 'ID' + id + '(未知)', raw: Array.from(raw), decoded: hexbytes(raw) })
 					continue
 				}
+				//定长 0 的字段(多为嵌套 TLV 容器):消费剩余字节并递归解析,避免 j+=0 死循环
+				if (vlen === 0) {
+					const raw = payload.subarray(j)
+					items.push({
+						id,
+						name: def ? def.name : ('ID' + id),
+						raw: Array.from(raw),
+						decoded: '嵌套TLV: ' + nestedTlvText(raw)
+					})
+					j = payload.length
+					break
+				}
 				if (j + vlen > payload.length) vlen = payload.length - j
 				const raw = payload.subarray(j, j + vlen)
 				j += vlen
@@ -426,6 +441,20 @@
 			}
 		}
 		return parseTlv(pt)
+	}
+
+	//把嵌套 TLV 区域压缩成简短文本(供 NULL 容器字段展示)
+	function nestedTlvText(bytes) {
+		try {
+			const sub = parseTlv(bytes)
+			if (!sub.length) return hexbytes(bytes)
+			return sub.map((t) => {
+				const parts = (t.items || []).map((it) => 'ID' + it.id + ' ' + (it.name || '') + (it.decoded ? '=' + it.decoded : '')).join('; ')
+				return 'Tag' + t.tag + (t.name ? ' ' + t.name : '') + (parts ? ' [' + parts + ']' : '')
+			}).join(' | ')
+		} catch (e) {
+			return hexbytes(bytes)
+		}
 	}
 
 	function resolveKey(opt) {
@@ -656,7 +685,161 @@
 		return h
 	}
 
-	W.skBuildDownFrame = function (opt) {
+	//生成「字节偏移 -> {tip, grp}」映射,供日志 HEX 悬停提示使用
+	//grp 相同的字节在悬停时一起高亮(同一字段 / 同一 TLV ID)
+	W.skByteMap = function (r) {
+		const raw = (r.raw instanceof Uint8Array) ? r.raw : Uint8Array.from(r.raw || [])
+		const n = raw.length
+		const map = new Array(n).fill('')
+		const dir = r.dir
+		if (dir !== 'up' && dir !== 'down') return map
+		const hx = (b) => '0x' + (b & 0xff).toString(16).toUpperCase().padStart(2, '0')
+		const set = (off, len, tip, grp) => {
+			for (let k = 0; k < len; k++) {
+				if (off + k < n) map[off + k] = { tip: tip, grp: grp }
+			}
+		}
+		const fieldLabel = (name, v) => {
+			let s
+			if (v == null) s = ''
+			else if (typeof v === 'object') {
+				if (Array.isArray(v)) s = v.join(' ')
+				else {
+					const parts = []
+					for (const key in v) {
+						const val = v[key]
+						parts.push(key + '=' + (val && typeof val === 'object' && val.name !== undefined ? (val.name ? val.value + '(' + val.name + ')' : val.value) : val))
+					}
+					s = parts.join(' ')
+				}
+			} else s = String(v)
+			return name + (s ? ' = ' + s : '')
+		}
+		let dataOffset
+		if (dir === 'up') {
+			dataOffset = 24
+			set(0, 2, '帧起始符 ' + hx(raw[0]) + ' ' + hx(raw[1]), 'h0')
+			set(2, 2, fieldLabel('帧序号', r.fields['帧序号']), 'h2')
+			set(4, 1, fieldLabel('协议版本号', r.fields['协议版本号']), 'h4')
+			set(5, 1, fieldLabel('厂家编号', r.fields['厂家编号']), 'h5')
+			set(6, 1, fieldLabel('设备类型', r.fields['设备类型']), 'h6')
+			set(7, 7, fieldLabel('设备唯一编码', r.fields['设备唯一编码']), 'h7')
+			set(14, 2, fieldLabel('信号强度RSRP', r.fields['信号强度RSRP']), 'h14')
+			set(16, 2, fieldLabel('信噪比SNR', r.fields['信噪比SNR']), 'h16')
+			set(18, 1, fieldLabel('覆盖等级ECL', r.fields['覆盖等级ECL']), 'h18')
+			set(19, 1, fieldLabel('信号质量CSQ', r.fields['信号质量CSQ']), 'h19')
+			set(20, 1, fieldLabel('功能码', r.fields['功能码']), 'h20')
+			set(21, 1, fieldLabel('控制码', r.fields['控制码']), 'h21')
+			set(22, 2, fieldLabel('数据域字节数', r.fields['数据域字节数']), 'h22')
+		} else {
+			dataOffset = 16
+			set(0, 2, '帧起始符 ' + hx(raw[0]) + ' ' + hx(raw[1]), 'h0')
+			set(2, 2, fieldLabel('帧序号', r.fields['帧序号']), 'h2')
+			set(4, 1, fieldLabel('协议版本号', r.fields['协议版本号']), 'h4')
+			set(5, 7, fieldLabel('平台时间', r.fields['平台时间']), 'h5')
+			set(12, 1, fieldLabel('功能码', r.fields['功能码']), 'h12')
+			set(13, 1, fieldLabel('控制码', r.fields['控制码']), 'h13')
+			set(14, 2, fieldLabel('数据域字节数', r.fields['数据域字节数']), 'h14')
+		}
+		const dataLen = r.fields['数据域字节数'] || 0
+		const crcOffset = dataOffset + dataLen
+		const enc = r.encrypted
+		const canDecode = !enc || (r.decryptOk && !r.needKey)
+		//数据域:不加密,或已用密钥成功解密时,可逐字节映射 TLV 含义
+		if (canDecode && crcOffset > dataOffset && crcOffset <= n) {
+			let region = null
+			let prefix = ''
+			if (enc) {
+				region = (r.plainBytes && r.plainBytes.length) ? Uint8Array.from(r.plainBytes) : null
+				prefix = '解密后-'
+			} else {
+				region = raw.subarray(dataOffset, crcOffset)
+			}
+			if (region && region.length === crcOffset - dataOffset) {
+				walkTlvRegion(region, dataOffset, map, prefix)
+			}
+		} else if (enc) {
+			set(dataOffset, Math.max(0, crcOffset - dataOffset), '加密数据域(需密钥解密后才有含义)', 'enc' + dataOffset)
+		}
+		if (crcOffset + 2 <= n) {
+			set(crcOffset, 2, 'CRC16校验 ' + (r.crcOk ? '✓' : '✗') + ' = ' + hx(raw[crcOffset]) + ' ' + hx(raw[crcOffset + 1]), 'crc' + crcOffset)
+		}
+		if (crcOffset + 2 < n) {
+			set(crcOffset + 2, 1, '帧结束符 = ' + hx(raw[crcOffset + 2]) + (raw[crcOffset + 2] === 0x16 ? ' ✓' : ' ✗ 期望0x16'), 'end' + crcOffset)
+		}
+		return map
+	}
+
+	function walkTlvRegion(region, baseOff, map, prefix) {
+		const set = (off, len, tip, grp) => {
+			for (let k = 0; k < len; k++) {
+				if (off + k < map.length) map[off + k] = { tip: tip, grp: grp }
+			}
+		}
+		let i = 0
+		if (region.length >= 2) {
+			const plainLen = u16leRead(region, 0)
+			if (2 + plainLen <= region.length) {
+				set(baseOff, 2, prefix + '数据域-明文长度 = ' + plainLen, 'p' + baseOff)
+				i = 2
+			}
+		}
+		while (i + 3 <= region.length) {
+			const tag = region[i]
+			const len = u16leRead(region, i + 1)
+			if (tag === 0 && len === 0) {
+				set(baseOff + i, 3, prefix + '数据域-填充', 'pad' + (baseOff + i))
+				i += 3
+				continue
+			}
+			if (i + 3 + len > region.length) {
+				set(baseOff + i, region.length - i, prefix + '数据域-截断', 'tr' + (baseOff + i))
+				break
+			}
+			const tagName = W.SK_TAG_NAME[tag] || ('Tag' + tag)
+			const tagGrp = 't' + tag + 'h'
+			set(baseOff + i, 1, prefix + '数据域-' + tagName + ' [Tag]', tagGrp)
+			set(baseOff + i + 1, 2, prefix + '数据域-' + tagName + ' [长度]', tagGrp)
+			const payload = region.subarray(i + 3, i + 3 + len)
+			const pBase = baseOff + i + 3
+			const defs = W.SK_TAGS[tag] || []
+			const idMap = {}
+			for (const d of defs) idMap[d.id] = d
+			let j = 0
+			while (j < payload.length) {
+				const id = payload[j]
+				const def = idMap[id]
+				let vlen = def ? typeLen(def.type) : null
+				const itemGrp = 't' + tag + 'i' + id
+				if (vlen === null) {
+					let k = j + 1
+					while (k < payload.length && !idMap[payload[k]]) k++
+					vlen = k - j
+					if (vlen <= 0) vlen = 1
+					const rawb = payload.subarray(j, j + vlen)
+					set(pBase + j, vlen, prefix + '数据域-' + tagName + ' ID' + id + '(未知) = ' + hexbytes(rawb), itemGrp)
+					j = k
+					continue
+				}
+				//定长 0 的字段(多为嵌套 TLV 容器):其内部是嵌套 TLV,递归逐字节标注,
+				//使每个嵌套字段独立显示(与文本解析一致),同时避免 j+=0 死循环
+				if (vlen === 0) {
+					const rawb = payload.subarray(j)
+					walkTlvRegion(rawb, pBase + j, map, prefix)
+					j = payload.length
+					break
+				}
+				if (j + vlen > payload.length) vlen = payload.length - j
+				const rawb = payload.subarray(j, j + vlen)
+				const name = def ? def.name : ('ID' + id)
+				set(pBase + j, vlen, prefix + '数据域-' + tagName + ' ' + name + ' = ' + renderValue(def, rawb), itemGrp)
+				j += vlen
+			}
+			i += 3 + len
+		}
+	}
+
+		W.skBuildDownFrame = function (opt) {
 		opt = opt || {}
 		const seq = opt.frameSeq != null ? opt.frameSeq : 1
 		const funcCode = typeof opt.funcCode === 'string' ? parseInt(opt.funcCode, opt.funcCode.indexOf('0x') === 0 ? 16 : 10) : opt.funcCode
