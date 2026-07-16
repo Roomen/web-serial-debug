@@ -169,3 +169,26 @@ body {
 .tab-content .tab-pane:not(.active) {
 	display: none !important;
 }
+.sk-hex-byte {
+	cursor: help;
+	border-radius: 2px;
+}
+.sk-hex-byte:hover,
+.sk-hex-byte-active {
+	background-color: #ffd24d;
+	outline: 1px solid #f0a500;
+}
+#sk-hover-tip {
+	position: absolute;
+	z-index: 1080;
+	max-width: 360px;
+	padding: 6px 9px;
+	background: #212529;
+	color: #fff;
+	font-size: 0.8rem;
+	line-height: 1.4;
+	white-space: pre-line;
+	border-radius: 6px;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+	pointer-events: none;
+}
