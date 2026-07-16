@@ -7,15 +7,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Web Serial Debug-浏览器串口调试工具</title>
 
-    <link href="https://cdn.bootcdn.net/ajax/libs/codemirror/5.65.16/codemirror.css" rel="stylesheet">
-    <link href="https://cdn.bootcdn.net/ajax/libs/codemirror/5.65.16/theme/idea.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.2.3/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.11.0/font/bootstrap-icons.css" rel="stylesheet">
 
-    <script src="https://cdn.bootcdn.net/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
-    <script src="https://cdn.bootcdn.net/ajax/libs/codemirror/5.65.16/addon/selection/active-line.min.js"></script>
-    <script src="https://cdn.bootcdn.net/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.js"></script>
-    <script src="https://cdn.bootcdn.net/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
     <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.2.3/js/bootstrap.bundle.min.js"></script>
 
     <link rel="stylesheet" href="css/style.css">
@@ -226,14 +220,15 @@
                         <button class="nav-link active" id="nav-quick-send-tab" data-bs-toggle="tab"
                             data-bs-target="#nav-quick-send" type="button" role="tab" aria-controls="nav-quick-send"
                             aria-selected="true">快捷发送</button>
-                        <button class="nav-link" id="nav-code-tab" data-bs-toggle="tab" data-bs-target="#nav-code"
-                            type="button" role="tab" aria-controls="nav-code" aria-selected="false">代码脚本</button>
                         <button class="nav-link" id="nav-protocol-tab" data-bs-toggle="tab"
                             data-bs-target="#nav-protocol" type="button" role="tab" aria-controls="nav-protocol"
                             aria-selected="false">第三方协议</button>
                         <button class="nav-link" id="nav-firmware-tab" data-bs-toggle="tab"
                             data-bs-target="#nav-firmware" type="button" role="tab" aria-controls="nav-firmware"
                             aria-selected="false">固件升级</button>
+                        <button class="nav-link" id="nav-firmware-pack-tab" data-bs-toggle="tab"
+                            data-bs-target="#nav-firmware-pack" type="button" role="tab" aria-controls="nav-firmware-pack"
+                            aria-selected="false">固件打包</button>
                     </div>
                 </nav>
                 <div class="tab-content pt-2 flex-fill" id="nav-tabContent">
@@ -280,33 +275,6 @@
                             class="flex-grow-1 border border-2 p-2 rounded overflow-auto">
                         </div>
                     </div>
-                    <div class="tab-pane d-flex flex-column fade" id="nav-code" role="tabpanel"
-                        aria-labelledby="nav-code-tab">
-                    <div class="flex-grow-1 overflow-hidden" id="serial-code-editor">
-                        <textarea class="form-control" rows="3" id="serial-code-content" style="resize: none;"
-                            placeholder="在此输入要执行的代码脚本">
-addEventListener('message', function ({data}) {
-    if(data.type=='uart_receive')
-    {
-        postMessage({type:'log',data:'消息长度:'+data.data.length});
-        //原文答复
-        postMessage({type:'uart_send',data:data.data});
-    }
-})
-setInterval(function(){
-    //定时发送
-    postMessage({type:'uart_send_txt',data:'hello world'});
-},1000);</textarea>
-                    </div>
-                    <div class="mt-2">
-                        <input id='serial-code-select' type='file' class="d-none">
-                        <button class="btn btn-sm btn-outline-secondary me-2" id="serial-code-load"><i
-                                class="bi bi-folder2-open"></i> 打开文件</button>
-                        <button id="serial-code-run" class="btn btn-primary btn-sm float-end"><i
-                                class="bi bi-play"></i>
-                            运行</button>
-                    </div>
-                </div>
                     <div class="tab-pane d-flex flex-column fade flex-grow-1" id="nav-protocol" role="tabpanel"
                         aria-labelledby="nav-protocol-tab">
                         <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
@@ -438,6 +406,58 @@ setInterval(function(){
 					</div>
 				</div>
 			</div>
+                    <div class="tab-pane d-flex flex-column fade" id="nav-firmware-pack" role="tabpanel"
+                        aria-labelledby="nav-firmware-pack-tab">
+                    <div class="d-flex flex-column flex-grow-1 min-h-0 overflow-auto">
+                        <div class="border rounded p-2 mb-2">
+                            <div class="mb-2">
+                                <span class="fw-bold small">旧固件路径 (差分用, 可选)</span>
+                                <div class="d-flex gap-2">
+                                    <input type="file" id="fp-old-file" class="d-none" accept=".bin">
+                                    <button class="btn btn-sm btn-outline-secondary" id="fp-old-select"><i class="bi bi-folder2-open"></i> 选择文件</button>
+                                    <span id="fp-old-name" class="small text-muted align-self-center">未选择旧固件</span>
+                                </div>
+                            </div>
+                            <div class="mb-2">
+                                <span class="fw-bold small">新固件路径</span>
+                                <div class="d-flex gap-2">
+                                    <input type="file" id="fp-new-file" class="d-none" accept=".bin">
+                                    <button class="btn btn-sm btn-outline-secondary" id="fp-new-select"><i class="bi bi-folder2-open"></i> 选择文件</button>
+                                    <span id="fp-new-name" class="small text-muted align-self-center">未选择新固件</span>
+                                </div>
+                            </div>
+                            <div class="mb-2">
+                                <span class="fw-bold small">自定义信息 (UserDefine, 最长48字节)</span>
+                                <input type="text" class="form-control form-control-sm" id="fp-user-define" maxlength="48">
+                            </div>
+                            <div class="d-flex flex-wrap gap-3 mb-2">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="fp-gen-origin">
+                                    <label class="form-check-label small" for="fp-gen-origin">原始包</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="fp-gen-compress" checked>
+                                    <label class="form-check-label small" for="fp-gen-compress">压缩包</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="fp-gen-diff" checked>
+                                    <label class="form-check-label small" for="fp-gen-diff">双向差分包</label>
+                                </div>
+                            </div>
+                            <div id="fp-blank-row" class="mb-2">
+                                <span class="fw-bold small">BLANK.bin 路径 (留空使用内置)</span>
+                                <div class="d-flex gap-2">
+                                    <input type="file" id="fp-blank-file" class="d-none" accept=".bin">
+                                    <button class="btn btn-sm btn-outline-secondary" id="fp-blank-select"><i class="bi bi-folder2-open"></i> 选择BLANK</button>
+                                    <span id="fp-blank-name" class="small text-muted align-self-center">未选择(将使内置BLANK)</span>
+                                </div>
+                            </div>
+                            <button class="btn btn-primary btn-sm w-100" id="fp-start"><i class="bi bi-box-seam"></i> 开始生成</button>
+                        </div>
+                        <pre id="fp-log"
+                            class="border rounded p-2 mb-0 bg-white small text-monospace flex-grow-1 overflow-auto" style="min-height: 100px; white-space: pre-wrap;"></pre>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -483,6 +503,9 @@ setInterval(function(){
         </div>
     </div>
     <script src="js/ansi_up.min.js"></script>
+    <script>
+        hideTop()
+    </script>
     <script src="js/pcp.js"></script>
     <script src="js/protocol-schema.js"></script>
     <script src="js/protocol-crypto.js"></script>
@@ -490,6 +513,8 @@ setInterval(function(){
     <script src="js/protocol-presets.js"></script>
     <script src="js/common.js"></script>
     <script src="js/firmware-upgrade.js"></script>
+    <script src="js/hdiffi.js"></script>
+    <script src="js/firmware-packager.js"></script>
 
 </body>
 
