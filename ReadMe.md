@@ -4,10 +4,6 @@
 
 仅测试了 Edge 和 Chrome 浏览器,其他浏览器未测试是否可用
 
-在线体验: [https://itldg.github.io/web-serial-debug/](https://itldg.github.io/web-serial-debug/)
-
-国内体验: [https://www.itldg.com/web_serial_debug/](https://www.itldg.com/web_serial_debug/)
-
 ## 界面预览
 
 ![界面预览](/imgs/main.png)
@@ -91,4 +87,4 @@ setInterval(function(){
 
 常用的朋友也可以提交一些常用的指令集,后续做一下常用指令集的整理
 
-开源地址：[GitHub](https://github.com/itldg/web-serial-debug) | [Gitee](https://gitee.com/itldg/web-serial-debug)
+原项目地址：[GitHub](https://github.com/itldg/web-serial-debug)
