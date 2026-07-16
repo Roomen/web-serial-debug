@@ -132,6 +132,12 @@
                         未选择串口
                     </div>
                 </div>
+                <div class="d-flex gap-1 mt-2">
+                    <button class="btn btn-sm btn-outline-secondary flex-fill" id="serial-reset" title="重置所有参数"><i class="bi bi-arrow-repeat"></i></button>
+                    <button class="btn btn-sm btn-outline-secondary flex-fill" id="serial-export" title="导出配置"><i class="bi bi-folder-symlink"></i></button>
+                    <button class="btn btn-sm btn-outline-secondary flex-fill" id="serial-import" title="导入配置"><i class="bi bi-folder-plus"></i></button>
+                    <input type="file" id="serial-import-file" style="display: none;" accept="application/json" />
+                </div>
             </div>
             <button class="toggle-button float-end" title="隐藏/打开边栏">
                 <i class="bi bi-chevron-compact-left"></i>
@@ -148,7 +154,7 @@
                 <div class="btn-toolbar">
                     <div class="input-group input-group-sm me-2">
                         <span class="input-group-text">分包超时</span>
-                        <input type="number" id="serial-timer-out" class="form-control" placeholder="0不分包" value="50"
+                        <input type="number" id="serial-timer-out" class="form-control" placeholder="0不分包" value="200"
                             style="width: 100px;" />
                     </div>
 
@@ -220,18 +226,18 @@
                         <button class="nav-link active" id="nav-quick-send-tab" data-bs-toggle="tab"
                             data-bs-target="#nav-quick-send" type="button" role="tab" aria-controls="nav-quick-send"
                             aria-selected="true">快捷发送</button>
-                        <button class="nav-link" id="nav-options-tab" data-bs-toggle="tab" data-bs-target="#nav-options"
-                            type="button" role="tab" aria-controls="nav-options" aria-selected="false">系统选项</button>
                         <button class="nav-link" id="nav-code-tab" data-bs-toggle="tab" data-bs-target="#nav-code"
                             type="button" role="tab" aria-controls="nav-code" aria-selected="false">代码脚本</button>
                         <button class="nav-link" id="nav-protocol-tab" data-bs-toggle="tab"
                             data-bs-target="#nav-protocol" type="button" role="tab" aria-controls="nav-protocol"
                             aria-selected="false">第三方协议</button>
-
+                        <button class="nav-link" id="nav-firmware-tab" data-bs-toggle="tab"
+                            data-bs-target="#nav-firmware" type="button" role="tab" aria-controls="nav-firmware"
+                            aria-selected="false">固件升级</button>
                     </div>
                 </nav>
                 <div class="tab-content pt-2 flex-fill" id="nav-tabContent">
-                    <div class="tab-pane fade show active" id="nav-quick-send" role="tabpanel"
+                    <div class="tab-pane fade show active d-flex flex-column" id="nav-quick-send" role="tabpanel"
                         aria-labelledby="nav-quick-send-tab">
                         <div class="btn-toolbar">
                             <div class="flex-grow-1 input-group input-group-sm me-2">
@@ -274,21 +280,11 @@
                             class="flex-grow-1 border border-2 p-2 rounded overflow-auto">
                         </div>
                     </div>
-                    <div class="tab-pane fade" id="nav-options" role="tabpanel" aria-labelledby="nav-options-tab">
-                        <h5>系统配置</h5>
-                        <button class="btn btn-sm btn-outline-secondary me-2" id="serial-reset"><i
-                                class="bi bi-arrow-repeat"></i> 重置参数</button>
-                        <button class="btn btn-sm btn-outline-secondary me-2" id="serial-export"><i
-                                class="bi bi-folder-symlink"></i> 导出配置</button>
-                        <button class="btn btn-sm btn-outline-secondary me-2" id="serial-import"><i
-                                class="bi bi-folder-plus"></i> 导入配置</button>
-                        <input type="file" id="serial-import-file" style="display: none;" accept="application/json" />
-                    </div>
                     <div class="tab-pane d-flex flex-column fade" id="nav-code" role="tabpanel"
                         aria-labelledby="nav-code-tab">
-                        <div class="flex-grow-1 overflow-hidden" id="serial-code-editor">
-                            <textarea class="form-control" rows="3" id="serial-code-content" style="resize: none;"
-                                placeholder="在此输入要执行的代码脚本">
+                    <div class="flex-grow-1 overflow-hidden" id="serial-code-editor">
+                        <textarea class="form-control" rows="3" id="serial-code-content" style="resize: none;"
+                            placeholder="在此输入要执行的代码脚本">
 addEventListener('message', function ({data}) {
     if(data.type=='uart_receive')
     {
@@ -301,17 +297,17 @@ setInterval(function(){
     //定时发送
     postMessage({type:'uart_send_txt',data:'hello world'});
 },1000);</textarea>
-                        </div>
-                        <div class="mt-2">
-                            <input id='serial-code-select' type='file' class="d-none">
-                            <button class="btn btn-sm btn-outline-secondary me-2" id="serial-code-load"><i
-                                    class="bi bi-folder2-open"></i> 打开文件</button>
-                            <button id="serial-code-run" class="btn btn-primary btn-sm float-end"><i
-                                    class="bi bi-play"></i>
-                                运行</button>
-                        </div>
                     </div>
-                <div class="tab-pane d-flex flex-column fade" id="nav-protocol" role="tabpanel"
+                    <div class="mt-2">
+                        <input id='serial-code-select' type='file' class="d-none">
+                        <button class="btn btn-sm btn-outline-secondary me-2" id="serial-code-load"><i
+                                class="bi bi-folder2-open"></i> 打开文件</button>
+                        <button id="serial-code-run" class="btn btn-primary btn-sm float-end"><i
+                                class="bi bi-play"></i>
+                            运行</button>
+                    </div>
+                </div>
+                    <div class="tab-pane d-flex flex-column fade flex-grow-1" id="nav-protocol" role="tabpanel"
                         aria-labelledby="nav-protocol-tab">
                         <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
                             <div class="input-group input-group-sm" style="width: auto;">
@@ -400,7 +396,48 @@ setInterval(function(){
                                 readonly placeholder="待发送的完整 HEX（空格分隔）"></textarea>
                         </div>
                     </div>
-                </div>
+                    <div class="tab-pane d-flex flex-column fade" id="nav-firmware" role="tabpanel"
+                        aria-labelledby="nav-firmware-tab">
+                    <div class="d-flex flex-column flex-grow-1 min-h-0">
+                        <!--固件文件选择与分析-->
+                        <div class="border rounded p-2 mb-2">
+                            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                <input type="file" id="fw-file" class="d-none" accept=".bin,.hex,.fw">
+                                <button class="btn btn-sm btn-outline-secondary" id="fw-select"><i
+                                        class="bi bi-folder2-open"></i> 选择固件</button>
+                                <span id="fw-file-name" class="small text-muted">未选择固件文件</span>
+                            </div>
+                            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                <div class="input-group input-group-sm" style="width: auto;">
+                                    <span class="input-group-text">分片大小(字节)</span>
+                                    <input type="number" class="form-control" id="fw-chunk-size" value="128"
+                                        min="32" max="500" step="32" style="width: 100px;">
+                                </div>
+                                <button class="btn btn-sm btn-outline-secondary" id="fw-parse">解析固件</button>
+                                <button class="btn btn-sm btn-outline-secondary" id="fw-diagnose">诊断固件</button>
+                            </div>
+                            <pre id="fw-info"
+                                class="border rounded p-2 mb-0 bg-white small text-monospace" style="min-height: 80px; white-space: pre-wrap;"></pre>
+                        </div>
+                        <!--升级控制-->
+                        <div class="border rounded p-2 mb-2">
+                            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                <button class="btn btn-sm btn-primary" id="fw-start" disabled><i
+                                        class="bi bi-upload"></i> 开始升级</button>
+                                <button class="btn btn-sm btn-outline-secondary" id="fw-stop" disabled>停止升级</button>
+                                <button class="btn btn-sm btn-outline-secondary" id="fw-query">查询版本</button>
+                                <button class="btn btn-sm btn-outline-secondary" id="fw-clear-log">清空日志</button>
+                                <span id="fw-status" class="small text-muted ms-auto"></span>
+                            </div>
+                            <div class="progress mb-2" style="height: 18px;">
+                                <div id="fw-progress" class="progress-bar" role="progressbar" style="width: 0%;"
+                                    aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                            </div>
+                            <pre id="fw-log"
+                                class="border rounded p-2 mb-0 bg-white small text-monospace flex-grow-1 overflow-auto" style="min-height: 120px; white-space: pre-wrap;"></pre>
+					</div>
+				</div>
+			</div>
             </div>
         </div>
     </div>
@@ -446,11 +483,13 @@ setInterval(function(){
         </div>
     </div>
     <script src="js/ansi_up.min.js"></script>
+    <script src="js/pcp.js"></script>
     <script src="js/protocol-schema.js"></script>
     <script src="js/protocol-crypto.js"></script>
     <script src="js/protocol.js"></script>
     <script src="js/protocol-presets.js"></script>
     <script src="js/common.js"></script>
+    <script src="js/firmware-upgrade.js"></script>
 
 </body>
 
