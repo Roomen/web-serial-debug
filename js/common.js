@@ -116,7 +116,6 @@
 			],
 		},
 	]
-	let worker = null
 	//工具配置
 	let toolOptions = {
 		//自动滚动
@@ -126,7 +125,7 @@
 		//日志类型
 		logType: 'hex&text',
 		//分包合并时间
-		timeOut: 50,
+		timeOut: 200,
 		//末尾加回车换行
 		addCRLF: false,
 		//HEX发送
@@ -328,7 +327,6 @@
 		localStorage.removeItem('serialOptions')
 		localStorage.removeItem('toolOptions')
 		localStorage.removeItem('quickSendList')
-		localStorage.removeItem('code')
 		location.reload()
 	})
 	//导出参数
@@ -337,7 +335,6 @@
 			serialOptions: localStorage.getItem('serialOptions'),
 			toolOptions: localStorage.getItem('toolOptions'),
 			quickSendList: localStorage.getItem('quickSendList'),
-			code: localStorage.getItem('code'),
 		}
 		let blob = new Blob([JSON.stringify(data)], { type: 'text/plain' })
 		saveAs(blob, 'web-serial-debug.json')
@@ -364,7 +361,6 @@
 				setParam('serialOptions', obj.serialOptions)
 				setParam('toolOptions', obj.toolOptions)
 				setParam('quickSendList', obj.quickSendList)
-				setParam('code', obj.code)
 				location.reload()
 			} catch (e) {
 				showMsg('导入失败:' + e.message)
@@ -513,62 +509,6 @@
 			addLog(desc, false)
 		})
 	}
-	const serialCodeContent = document.getElementById('serial-code-content')
-	const serialCodeSelect = document.getElementById('serial-code-select')
-	const code = localStorage.getItem('code')
-	if (code) {
-		serialCodeContent.value = code
-	}
-	//代码编辑器
-	var editor = CodeMirror.fromTextArea(serialCodeContent, {
-		lineNumbers: true, // 显示行数
-		indentUnit: 4, // 缩进单位为4
-		styleActiveLine: true, // 当前行背景高亮
-		matchBrackets: true, // 括号匹配
-		mode: 'javascript', // 设置编辑器语言为JavaScript
-		// lineWrapping: true,    // 自动换行
-		theme: 'idea', // 主题
-	})
-	//读取本地文件
-	serialCodeSelect.onchange = function (e) {
-		var fr = new FileReader()
-		fr.onload = function () {
-			editor.setValue(fr.result)
-		}
-		fr.readAsText(this.files[0])
-	}
-	document.getElementById('serial-code-load').onclick = function () {
-		serialCodeSelect.click()
-	}
-	//运行或停止脚本
-	const code_editor_run = document.getElementById('serial-code-run')
-	code_editor_run.addEventListener('click', (e) => {
-		if (worker) {
-			worker.terminate()
-			worker = null
-			code_editor_run.innerHTML = '<i class="bi bi-play"></i>运行'
-			editor.setOption('readOnly', false)
-			editor.getWrapperElement().classList.remove('CodeMirror-readonly')
-			return
-		}
-		editor.setOption('readOnly', 'nocursor')
-		editor.getWrapperElement().classList.add('CodeMirror-readonly')
-		localStorage.setItem('code', editor.getValue())
-		code_editor_run.innerHTML = '<i class="bi bi-stop"></i>停止'
-		var blob = new Blob([editor.getValue()], { type: 'text/javascript' })
-		worker = new Worker(window.URL.createObjectURL(blob))
-		worker.onmessage = function (e) {
-			if (e.data.type == 'uart_send') {
-				writeData(new Uint8Array(e.data.data))
-			} else if (e.data.type == 'uart_send_hex') {
-				sendHex(e.data.data)
-			} else if (e.data.type == 'uart_send_txt') {
-				sendText(e.data.data)
-			} else if (e.data.type == 'log') {
-				addLogErr(e.data.data)
-			}
-		}
-	})
 	//读取参数
 	let options = localStorage.getItem('serialOptions')
 	if (options) {
@@ -931,11 +871,10 @@
 
 	//串口分包合并
 	function dataReceived(data) {
+		//立即把原始字节交给固件升级等模块,由其自行按协议帧边界组装
+		if (window.serialApi && window.serialApi._onReceive) window.serialApi._onReceive(data)
 		serialData.push(...data)
 		if (toolOptions.timeOut == 0) {
-			if (worker) {
-				worker.postMessage({ type: 'uart_receive', data: serialData })
-			}
 			addLog(serialData, true)
 			addParseLog([...serialData], true)
 			serialData = []
@@ -944,14 +883,27 @@
 		//清除之前的时钟
 		clearTimeout(serialTimer)
 		serialTimer = setTimeout(() => {
-			if (worker) {
-				worker.postMessage({ type: 'uart_receive', data: serialData })
-			}
 			//超时发出
 			addLog(serialData, true)
 			addParseLog([...serialData], true)
 			serialData = []
 		}, toolOptions.timeOut)
+	}
+
+	//对外暴露的串口接口(供固件升级等模块使用)
+	window.serialApi = {
+		async writeData(data) {
+			await writeData(data)
+		},
+		isOpen() {
+			return !!(serialPort && serialPort.writable && serialOpen)
+		},
+		//升级进行中时禁止第三方协议解析日志,避免干扰
+		suppressParse: false,
+		_onReceive: null,
+		onReceive(cb) {
+			this._onReceive = cb
+		},
 	}
 	var ansi_up = new AnsiUp()
 	//添加日志
@@ -1023,6 +975,9 @@
 	//第三方协议解析日志
 	function addParseLog(data, isReceive) {
 		if (!toolOptions.skParseEnable) {
+			return
+		}
+		if (window.serialApi && window.serialApi.suppressParse) {
 			return
 		}
 		let html
