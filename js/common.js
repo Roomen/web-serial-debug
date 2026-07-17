@@ -2,6 +2,42 @@
 	if (!('serial' in navigator)) {
 		alert('当前浏览器不支持串口操作,请更换Edge或Chrome浏览器')
 	}
+
+	/* ========== Theme Toggle ========== */
+	const STORAGE_KEY = 'serial-debug-theme'
+	const themeToggle = document.getElementById('theme-toggle')
+	const savedTheme = localStorage.getItem(STORAGE_KEY)
+
+	if (savedTheme) {
+		document.documentElement.setAttribute('data-theme', savedTheme)
+	} else {
+		const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+		if (prefersDark) {
+			document.documentElement.setAttribute('data-theme', 'dark')
+		}
+	}
+
+	function updateToggleUi() {
+		const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+		themeToggle.title = isDark ? '切换至亮色模式' : '切换至暗色模式'
+	}
+
+	updateToggleUi()
+
+	themeToggle.addEventListener('click', () => {
+		const current = document.documentElement.getAttribute('data-theme')
+		const next = current === 'dark' ? 'light' : 'dark'
+		document.documentElement.setAttribute('data-theme', next)
+		localStorage.setItem(STORAGE_KEY, next)
+		updateToggleUi()
+	})
+
+	window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+		if (!localStorage.getItem(STORAGE_KEY)) {
+			document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light')
+			updateToggleUi()
+		}
+	})
 	let serialPort = null
 	navigator.serial.getPorts().then((ports) => {
 		if (ports.length > 0) {
@@ -123,13 +159,13 @@
 		//显示时间 界面未开放
 		showTime: true,
 		//日志类型
-		logType: 'hex&text',
+		logType: 'hex',
 		//分包合并时间
 		timeOut: 200,
 		//末尾加回车换行
 		addCRLF: false,
 		//HEX发送
-		hexSend: false,
+		hexSend: true,
 		//循环发送
 		loopSend: false,
 		//循环发送时间
