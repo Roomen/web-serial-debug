@@ -15,6 +15,16 @@
     <link rel="stylesheet" href="css/style.css">
     <link rel="icon" href="imgs/logo.svg" type="image/svg+xml">
     <script>
+        (function () {
+            var t = localStorage.getItem('serial-debug-theme')
+            if (t) {
+                document.documentElement.setAttribute('data-theme', t)
+            } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                document.documentElement.setAttribute('data-theme', 'dark')
+            }
+        })()
+    </script>
+    <script>
         hideTop = function () {
             var header = document.querySelector('.bd-header');
             header.remove();
@@ -152,9 +162,7 @@
             </button>
 
             <div class="text-center mt-2 mb-1">
-                <a href="https://github.com/Roomen/web-serial-debug" target="_blank" class="text-muted text-decoration-none small">
-                    <i class="bi bi-github"></i> GitHub
-                </a>
+                &nbsp;
             </div>
         </div>
         <div class="clear"></div>
@@ -163,6 +171,13 @@
             <div
                 class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
                 <h1 class="h3">串口日志</h1>
+                <button id="theme-toggle" class="theme-toggle-btn" title="切换亮色/暗色模式">
+                    <span class="theme-toggle-track">
+                        <i class="bi bi-sun-fill"></i>
+                        <i class="bi bi-moon-stars-fill"></i>
+                        <span class="theme-toggle-thumb"></span>
+                    </span>
+                </button>
 
                 <div class="btn-toolbar">
                     <div class="input-group input-group-sm me-2">
@@ -480,6 +495,12 @@
             </div>
         </div>
     </div>
+
+    <footer class="text-center py-2">
+        <a href="https://github.com/Roomen/web-serial-debug" target="_blank" class="text-muted text-decoration-none small">
+            <i class="bi bi-github"></i> GitHub
+        </a>
+    </footer>
 
 
 
