@@ -317,6 +317,7 @@
 					const linkMap = { 0: '其他', 1: 'AT失败', 2: '无SIM', 8: '驻网失败', 11: '接入失败', 13: '断网', 99: '上报无应答' }
 					return '最近一次上行异常发生时间:' + bcdTimeOrEmpty(raw.subarray(0, 6)) + ' 最近一次异常发生时的CSQ:' + raw[6] + ' 异常发生的环节:' + (linkMap[raw[7]] != null ? linkMap[raw[7]] : raw[7])
 				}
+				case 'magSignal': return 'CH0=' + raw[0] + ' CH1=' + raw[1]
 			}
 		}
 		if (/YYYYMMDDhhmmss/.test(desc) || (def && def.unit === 'BCD' && raw.length === 7)) return bcdTime(raw)
@@ -332,6 +333,17 @@
 			if (/时间/.test(blob)) return renderAlarmTime(raw)
 			const v = uNle(raw, 1, Math.min(7, raw.length - 1))
 			return (raw[0] & 0x01 ? '异常 ' : '') + fmtNum(v, numUnit(desc).unit)
+		}
+		if ((sm = type.match(/^BYTE\[1\+3\]$/))) {
+			const status = raw[0] & 0x01 ? '异常' : '正常'
+			const v = signed16(raw.subarray(1, 4))
+			return status + ' ' + fmtNum(v, numUnit(desc).unit)
+		}
+		if ((sm = type.match(/^BYTE\[1\+1\]$/))) {
+			return raw[0] + ' / ' + raw[1]
+		}
+		if ((sm = type.match(/^BYTE\[4\+7\]$/))) {
+			return '告警位:' + hexbytes(raw.subarray(0, 4)) + ' 时间:' + bcdTimeOrEmpty(raw.subarray(4, 11))
 		}
 		if (desc.indexOf('BCD') >= 0) {
 			const s = bcdDecode(raw)
@@ -459,7 +471,9 @@
 
 	function resolveKey(opt) {
 		if (opt && opt.keyHex) {
-			return toBytes(opt.keyHex).subarray(0, 16)
+			const raw = toBytes(opt.keyHex)
+			const len = raw.length >= 32 ? 32 : 16
+			return raw.subarray(0, len)
 		}
 		const asciiKey = opt && opt.keyAscii
 		if (!asciiKey) return null
@@ -470,6 +484,9 @@
 			bytes = new Uint8Array(asciiKey.length)
 			for (let i = 0; i < asciiKey.length; i++) bytes[i] = asciiKey.charCodeAt(i) & 0xff
 		}
+		if (bytes.length >= 32) {
+			return bytes.subarray(0, 32)
+		}
 		const k = new Uint8Array(16)
 		k.set(bytes.subarray(0, 16))
 		return k
@@ -479,7 +496,7 @@
 		try {
 			const k = resolveKey(opt)
 			if (!k) return { ok: false, needKey: true }
-			const out = W.skAes128EcbDecrypt(new Uint8Array(enc), k)
+			const out = W.skAesEcbDecrypt(new Uint8Array(enc), k)
 			return { ok: true, bytes: out }
 		} catch (e) {
 			return { ok: false, error: String(e) }
@@ -634,45 +651,63 @@
 	}
 
 	W.skFormatFrame = function (p) {
-		const dirArrow = p.dir === 'up' ? '<span class="sk-parse-arrow">↑上行</span>' : p.dir === 'down' ? '<span class="sk-parse-arrow">↓下行</span>' : '<span class="sk-parse-arrow">未知</span>'
-		const cls = p.dir === 'up' ? 'sk-parse-up' : p.dir === 'down' ? 'sk-parse-down' : 'sk-parse-error'
-		let crc = p.crcOk ? '<span class="sk-parse-ok">CRC ✓</span>' : '<span class="sk-parse-bad">CRC ✗</span>'
-		let lock = p.encrypted ? '<span class="sk-parse-lock" title="加密">🔒</span>' : ''
-		let h = '<div class="sk-parse ' + cls + '">'
-		h += '<div class="sk-parse-head">' + dirArrow + ' ' + lock + ' ' + crc + '</div>'
-		h += '<dl class="sk-parse-dl">';
+		const dirArrow = p.dir === 'up' ? '↑' : p.dir === 'down' ? '↓' : '?'
+		const status = (p.crcOk ? '✓' : '✗') + (p.encrypted ? ' 🔒' : '')
+		let h = '<div class="sk-parse">'
+		h += '<div class="sk-parse-bar">' + dirArrow + ' ' + status + '</div>'
 		const f = p.fields || {}
-		const addField = (k, v) => {
-			let s
-			if (v == null) s = ''
-			else if (typeof v === 'object') {
-				if (Array.isArray(v)) s = v.join(' ')
+		const cells = []
+		const filterKeys = ['帧结束符', '数据域字节数', '平台时间BCD', '控制码']
+		for (const k in f) {
+			if (filterKeys.includes(k)) continue
+			const v = f[k]
+			let val
+			if (v == null) val = ''
+			else if (typeof v === 'object' && !Array.isArray(v)) {
+				if (v.name !== undefined) val = v.value + (v.name ? ' (' + v.name + ')' : '')
 				else {
 					const parts = []
 					for (const key in v) {
-						const val = v[key]
-						parts.push(key + '=' + (val && typeof val === 'object' && val.name !== undefined ? (val.name ? val.value + '(' + val.name + ')' : val.value) : val))
+						if (key === '后续帧') continue
+						const kv = v[key]
+						parts.push(kv && typeof kv === 'object' ? (kv.value + (kv.name ? '(' + kv.name + ')' : '')) : kv)
 					}
-					s = parts.join(' ')
+					val = parts.join(', ')
 				}
-			} else s = String(v)
-			h += '<dt>' + escHtml(k) + '</dt><dd>' + escHtml(s) + '</dd>'
+			} else val = escHtml(String(v))
+			cells.push({ name: k, value: val })
 		}
-		for (const k in f) addField(k, f[k])
-		h += '</dl>'
+		if (cells.length) {
+			const COLS = 4
+			h += '<table class="sk-parse-grid"><tbody>'
+			for (let i = 0; i < cells.length; i += COLS) {
+				h += '<tr>'
+				for (let j = 0; j < COLS; j++) {
+					const c = cells[i + j]
+					h += '<td class="sk-parse-hdr">' + (c ? escHtml(c.name) : '') + '</td>'
+				}
+				h += '</tr><tr>'
+				for (let j = 0; j < COLS; j++) {
+					const c = cells[i + j]
+					h += '<td>' + (c ? c.value : '') + '</td>'
+				}
+				h += '</tr>'
+			}
+			h += '</tbody></table>'
+		}
 		if (p.tlv && p.tlv.length) {
 			h += '<div class="sk-parse-tlvs">'
 			for (const t of p.tlv) {
-				h += '<div class="sk-parse-tag"><span class="sk-parse-tagname">Tag' + t.tag + ' ' + escHtml(t.name || '') + '</span>'
+				h += '<details class="sk-parse-tag" open><summary>Tag' + t.tag + ' ' + escHtml(t.name || '') + '</summary>'
 				if (t.error) h += ' <span class="sk-parse-bad">' + escHtml(t.error) + '</span>'
 				if (t.items && t.items.length) {
-					h += '<table class="sk-parse-items"><tbody>'
+					h += '<div class="sk-parse-items">'
 					for (const it of t.items) {
-						h += '<tr><td>ID' + it.id + '</td><td>' + escHtml(it.name || '') + '</td><td><code>' + escHtml(it.decoded || hexbytes(it.raw)) + '</code></td><td><code>' + escHtml(hexbytes(it.raw)) + '</code></td></tr>'
+						h += '<span class="sk-parse-item" title="raw:' + escHtml(hexbytes(it.raw)) + '">ID' + it.id + ' ' + escHtml(it.name || '') + ' = ' + escHtml(it.decoded || hexbytes(it.raw)) + '</span>'
 					}
-					h += '</tbody></table>'
+					h += '</div>'
 				}
-				h += '</div>'
+				h += '</details>'
 			}
 			h += '</div>'
 		}
@@ -887,7 +922,20 @@
 				for (let k = 0; k < v.length; k++) tlvBuf.push(v[k])
 			}
 		}
-		const tlvLen = tlvBuf.length
+
+		const plainTlvLen = tlvBuf.length
+		const dataBuf = []
+		u16leWrite(dataBuf, plainTlvLen)
+		for (const x of tlvBuf) dataBuf.push(x)
+		let dataField = new Uint8Array(dataBuf)
+
+		let ctrl = 0x00
+		if (opt.encKey && dataField.length > 0) {
+			try {
+				dataField = W.skAesEcbEncrypt(dataField, new Uint8Array(opt.encKey))
+				ctrl |= 0x01
+			} catch (e) {}
+		}
 
 		const ver = opt.version != null ? (opt.version & 0xff) : 0x02
 
@@ -897,10 +945,9 @@
 		head.push(ver)
 		for (let i = 0; i < 7; i++) head.push(timeBytes[i])
 		head.push(funcCode & 0xff)
-		head.push(0x00)
-		u16leWrite(head, 2 + tlvLen)
-		u16leWrite(head, tlvLen)
-		for (const x of tlvBuf) head.push(x)
+		head.push(ctrl)
+		u16leWrite(head, dataField.length)
+		for (const x of dataField) head.push(x)
 
 		const crc = W.skCrc16(new Uint8Array(head))
 		u16leWrite(head, crc)

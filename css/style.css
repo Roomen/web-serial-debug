@@ -579,65 +579,100 @@ footer a:hover {
 	font-size: 0.8rem;
 }
 
-/* ========== Protocol Parse ========== */
+/* ========== Protocol Parse (compact) ========== */
 .sk-parse-block {
-	border-left: 3px solid var(--text-muted);
-	padding: 8px 10px;
-	margin: 4px 0 6px 8px;
+	margin: 2px 0 2px 4px;
 	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-	font-size: 0.75rem;
-	background-color: var(--bg-surface);
+	font-size: 0.7rem;
+	line-height: 1.4;
+}
+.sk-parse-block.sk-parse-up .sk-parse { border-left-color: var(--success); }
+.sk-parse-block.sk-parse-down .sk-parse { border-left-color: var(--accent); }
+.sk-parse-block.sk-parse-error {
+	border-left: 3px solid var(--danger);
+	background: var(--danger-light);
+	color: var(--danger);
+	padding: 4px 8px;
 	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-	transition: background-color var(--transition-normal);
 }
 
-.sk-parse-block.sk-parse-up {
-	border-left-color: var(--success);
+.sk-parse {
+	border-left: 3px solid var(--text-muted);
+	padding: 3px 6px;
+	background: var(--bg-surface);
+	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
-.sk-parse-block.sk-parse-down {
-	border-left-color: var(--accent);
-}
-
-.sk-parse-block.sk-parse-err {
-	border-left-color: var(--danger);
-	background-color: var(--danger-light);
-	color: var(--danger);
-}
-
-.sk-parse-ok {
-	color: var(--success);
-}
-
-.sk-parse-bad {
-	color: var(--danger);
-}
-
-.sk-parse-dl dt {
+.sk-parse-bar {
 	font-weight: 600;
-	color: var(--text-secondary);
+	font-size: 0.8rem;
+	color: var(--text-muted);
+	margin-bottom: 1px;
 }
 
-.sk-parse-items {
+.sk-parse-grid {
 	width: 100%;
 	border-collapse: collapse;
-	font-size: 0.7rem;
+	table-layout: fixed;
+	font-size: 0.65rem;
+	margin: 2px 0;
+}
+.sk-parse-grid td {
+	border: 1px solid var(--border-light);
+	padding: 1px 4px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.sk-parse-grid td.sk-parse-hdr {
+	font-weight: 600;
+	font-size: 0.6rem;
+	color: var(--text-muted);
+	background: var(--bg-code);
+	border-bottom: none;
+	padding-bottom: 0;
+}
+.sk-parse-grid tr:nth-child(2n) td {
+	padding-top: 0;
 }
 
-.sk-parse-items td {
-	border: 1px solid var(--border-color);
-	padding: 2px 6px;
-	vertical-align: top;
+.sk-parse-ok { color: var(--success); }
+.sk-parse-bad { color: var(--danger); }
+
+.sk-parse-tlvs { margin-top: 2px; }
+
+.sk-parse-tag summary {
+	font-weight: 600;
+	font-size: 0.68rem;
+	color: var(--text-secondary);
+	cursor: pointer;
+	padding: 1px 0;
+}
+.sk-parse-tag summary:hover { color: var(--accent); }
+
+.sk-parse-items {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 1px 4px;
+	padding: 2px 0 2px 8px;
 }
 
-.sk-parse-items code {
-	color: var(--accent);
-	word-break: break-all;
+.sk-parse-item {
+	font-size: 0.65rem;
+	padding: 1px 4px;
+	background: var(--bg-code);
+	border-radius: 2px;
+	white-space: nowrap;
+	cursor: help;
+}
+.sk-parse-item:hover {
+	background: var(--accent-light);
 }
 
 .sk-parse-errors {
 	color: var(--danger);
 	margin-top: 2px;
+	font-size: 0.7rem;
 }
 
 .sk-parse-err {
@@ -648,10 +683,6 @@ footer a:hover {
 	margin: 4px 0;
 	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 	font-size: 0.8rem;
-}
-
-.sk-parse-tag {
-	border-top: 1px dashed var(--border-color);
 }
 
 /* ========== Hover Tips (Hex bytes) ========== */

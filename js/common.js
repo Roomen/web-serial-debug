@@ -184,6 +184,8 @@
 		skKeyAscii: '',
 		//密钥HEX(优先)
 		skKeyHex: '',
+		//加密方式 aes128|aes256
+		skEncType: 'aes128',
 	}
 
 	//生成快捷发送列表
@@ -433,6 +435,7 @@
 		}
 	})
 	//生成下发HEX
+	let _downSeq = 1
 	document.getElementById('serial-protocol-build').addEventListener('click', (e) => {
 		let tlv
 		try {
@@ -441,20 +444,28 @@
 			addLogErr('TLV JSON解析失败:' + err.toString())
 			return
 		}
-		let timeInput = document.getElementById('serial-protocol-down-time').value
-		let time
-		if (!timeInput) {
-			time = new Date()
-		} else {
-			time = timeInput
-		}
 		try {
+			let encKey = null
+			if (toolOptions.skKeyHex) {
+				const hex = toolOptions.skKeyHex.trim().replace(/\s+/g, '')
+				if (/^[0-9a-fA-F]+$/.test(hex) && hex.length % 2 === 0) {
+					const a = []
+					for (let i = 0; i < hex.length; i += 2) a.push(parseInt(hex.substr(i, 2), 16))
+					encKey = new Uint8Array(a)
+				}
+			} else if (toolOptions.skKeyAscii) {
+				const s = toolOptions.skKeyAscii
+				const a = new Uint8Array(s.length)
+				for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) & 0xff
+				encKey = a
+			}
 			const frame = skBuildDownFrame({
 				funcCode: document.getElementById('serial-protocol-down-func').value,
-				version: parseInt(document.getElementById('serial-protocol-down-ver').value) || 1,
-				time: time,
-				frameSeq: parseInt(document.getElementById('serial-protocol-down-seq').value) || 1,
+				version: 2,
+				time: new Date(),
+				frameSeq: _downSeq++,
 				tlv: tlv,
+				encKey: encKey ? encKey : null,
 			})
 			let hex = []
 			for (const b of frame) {
@@ -477,11 +488,16 @@
 
 	//常用指令(下行下发)初始化
 	const presetSel = document.getElementById('serial-protocol-down-preset')
-	if (presetSel && window.SK_DOWN_PRESETS) {
+	const funcSel = document.getElementById('serial-protocol-down-func')
+	function rebuildPresets(funcCode) {
+		if (!presetSel || !window.SK_DOWN_PRESETS) return
+		while (presetSel.options.length > 1) presetSel.remove(1)
 		for (const grp of window.SK_DOWN_PRESETS) {
+			const filtered = grp.items.filter(it => it.func === funcCode)
+			if (!filtered.length) continue
 			const og = document.createElement('optgroup')
 			og.label = grp.group
-			for (const it of grp.items) {
+			for (const it of filtered) {
 				const op = document.createElement('option')
 				op.value = it.name
 				op.textContent = it.name
@@ -489,6 +505,15 @@
 			}
 			presetSel.appendChild(og)
 		}
+	}
+	let _skipFuncEvent = false
+	if (funcSel && window.SK_DOWN_PRESETS) {
+		rebuildPresets(funcSel.value)
+		funcSel.addEventListener('change', () => {
+			if (_skipFuncEvent) { _skipFuncEvent = false; return }
+			presetSel.value = ''
+			rebuildPresets(funcSel.value)
+		})
 	}
 	function presetItemByName(name) {
 		if (!window.SK_DOWN_PRESETS) return null
@@ -506,6 +531,14 @@
 			while (a.length < fillLen) a.push(0x00)
 		}
 		return a
+	}
+	function numToBytes(val, type) {
+		switch (type) {
+			case 'uint32le': return [val & 0xff, (val >> 8) & 0xff, (val >> 16) & 0xff, (val >> 24) & 0xff]
+			case 'uint16le': return [val & 0xff, (val >> 8) & 0xff]
+			case 'uint8': return [val & 0xff]
+			default: return []
+		}
 	}
 	function presetToTlvJson(preset) {
 		const out = []
@@ -527,22 +560,104 @@
 		}
 		return JSON.stringify(out, null, 0)
 	}
-	if (presetSel) {
-		presetSel.addEventListener('change', (e) => {
-			const name = e.target.value
+		if (presetSel) {
+		const paramGroup = document.getElementById('serial-protocol-down-param-group')
+		const paramVal = document.getElementById('serial-protocol-down-param-val')
+		const paramSelEnum = document.getElementById('serial-protocol-down-param-sel')
+		const paramLabel = document.getElementById('serial-protocol-down-param-label')
+		const paramUnit = document.getElementById('serial-protocol-down-param-unit')
+		let _currentParamType = ''
+
+		function buildWithParam() {
+			const name = presetSel.value
 			if (!name) return
 			const preset = presetItemByName(name)
 			if (!preset) return
-			document.getElementById('serial-protocol-down-func').value = preset.func
-			const verSel = document.getElementById('serial-protocol-down-ver')
-			if (verSel && preset.version != null) verSel.value = String(preset.version)
-			const tlvStr = presetToTlvJson(preset)
+			if (funcSel.value !== preset.func) {
+				_skipFuncEvent = true
+				document.getElementById('serial-protocol-down-func').value = preset.func
+			}
+			const tlv = JSON.parse(JSON.stringify(preset.tlv || []))
+			if (preset.param) {
+				let bytes
+				if (preset.param.type === 'enum') {
+					const rawVal = parseInt(paramSelEnum.value, 10)
+					if (isNaN(rawVal)) return
+					bytes = numToBytes(rawVal, 'uint8')
+				} else if (preset.param.type === 'ascii') {
+					const s = paramVal.value
+					if (!s) return
+					bytes = asciiToHexBytes(s, preset.param.fillLen)
+				} else {
+					const rawVal = parseInt(paramVal.value.trim(), 10)
+					if (isNaN(rawVal)) return
+					bytes = numToBytes(rawVal, _currentParamType)
+				}
+				if (!bytes || !bytes.length) return
+				for (const blk of tlv) {
+					for (const it of (blk.items || [])) {
+						if (!it.value || it.value.length === 0) it.value = bytes
+					}
+				}
+			}
+			const presetClone = { func: preset.func, tlv: tlv }
+			const tlvStr = presetToTlvJson(presetClone)
 			document.getElementById('serial-protocol-down-tlv').value = tlvStr
-			const t = document.getElementById('serial-protocol-down-time')
-			if (t) t.value = ''
 			document.getElementById('serial-protocol-build').click()
-			const desc = preset.desc ? ('已载入「' + name + '」 ' + preset.desc) : ('已载入「' + name + '」')
-			addLog(desc, false)
+		}
+
+		presetSel.addEventListener('change', (e) => {
+			const name = e.target.value
+			if (!name) { paramGroup.style.display = 'none'; return }
+			const preset = presetItemByName(name)
+			if (!preset) { paramGroup.style.display = 'none'; return }
+			if (preset.param) {
+				paramGroup.style.display = ''
+				paramLabel.textContent = preset.param.label || '参数'
+				if (preset.param.type === 'enum') {
+					paramVal.style.display = 'none'
+					paramSelEnum.style.display = ''
+					paramSelEnum.innerHTML = ''
+					const opts = preset.param.options || {}
+					const def = preset.param.default || Object.keys(opts)[0] || '0'
+					for (const [k, v] of Object.entries(opts)) {
+						const op = document.createElement('option')
+						op.value = k
+						op.textContent = k + ':' + v
+						if (String(k) === String(def)) op.selected = true
+						paramSelEnum.appendChild(op)
+					}
+					paramUnit.textContent = ''
+					_currentParamType = 'uint8'
+				} else if (preset.param.type === 'ascii') {
+					paramVal.style.display = ''
+					paramVal.style.width = '180px'
+					paramSelEnum.style.display = 'none'
+					paramVal.value = preset.param.default || ''
+					paramUnit.textContent = ''
+					_currentParamType = 'ascii'
+				} else {
+					paramVal.style.display = ''
+					paramVal.style.width = '100px'
+					paramSelEnum.style.display = 'none'
+					paramVal.value = preset.param.default || '0'
+					paramUnit.textContent = preset.param.type === 'uint32le' ? '(uint32 LE)' : preset.param.type === 'uint16le' ? '(uint16 LE)' : '(u8)'
+					_currentParamType = preset.param.type
+				}
+			} else {
+				paramGroup.style.display = 'none'
+				_currentParamType = ''
+			}
+			buildWithParam()
+		})
+		paramVal.addEventListener('input', () => {
+			if (_currentParamType) buildWithParam()
+		})
+		paramVal.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter') { e.preventDefault(); document.getElementById('serial-protocol-send').click() }
+		})
+		paramSelEnum.addEventListener('change', () => {
+			buildWithParam()
 		})
 	}
 	//读取参数
@@ -575,9 +690,28 @@
 	}
 	document.getElementById('serial-protocol-key-ascii').value = toolOptions.skKeyAscii
 	document.getElementById('serial-protocol-key-hex').value = toolOptions.skKeyHex
+	if (toolOptions.skEncType) {
+		set('serial-protocol-enc-type', toolOptions.skEncType)
+	}
 	quickSend.value = toolOptions.quickSendIndex
 	quickSend.dispatchEvent(new Event('change'))
 	resetLoopSend()
+
+	// 记住当前 tab，刷新不丢失
+	const tabTriggers = document.querySelectorAll('#nav-tab button[data-bs-toggle="tab"]')
+	tabTriggers.forEach(btn => {
+		btn.addEventListener('shown.bs.tab', (e) => {
+			localStorage.setItem('activeTab', e.target.id)
+		})
+	})
+	const savedTab = localStorage.getItem('activeTab')
+	if (savedTab) {
+		const tabBtn = document.getElementById(savedTab)
+		if (tabBtn) {
+			const tab = new bootstrap.Tab(tabBtn)
+			tab.show()
+		}
+	}
 
 	//实时修改选项
 	document.getElementById('serial-timer-out').addEventListener('change', (e) => {
@@ -627,6 +761,9 @@
 	})
 	document.getElementById('serial-protocol-key-hex').addEventListener('change', function (e) {
 		changeOption('skKeyHex', this.value)
+	})
+	document.getElementById('serial-protocol-enc-type').addEventListener('change', function (e) {
+		changeOption('skEncType', this.value)
 	})
 
 	document.querySelectorAll('#serial-options .input-group input,#serial-options .input-group select').forEach((item) => {
@@ -1029,7 +1166,7 @@
 			const prompt = r.needKey ? '<div class="sk-parse-err">⚠ 加密报文,请在上方「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>' : ''
 			html = '<div class="sk-parse-block ' + dirCls + '"><span class="text-muted small">' + time + form + ' 解析</span>' + prompt + skFormatFrame(r) + '</div>'
 		} catch (err) {
-			html = '<div class="sk-parse-block sk-parse-err"><span class="text-danger small">第三方协议解析异常:' + HTMLEncode(String(err)) + '</span></div>'
+			html = '<div class="sk-parse-block sk-parse-error"><span class="text-danger small">第三方协议解析异常:' + HTMLEncode(String(err)) + '</span></div>'
 		}
 		let tempNode = document.createElement('div')
 		tempNode.innerHTML = html

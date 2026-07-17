@@ -236,3 +236,106 @@ window.skAes128EcbDecrypt = function (cipherBytes, keyBytes) {
 	}
 	return out
 }
+
+window.skAes256KeyExpansion = function (key) {
+	const Nk = 8
+	const Nr = 14
+	const rk = new Uint8Array((Nr + 1) * 16)
+	rk.set(key.subarray(0, 32))
+	let i = 32
+	for (let round = 8; round < (Nr + 1) * 4; round++) {
+		let t0 = rk[(round - 1) * 4]
+		let t1 = rk[(round - 1) * 4 + 1]
+		let t2 = rk[(round - 1) * 4 + 2]
+		let t3 = rk[(round - 1) * 4 + 3]
+		if (round % Nk === 0) {
+			const tt = t0; t0 = t1; t1 = t2; t2 = t3; t3 = tt
+			t0 = window.skAesSbox[t0]
+			t1 = window.skAesSbox[t1]
+			t2 = window.skAesSbox[t2]
+			t3 = window.skAesSbox[t3]
+			t0 ^= window.skAesRcon[Math.floor(round / Nk) - 1]
+		} else if (Nk > 6 && round % Nk === 4) {
+			t0 = window.skAesSbox[t0]
+			t1 = window.skAesSbox[t1]
+			t2 = window.skAesSbox[t2]
+			t3 = window.skAesSbox[t3]
+		}
+		rk[i] = rk[i - 32] ^ t0
+		rk[i + 1] = rk[i - 31] ^ t1
+		rk[i + 2] = rk[i - 30] ^ t2
+		rk[i + 3] = rk[i - 29] ^ t3
+		i += 4
+	}
+	return rk
+}
+
+window.skAes256EcbEncryptBlock = function (plain, rk) {
+	const s = new Uint8Array(plain.subarray(0, 16))
+	window.skAesAddRoundKey(s, rk, 0)
+	for (let round = 1; round < 14; round++) {
+		window.skAesSubBytes(s, window.skAesSbox)
+		window.skAesShiftRows(s)
+		window.skAesMixColumns(s)
+		window.skAesAddRoundKey(s, rk, round * 16)
+	}
+	window.skAesSubBytes(s, window.skAesSbox)
+	window.skAesShiftRows(s)
+	window.skAesAddRoundKey(s, rk, 224)
+	return s
+}
+
+window.skAes256EcbDecryptBlock = function (cipher, rk) {
+	const s = new Uint8Array(cipher.subarray(0, 16))
+	window.skAesAddRoundKey(s, rk, 224)
+	window.skAesInvShiftRows(s)
+	window.skAesSubBytes(s, window.skAesInvSbox)
+	for (let round = 13; round >= 1; round--) {
+		window.skAesAddRoundKey(s, rk, round * 16)
+		window.skAesInvMixColumns(s)
+		window.skAesInvShiftRows(s)
+		window.skAesSubBytes(s, window.skAesInvSbox)
+	}
+	window.skAesAddRoundKey(s, rk, 0)
+	return s
+}
+
+window.skAes256EcbEncrypt = function (plainBytes, keyBytes) {
+	const rk = window.skAes256KeyExpansion(new Uint8Array(keyBytes.subarray(0, 32)))
+	const plain = new Uint8Array(plainBytes)
+	const blocks = Math.floor(plain.length / 16) + 1
+	const out = new Uint8Array(blocks * 16)
+	out.fill(0)
+	out.set(plain)
+	for (let b = 0; b < blocks; b++) {
+		const enc = window.skAes256EcbEncryptBlock(out.subarray(b * 16, b * 16 + 16), rk)
+		out.set(enc, b * 16)
+	}
+	return out
+}
+
+window.skAes256EcbDecrypt = function (cipherBytes, keyBytes) {
+	const rk = window.skAes256KeyExpansion(new Uint8Array(keyBytes.subarray(0, 32)))
+	const cipher = new Uint8Array(cipherBytes)
+	const blocks = Math.floor(cipher.length / 16)
+	const out = new Uint8Array(blocks * 16)
+	for (let b = 0; b < blocks; b++) {
+		const dec = window.skAes256EcbDecryptBlock(cipher.subarray(b * 16, b * 16 + 16), rk)
+		out.set(dec, b * 16)
+	}
+	return out
+}
+
+window.skAesEcbEncrypt = function (plainBytes, keyBytes) {
+	const key = new Uint8Array(keyBytes)
+	if (key.length === 32) return window.skAes256EcbEncrypt(plainBytes, key)
+	const k16 = new Uint8Array(key.subarray(0, 16))
+	return window.skAes128EcbEncrypt(plainBytes, k16)
+}
+
+window.skAesEcbDecrypt = function (cipherBytes, keyBytes) {
+	const key = new Uint8Array(keyBytes)
+	if (key.length === 32) return window.skAes256EcbDecrypt(cipherBytes, key)
+	const k16 = new Uint8Array(key.subarray(0, 16))
+	return window.skAes128EcbDecrypt(cipherBytes, k16)
+}

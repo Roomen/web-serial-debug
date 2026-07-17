@@ -1,6 +1,7 @@
 ;(function () {
 	var _h = [175, 162, 62, 223, 78, 252, 150, 80, 91, 159, 27, 96, 16, 146, 189, 84, 217, 75, 48, 212, 59, 7, 164, 221, 109, 225, 249, 252, 98, 153, 110, 18]
 	var _k = [75, 114, 31, 142, 58, 213, 103, 201]
+	var _expiry = 3 * 24 * 60 * 60 * 1000
 
 	function _d() {
 		var r = ''
@@ -34,6 +35,7 @@
 		if (p < 0) return false
 		var t = parseInt(v.substring(0, p), 36)
 		if (!t || t > Date.now() + 86400000) return false
+		if (Date.now() - t > _expiry) return false
 		var s = parseInt(v.substring(p + 1), 36)
 		var x = (_h[0] << 24) | (_h[1] << 16) | (_h[2] << 8) | _h[3]
 		return s === (t ^ x)
@@ -43,14 +45,14 @@
 		login: async function (email, password) {
 			var h = await _sha(email + ':' + password)
 			if (h !== _d()) return false
-			sessionStorage.setItem('_as', _gt())
+			localStorage.setItem('_as', _gt())
 			return true
 		},
 		authed: function () {
-			return _vt(sessionStorage.getItem('_as'))
+			return _vt(localStorage.getItem('_as'))
 		},
 		logout: function () {
-			sessionStorage.removeItem('_as')
+			localStorage.removeItem('_as')
 			location.reload()
 		}
 	}

@@ -320,15 +320,22 @@
                                     <option value="never">不解密</option>
                                 </select>
                             </div>
+                            <div class="input-group input-group-sm" style="width: auto;" title="报文加解密算法 A ES128/256-ECB">
+                                <span class="input-group-text">加密方式</span>
+                                <select class="form-select" id="serial-protocol-enc-type">
+                                    <option value="aes128">AES-128-ECB</option>
+                                    <option value="aes256">AES-256-ECB</option>
+                                </select>
+                            </div>
                             <div class="input-group input-group-sm" style="width: auto;">
                                 <span class="input-group-text">密钥(ASCII)</span>
                                 <input type="text" class="form-control" id="serial-protocol-key-ascii"
-                                    placeholder="留空则不解密(加密报文需输入密钥)">
+                                    placeholder="留空则不解密(加密报文需输入密钥 16/32字节)">
                             </div>
                             <div class="input-group input-group-sm" style="width: auto;">
                                 <span class="input-group-text">密钥(HEX，优先)</span>
                                 <input type="text" class="form-control" id="serial-protocol-key-hex"
-                                    placeholder="如 0102030405...16字节">
+                                    placeholder="如 01020304...16/32字节 AES256需32字节">
                             </div>
                             <div class="form-check form-switch align-self-center">
                                 <input class="form-check-input" type="checkbox" id="serial-protocol-enable">
@@ -353,39 +360,24 @@
                             <h6 class="mb-2">下行下发</h6>
                             <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
                                 <div class="input-group input-group-sm" style="width: auto;">
-                                    <span class="input-group-text">常用指令</span>
-                                    <select class="form-select" id="serial-protocol-down-preset" style="max-width: 220px;">
-                                        <option value="">— 选择常用指令 —</option>
-                                    </select>
-                                </div>
-                                <div class="input-group input-group-sm" style="width: auto;">
                                     <span class="input-group-text">功能码</span>
                                     <select class="form-select" id="serial-protocol-down-func">
                                         <option value="0x01">参数设置 0x01</option>
-                                        <option value="0x02">终端数据上报 0x02</option>
                                         <option value="0x03">信息查询 0x03</option>
-                                        <option value="0x04">数据透传 0x04</option>
                                         <option value="0x11">指令操作 0x11</option>
                                     </select>
                                 </div>
                                 <div class="input-group input-group-sm" style="width: auto;">
-                                    <span class="input-group-text">协议版本</span>
-                                    <select class="form-select" id="serial-protocol-down-ver">
-                                        <option value="1">旧版本 0x01</option>
-                                        <option value="2">当前版本 0x02</option>
+                                    <span class="input-group-text">常用指令</span>
+                                    <select class="form-select" id="serial-protocol-down-preset" style="max-width: 180px;">
+                                        <option value="">— 选择 —</option>
                                     </select>
                                 </div>
-                            </div>
-                            <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
-                                <div class="input-group input-group-sm" style="width: auto;">
-                                    <span class="input-group-text">时间</span>
-                                    <input type="text" class="form-control" id="serial-protocol-down-time"
-                                        placeholder="留空=当前时间，BCD YYYYMMDDhhmmss">
-                                </div>
-                                <div class="input-group input-group-sm" style="width: auto;">
-                                    <span class="input-group-text">帧序号</span>
-                                    <input type="number" class="form-control" id="serial-protocol-down-seq" value="1"
-                                        min="1" max="65535" style="width: 90px;">
+                                <div class="input-group input-group-sm" id="serial-protocol-down-param-group" style="display:none;width:auto;">
+                                    <span class="input-group-text" id="serial-protocol-down-param-label">参数</span>
+                                    <input type="text" class="form-control" id="serial-protocol-down-param-val" style="width:100px;" placeholder="值">
+                                    <select class="form-select form-select-sm" id="serial-protocol-down-param-sel" style="display:none;width:130px;"></select>
+                                    <span class="input-group-text" id="serial-protocol-down-param-unit" style="font-size:0.7rem;"></span>
                                 </div>
                             </div>
                             <textarea class="form-control form-control-sm" rows="4" id="serial-protocol-down-tlv"
