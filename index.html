@@ -27,6 +27,20 @@
 </head>
 
 <body>
+    <div id="login-overlay" class="login-overlay">
+        <div class="login-card">
+            <div class="login-logo">
+                <img src="imgs/logo.svg" width="48" height="38" alt="Web Serial">
+                <h2>Web Serial Debug</h2>
+            </div>
+            <div class="login-form">
+                <input type="email" id="login-email" class="login-input" placeholder="邮箱" autocomplete="email">
+                <input type="password" id="login-password" class="login-input" placeholder="密码" autocomplete="current-password">
+                <p id="login-error" class="login-error"></p>
+                <button id="login-submit" class="login-btn">登 录</button>
+            </div>
+        </div>
+    </div>
     <header class="bd-header bg-dark py-3 d-flex align-items-stretch border-bottom border-dark">
         <div class="container-fluid d-flex align-items-center">
             <h1 class="d-flex align-items-center fs-4 text-white mb-0">
@@ -502,6 +516,7 @@
             </div>
         </div>
     </div>
+    <script src="js/auth.js"></script>
     <script src="js/ansi_up.min.js"></script>
     <script>
         hideTop()
