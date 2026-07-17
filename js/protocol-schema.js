@@ -6,7 +6,7 @@ window.SK_TAG_NAME = {
 	'92': '设备上行信息', '93': '控制指令', '254': '错误日志记录'
 }
 
-window.SK_MANUFACTURER = { 1: '杭州第三方', 2: '宁波水表' }
+window.SK_MANUFACTURER = { 1: '厂商A', 2: '厂商B' }
 
 window.SK_PROTOCOL_VERSION = { 1: '旧版本', 2: '当前版本' }
 
@@ -127,7 +127,7 @@ window.SK_TAGS = {
 		{ id: 25, name: '设备唯一编码', type: 'BYTE[7]', desc: 'BCD 高位补0' },
 		{ id: 26, name: '基表号', type: 'BYTE[10]', desc: 'BCD 高位补0' },
 		{ id: 27, name: '维护后台上报时间参数', type: 'BYTE[1+1+2]', desc: 'DD+hh+最大上报时长(分钟,预留)', dec: { t: 'reportTime' } },
-		{ id: 28, name: '脉冲形式', type: 'BYTE', desc: '0未知 1单脉冲 2双脉冲 3正反单脉冲 4方向单脉冲 5HRI(申舒斯) 8瑞森三霍尔 9第三方双霍尔' },
+		{ id: 28, name: '脉冲形式', type: 'BYTE', desc: '0未知 1单脉冲 2双脉冲 3正反单脉冲 4方向单脉冲 5HRI 8三霍尔 9双霍尔' },
 		{ id: 29, name: '基准水量', type: 'BYTE', desc: '0=1000L 1=100L 2=10L 3=1L 每圈', dec: { t: 'enum', map: { 0: '1000L每圈', 1: '100L每圈', 2: '10L每圈', 3: '1圈代表1L' } } },
 		{ id: 30, name: '基表整数位数', type: 'BYTE', desc: '字轮框内数字个数' },
 		{ id: 31, name: '设备启用标志', type: 'BYTE', desc: '0停止 1启用 2运输模式' },
@@ -171,7 +171,7 @@ window.SK_TAGS = {
 		{ id: 1, name: '无磁传感器信号值（只读）', type: 'BYTE[2]', desc: 'BYTE1第一路 BYTE2第二路信号值' },
 		{ id: 2, name: '计量过滤模式', type: 'BYTE', desc: '0常规 1开猫16ms滤波 2开猫32ms滤波 3开猫不计量' },
 		{ id: 3, name: 'SENSOR参数', type: 'BYTES[6]', desc: 'EC200/EC1000: BADJ1 BADJ2 采样周期 预留 测量时长2B' },
-		{ id: 4, name: '模组型号（只读）', type: 'BYTE', desc: '0其他 1NV40第三方 2JY20隽永 3MS17马圣' },
+		{ id: 4, name: '模组型号（只读）', type: 'BYTE', desc: '0其他 1NV40 2JY20 3MS17' },
 		{ id: 5, name: '采样距离', type: 'BYTE', desc: 'mm' },
 		{ id: 6, name: '采样频率', type: 'BYTE', desc: 'ms' }
 	],
