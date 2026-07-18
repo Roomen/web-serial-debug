@@ -199,7 +199,150 @@ body {
 }
 
 #main {
+	height: 100%;
+}
+
+/* ========== App Shell + Activity Rail ========== */
+#app-shell {
 	height: calc(100% - var(--top-height));
+}
+
+#activity-rail {
+	flex: 0 0 auto;
+	width: 74px;
+	background: var(--bg-header);
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	padding: 6px 0 8px;
+	border-right: 1px solid rgba(255, 255, 255, 0.06);
+	z-index: 20;
+}
+
+.rail-brand {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 8px 0 12px;
+	margin-bottom: 4px;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.rail-brand img {
+	opacity: 0.9;
+}
+
+.rail-top {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.rail-bottom {
+	margin-top: auto;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	padding-top: 8px;
+	border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.rail-item {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 4px;
+	width: 100%;
+	padding: 10px 2px;
+	background: none;
+	border: 0;
+	color: rgba(255, 255, 255, 0.55);
+	cursor: pointer;
+	font-size: 0.62rem;
+	text-align: center;
+	text-decoration: none;
+	transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.rail-item i {
+	font-size: 1.3rem;
+	line-height: 1;
+}
+
+.rail-item:hover {
+	color: #fff;
+	background: rgba(255, 255, 255, 0.06);
+}
+
+.rail-item.active {
+	color: #fff;
+}
+
+.rail-item.active::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	top: 9px;
+	bottom: 9px;
+	width: 3px;
+	border-radius: 0 3px 3px 0;
+	background: var(--accent);
+}
+
+.rail-label {
+	line-height: 1;
+	letter-spacing: 0.3px;
+}
+
+.rail-bottom .theme-toggle-btn {
+	margin: 0;
+	padding: 0;
+}
+
+.rail-bottom .theme-toggle-track {
+	transform: scale(0.85);
+}
+
+#views {
+	flex: 1 1 auto;
+	position: relative;
+	min-width: 0;
+	height: 100%;
+}
+
+.app-view {
+	height: 100%;
+}
+
+.app-view:not(.active) {
+	display: none !important;
+}
+
+/* Standalone tool view (non-serial tools, e.g. firmware packager) */
+.tool-view-inner {
+	max-width: 920px;
+	margin: 0 auto;
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	padding: 20px 16px;
+}
+
+.tool-view-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0 0 14px;
+	font-size: 1.15rem;
+	font-weight: 600;
+	color: var(--text-primary);
+}
+
+.tool-view-title i {
+	color: var(--accent);
 }
 
 /* ========== Header ========== */
@@ -990,4 +1133,1019 @@ hr {
 
 #serial-options .text-muted:hover {
 	color: var(--text-link) !important;
+}
+
+/* ========== Responsive / Mobile (Android phones etc.) ========== */
+@media (max-width: 768px) {
+	html, body {
+		height: auto;
+		min-height: 100%;
+	}
+
+	/* App shell grows with content; the rail stays pinned while the page scrolls */
+	#app-shell {
+		height: auto !important;
+	}
+
+	#activity-rail {
+		position: sticky;
+		top: 0;
+		align-self: flex-start;
+		height: 100vh;
+		width: 60px;
+	}
+
+	.rail-item {
+		font-size: 0.55rem;
+		padding: 9px 1px;
+	}
+
+	.rail-item i {
+		font-size: 1.15rem;
+	}
+
+	.app-view {
+		height: auto;
+	}
+
+	.tool-view-inner {
+		height: auto;
+		padding: 14px 10px;
+	}
+
+	/* Stack the three columns vertically */
+	#main {
+		flex-direction: column;
+		height: auto !important;
+	}
+
+	/* Sidebars span the full width and size to their content */
+	#serial-options,
+	#serial-tools {
+		width: 100% !important;
+		max-width: 100%;
+		height: auto !important;
+		border-left: none !important;
+		border-right: none !important;
+	}
+
+	#serial-options {
+		border-bottom: 1px solid var(--border-color);
+	}
+
+	#serial-tools {
+		border-top: 1px solid var(--border-color);
+	}
+
+	/* Collapse panels: no float, full width (overrides inline width:428px) */
+	.sidebar .collapse {
+		float: none !important;
+		width: 100% !important;
+	}
+
+	#serial-tools .collapse.show {
+		height: auto !important;
+		width: 100% !important;
+		overflow: visible !important;
+	}
+
+	/* Turn the full-height vertical toggle bars into horizontal collapse headers */
+	.toggle-button {
+		float: none !important;
+		width: 100% !important;
+		height: 40px;
+		border-top: 1px solid var(--border-color);
+	}
+
+	.toggle-button i {
+		transform: rotate(-90deg);
+	}
+
+	/* Center log panel keeps a definite height so the log scrolls internally */
+	#log-main {
+		height: 78vh;
+		padding: 0 8px;
+	}
+
+	#serial-logs {
+		min-height: 200px;
+	}
+
+	/* Tools tab content grows with its content; the page scrolls instead */
+	#nav-tabContent {
+		overflow: visible;
+	}
+
+	#nav-tabContent > .tab-pane,
+	#nav-protocol,
+	#nav-firmware,
+	#nav-firmware-pack {
+		overflow: visible;
+		min-height: 0;
+	}
+
+	#serial-quick-send-content {
+		min-height: 220px;
+	}
+
+	/* Let crowded toolbars wrap instead of overflowing */
+	.btn-toolbar {
+		flex-wrap: wrap;
+	}
+
+	/* Release fixed-width inputs so they fit narrow screens */
+	#serial-timer-out,
+	#serial-log-type,
+	#serial-loop-send-time {
+		width: auto !important;
+	}
+
+    /* Full-width send button once its toolbar wraps */
+    #serial-send {
+        width: 100%;
+        margin-top: 6px;
+    }
+}
+
+/* ======================================================
+   Firmware Packager — Modern Redesign
+   ====================================================== */
+
+.fw-pack-wrapper {
+    max-width: 860px !important;
+    padding: 24px 20px 32px;
+}
+
+/* ---- Banner ---- */
+.fw-banner {
+    background: linear-gradient(135deg, var(--accent), #6366f1);
+    border-radius: var(--radius-lg);
+    padding: 22px 28px;
+    margin-bottom: 22px;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 4px 24px rgba(59, 130, 246, 0.2);
+}
+.fw-banner::after {
+    content: '';
+    position: absolute;
+    top: -60%;
+    right: -10%;
+    width: 220px;
+    height: 220px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 50%;
+    pointer-events: none;
+}
+.fw-banner-content {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+}
+.fw-banner-icon {
+    width: 52px; height: 52px;
+    background: rgba(255,255,255,0.18);
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.6rem;
+    color: #fff;
+    flex-shrink: 0;
+    backdrop-filter: blur(4px);
+}
+.fw-banner-title {
+    margin: 0;
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 0.5px;
+}
+.fw-banner-sub {
+    margin: 4px 0 0;
+    font-size: 0.8rem;
+    color: rgba(255,255,255,0.78);
+}
+
+/* ---- Drop Zone Grid ---- */
+.fw-drop-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 18px;
+}
+@media (max-width: 640px) {
+    .fw-drop-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.fw-drop-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.fw-drop-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--bg-surface-hover);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.fw-drop-badge {
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    background: var(--accent);
+    color: #fff;
+}
+.fw-drop-badge.optional {
+    background: var(--text-muted);
+    color: var(--bg-surface);
+}
+.fw-drop-type {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* ---- Drop Zone ---- */
+.fw-drop-zone {
+    padding: 32px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: background var(--transition-fast), border-color var(--transition-fast);
+    position: relative;
+    border: 2px dashed var(--border-color);
+    margin: 12px 16px 16px;
+    border-radius: var(--radius-md);
+}
+.fw-drop-zone:hover {
+    border-color: var(--accent);
+    background: var(--accent-light);
+}
+.fw-drop-zone.drag-over {
+    border-color: var(--accent);
+    background: var(--accent-light);
+    box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.12);
+}
+.fw-drop-zone-icon {
+    font-size: 2.2rem;
+    color: var(--text-muted);
+    display: block;
+    margin-bottom: 8px;
+    transition: color var(--transition-fast), transform var(--transition-fast);
+}
+.fw-drop-zone:hover .fw-drop-zone-icon,
+.fw-drop-zone.drag-over .fw-drop-zone-icon {
+    color: var(--accent);
+    transform: translateY(-3px);
+}
+.fw-drop-zone-text {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+.fw-drop-zone-hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+.fw-drop-browse {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0 2px;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    font-size: 0.75rem;
+}
+.fw-drop-browse:hover {
+    color: var(--accent-hover);
+}
+
+/* ---- File Info Card (after upload) ---- */
+.fw-file-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    margin: 12px 16px 16px;
+    background: linear-gradient(135deg, var(--success-light), var(--bg-surface));
+    border: 2px solid var(--success);
+    border-radius: var(--radius-md);
+}
+.fw-file-icon {
+    width: 42px; height: 42px;
+    background: var(--success);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3rem;
+    color: #fff;
+    flex-shrink: 0;
+}
+.fw-file-detail {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.fw-file-name {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fw-file-size {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.fw-file-clear {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1.1rem;
+    padding: 4px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: color var(--transition-fast), background var(--transition-fast);
+}
+.fw-file-clear:hover {
+    color: var(--danger);
+    background: var(--danger-light);
+}
+
+/* ---- Config Card ---- */
+.fw-config-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 20px 24px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow-sm);
+}
+
+.fw-config-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+}
+@media (max-width: 640px) {
+    .fw-config-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.fw-config-item {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.fw-config-wide {
+    grid-column: 1 / -1;
+}
+
+.fw-config-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+}
+.fw-config-label i {
+    color: var(--accent);
+    font-size: 0.85rem;
+}
+
+.fw-input {
+    background: var(--bg-input) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
+    border-radius: var(--radius-sm) !important;
+    padding: 8px 12px !important;
+    font-size: 0.85rem !important;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast) !important;
+}
+.fw-input:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15) !important;
+}
+.fw-input::placeholder {
+    color: var(--text-muted) !important;
+}
+
+/* ---- Output Type Pills ---- */
+.fw-output-types {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.fw-check-pill {
+    position: relative;
+    cursor: pointer;
+    margin: 0;
+}
+.fw-check-pill input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.fw-check-pill-content {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 7px 14px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: var(--bg-surface-hover);
+    border: 1.5px solid var(--border-color);
+    border-radius: 22px;
+    transition: all var(--transition-fast);
+    user-select: none;
+}
+.fw-check-pill input:checked + .fw-check-pill-content {
+    color: var(--accent);
+    background: var(--accent-light);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+}
+.fw-check-pill:hover .fw-check-pill-content {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.fw-zip-row {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border-color);
+}
+
+/* ---- BLANK Row ---- */
+.fw-blank-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.fw-blank-name {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    flex: 1;
+}
+
+/* ---- Generate Button ---- */
+.fw-generate-btn {
+    position: relative;
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+    margin-bottom: 20px;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+}
+.fw-generate-btn-inner {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 16px 24px;
+    background: linear-gradient(135deg, var(--accent), #6366f1);
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    border-radius: var(--radius-lg);
+    transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+.fw-generate-btn:hover .fw-generate-btn-inner {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 28px rgba(59, 130, 246, 0.35);
+}
+.fw-generate-btn:active .fw-generate-btn-inner {
+    transform: translateY(0);
+}
+.fw-generate-btn-inner i {
+    font-size: 1.2rem;
+}
+.fw-generate-btn-glow {
+    position: absolute;
+    inset: -3px;
+    border-radius: calc(var(--radius-lg) + 3px);
+    background: linear-gradient(135deg, var(--accent), #6366f1, #a78bfa);
+    opacity: 0;
+    transition: opacity var(--transition-normal);
+    filter: blur(12px);
+    z-index: 0;
+}
+.fw-generate-btn:hover .fw-generate-btn-glow {
+    opacity: 0.25;
+}
+
+/* ---- Log Card ---- */
+.fw-log-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 140px;
+}
+
+.fw-log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: var(--bg-surface-hover);
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+.fw-log-header i {
+    color: var(--accent);
+    margin-right: 4px;
+}
+.fw-log-clear {
+    background: none;
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.fw-log-clear:hover {
+    color: var(--danger);
+    border-color: var(--danger);
+    background: var(--danger-light);
+}
+
+.fw-log-body {
+    margin: 0;
+    padding: 14px 16px;
+    background: var(--bg-surface) !important;
+    color: var(--text-primary) !important;
+    border: none !important;
+    flex: 1 1 auto;
+    overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+    font-size: 0.78rem !important;
+    line-height: 1.55;
+    white-space: pre-wrap !important;
+    min-height: 120px;
+}
+
+/* ======================================================
+   Serial Settings Sidebar — Modern Redesign
+   ====================================================== */
+
+.serial-settings-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 14px;
+    margin-bottom: 10px;
+    box-shadow: var(--shadow-sm);
+}
+
+.serial-settings-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-light);
+}
+.serial-settings-title i {
+    color: var(--accent);
+}
+
+.serial-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.serial-field:last-child {
+    margin-bottom: 0;
+}
+
+.serial-field-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    width: 58px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0;
+    white-space: nowrap;
+}
+.serial-field-label i {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+}
+
+.serial-field-input {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.78rem !important;
+    padding: 5px 8px !important;
+    background: var(--bg-input) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
+    border-radius: var(--radius-sm) !important;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast) !important;
+}
+.serial-field-input:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12) !important;
+}
+
+.serial-baud-combo {
+    flex: 1;
+    position: relative;
+    min-width: 0;
+}
+.serial-baud-combo .serial-field-input {
+    width: 100%;
+    padding-right: 30px !important;
+    cursor: pointer;
+}
+.serial-baud-arrow {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    pointer-events: none;
+    transition: color var(--transition-fast);
+}
+.serial-baud-combo.open .serial-baud-arrow {
+    color: var(--accent);
+    transform: translateY(-50%) rotate(180deg);
+}
+
+.serial-baud-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    margin: 2px 0 0;
+    padding: 4px 0;
+    list-style: none;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-lg);
+    max-height: 200px;
+    overflow-y: auto;
+}
+.serial-baud-combo.open .serial-baud-dropdown {
+    display: block;
+}
+
+.serial-baud-dropdown li {
+    padding: 6px 12px;
+    font-size: 0.78rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+.serial-baud-dropdown li:hover {
+    background: var(--accent-light);
+    color: var(--accent);
+}
+.serial-baud-dropdown li.active {
+    background: var(--accent-light);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+/* ---- Port Select & Open Buttons ---- */
+.serial-port-btn {
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 7px 14px;
+    border-radius: var(--radius-md);
+    transition: all var(--transition-fast);
+}
+.serial-port-btn i {
+    margin-right: 2px;
+}
+
+.serial-open-btn {
+    font-size: 0.82rem;
+    font-weight: 600;
+    padding: 7px 14px;
+    border-radius: var(--radius-md);
+    background: linear-gradient(135deg, var(--accent), #3b82f6);
+    border: none;
+    transition: all var(--transition-fast);
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
+}
+.serial-open-btn:hover {
+    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.35);
+    transform: translateY(-1px);
+}
+.serial-open-btn i {
+    margin-right: 2px;
+}
+
+/* ---- Status Indicator ---- */
+.serial-status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    font-size: 0.8rem;
+    font-weight: 500;
+    border: 1px solid;
+}
+
+.serial-status-indicator.connected {
+    background: var(--success-light);
+    color: #16a34a;
+    border-color: rgba(34, 197, 94, 0.3);
+}
+[data-theme="dark"] .serial-status-indicator.connected {
+    color: #4ade80;
+}
+
+.serial-status-indicator.disconnected {
+    background: var(--bg-surface-hover);
+    color: var(--text-muted);
+    border-color: var(--border-color);
+}
+
+.serial-status-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.serial-status-indicator.connected .serial-status-dot {
+    background: #22c55e;
+    box-shadow: 0 0 6px rgba(34, 197, 94, 0.6);
+    animation: serial-dot-pulse 2s ease-in-out infinite;
+}
+
+.serial-status-indicator.disconnected .serial-status-dot {
+    background: var(--text-muted);
+}
+
+@keyframes serial-dot-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.serial-status-text {
+    line-height: 1;
+}
+
+/* ---- Serial Log Title ---- */
+.serial-log-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
+}
+.serial-log-title i {
+    color: var(--accent);
+    font-size: 1.1rem;
+}
+
+/* ---- Serial Log Actions ---- */
+.serial-log-actions .btn {
+    font-size: 0.75rem;
+    padding: 4px 12px;
+    font-weight: 500;
+}
+
+/* ---- Send Area ---- */
+.serial-send-area {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 12px;
+    box-shadow: var(--shadow-sm);
+}
+
+.serial-send-textarea {
+    resize: none !important;
+    border-radius: var(--radius-sm) !important;
+    font-size: 0.82rem !important;
+    padding: 10px 12px !important;
+    background: var(--bg-input) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast) !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.serial-send-textarea:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+}
+.serial-send-textarea::placeholder {
+    color: var(--text-muted);
+}
+
+.serial-send-btn {
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 8px 24px !important;
+    border-radius: var(--radius-md) !important;
+    background: linear-gradient(135deg, var(--accent), #6366f1) !important;
+    border: none !important;
+    box-shadow: 0 2px 10px rgba(59, 130, 246, 0.2);
+    transition: all var(--transition-fast);
+    letter-spacing: 0.3px;
+}
+.serial-send-btn:hover {
+    box-shadow: 0 4px 18px rgba(99, 102, 241, 0.35);
+    transform: translateY(-1px);
+}
+.serial-send-btn:active {
+    transform: translateY(0);
+}
+.serial-send-btn i {
+    margin-right: 2px;
+}
+
+/* ======================================================
+   Firmware Upgrade — Drag & Drop
+   ====================================================== */
+
+.fw-upgrade-dropzone {
+    border: 2px dashed var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 24px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+    margin-bottom: 4px;
+}
+.fw-upgrade-dropzone:hover {
+    border-color: var(--accent);
+    background: var(--accent-light);
+}
+.fw-upgrade-dropzone.drag-over {
+    border-color: var(--accent);
+    background: var(--accent-light);
+    box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+}
+.fw-upgrade-drop-icon {
+    font-size: 1.6rem;
+    color: var(--text-muted);
+    display: block;
+    margin-bottom: 6px;
+    transition: color var(--transition-fast), transform var(--transition-fast);
+}
+.fw-upgrade-dropzone:hover .fw-upgrade-drop-icon,
+.fw-upgrade-dropzone.drag-over .fw-upgrade-drop-icon {
+    color: var(--accent);
+    transform: translateY(-2px);
+}
+.fw-upgrade-drop-text {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 3px;
+}
+.fw-upgrade-drop-hint {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.fw-upgrade-file {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    margin-bottom: 4px;
+    background: linear-gradient(135deg, var(--success-light), var(--bg-surface));
+    border: 2px solid var(--success);
+    border-radius: var(--radius-md);
+}
+.fw-upgrade-file-icon {
+    font-size: 1.2rem;
+    color: var(--success);
+    flex-shrink: 0;
+}
+.fw-upgrade-file-detail {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+.fw-upgrade-file-name {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fw-upgrade-file-size {
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.fw-upgrade-file-clear {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 2px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: color var(--transition-fast);
+}
+.fw-upgrade-file-clear:hover {
+    color: var(--danger);
+}
+
+.fw-log-upgrade-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    flex-wrap: wrap;
+}
+.fw-log-upgrade-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #fff;
+    background: linear-gradient(135deg, var(--accent), #6366f1);
+    border: none;
+    border-radius: 16px;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    white-space: nowrap;
+}
+.fw-log-upgrade-btn:hover {
+    box-shadow: 0 2px 10px rgba(59, 130, 246, 0.35);
+    transform: translateY(-1px);
+}
+.fw-log-upgrade-btn i {
+    font-size: 0.8rem;
+}
+.fw-log-upgrade-name {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }

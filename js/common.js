@@ -186,6 +186,103 @@
 		skKeyHex: '',
 		//加密方式 aes128|aes256
 		skEncType: 'aes128',
+		//当前协议
+		skProtocol: 'sek',
+	}
+
+	// ---- 协议注册表 ----
+	window._protocols = {}
+	window._activeProtocol = 'sek'
+
+	window.registerProtocol = function (id, impl) {
+		window._protocols[id] = impl
+		if (!document.getElementById('serial-protocol-select')) return
+		var sel = document.getElementById('serial-protocol-select')
+		var exists = Array.from(sel.options).some(function (o) { return o.value === id })
+		if (!exists) {
+			var opt = document.createElement('option')
+			opt.value = id
+			opt.textContent = impl.name || id
+			sel.appendChild(opt)
+		}
+	}
+
+	// 初始化 SEK 协议（延迟注册，等 protocol.js 加载后函数可用）
+	function _initProtocolRegistry() {
+		if (typeof skParseFrame === 'function') {
+			window.registerProtocol('sek', {
+				name: 'SEK',
+				parseFrame: skParseFrame,
+				formatFrame: skFormatFrame,
+				byteMap: typeof skByteMap === 'function' ? skByteMap : null,
+				buildDownFrame: typeof skBuildDownFrame === 'function' ? skBuildDownFrame : null,
+				presets: window.SK_DOWN_PRESETS || [],
+			})
+		}
+	}
+
+	// 将全局函数替换为协议代理，根据 activeProtocol 分发
+	;(function () {
+		var _parse = typeof skParseFrame === 'function' ? skParseFrame : null
+		var _fmt = typeof skFormatFrame === 'function' ? skFormatFrame : null
+		var _bmap = typeof skByteMap === 'function' ? skByteMap : null
+		var _build = typeof skBuildDownFrame === 'function' ? skBuildDownFrame : null
+
+		_initProtocolRegistry()
+
+		skParseFrame = function (data, opts) {
+			var p = window.getActiveProtocol()
+			if (p && p.parseFrame) return p.parseFrame(data, opts)
+			if (_parse) return _parse(data, opts)
+			return { errors: ['当前协议无解析器'] }
+		}
+		skFormatFrame = function (r) {
+			var p = window.getActiveProtocol()
+			if (p && p.formatFrame) return p.formatFrame(r)
+			if (_fmt) return _fmt(r)
+			return ''
+		}
+		if (_bmap) {
+			skByteMap = function (r) {
+				var p = window.getActiveProtocol()
+				if (p && p.byteMap) return p.byteMap(r)
+				return _bmap(r)
+			}
+		}
+		if (_build) {
+			skBuildDownFrame = function (opts) {
+				var p = window.getActiveProtocol()
+				if (p && p.buildDownFrame) return p.buildDownFrame(opts)
+				return _build(opts)
+			}
+		}
+
+		// 暴露协议预设重建函数
+		window.rebuildProtocolPresets = function () {
+			if (!window.SK_DOWN_PRESETS) return
+			var proto = window.getActiveProtocol()
+			var presets = (proto && proto.presets) ? proto.presets : window.SK_DOWN_PRESETS
+			var oldSK = window.SK_DOWN_PRESETS
+			window.SK_DOWN_PRESETS = presets
+			rebuildPresets(document.getElementById('serial-protocol-down-func').value)
+			window.SK_DOWN_PRESETS = oldSK
+		}
+	})()
+
+	window.getActiveProtocol = function () {
+		return window._protocols[window._activeProtocol] || null
+	}
+
+	// 协议选择器变更
+	var protocolSelectEl = document.getElementById('serial-protocol-select')
+	if (protocolSelectEl) {
+		protocolSelectEl.addEventListener('change', function () {
+			window._activeProtocol = this.value
+			toolOptions.skProtocol = this.value
+			localStorage.setItem('toolOptions', JSON.stringify(toolOptions))
+			// 刷新常用指令列表
+			if (typeof rebuildProtocolPresets === 'function') rebuildProtocolPresets()
+		})
 	}
 
 	//生成快捷发送列表
@@ -490,9 +587,11 @@
 	const presetSel = document.getElementById('serial-protocol-down-preset')
 	const funcSel = document.getElementById('serial-protocol-down-func')
 	function rebuildPresets(funcCode) {
-		if (!presetSel || !window.SK_DOWN_PRESETS) return
+		if (!presetSel) return
+		var proto = window.getActiveProtocol()
+		var presets = (proto && proto.presets) ? proto.presets : (window.SK_DOWN_PRESETS || [])
 		while (presetSel.options.length > 1) presetSel.remove(1)
-		for (const grp of window.SK_DOWN_PRESETS) {
+		for (const grp of presets) {
 			const filtered = grp.items.filter(it => it.func === funcCode)
 			if (!filtered.length) continue
 			const og = document.createElement('optgroup')
@@ -507,7 +606,7 @@
 		}
 	}
 	let _skipFuncEvent = false
-	if (funcSel && window.SK_DOWN_PRESETS) {
+	if (funcSel) {
 		rebuildPresets(funcSel.value)
 		funcSel.addEventListener('change', () => {
 			if (_skipFuncEvent) { _skipFuncEvent = false; return }
@@ -516,8 +615,9 @@
 		})
 	}
 	function presetItemByName(name) {
-		if (!window.SK_DOWN_PRESETS) return null
-		for (const grp of window.SK_DOWN_PRESETS) {
+		var proto = window.getActiveProtocol()
+		var presets = (proto && proto.presets) ? proto.presets : (window.SK_DOWN_PRESETS || [])
+		for (const grp of presets) {
 			for (const it of grp.items) {
 				if (it.name === name) return it
 			}
@@ -693,9 +793,169 @@
 	if (toolOptions.skEncType) {
 		set('serial-protocol-enc-type', toolOptions.skEncType)
 	}
+	if (toolOptions.skProtocol) {
+		window._activeProtocol = toolOptions.skProtocol
+		var sel = document.getElementById('serial-protocol-select')
+		if (sel) {
+			var found = Array.from(sel.options).some(function (o) { return o.value === toolOptions.skProtocol })
+			if (found) sel.value = toolOptions.skProtocol
+		}
+	}
 	quickSend.value = toolOptions.quickSendIndex
 	quickSend.dispatchEvent(new Event('change'))
 	resetLoopSend()
+
+	//波特率预设选择联动
+	var baudPresetEl = document.getElementById('serial-baud-preset')
+	var baudInputEl = document.getElementById('serial-baud')
+	if (baudPresetEl && baudInputEl) {
+		baudPresetEl.addEventListener('change', function () {
+			var val = this.value
+			if (val === 'custom') {
+				baudInputEl.style.display = ''
+				baudInputEl.focus()
+			} else {
+				baudInputEl.style.display = 'none'
+				baudInputEl.value = val
+				baudInputEl.dispatchEvent(new Event('change'))
+			}
+		})
+		baudInputEl.addEventListener('change', function () {
+			// 如果手动输入的值匹配某个预设，同步回 select
+			var val = String(this.value)
+			var found = Array.from(baudPresetEl.options).some(function (o) { return o.value === val })
+			if (found) {
+				baudPresetEl.value = val
+				this.style.display = 'none'
+			}
+		})
+	}
+
+	//波特率预设选择联动
+	var baudPresetEl = document.getElementById('serial-baud-preset')
+	var baudInputEl = document.getElementById('serial-baud')
+	if (baudPresetEl && baudInputEl) {
+		baudPresetEl.addEventListener('change', function () {
+			var val = this.value
+			if (val === 'custom') {
+				baudInputEl.style.display = ''
+				baudInputEl.focus()
+			} else {
+				baudInputEl.style.display = 'none'
+				baudInputEl.value = val
+				baudInputEl.dispatchEvent(new Event('change'))
+			}
+		})
+		baudInputEl.addEventListener('change', function () {
+			// 如果手动输入的值匹配某个预设，同步回 select
+			var val = String(this.value)
+			var found = Array.from(baudPresetEl.options).some(function (o) { return o.value === val })
+			if (found) {
+				baudPresetEl.value = val
+				this.style.display = 'none'
+			}
+		})
+	}
+
+	// 波特率二合一下拉输入框
+	;(function () {
+		var combo = document.getElementById('baud-combo')
+		var input = document.getElementById('serial-baud')
+		var dropdown = document.getElementById('baud-dropdown')
+		if (!combo || !input || !dropdown) return
+
+		var isOpen = false
+		var userFiltering = false
+
+		function openDropdown() {
+			isOpen = true
+			combo.classList.add('open')
+			showAll()
+			setTimeout(function () { input.select() }, 0)
+		}
+		function closeDropdown() {
+			isOpen = false
+			userFiltering = false
+			combo.classList.remove('open')
+		}
+		function selectValue(val) {
+			input.value = val
+			closeDropdown()
+			input.dispatchEvent(new Event('change', { bubbles: true }))
+		}
+		function showAll() {
+			dropdown.querySelectorAll('li').forEach(function (li) {
+				li.style.display = ''
+			})
+		}
+		function filterOptions(query) {
+			var q = query.toLowerCase()
+			dropdown.querySelectorAll('li').forEach(function (li) {
+				li.style.display = li.textContent.indexOf(q) !== -1 ? '' : 'none'
+			})
+		}
+
+		input.addEventListener('click', function (e) {
+			e.stopPropagation()
+			if (isOpen) { closeDropdown(); return }
+			openDropdown()
+		})
+		input.addEventListener('input', function () {
+			userFiltering = true
+			if (!isOpen) openDropdown()
+			filterOptions(this.value)
+		})
+		input.addEventListener('focus', function () {
+			if (!isOpen) openDropdown()
+		})
+		input.addEventListener('keydown', function (e) {
+			if (e.key === 'Escape') { closeDropdown(); input.blur(); return }
+			if (e.key === 'Enter') {
+				var active = dropdown.querySelector('li.active')
+				if (active && active.style.display !== 'none') {
+					selectValue(active.getAttribute('data-value'))
+					e.preventDefault()
+				}
+				closeDropdown()
+				return
+			}
+			if (e.key === 'ArrowDown') {
+				e.preventDefault()
+				if (!isOpen) { openDropdown(); return }
+				moveHighlight(1)
+				return
+			}
+			if (e.key === 'ArrowUp') {
+				e.preventDefault()
+				if (!isOpen) { openDropdown(); return }
+				moveHighlight(-1)
+				return
+			}
+		})
+		function moveHighlight(dir) {
+			var visible = []
+			dropdown.querySelectorAll('li').forEach(function (li) {
+				if (li.style.display !== 'none') visible.push(li)
+			})
+			if (!visible.length) return
+			var curr = dropdown.querySelector('li.active')
+			var idx = curr ? visible.indexOf(curr) : -1
+			if (curr) curr.classList.remove('active')
+			idx = (idx + dir + visible.length) % visible.length
+			visible[idx].classList.add('active')
+			visible[idx].scrollIntoView({ block: 'nearest' })
+		}
+
+		dropdown.addEventListener('click', function (e) {
+			var li = e.target.closest('li')
+			if (!li) return
+			selectValue(li.getAttribute('data-value'))
+		})
+
+		document.addEventListener('click', function (e) {
+			if (!combo.contains(e.target)) closeDropdown()
+		})
+	})()
 
 	// 记住当前 tab，刷新不丢失
 	const tabTriggers = document.querySelectorAll('#nav-tab button[data-bs-toggle="tab"]')
@@ -891,7 +1151,7 @@
 		if (serialOpen) {
 			serialOpen = false
 			reader?.cancel()
-			serialToggle.innerHTML = '打开串口'
+			serialToggle.innerHTML = '<i class="bi bi-play-circle"></i> 打开串口'
 		}
 	}
 
@@ -909,7 +1169,7 @@
 		serialPort
 			.open(SerialOptions)
 			.then(() => {
-				serialToggle.innerHTML = '关闭串口'
+				serialToggle.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭串口'
 				serialOpen = true
 				serialClose = false
 				localStorage.setItem('serialOptions', JSON.stringify(SerialOptions))
@@ -964,13 +1224,12 @@
 		setTimeout(closeSerial, 500)
 	})
 	function serialStatuChange(statu) {
-		let tip
+		var el = document.getElementById('serial-status')
 		if (statu) {
-			tip = '<div class="alert alert-success" role="alert">设备已连接</div>'
+			el.innerHTML = '<div class="serial-status-indicator connected"><span class="serial-status-dot"></span><span class="serial-status-text">已连接</span></div>'
 		} else {
-			tip = '<div class="alert alert-danger" role="alert">设备已断开</div>'
+			el.innerHTML = '<div class="serial-status-indicator disconnected"><span class="serial-status-dot"></span><span class="serial-status-text">未连接</span></div>'
 		}
-		document.getElementById('serial-status').innerHTML = tip
 	}
 	//串口数据收发
 	async function send() {
@@ -1272,11 +1531,44 @@
 	//左右折叠
 	document.querySelectorAll('.toggle-button').forEach((element) => {
 		element.addEventListener('click', (e) => {
-			e.currentTarget.parentElement.querySelector('.collapse').classList.toggle('show')
-			e.currentTarget.querySelector('i').classList.toggle('bi-chevron-compact-right')
-			e.currentTarget.querySelector('i').classList.toggle('bi-chevron-compact-left')
+			var parent = e.currentTarget.parentElement
+			var collapse = parent.querySelector('.collapse')
+			collapse.classList.toggle('show')
+			var icon = e.currentTarget.querySelector('i')
+			icon.classList.toggle('bi-chevron-compact-right')
+			icon.classList.toggle('bi-chevron-compact-left')
+			saveSidebarState()
 		})
 	})
+
+	function saveSidebarState() {
+		var state = {}
+		document.querySelectorAll('.sidebar .collapse').forEach(function (el) {
+			state[el.parentElement.id || ''] = el.classList.contains('show')
+		})
+		localStorage.setItem('sidebarCollapsed', JSON.stringify(state))
+	}
+
+	// 恢复侧边栏折叠状态
+	;(function () {
+		try {
+			var raw = localStorage.getItem('sidebarCollapsed')
+			if (!raw) return
+			var state = JSON.parse(raw)
+			document.querySelectorAll('.sidebar').forEach(function (sidebar) {
+				var id = sidebar.id
+				if (state[id] === false) {
+					var collapse = sidebar.querySelector('.collapse')
+					if (collapse) collapse.classList.remove('show')
+					var icon = sidebar.querySelector('.toggle-button i')
+					if (icon) {
+						icon.classList.remove('bi-chevron-compact-left')
+						icon.classList.add('bi-chevron-compact-right')
+					}
+				}
+			})
+		} catch (e) {}
+	})()
 
 	//设置名称
 	const modalNewName = new bootstrap.Modal('#model-change-name')
