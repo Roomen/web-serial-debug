@@ -200,7 +200,7 @@
 
 	const FirmwareParser = {
 		HEADER_SIZE: 128,
-		MAGIC_NUM: 0x6b636553
+		MAGIC_NUM: 0x6b636553,
 
 		parse(arrayBuffer) {
 			const fileData = new Uint8Array(arrayBuffer)

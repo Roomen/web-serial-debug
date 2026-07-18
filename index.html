@@ -63,114 +63,23 @@
         </div>
     </header>
 
-    <div id="main" class="d-flex">
-        <!--左侧串口配置-->
-        <div id="serial-options" class="col-auto m-0 bg-light sidebar">
-            <div class="collapse show p-2 float-start">
-                <div class="input-group mb-3">
-                    <span class="input-group-text">波特率</span>
-                    <input type="number" id="serial-baud" class="form-control" placeholder="选择波特率" value="115200"
-                        list="baud-list">
-                    <datalist id="baud-list">
-                        <option>110</option>
-                        <option>300</option>
-                        <option>600</option>
-                        <option>1200</option>
-                        <option>2400</option>
-                        <option>4800</option>
-                        <option>7200</option>
-                        <option>9600</option>
-                        <option>14400</option>
-                        <option>19200</option>
-                        <option>28800</option>
-                        <option>38400</option>
-                        <option>56000</option>
-                        <option>57600</option>
-                        <option>76800</option>
-                        <option>115200</option>
-                        <option>230400</option>
-                        <option>460800</option>
-                    </datalist>
-                </div>
-
-                <div class="input-group mb-3">
-                    <span class="input-group-text">数据位</span>
-                    <select class="form-select" id="serial-data-bits">
-                        <option>8</option>
-                        <option>7</option>
-                    </select>
-                </div>
-
-                <div class="input-group mb-3">
-                    <span class="input-group-text">停止位</span>
-                    <select class="form-select" id="serial-stop-bits">
-                        <option>1</option>
-                        <option>2</option>
-                    </select>
-                </div>
-
-                <div class="input-group mb-3">
-                    <span class="input-group-text">校验位</span>
-                    <select class="form-select" id="serial-parity">
-                        <Option value="none">None</Option>
-                        <Option value="even">Even</Option>
-                        <Option value="odd">Odd</Option>
-                    </select>
-                </div>
-
-                <div class="input-group mb-3">
-                    <span class="input-group-text">缓冲区</span>
-                    <input type="number" id="serial-buffer-size" class="form-control" placeholder="缓冲区大小"
-                        list="buffer-size-list" max="1677216" value="1024">
-                    <datalist id="buffer-size-list">
-                        <option>255</option>
-                        <option>512</option>
-                        <option>1024</option>
-                        <option>2048</option>
-                        <option>4096</option>
-                        <option>8192</option>
-                    </datalist>
-                </div>
-
-                <div class="input-group mb-3">
-                    <span class="input-group-text">流控制</span>
-                    <select class="form-select" id="serial-flow-control">
-                        <Option value="none">None</Option>
-                        <Option value="hardware">HardWare</Option>
-                    </select>
-                </div>
-
-                <div class="d-flex mt-2">
-                    <button class="btn btn-secondary me-3" id="serial-select-port">选择串口</button>
-                    <button class="btn btn-primary flex-grow-1" id="serial-open-or-close">打开串口</button>
-                </div>
-
-                <div id="serial-status" class="mt-2">
-                    <div class="alert alert-info" role="alert">
-                        未选择串口
-                    </div>
-                </div>
-                <div class="d-flex gap-1 mt-2">
-                    <button class="btn btn-sm btn-outline-secondary flex-fill" id="serial-reset" title="重置所有参数"><i class="bi bi-arrow-repeat"></i></button>
-                    <button class="btn btn-sm btn-outline-secondary flex-fill" id="serial-export" title="导出配置"><i class="bi bi-folder-symlink"></i></button>
-                    <button class="btn btn-sm btn-outline-secondary flex-fill" id="serial-import" title="导入配置"><i class="bi bi-folder-plus"></i></button>
-                    <input type="file" id="serial-import-file" style="display: none;" accept="application/json" />
-                </div>
+    <div id="app-shell" class="d-flex">
+        <!--最左侧工具导航栏-->
+        <nav id="activity-rail">
+            <div class="rail-brand" title="Web Serial Debug">
+                <img src="imgs/logo.svg" width="26" height="21" alt="Web Serial">
             </div>
-            <button class="toggle-button float-end" title="隐藏/打开边栏">
-                <i class="bi bi-chevron-compact-left"></i>
-            </button>
-
-            <div class="text-center mt-2 mb-1">
-                &nbsp;
+            <div class="rail-top">
+                <button class="rail-item active" data-view="view-serial" title="串口调试">
+                    <i class="bi bi-terminal"></i>
+                    <span class="rail-label">串口调试</span>
+                </button>
+                <button class="rail-item" data-view="view-fw-pack" title="固件打包">
+                    <i class="bi bi-box-seam"></i>
+                    <span class="rail-label">固件打包</span>
+                </button>
             </div>
-        </div>
-        <div class="clear"></div>
-        <!--中间串口日志-->
-        <div id="log-main" class="flex-fill px-md-2">
-            <div
-                class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
-                <h1 class="h3">串口日志</h1>
+            <div class="rail-bottom">
                 <button id="theme-toggle" class="theme-toggle-btn" title="切换亮色/暗色模式">
                     <span class="theme-toggle-track">
                         <i class="bi bi-sun-fill"></i>
@@ -178,323 +87,486 @@
                         <span class="theme-toggle-thumb"></span>
                     </span>
                 </button>
+                <a href="https://github.com/Roomen/web-serial-debug" target="_blank" class="rail-item" title="GitHub 仓库">
+                    <i class="bi bi-github"></i>
+                    <span class="rail-label">GitHub</span>
+                </a>
+            </div>
+        </nav>
 
-                <div class="btn-toolbar">
-                    <div class="input-group input-group-sm me-2">
-                        <span class="input-group-text">分包超时</span>
-                        <input type="number" id="serial-timer-out" class="form-control" placeholder="0不分包" value="200"
-                            style="width: 100px;" />
+        <!--视图容器-->
+        <div id="views">
+            <!--串口调试视图-->
+            <div id="view-serial" class="app-view active">
+                <div id="main" class="d-flex">
+                    <!--左侧串口配置-->
+                    <div id="serial-options" class="col-auto m-0 bg-light sidebar">
+                        <div class="collapse show p-2 float-start">
+                            <div class="serial-settings-card">
+                                <div class="serial-settings-title">
+                                    <i class="bi bi-sliders2"></i> 串口参数
+                                </div>
+                                <div class="serial-field">
+                                    <label class="serial-field-label"><i class="bi bi-speedometer2"></i> 波特率</label>
+                                    <div class="serial-baud-combo" id="baud-combo">
+                                        <input type="text" id="serial-baud" class="form-control serial-field-input" placeholder="选择或输入" value="115200" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+                                        <i class="bi bi-chevron-down serial-baud-arrow"></i>
+                                        <ul class="serial-baud-dropdown" id="baud-dropdown">
+                                            <li data-value="2400">2400</li>
+                                            <li data-value="4800">4800</li>
+                                            <li data-value="9600">9600</li>
+                                            <li data-value="14400">14400</li>
+                                            <li data-value="19200">19200</li>
+                                            <li data-value="28800">28800</li>
+                                            <li data-value="38400">38400</li>
+                                            <li data-value="57600">57600</li>
+                                            <li data-value="76800">76800</li>
+                                            <li data-value="115200">115200</li>
+                                            <li data-value="230400">230400</li>
+                                            <li data-value="460800">460800</li>
+                                            <li data-value="921600">921600</li>
+                                        </ul>
+                                    </div>
+                                    <!-- 隐藏的 ID 保存，保持兼容 get('serial-baud') 可用 -->
+                                </div>
+                                <div class="serial-field">
+                                    <label class="serial-field-label"><i class="bi bi-123"></i> 数据位</label>
+                                    <select class="form-select serial-field-input" id="serial-data-bits">
+                                        <option>8</option><option>7</option>
+                                    </select>
+                                </div>
+                                <div class="serial-field">
+                                    <label class="serial-field-label"><i class="bi bi-stop-circle"></i> 停止位</label>
+                                    <select class="form-select serial-field-input" id="serial-stop-bits">
+                                        <option>1</option><option>2</option>
+                                    </select>
+                                </div>
+                                <div class="serial-field">
+                                    <label class="serial-field-label"><i class="bi bi-shield-check"></i> 校验位</label>
+                                    <select class="form-select serial-field-input" id="serial-parity">
+                                        <Option value="none">None</Option><Option value="even">Even</Option><Option value="odd">Odd</Option>
+                                    </select>
+                                </div>
+                                <div class="serial-field">
+                                    <label class="serial-field-label"><i class="bi bi-database"></i> 缓冲区</label>
+                                    <input type="number" id="serial-buffer-size" class="form-control serial-field-input" placeholder="1024" list="buffer-size-list" max="1677216" value="1024">
+                                    <datalist id="buffer-size-list">
+                                        <option>255</option><option>512</option><option>1024</option><option>2048</option><option>4096</option><option>8192</option>
+                                    </datalist>
+                                </div>
+                                <div class="serial-field">
+                                    <label class="serial-field-label"><i class="bi bi-send-check"></i> 流控制</label>
+                                    <select class="form-select serial-field-input" id="serial-flow-control">
+                                        <Option value="none">None</Option><Option value="hardware">HardWare</Option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="d-flex mt-2 gap-2">
+                                <button class="btn btn-outline-secondary serial-port-btn" id="serial-select-port">
+                                    <i class="bi bi-usb-plug"></i> 选择串口
+                                </button>
+                                <button class="btn btn-primary serial-open-btn flex-grow-1" id="serial-open-or-close">
+                                    <i class="bi bi-play-circle"></i> 打开串口
+                                </button>
+                            </div>
+
+                            <div id="serial-status" class="mt-2">
+                                <div class="serial-status-indicator disconnected">
+                                    <span class="serial-status-dot"></span>
+                                    <span class="serial-status-text">未连接</span>
+                                </div>
+                            </div>
+
+                            <div class="d-flex gap-1 mt-2">
+                                <button class="btn btn-sm btn-outline-secondary flex-fill" id="serial-reset" title="重置所有参数"><i class="bi bi-arrow-repeat"></i></button>
+                                <button class="btn btn-sm btn-outline-secondary flex-fill" id="serial-export" title="导出配置"><i class="bi bi-folder-symlink"></i></button>
+                                <button class="btn btn-sm btn-outline-secondary flex-fill" id="serial-import" title="导入配置"><i class="bi bi-folder-plus"></i></button>
+                                <input type="file" id="serial-import-file" style="display: none;" accept="application/json" />
+                            </div>
+                        </div>
+                        <button class="toggle-button float-end" title="隐藏/打开边栏">
+                            <i class="bi bi-chevron-compact-left"></i>
+                        </button>
+                        <div class="text-center mt-2 mb-1">&nbsp;</div>
                     </div>
+                    <div class="clear"></div>
+                    <!--中间串口日志-->
+                    <div id="log-main" class="flex-fill px-md-2">
+                        <div
+                            class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
+                            <h1 class="h4 serial-log-title"><i class="bi bi-journal-text"></i> 串口日志</h1>
 
-                    <div class="input-group input-group-sm me-2">
-                        <span class="input-group-text">日志类型</span>
-                        <select class="form-select" id="serial-log-type" style="width: 120px;">
-                            <Option value="hex&text">Hex和Text</Option>
-                            <Option value="hex">Hex</Option>
-                            <Option value="text">Text</Option>
-                            <Option value="ansi">彩色Ansi</Option>
-                        </select>
+                            <div class="btn-toolbar">
+                                <div class="input-group input-group-sm me-2">
+                                    <span class="input-group-text">分包超时</span>
+                                    <input type="number" id="serial-timer-out" class="form-control" placeholder="0不分包" value="200"
+                                        style="width: 90px;" />
+                                </div>
+
+                                <div class="input-group input-group-sm me-2">
+                                    <span class="input-group-text">日志类型</span>
+                                    <select class="form-select" id="serial-log-type" style="width: 120px;">
+                                        <Option value="hex&text">Hex和Text</Option>
+                                        <Option value="hex">Hex</Option>
+                                        <Option value="text">Text</Option>
+                                        <Option value="ansi">彩色Ansi</Option>
+                                    </select>
+                                </div>
+
+                                <div class="btn-group serial-log-actions">
+                                    <button class="btn btn-sm btn-outline-secondary" id="serial-auto-scroll">自动滚动</button>
+                                    <button class="btn btn-sm btn-outline-secondary" id="serial-clear">清空</button>
+                                    <button class="btn btn-sm btn-outline-secondary" id="serial-copy">复制</button>
+                                    <button class="btn btn-sm btn-outline-secondary" id="serial-save">导出</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="serial-logs" class="flex-grow-1 border border-2 rounded mb-2"></div>
+                        <div class="flex-shrink-0 mb-2 serial-send-area">
+                            <textarea class="form-control serial-send-textarea" rows="3" id="serial-send-content"
+                                placeholder="在此输入要发送的内容,可以是字符串(如:你好,世界!),也可以是HEX(如:49544c4447)"></textarea>
+                            <div
+                                class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
+                                <div class="btn-toolbar">
+                                    <div class="form-check align-self-center me-2">
+                                        <input class="form-check-input" type="checkbox" id="serial-add-crlf">
+                                        <label class="form-check-label" for="serial-add-crlf">末尾加回车换行</label>
+                                    </div>
+                                    <div class="form-check align-self-center me-2">
+                                        <input class="form-check-input" type="checkbox" id="serial-hex-send">
+                                        <label class="form-check-label" for="serial-hex-send">HEX发送</label>
+                                    </div>
+                                    <div class="form-check align-self-center me-2">
+                                        <input class="form-check-input" type="checkbox" id="serial-loop-send">
+                                        <label class="form-check-label" for="serial-loop-send">循环发送</label>
+                                    </div>
+                                    <div class="input-group input-group-sm">
+                                        <span class="input-group-text">发送间隔(MS)</span>
+                                        <input type="number" id="serial-loop-send-time" class="form-control" min="1" value="1000" style="width: 90px;" />
+                                    </div>
+                                </div>
+                                <button id="serial-send" class="btn btn-primary serial-send-btn h-10 px-4">
+                                    <i class="bi bi-send-fill"></i> 发送
+                                </button>
+                            </div>
+                        </div>
                     </div>
+                    <div class="clear"></div>
 
-                    <div class="btn-group">
-                        <button class="btn btn-sm btn-outline-secondary" id="serial-auto-scroll">自动滚动</button>
-                        <button class="btn btn-sm btn-outline-secondary" id="serial-clear">清空</button>
-                        <button class="btn btn-sm btn-outline-secondary" id="serial-copy">复制</button>
-                        <button class="btn btn-sm btn-outline-secondary" id="serial-save">导出</button>
+                    <!--右侧串口工具-->
+                    <div id="serial-tools" class="col-auto m-0 bg-light sidebar">
+                        <button class="toggle-button float-start" title="隐藏/打开边栏">
+                            <i class="bi bi-chevron-compact-right"></i>
+                        </button>
+                        <div class="collapse show p-1 float-start overflow-hidden" style="width:428px">
+
+                            <nav>
+                                <div class="nav nav-tabs" id="nav-tab" role="tablist">
+                                    <button class="nav-link active" id="nav-quick-send-tab" data-bs-toggle="tab"
+                                        data-bs-target="#nav-quick-send" type="button" role="tab" aria-controls="nav-quick-send"
+                                        aria-selected="true">快捷发送</button>
+                                    <button class="nav-link" id="nav-protocol-tab" data-bs-toggle="tab"
+                                        data-bs-target="#nav-protocol" type="button" role="tab" aria-controls="nav-protocol"
+                                         aria-selected="false">第三方协议</button>
+                                    <button class="nav-link" id="nav-firmware-tab" data-bs-toggle="tab"
+                                        data-bs-target="#nav-firmware" type="button" role="tab" aria-controls="nav-firmware"
+                                        aria-selected="false">固件升级</button>
+                                </div>
+                            </nav>
+                            <div class="tab-content pt-2 flex-fill" id="nav-tabContent">
+                                <div class="tab-pane fade show active d-flex flex-column" id="nav-quick-send" role="tabpanel"
+                                    aria-labelledby="nav-quick-send-tab">
+                                    <div class="btn-toolbar">
+                                        <div class="flex-grow-1 input-group input-group-sm me-2">
+                                            <span class="input-group-text">选择分组</span>
+                                            <select class="form-select" id="serial-quick-send">
+                                            </select>
+                                        </div>
+
+                                        <div class="btn-group">
+                                            <button class="btn btn-sm btn-outline-secondary"
+                                                id="serial-quick-send-add-group">新增</button>
+                                            <button class="btn btn-sm btn-outline-secondary"
+                                                id="serial-quick-send-rename-group">改名</button>
+                                            <button class="btn btn-sm btn-outline-secondary"
+                                                id="serial-quick-send-remove-group">删除</button>
+                                        </div>
+                                    </div>
+                                    <div class="d-flex mt-2">
+                                        <button id="serial-quick-send-add" class="btn btn-sm btn-outline-secondary me-5"><i
+                                                class="bi bi-plus-square"></i> 增加一条</button>
+                                        <button class="btn btn-sm btn-outline-secondary me-2 flex-grow-1"
+                                            id="serial-quick-send-import-btn"><i class="bi bi-folder-plus"></i>
+                                            导入</button>
+                                        <input type="file" id="serial-quick-send-import" style="display: none;"
+                                            accept="application/json" />
+                                        <button class="btn btn-sm btn-outline-secondary flex-grow-1"
+                                            id="serial-quick-send-export"><i class="bi bi-folder-symlink"></i>
+                                            导出</button>
+                                    </div>
+                                    <div class="mt-2">
+                                        <div class="d-flex">
+                                            <span class="me-2 ms-3">移除</span>
+                                            <span class="flex-grow-1 me-1">发送内容,点击修改,双击改名</span>
+                                            <span class="flex-shrink-0 me-3">显示名称</span>
+                                            <span class="flex-shrink-0 me-2">HEX</span>
+                                        </div>
+                                    </div>
+                                    <div id="serial-quick-send-content"
+                                        class="flex-grow-1 border border-2 p-2 rounded overflow-auto">
+                                    </div>
+                                </div>
+                                <div class="tab-pane d-flex flex-column fade flex-grow-1" id="nav-protocol" role="tabpanel"
+                                    aria-labelledby="nav-protocol-tab">
+                                    <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
+                                        <div class="input-group input-group-sm" style="width: auto;">
+                                            <span class="input-group-text">协议</span>
+                                            <select class="form-select" id="serial-protocol-select">
+                                                <option value="sek">SEK（默认）</option>
+                                            </select>
+                                        </div>
+                                        <div class="input-group input-group-sm" style="width: auto;">
+                                            <span class="input-group-text">加解密</span>
+                                            <select class="form-select" id="serial-protocol-decrypt">
+                                                <option value="auto">自动</option>
+                                                <option value="always">强制解密</option>
+                                                <option value="never">不解密</option>
+                                            </select>
+                                        </div>
+                                        <div class="input-group input-group-sm" style="width: auto;" title="报文加解密算法 A ES128/256-ECB">
+                                            <span class="input-group-text">加密方式</span>
+                                            <select class="form-select" id="serial-protocol-enc-type">
+                                                <option value="aes128">AES-128-ECB</option>
+                                                <option value="aes256">AES-256-ECB</option>
+                                            </select>
+                                        </div>
+                                        <div class="input-group input-group-sm" style="width: auto;">
+                                            <span class="input-group-text">密钥(ASCII)</span>
+                                            <input type="text" class="form-control" id="serial-protocol-key-ascii"
+                                                placeholder="留空则不解密(加密报文需输入密钥 16/32字节)">
+                                        </div>
+                                        <div class="input-group input-group-sm" style="width: auto;">
+                                            <span class="input-group-text">密钥(HEX，优先)</span>
+                                            <input type="text" class="form-control" id="serial-protocol-key-hex"
+                                                placeholder="如 01020304...16/32字节 AES256需32字节">
+                                        </div>
+                                        <div class="form-check form-switch align-self-center">
+                                            <input class="form-check-input" type="checkbox" id="serial-protocol-enable">
+                                            <label class="form-check-label" for="serial-protocol-enable">串口实时解析</label>
+                                        </div>
+                                        <div class="form-check form-switch align-self-center" title="开启后日志 HEX 视图的每个字节可悬停查看其协议字段含义,不展开文本">
+                                            <input class="form-check-input" type="checkbox" id="serial-protocol-hover">
+                                            <label class="form-check-label" for="serial-protocol-hover">悬停提示(静默解析)</label>
+                                        </div>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label class="form-label small mb-1">手动解析 HEX 报文</label>
+                                        <textarea class="form-control form-control-sm" rows="4" id="serial-protocol-input"
+                                            placeholder="粘贴 HEX 报文（空格/换行/0x前缀均可）"></textarea>
+                                        <button class="btn btn-sm btn-outline-secondary mt-1" id="serial-protocol-parse">解析</button>
+                                    </div>
+                                    <div id="serial-protocol-output"
+                                        class="flex-grow-1 border border-2 rounded p-2 mb-2 overflow-auto bg-white" style="min-height: 80px;">
+                                    </div>
+                                    <hr class="my-2">
+                                    <div class="mb-2">
+                                        <h6 class="mb-2">下行下发</h6>
+                                        <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
+                                            <div class="input-group input-group-sm" style="width: auto;">
+                                                <span class="input-group-text">功能码</span>
+                                                <select class="form-select" id="serial-protocol-down-func">
+                                                    <option value="0x01">参数设置 0x01</option>
+                                                    <option value="0x03">信息查询 0x03</option>
+                                                    <option value="0x11">指令操作 0x11</option>
+                                                </select>
+                                            </div>
+                                            <div class="input-group input-group-sm" style="width: auto;">
+                                                <span class="input-group-text">常用指令</span>
+                                                <select class="form-select" id="serial-protocol-down-preset" style="max-width: 180px;">
+                                                    <option value="">— 选择 —</option>
+                                                </select>
+                                            </div>
+                                            <div class="input-group input-group-sm" id="serial-protocol-down-param-group" style="display:none;width:auto;">
+                                                <span class="input-group-text" id="serial-protocol-down-param-label">参数</span>
+                                                <input type="text" class="form-control" id="serial-protocol-down-param-val" style="width:100px;" placeholder="值">
+                                                <select class="form-select form-select-sm" id="serial-protocol-down-param-sel" style="display:none;width:130px;"></select>
+                                                <span class="input-group-text" id="serial-protocol-down-param-unit" style="font-size:0.7rem;"></span>
+                                            </div>
+                                        </div>
+                                        <textarea class="form-control form-control-sm" rows="4" id="serial-protocol-down-tlv"
+                                            placeholder='TLV JSON，例如：[{"tag":10,"items":[{"id":1,"value":[]}]}]，value 可为空数组(查询) 或 十六进制字符串 或 字节数组'></textarea>
+                                        <div class="d-flex gap-2 mt-1">
+                                            <button class="btn btn-sm btn-outline-secondary" id="serial-protocol-build">生成HEX</button>
+                                            <button class="btn btn-sm btn-primary flex-grow-1" id="serial-protocol-send">立即下发</button>
+                                        </div>
+                                        <textarea class="form-control form-control-sm mt-1" rows="3" id="serial-protocol-down-preview"
+                                            readonly placeholder="待发送的完整 HEX（空格分隔）"></textarea>
+                                    </div>
+                                </div>
+                                <div class="tab-pane d-flex flex-column fade" id="nav-firmware" role="tabpanel"
+                                    aria-labelledby="nav-firmware-tab">
+                                    <div class="d-flex flex-column flex-grow-1 min-h-0">
+                                        <div class="border rounded p-2 mb-2">
+                                            <input type="file" id="fw-file" class="d-none" accept=".bin,.hex,.fw">
+                                            <div class="fw-upgrade-dropzone" id="fw-drop-zone">
+                                                <div class="fw-upgrade-dropzone-inner">
+                                                    <i class="bi bi-cloud-upload fw-upgrade-drop-icon"></i>
+                                                    <div class="fw-upgrade-drop-text">拖拽固件文件到此处</div>
+                                                    <div class="fw-upgrade-drop-hint">或 <button class="fw-drop-browse" id="fw-select">点击浏览</button></div>
+                                                </div>
+                                            </div>
+                                            <div class="fw-upgrade-file d-none" id="fw-file-card">
+                                                <i class="bi bi-file-earmark-binary fw-upgrade-file-icon"></i>
+                                                <div class="fw-upgrade-file-detail">
+                                                    <span id="fw-file-name" class="fw-upgrade-file-name">未选择固件文件</span>
+                                                    <span class="fw-upgrade-file-size" id="fw-file-size">--</span>
+                                                </div>
+                                                <button class="fw-upgrade-file-clear" id="fw-file-clear" title="清除"><i class="bi bi-x-circle"></i></button>
+                                            </div>
+                                            <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+                                                <div class="input-group input-group-sm" style="width: auto;">
+                                                    <span class="input-group-text">分片大小(字节)</span>
+                                                    <input type="number" class="form-control" id="fw-chunk-size" value="128"
+                                                        min="32" max="500" step="32" style="width: 80px;">
+                                                </div>
+                                                <button class="btn btn-sm btn-outline-secondary" id="fw-parse">解析固件</button>
+                                                <button class="btn btn-sm btn-outline-secondary" id="fw-diagnose">诊断固件</button>
+                                            </div>
+                                            <pre id="fw-info"
+                                                class="border rounded p-2 mb-0 bg-white small text-monospace mt-2" style="min-height: 60px; white-space: pre-wrap;"></pre>
+                                        </div>
+                                        <div class="border rounded p-2 mb-2">
+                                            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                                <button class="btn btn-sm btn-primary" id="fw-start" disabled><i
+                                                        class="bi bi-upload"></i> 开始升级</button>
+                                                <button class="btn btn-sm btn-outline-secondary" id="fw-stop" disabled>停止升级</button>
+                                                <button class="btn btn-sm btn-outline-secondary" id="fw-query">查询版本</button>
+                                                <button class="btn btn-sm btn-outline-secondary" id="fw-clear-log">清空日志</button>
+                                                <span id="fw-status" class="small text-muted ms-auto"></span>
+                                            </div>
+                                            <div class="progress mb-2" style="height: 18px;">
+                                                <div id="fw-progress" class="progress-bar" role="progressbar" style="width: 0%;"
+                                                    aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                                            </div>
+                                            <pre id="fw-log"
+                                                class="border rounded p-2 mb-0 bg-white small text-monospace flex-grow-1 overflow-auto" style="min-height: 100px; white-space: pre-wrap;"></pre>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
-            <div id="serial-logs" class="flex-grow-1 border border-2 rounded mb-2"></div>
-            <div class="flex-shrink-0 mb-2">
-                <textarea class="form-control" rows="3" id="serial-send-content" style="resize: none;"
-                    placeholder="在此输入要发送的内容,可以是字符串(如:你好,世界!),也可以是HEX(如:49544c4447)"></textarea>
-                <div
-                    class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
-                    <div class="btn-toolbar">
-                        <div class="form-check align-self-center me-2">
-                            <input class="form-check-input" type="checkbox" id="serial-add-crlf">
-                            <label class="form-check-label" for="serial-add-crlf">
-                                末尾加回车换行
-                            </label>
-                        </div>
-                        <div class="form-check align-self-center me-2">
-                            <input class="form-check-input" type="checkbox" id="serial-hex-send">
-                            <label class="form-check-label" for="serial-hex-send">
-                                HEX发送
-                            </label>
-                        </div>
-                        <div class="form-check align-self-center me-2">
-                            <input class="form-check-input" type="checkbox" id="serial-loop-send">
-                            <label class="form-check-label" for="serial-loop-send">
-                                循环发送
-                            </label>
-                        </div>
-                        <div class="input-group input-group-sm">
-                            <span class="input-group-text">发送间隔(MS)</span>
-                            <input type="number" id="serial-loop-send-time" class="form-control" placeholder="" min="1"
-                                value="1000" style="width: 100px;" />
-                        </div>
-                    </div>
-                    <button id="serial-send" class="btn btn-primary h-10 px-5"><i class="bi bi-send"></i>
-                        发送</button>
-                </div>
-            </div>
-        </div>
-        <div class="clear"></div>
 
-        <!--右侧串口工具-->
-        <div id="serial-tools" class="col-auto m-0 bg-light sidebar">
-            <button class="toggle-button float-start" title="隐藏/打开边栏">
-                <i class="bi bi-chevron-compact-right"></i>
-            </button>
-            <div class="collapse show p-1 float-start overflow-hidden" style="width:428px">
-
-                <nav>
-                    <div class="nav nav-tabs" id="nav-tab" role="tablist">
-                        <button class="nav-link active" id="nav-quick-send-tab" data-bs-toggle="tab"
-                            data-bs-target="#nav-quick-send" type="button" role="tab" aria-controls="nav-quick-send"
-                            aria-selected="true">快捷发送</button>
-                        <button class="nav-link" id="nav-protocol-tab" data-bs-toggle="tab"
-                            data-bs-target="#nav-protocol" type="button" role="tab" aria-controls="nav-protocol"
-                             aria-selected="false">第三方协议</button>
-                        <button class="nav-link" id="nav-firmware-tab" data-bs-toggle="tab"
-                            data-bs-target="#nav-firmware" type="button" role="tab" aria-controls="nav-firmware"
-                            aria-selected="false">固件升级</button>
-                        <button class="nav-link" id="nav-firmware-pack-tab" data-bs-toggle="tab"
-                            data-bs-target="#nav-firmware-pack" type="button" role="tab" aria-controls="nav-firmware-pack"
-                            aria-selected="false">固件打包</button>
-                    </div>
-                </nav>
-                <div class="tab-content pt-2 flex-fill" id="nav-tabContent">
-                    <div class="tab-pane fade show active d-flex flex-column" id="nav-quick-send" role="tabpanel"
-                        aria-labelledby="nav-quick-send-tab">
-                        <div class="btn-toolbar">
-                            <div class="flex-grow-1 input-group input-group-sm me-2">
-                                <span class="input-group-text">选择分组</span>
-                                <select class="form-select" id="serial-quick-send">
-                                </select>
+            <!--固件打包视图（独立工具，与串口无关）-->
+            <div id="view-fw-pack" class="app-view">
+                <div class="tool-view-inner fw-pack-wrapper">
+                    <div class="fw-banner">
+                        <div class="fw-banner-content">
+                            <div class="fw-banner-icon"><i class="bi bi-box-seam"></i></div>
+                            <div>
+                                <h2 class="fw-banner-title">固件打包工具</h2>
+                                <p class="fw-banner-sub">原始包 · 压缩包 · 双向差分包 — 支持拖拽上传固件文件</p>
                             </div>
-
-                            <div class="btn-group">
-                                <button class="btn btn-sm btn-outline-secondary"
-                                    id="serial-quick-send-add-group">新增</button>
-                                <button class="btn btn-sm btn-outline-secondary"
-                                    id="serial-quick-send-rename-group">改名</button>
-                                <button class="btn btn-sm btn-outline-secondary"
-                                    id="serial-quick-send-remove-group">删除</button>
-                                <!-- <button class="btn btn-sm btn-outline-secondary">云端</button> -->
-                            </div>
-                        </div>
-                        <div class="d-flex mt-2">
-                            <button id="serial-quick-send-add" class="btn btn-sm btn-outline-secondary me-5"><i
-                                    class="bi bi-plus-square"></i> 增加一条</button>
-                            <button class="btn btn-sm btn-outline-secondary me-2 flex-grow-1"
-                                id="serial-quick-send-import-btn"><i class="bi bi-folder-plus"></i>
-                                导入</button>
-                            <input type="file" id="serial-quick-send-import" style="display: none;"
-                                accept="application/json" />
-                            <button class="btn btn-sm btn-outline-secondary flex-grow-1"
-                                id="serial-quick-send-export"><i class="bi bi-folder-symlink"></i>
-                                导出</button>
-                        </div>
-                        <div class="mt-2">
-                            <div class="d-flex">
-                                <span class="me-2 ms-3">移除</span>
-                                <span class="flex-grow-1 me-1">发送内容,点击修改,双击改名</span>
-                                <span class="flex-shrink-0 me-3">显示名称</span>
-                                <span class="flex-shrink-0 me-2">HEX</span>
-                            </div>
-                        </div>
-                        <div id="serial-quick-send-content"
-                            class="flex-grow-1 border border-2 p-2 rounded overflow-auto">
                         </div>
                     </div>
-                    <div class="tab-pane d-flex flex-column fade flex-grow-1" id="nav-protocol" role="tabpanel"
-                        aria-labelledby="nav-protocol-tab">
-                        <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
-                            <div class="input-group input-group-sm" style="width: auto;">
-                                <span class="input-group-text">加解密</span>
-                                <select class="form-select" id="serial-protocol-decrypt">
-                                    <option value="auto">自动</option>
-                                    <option value="always">强制解密</option>
-                                    <option value="never">不解密</option>
-                                </select>
+                    <div class="fw-drop-grid">
+                        <div class="fw-drop-card fw-drop-optional" id="fp-drop-old">
+                            <div class="fw-drop-card-header">
+                                <span class="fw-drop-badge optional">可选</span><span class="fw-drop-type">旧固件（差分用）</span>
                             </div>
-                            <div class="input-group input-group-sm" style="width: auto;" title="报文加解密算法 A ES128/256-ECB">
-                                <span class="input-group-text">加密方式</span>
-                                <select class="form-select" id="serial-protocol-enc-type">
-                                    <option value="aes128">AES-128-ECB</option>
-                                    <option value="aes256">AES-256-ECB</option>
-                                </select>
+                            <input type="file" id="fp-old-file" class="d-none" accept=".bin">
+                            <div class="fw-drop-zone" id="fp-old-zone">
+                                <i class="bi bi-cloud-upload fw-drop-zone-icon"></i>
+                                <div class="fw-drop-zone-text">拖拽文件到此处</div>
+                                <div class="fw-drop-zone-hint">或 <button class="fw-drop-browse" id="fp-old-select">点击浏览</button></div>
                             </div>
-                            <div class="input-group input-group-sm" style="width: auto;">
-                                <span class="input-group-text">密钥(ASCII)</span>
-                                <input type="text" class="form-control" id="serial-protocol-key-ascii"
-                                    placeholder="留空则不解密(加密报文需输入密钥 16/32字节)">
-                            </div>
-                            <div class="input-group input-group-sm" style="width: auto;">
-                                <span class="input-group-text">密钥(HEX，优先)</span>
-                                <input type="text" class="form-control" id="serial-protocol-key-hex"
-                                    placeholder="如 01020304...16/32字节 AES256需32字节">
-                            </div>
-                            <div class="form-check form-switch align-self-center">
-                                <input class="form-check-input" type="checkbox" id="serial-protocol-enable">
-                                <label class="form-check-label" for="serial-protocol-enable">串口实时解析</label>
-                            </div>
-                            <div class="form-check form-switch align-self-center" title="开启后日志 HEX 视图的每个字节可悬停查看其协议字段含义,不展开文本">
-                                <input class="form-check-input" type="checkbox" id="serial-protocol-hover">
-                                <label class="form-check-label" for="serial-protocol-hover">悬停提示(静默解析)</label>
+                            <div class="fw-file-info d-none" id="fp-old-info">
+                                <div class="fw-file-icon"><i class="bi bi-file-earmark-binary"></i></div>
+                                <div class="fw-file-detail">
+                                    <span class="fw-file-name" id="fp-old-name">--</span>
+                                    <span class="fw-file-size" id="fp-old-size">--</span>
+                                </div>
+                                <button class="fw-file-clear" id="fp-old-clear" title="清除文件"><i class="bi bi-x-circle"></i></button>
                             </div>
                         </div>
-                        <div class="mb-2">
-                            <label class="form-label small mb-1">手动解析 HEX 报文</label>
-                            <textarea class="form-control form-control-sm" rows="4" id="serial-protocol-input"
-                                placeholder="粘贴 HEX 报文（空格/换行/0x前缀均可）"></textarea>
-                            <button class="btn btn-sm btn-outline-secondary mt-1" id="serial-protocol-parse">解析</button>
-                        </div>
-                        <div id="serial-protocol-output"
-                            class="flex-grow-1 border border-2 rounded p-2 mb-2 overflow-auto bg-white" style="min-height: 80px;">
-                        </div>
-                        <hr class="my-2">
-                        <div class="mb-2">
-                            <h6 class="mb-2">下行下发</h6>
-                            <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
-                                <div class="input-group input-group-sm" style="width: auto;">
-                                    <span class="input-group-text">功能码</span>
-                                    <select class="form-select" id="serial-protocol-down-func">
-                                        <option value="0x01">参数设置 0x01</option>
-                                        <option value="0x03">信息查询 0x03</option>
-                                        <option value="0x11">指令操作 0x11</option>
-                                    </select>
-                                </div>
-                                <div class="input-group input-group-sm" style="width: auto;">
-                                    <span class="input-group-text">常用指令</span>
-                                    <select class="form-select" id="serial-protocol-down-preset" style="max-width: 180px;">
-                                        <option value="">— 选择 —</option>
-                                    </select>
-                                </div>
-                                <div class="input-group input-group-sm" id="serial-protocol-down-param-group" style="display:none;width:auto;">
-                                    <span class="input-group-text" id="serial-protocol-down-param-label">参数</span>
-                                    <input type="text" class="form-control" id="serial-protocol-down-param-val" style="width:100px;" placeholder="值">
-                                    <select class="form-select form-select-sm" id="serial-protocol-down-param-sel" style="display:none;width:130px;"></select>
-                                    <span class="input-group-text" id="serial-protocol-down-param-unit" style="font-size:0.7rem;"></span>
-                                </div>
+                        <div class="fw-drop-card fw-drop-required" id="fp-drop-new">
+                            <div class="fw-drop-card-header">
+                                <span class="fw-drop-badge">必需</span><span class="fw-drop-type">新固件</span>
                             </div>
-                            <textarea class="form-control form-control-sm" rows="4" id="serial-protocol-down-tlv"
-                                placeholder='TLV JSON，例如：[{"tag":10,"items":[{"id":1,"value":[]}]}]，value 可为空数组(查询) 或 十六进制字符串 或 字节数组'></textarea>
-                            <div class="d-flex gap-2 mt-1">
-                                <button class="btn btn-sm btn-outline-secondary" id="serial-protocol-build">生成HEX</button>
-                                <button class="btn btn-sm btn-primary flex-grow-1" id="serial-protocol-send">立即下发</button>
+                            <input type="file" id="fp-new-file" class="d-none" accept=".bin">
+                            <div class="fw-drop-zone" id="fp-new-zone">
+                                <i class="bi bi-cloud-upload fw-drop-zone-icon"></i>
+                                <div class="fw-drop-zone-text">拖拽文件到此处</div>
+                                <div class="fw-drop-zone-hint">或 <button class="fw-drop-browse" id="fp-new-select">点击浏览</button></div>
                             </div>
-                            <textarea class="form-control form-control-sm mt-1" rows="3" id="serial-protocol-down-preview"
-                                readonly placeholder="待发送的完整 HEX（空格分隔）"></textarea>
+                            <div class="fw-file-info d-none" id="fp-new-info">
+                                <div class="fw-file-icon"><i class="bi bi-file-earmark-binary"></i></div>
+                                <div class="fw-file-detail">
+                                    <span class="fw-file-name" id="fp-new-name">--</span>
+                                    <span class="fw-file-size" id="fp-new-size">--</span>
+                                </div>
+                                <button class="fw-file-clear" id="fp-new-clear" title="清除文件"><i class="bi bi-x-circle"></i></button>
+                            </div>
                         </div>
                     </div>
-                    <div class="tab-pane d-flex flex-column fade" id="nav-firmware" role="tabpanel"
-                        aria-labelledby="nav-firmware-tab">
-                    <div class="d-flex flex-column flex-grow-1 min-h-0">
-                        <!--固件文件选择与分析-->
-                        <div class="border rounded p-2 mb-2">
-                            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-                                <input type="file" id="fw-file" class="d-none" accept=".bin,.hex,.fw">
-                                <button class="btn btn-sm btn-outline-secondary" id="fw-select"><i
-                                        class="bi bi-folder2-open"></i> 选择固件</button>
-                                <span id="fw-file-name" class="small text-muted">未选择固件文件</span>
+                    <div class="fw-config-card">
+                        <div class="fw-config-grid">
+                            <div class="fw-config-item fw-config-wide">
+                                <label class="fw-config-label"><i class="bi bi-pencil"></i> 自定义信息（UserDefine）</label>
+                                <input type="text" class="form-control form-control-sm fw-input" id="fp-user-define" maxlength="48" placeholder="最长48字节，如设备SN号、备注信息等">
                             </div>
-                            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-                                <div class="input-group input-group-sm" style="width: auto;">
-                                    <span class="input-group-text">分片大小(字节)</span>
-                                    <input type="number" class="form-control" id="fw-chunk-size" value="128"
-                                        min="32" max="500" step="32" style="width: 100px;">
+                            <div class="fw-config-item">
+                                <label class="fw-config-label"><i class="bi bi-gear"></i> 输出包类型</label>
+                                <div class="fw-output-types">
+                                    <label class="fw-check-pill">
+                                        <input type="checkbox" id="fp-gen-origin">
+                                        <span class="fw-check-pill-content"><i class="bi bi-file-earmark"></i> 原始包</span>
+                                    </label>
+                                    <label class="fw-check-pill">
+                                        <input type="checkbox" id="fp-gen-compress" checked>
+                                        <span class="fw-check-pill-content"><i class="bi bi-file-zip"></i> 压缩包</span>
+                                    </label>
+                                    <label class="fw-check-pill">
+                                        <input type="checkbox" id="fp-gen-diff" checked>
+                                        <span class="fw-check-pill-content"><i class="bi bi-arrow-left-right"></i> 差分包</span>
+                                    </label>
                                 </div>
-                                <button class="btn btn-sm btn-outline-secondary" id="fw-parse">解析固件</button>
-                                <button class="btn btn-sm btn-outline-secondary" id="fw-diagnose">诊断固件</button>
+                                <label class="fw-check-pill fw-zip-row">
+                                    <input type="checkbox" id="fp-gen-zip" checked>
+                                    <span class="fw-check-pill-content"><i class="bi bi-file-zip-fill"></i> 打包下载（ZIP）</span>
+                                </label>
                             </div>
-                            <pre id="fw-info"
-                                class="border rounded p-2 mb-0 bg-white small text-monospace" style="min-height: 80px; white-space: pre-wrap;"></pre>
-                        </div>
-                        <!--升级控制-->
-                        <div class="border rounded p-2 mb-2">
-                            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-                                <button class="btn btn-sm btn-primary" id="fw-start" disabled><i
-                                        class="bi bi-upload"></i> 开始升级</button>
-                                <button class="btn btn-sm btn-outline-secondary" id="fw-stop" disabled>停止升级</button>
-                                <button class="btn btn-sm btn-outline-secondary" id="fw-query">查询版本</button>
-                                <button class="btn btn-sm btn-outline-secondary" id="fw-clear-log">清空日志</button>
-                                <span id="fw-status" class="small text-muted ms-auto"></span>
-                            </div>
-                            <div class="progress mb-2" style="height: 18px;">
-                                <div id="fw-progress" class="progress-bar" role="progressbar" style="width: 0%;"
-                                    aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
-                            </div>
-                            <pre id="fw-log"
-                                class="border rounded p-2 mb-0 bg-white small text-monospace flex-grow-1 overflow-auto" style="min-height: 120px; white-space: pre-wrap;"></pre>
-					</div>
-				</div>
-			</div>
-                    <div class="tab-pane d-flex flex-column fade" id="nav-firmware-pack" role="tabpanel"
-                        aria-labelledby="nav-firmware-pack-tab">
-                    <div class="d-flex flex-column flex-grow-1 min-h-0 overflow-auto">
-                        <div class="border rounded p-2 mb-2">
-                            <div class="mb-2">
-                                <span class="fw-bold small">旧固件路径 (差分用, 可选)</span>
-                                <div class="d-flex gap-2">
-                                    <input type="file" id="fp-old-file" class="d-none" accept=".bin">
-                                    <button class="btn btn-sm btn-outline-secondary" id="fp-old-select"><i class="bi bi-folder2-open"></i> 选择文件</button>
-                                    <span id="fp-old-name" class="small text-muted align-self-center">未选择旧固件</span>
-                                </div>
-                            </div>
-                            <div class="mb-2">
-                                <span class="fw-bold small">新固件路径</span>
-                                <div class="d-flex gap-2">
-                                    <input type="file" id="fp-new-file" class="d-none" accept=".bin">
-                                    <button class="btn btn-sm btn-outline-secondary" id="fp-new-select"><i class="bi bi-folder2-open"></i> 选择文件</button>
-                                    <span id="fp-new-name" class="small text-muted align-self-center">未选择新固件</span>
-                                </div>
-                            </div>
-                            <div class="mb-2">
-                                <span class="fw-bold small">自定义信息 (UserDefine, 最长48字节)</span>
-                                <input type="text" class="form-control form-control-sm" id="fp-user-define" maxlength="48">
-                            </div>
-                            <div class="d-flex flex-wrap gap-3 mb-2">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="fp-gen-origin">
-                                    <label class="form-check-label small" for="fp-gen-origin">原始包</label>
-                                </div>
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="fp-gen-compress" checked>
-                                    <label class="form-check-label small" for="fp-gen-compress">压缩包</label>
-                                </div>
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="fp-gen-diff" checked>
-                                    <label class="form-check-label small" for="fp-gen-diff">双向差分包</label>
-                                </div>
-                            </div>
-                            <div id="fp-blank-row" class="mb-2">
-                                <span class="fw-bold small">BLANK.bin 路径 (留空使用内置)</span>
-                                <div class="d-flex gap-2">
+                            <div class="fw-config-item" id="fp-blank-row">
+                                <label class="fw-config-label"><i class="bi bi-file-earmark-code"></i> BLANK.bin 参考文件</label>
+                                <div class="fw-blank-row">
                                     <input type="file" id="fp-blank-file" class="d-none" accept=".bin">
-                                    <button class="btn btn-sm btn-outline-secondary" id="fp-blank-select"><i class="bi bi-folder2-open"></i> 选择BLANK</button>
-                                    <span id="fp-blank-name" class="small text-muted align-self-center">未选择(将使内置BLANK)</span>
+                                    <span class="fw-blank-name" id="fp-blank-name">内置 BLANK.BIN (32 B)</span>
+                                    <button class="btn btn-sm btn-outline-secondary" id="fp-blank-select"><i class="bi bi-arrow-repeat"></i> 更换</button>
                                 </div>
                             </div>
-                            <button class="btn btn-primary btn-sm w-100" id="fp-start"><i class="bi bi-box-seam"></i> 开始生成</button>
                         </div>
-                        <pre id="fp-log"
-                            class="border rounded p-2 mb-0 bg-white small text-monospace flex-grow-1 overflow-auto" style="min-height: 100px; white-space: pre-wrap;"></pre>
+                    </div>
+                    <button class="fw-generate-btn" id="fp-start">
+                        <div class="fw-generate-btn-inner">
+                            <i class="bi bi-stars"></i>
+                            <span>开始生成固件包</span>
+                        </div>
+                        <div class="fw-generate-btn-glow"></div>
+                    </button>
+                    <div class="fw-log-card">
+                        <div class="fw-log-header">
+                            <span><i class="bi bi-terminal"></i> 生成日志</span>
+                            <button class="fw-log-clear" id="fp-log-clear"><i class="bi bi-trash"></i> 清空</button>
+                        </div>
+                        <pre id="fp-log" class="fw-log-body"></pre>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-
-    <footer class="text-center py-2">
-        <a href="https://github.com/Roomen/web-serial-debug" target="_blank" class="text-muted text-decoration-none small">
-            <i class="bi bi-github"></i> GitHub
-        </a>
-    </footer>
-
-
 
     <div class="modal fade" id="model-tip" aria-hidden="true" tabindex="-1">
         <div class="modal-dialog modal-dialog-centered">
@@ -539,6 +611,30 @@
     <script>
         hideTop()
     </script>
+    <script>
+        // 最左侧导航栏：切换工具视图
+        (function () {
+            var rail = document.getElementById('activity-rail')
+            if (!rail) return
+            var items = rail.querySelectorAll('.rail-item[data-view]')
+            var KEY = 'serial-debug-active-view'
+            function activate(id) {
+                if (!document.getElementById(id)) return
+                document.querySelectorAll('.app-view').forEach(function (v) {
+                    v.classList.toggle('active', v.id === id)
+                })
+                items.forEach(function (it) {
+                    it.classList.toggle('active', it.dataset.view === id)
+                })
+                localStorage.setItem(KEY, id)
+            }
+            items.forEach(function (it) {
+                it.addEventListener('click', function () { activate(it.dataset.view) })
+            })
+            var saved = localStorage.getItem(KEY)
+            if (saved) activate(saved)
+        })()
+    </script>
     <script src="js/pcp.js"></script>
     <script src="js/protocol-schema.js"></script>
     <script src="js/protocol-crypto.js"></script>
@@ -547,6 +643,8 @@
     <script src="js/common.js"></script>
     <script src="js/firmware-upgrade.js"></script>
     <script src="js/hdiffi.js"></script>
+    <script src="js/hdiffi-data.js"></script>
+    <script src="https://cdn.bootcdn.net/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="js/firmware-packager.js"></script>
 
 </body>

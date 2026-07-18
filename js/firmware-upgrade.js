@@ -25,6 +25,10 @@
 		file: document.getElementById('fw-file'),
 		select: document.getElementById('fw-select'),
 		fileName: document.getElementById('fw-file-name'),
+		fileSize: document.getElementById('fw-file-size'),
+		dropZone: document.getElementById('fw-drop-zone'),
+		fileCard: document.getElementById('fw-file-card'),
+		fileClear: document.getElementById('fw-file-clear'),
 		chunkSize: document.getElementById('fw-chunk-size'),
 		parse: document.getElementById('fw-parse'),
 		diagnose: document.getElementById('fw-diagnose'),
@@ -36,6 +40,39 @@
 		status: document.getElementById('fw-status'),
 		progress: document.getElementById('fw-progress'),
 		log: document.getElementById('fw-log'),
+	}
+
+	function fmtSize(bytes) {
+		if (bytes < 1024) return bytes + ' B'
+		if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+		return (bytes / (1024 * 1024)).toFixed(2) + ' MB'
+	}
+
+	function showFileCard(name, size) {
+		el.dropZone.classList.add('d-none')
+		el.fileCard.classList.remove('d-none')
+		el.fileName.textContent = name
+		el.fileSize.textContent = fmtSize(size)
+	}
+
+	function hideFileCard() {
+		el.dropZone.classList.remove('d-none')
+		el.fileCard.classList.add('d-none')
+		el.fileName.textContent = '未选择固件文件'
+		el.fileSize.textContent = '--'
+	}
+
+	function loadFwFile(file) {
+		if (!file) return
+		el.fileName.dataset.name = file.name
+		const reader = new FileReader()
+		reader.onload = function () {
+			fwFileBuffer = reader.result
+			showFileCard(file.name, file.size)
+			log('已载入固件: ' + file.name + ' (' + fmtSize(file.size) + ')', 'info')
+			el.parse.click()
+		}
+		reader.readAsArrayBuffer(file)
 	}
 
 	function log(msg, level) {
@@ -57,20 +94,39 @@
 		el.status.textContent = s || ''
 	}
 
-	el.select.addEventListener('click', () => el.file.click())
-	el.file.addEventListener('change', (e) => {
-		const f = e.target.files[0]
-		if (!f) return
-		el.fileName.textContent = f.name
-		el.fileName.dataset.name = f.name
-		const reader = new FileReader()
-		reader.onload = function () {
-			fwFileBuffer = reader.result
-			log('已载入固件: ' + f.name + ' (' + f.size + ' 字节)', 'info')
-			el.parse.click()
-		}
-		reader.readAsArrayBuffer(f)
+	el.select.addEventListener('click', function (e) { e.stopPropagation(); el.file.click() })
+	el.dropZone.addEventListener('click', function () { el.file.click() })
+
+	el.fileClear.addEventListener('click', function (e) {
+		e.stopPropagation()
+		fw = null
+		fwFileBuffer = null
+		hideFileCard()
+		el.file.value = ''
+		el.info.textContent = ''
+		el.start.disabled = true
+		log('已清除固件文件', 'info')
 	})
+
+	el.file.addEventListener('change', function (e) {
+		const f = e.target.files[0]
+		if (f) loadFwFile(f)
+	})
+
+	// Drag & Drop
+	;['dragenter', 'dragover', 'dragleave', 'drop'].forEach(function (evt) {
+		el.dropZone.addEventListener(evt, function (e) { e.preventDefault(); e.stopPropagation() }, false)
+	})
+	;['dragenter', 'dragover'].forEach(function (evt) {
+		el.dropZone.addEventListener(evt, function () { el.dropZone.classList.add('drag-over') }, false)
+	})
+	;['dragleave', 'drop'].forEach(function (evt) {
+		el.dropZone.addEventListener(evt, function () { el.dropZone.classList.remove('drag-over') }, false)
+	})
+	el.dropZone.addEventListener('drop', function (e) {
+		const files = e.dataTransfer.files
+		if (files.length > 0) loadFwFile(files[0])
+	}, false)
 
 	el.parse.addEventListener('click', () => {
 		if (!fwFileBuffer) {
@@ -121,6 +177,15 @@
 	})
 
 	el.clearLog.addEventListener('click', () => { el.log.innerHTML = '' })
+
+	// 持久化分片大小
+	;(function () {
+		var saved = localStorage.getItem('fwChunkSize')
+		if (saved) el.chunkSize.value = saved
+		el.chunkSize.addEventListener('change', function () {
+			localStorage.setItem('fwChunkSize', this.value)
+		})
+	})()
 
 	el.start.addEventListener('click', async () => {
 		if (!fw) {
@@ -390,6 +455,17 @@
 	// 串口打开状态变化时同步按钮
 	const syncStartBtn = () => {
 		el.start.disabled = !(fw && serialApi.isOpen())
+	}
+
+	// 供固件打包工具调用的外部接口
+	window.setFwUpgradeFile = function (arrayBuffer, fileName) {
+		fw = null
+		fwFileBuffer = arrayBuffer
+		el.fileName.dataset.name = fileName || 'packed_fw.bin'
+		showFileCard(fileName || 'packed_fw.bin', arrayBuffer.byteLength)
+		log('已载入固件(来自打包): ' + (fileName || 'packed_fw.bin') + ' (' + fmtSize(arrayBuffer.byteLength) + ')', 'info')
+		var parseBtn = document.getElementById('fw-parse')
+		if (parseBtn) parseBtn.click()
 	}
 	// 监听 serialApi 状态: 简单轮询 open 状态变化
 	let lastOpen = serialApi.isOpen()
