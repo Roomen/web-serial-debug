@@ -1140,9 +1140,19 @@
 				closeSerial()
 				serialPort = port
 				serialStatuChange(true)
+				addLogErr('串口已选择')
 			})
 		} catch (e) {
-			console.error('获取串口权限出错' + e.toString())
+			const errorType = e.name || 'UnknownError'
+			const errorMsg = e.message || '未知错误'
+			
+			if (errorType === 'NotFoundError') {
+				addLogErr('未选择串口设备')
+			} else if (errorType === 'SecurityError') {
+				addLogErr('串口权限被拒绝')
+			} else {
+				addLogErr(`获取串口权限出错: ${errorType} - ${errorMsg}`)
+			}
 		}
 	})
 
@@ -1150,13 +1160,18 @@
 	async function closeSerial() {
 		if (serialOpen) {
 			serialOpen = false
-			reader?.cancel()
+			try {
+				reader?.cancel()
+			} catch (e) {
+				console.error('取消读取器时出错:', e)
+			}
 			serialToggle.innerHTML = '<i class="bi bi-play-circle"></i> 打开串口'
 		}
 	}
 
 	//打开串口
 	async function openSerial() {
+		if (serialOpen) return
 		let SerialOptions = {
 			baudRate: parseInt(get('serial-baud')),
 			dataBits: parseInt(get('serial-data-bits')),
@@ -1176,6 +1191,19 @@
 				readData()
 			})
 			.catch((e) => {
+				const errorType = e.name || 'UnknownError'
+				const errorMsg = e.message || '未知错误'
+				
+				addLogErr(`打开串口失败: ${errorType} - ${errorMsg}`)
+				
+				if (errorType === 'SecurityError') {
+					addLogErr('权限错误：请检查浏览器串口权限设置')
+				} else if (errorType === 'InvalidStateError') {
+					addLogErr('串口状态错误：设备可能已被占用')
+				} else if (errorType === 'NetworkError') {
+					addLogErr('网络错误：设备可能已断开连接')
+				}
+				
 				showMsg('打开串口失败:' + e.toString())
 			})
 	}
@@ -1212,6 +1240,11 @@
 
 	//串口事件监听
 	navigator.serial.addEventListener('connect', (e) => {
+		const portInfo = e.target.getInfo ? e.target.getInfo() : {}
+		const vendorId = portInfo.usbVendorId ? `0x${portInfo.usbVendorId.toString(16).padStart(4, '0')}` : '未知'
+		const productId = portInfo.usbProductId ? `0x${portInfo.usbProductId.toString(16).padStart(4, '0')}` : '未知'
+
+		addLogErr(`设备已连接 (Vendor: ${vendorId}, Product: ${productId})`)
 		serialStatuChange(true)
 		serialPort = e.target
 		//未主动关闭连接的情况下,设备重插,自动重连
@@ -1220,7 +1253,24 @@
 		}
 	})
 	navigator.serial.addEventListener('disconnect', (e) => {
+		const portInfo = e.target.getInfo ? e.target.getInfo() : {}
+		const vendorId = portInfo.usbVendorId ? `0x${portInfo.usbVendorId.toString(16).padStart(4, '0')}` : '未知'
+		const productId = portInfo.usbProductId ? `0x${portInfo.usbProductId.toString(16).padStart(4, '0')}` : '未知'
+		
+		addLogErr(`设备断开连接 (Vendor: ${vendorId}, Product: ${productId})`)
+		
 		serialStatuChange(false)
+		
+		// 如果不是手动关闭，尝试自动重连
+		if (!serialClose) {
+			addLogErr('检测到非手动断开，5秒后尝试自动重连...')
+			setTimeout(() => {
+				if (!serialOpen && serialPort) {
+					openSerial()
+				}
+			}, 5000)
+		}
+		
 		setTimeout(closeSerial, 500)
 	})
 	function serialStatuChange(statu) {
@@ -1271,18 +1321,28 @@
 			addLogErr('请先打开串口再发送数据')
 			return
 		}
-		const writer = serialPort.writable.getWriter()
-		if (toolOptions.addCRLF) {
-			data = new Uint8Array([...data, 0x0d, 0x0a])
+		try {
+			const writer = serialPort.writable.getWriter()
+			if (toolOptions.addCRLF) {
+				data = new Uint8Array([...data, 0x0d, 0x0a])
+			}
+			await writer.write(data)
+			writer.releaseLock()
+			addLog(data, false)
+			addParseLog([...data], false)
+		} catch (error) {
+			const errorType = error.name || 'UnknownError'
+			const errorMsg = error.message || '未知错误'
+			addLogErr(`串口写入失败: ${errorType} - ${errorMsg}`)
 		}
-		await writer.write(data)
-		writer.releaseLock()
-		addLog(data, false)
-		addParseLog([...data], false)
 	}
 
 	//读串口数据
 	async function readData() {
+		let reconnectAttempts = 0
+		const maxReconnectAttempts = 3
+		const reconnectDelay = 1000
+
 		while (serialOpen && serialPort.readable) {
 			reader = serialPort.readable.getReader()
 			try {
@@ -1293,12 +1353,46 @@
 					}
 					dataReceived(value)
 				}
+				reconnectAttempts = 0
 			} catch (error) {
+				const errorType = error.name || 'UnknownError'
+				const errorMsg = error.message || '未知错误'
+				
+				addLogErr(`串口读取错误: ${errorType} - ${errorMsg}`)
+				
+				// 区分错误类型
+				if (errorType === 'NetworkError' || errorType === 'DeviceLostError') {
+					addLogErr('设备可能已断开连接')
+					break
+				} else if (errorType === 'SecurityError') {
+					addLogErr('串口权限错误，请重新授权')
+					break
+				} else {
+					// 其他错误，尝试重连
+					if (reconnectAttempts < maxReconnectAttempts) {
+						reconnectAttempts++
+						addLogErr(`尝试重新连接 (${reconnectAttempts}/${maxReconnectAttempts})...`)
+						await new Promise(resolve => setTimeout(resolve, reconnectDelay))
+						continue
+					} else {
+						addLogErr('重连失败，请手动重新连接')
+						break
+					}
+				}
 			} finally {
 				reader.releaseLock()
 			}
 		}
-		await serialPort.close()
+		
+		// 如果是自动重连模式且不是手动关闭，尝试重连
+		if (!serialClose && reconnectAttempts >= maxReconnectAttempts) {
+			addLogErr('连接已断开，尝试自动重连...')
+			setTimeout(() => {
+				if (!serialOpen && serialPort) {
+					openSerial()
+				}
+			}, 2000)
+		}
 	}
 
 	//串口分包合并
