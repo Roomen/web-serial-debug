@@ -2,6 +2,9 @@
 :root {
 	--top-height: 63px;
 
+	/* 让原生控件(select 弹出菜单、滚动条、输入框内部件)跟随主题渲染 */
+	color-scheme: light;
+
 	/* Light theme (default, follows system) */
 	--bg-body: #f0f2f5;
 	--bg-surface: #ffffff;
@@ -55,6 +58,7 @@
 /* Dark theme overrides (matches system preference) */
 @media (prefers-color-scheme: dark) {
 	:root:not([data-theme="light"]) {
+		color-scheme: dark;
 		--bg-body: #0f172a;
 		--bg-surface: #1e293b;
 		--bg-surface-hover: #273548;
@@ -100,6 +104,7 @@
 
 /* Explicit dark mode (overrides both system and light) */
 [data-theme="dark"] {
+	color-scheme: dark;
 	--bg-body: #0f172a;
 	--bg-surface: #1e293b;
 	--bg-surface-hover: #273548;
@@ -144,6 +149,7 @@
 
 /* Explicit light mode */
 [data-theme="light"] {
+	color-scheme: light;
 	--bg-body: #f0f2f5;
 	--bg-surface: #ffffff;
 	--bg-surface-hover: #f8f9fa;
@@ -198,8 +204,29 @@ body {
 	transition: background-color var(--transition-normal), color var(--transition-normal);
 }
 
+/* 两栏：中间日志 / 右侧工具。串口参数已上移到 #serial-connect-bar。
+   右栏宽度由 --pane-right 控制，拖动折叠条即可调整(见 common.js)。
+   折叠时轨道退化为 auto，只剩 22px 的折叠条本身。 */
 #main {
 	height: 100%;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) var(--pane-right, 428px);
+	--pane-right: 428px;
+}
+
+#main.right-collapsed {
+	--pane-right: auto;
+}
+
+/* 拖动过程中关掉过渡，否则跟手会有延迟 */
+#main.pane-dragging {
+	user-select: none;
+	cursor: col-resize;
+}
+
+#main.pane-dragging .sidebar-body,
+#main.pane-dragging #log-main {
+	pointer-events: none;
 }
 
 /* ========== App Shell + Activity Rail ========== */
@@ -315,6 +342,19 @@ body {
 
 .app-view {
 	height: 100%;
+}
+
+/* 串口视图：顶部连接条 + 下方两栏主体 */
+#view-serial {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+#view-serial > #main {
+	flex: 1 1 auto;
+	height: auto;
+	min-height: 0;
 }
 
 .app-view:not(.active) {
@@ -471,6 +511,17 @@ footer a:hover {
 	border-right: 1px solid var(--border-color);
 	transition: background-color var(--transition-normal), border-color var(--transition-normal);
 	position: relative;
+	display: flex;
+	min-width: 0;
+	overflow: hidden;
+}
+
+/* 内容区吃掉折叠条以外的全部宽度 */
+.sidebar-body {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-x: hidden;
+	overflow-y: auto;
 }
 
 #serial-tools.sidebar {
@@ -482,6 +533,7 @@ footer a:hover {
 	background: var(--bg-sidebar);
 }
 
+/* 折叠条同时是拖拽手柄：拖动改宽度，原地点击(位移 < 4px)则折叠 */
 .toggle-button {
 	align-items: center;
 	background: var(--bg-sidebar-toggle);
@@ -493,14 +545,20 @@ footer a:hover {
 	justify-content: center;
 	width: 22px;
 	z-index: 1;
-	cursor: pointer;
+	cursor: col-resize;
 	color: var(--text-secondary);
-	transition: all var(--transition-fast);
+	transition: background var(--transition-fast), color var(--transition-fast);
+	touch-action: none;
 }
 
 .toggle-button:hover {
 	background: var(--accent-light);
 	color: var(--accent);
+}
+
+/* 折叠状态下不该再能拖宽 */
+#main.right-collapsed #serial-tools .toggle-button {
+	cursor: pointer;
 }
 
 /* ========== Inputs & Form Controls ========== */
@@ -627,6 +685,8 @@ footer a:hover {
 
 /* ========== Log Area ========== */
 #serial-logs {
+	flex: 1 1 0;
+	min-height: 0;
 	overflow-y: scroll;
 	white-space: pre-wrap;
 	word-break: break-all;
@@ -650,6 +710,83 @@ footer a:hover {
 #serial-logs.ansi {
 	background-color: #000;
 	color: #fff;
+}
+
+/* ========== 结构化日志行 ========== */
+.log-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	min-width: 0;
+	padding: 1px 6px;
+	border-left: 2px solid transparent;
+	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+	cursor: pointer;
+	transition: background-color var(--transition-fast);
+}
+
+.log-row .log-time {
+	flex: 0 0 auto;
+	color: var(--text-muted);
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+
+.log-row .log-dir {
+	flex: 0 0 auto;
+	width: 1em;
+	text-align: center;
+}
+
+.log-row .log-body {
+	flex: 1 1 0;
+	min-width: 0;
+	white-space: pre-wrap;
+	word-break: break-all;
+	overflow-wrap: anywhere;
+}
+
+.log-row[data-dir='rx'] {
+	border-left-color: var(--success);
+	background-color: var(--success-light);
+}
+
+.log-row[data-dir='rx'] .log-dir {
+	color: var(--success);
+}
+
+.log-row[data-dir='tx'] {
+	border-left-color: var(--accent);
+	background-color: var(--accent-light);
+}
+
+.log-row[data-dir='tx'] .log-dir {
+	color: var(--accent);
+}
+
+.log-row[data-dir='sys'] {
+	border-left-color: var(--danger);
+	cursor: default;
+}
+
+.log-row[data-dir='sys'] .log-dir {
+	color: var(--danger);
+}
+
+.log-row:hover {
+	background-color: var(--bg-surface-hover);
+}
+
+.log-row.selected {
+	background-color: var(--accent-light);
+	box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* ANSI 模式是黑底,行底色改用半透明叠加免得糊成一片 */
+#serial-logs.ansi .log-row[data-dir='rx'],
+#serial-logs.ansi .log-row[data-dir='tx'],
+#serial-logs.ansi .log-row:hover {
+	background-color: rgba(255, 255, 255, 0.06);
 }
 
 /* ========== Alert / Status ========== */
@@ -878,7 +1015,9 @@ footer a:hover {
 	background-color: var(--bg-surface) !important;
 	color: var(--text-primary);
 	border-color: var(--border-color) !important;
-	flex: 1 1 auto;
+	flex: 1 1 0;
+	min-height: 0;
+	min-width: 0;
 	transition: background-color var(--transition-normal), color var(--transition-normal);
 }
 
@@ -913,7 +1052,6 @@ select option {
 }
 
 /* ========== Sidebar Layout Fixes ========== */
-#serial-options,
 #serial-tools {
 	position: relative;
 }
@@ -1082,11 +1220,113 @@ hr {
 	display: flex;
 	flex-direction: column;
 	height: 100%;
+	min-width: 0;
 }
 
 #log-main > div:first-child {
 	border-bottom: 1px solid var(--border-color);
 	margin-bottom: 8px;
+}
+
+/* ========== 协议解析底部面板 ==========
+   高度由 --parse-h 控制，header 既是拖拽手柄也是折叠按钮(见 common.js)。 */
+#log-main {
+	--parse-h: 220px;
+}
+
+#serial-parse-panel {
+	flex: 0 0 auto;
+	display: flex;
+	flex-direction: column;
+	height: var(--parse-h);
+	min-height: 0;
+	margin-bottom: 8px;
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	background-color: var(--bg-surface);
+	overflow: hidden;
+	transition: background-color var(--transition-normal), border-color var(--transition-normal);
+}
+
+#serial-parse-panel.collapsed {
+	height: auto;
+	flex: 0 0 auto;
+}
+
+#serial-parse-panel.collapsed #serial-parse-body {
+	display: none;
+}
+
+#serial-parse-header {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 4px 10px;
+	cursor: row-resize;
+	user-select: none;
+	border-bottom: 1px solid var(--border-color);
+	color: var(--text-secondary);
+	font-size: 0.8rem;
+}
+
+#serial-parse-panel.collapsed #serial-parse-header {
+	border-bottom: 0;
+}
+
+.serial-parse-title {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.serial-parse-chevron {
+	transition: transform var(--transition-fast);
+}
+
+#serial-parse-panel.collapsed .serial-parse-chevron {
+	transform: rotate(-90deg);
+}
+
+.serial-parse-actions {
+	flex: 0 0 auto;
+	cursor: default;
+}
+
+#serial-parse-body {
+	flex: 1 1 0;
+	min-height: 0;
+	display: flex;
+	gap: 8px;
+	padding: 8px;
+}
+
+#serial-parse-input {
+	flex: 0 0 260px;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+#serial-parse-input textarea {
+	flex: 1 1 0;
+	min-height: 0;
+	resize: none;
+}
+
+/* 拖动解析面板时禁掉内部交互，避免选中文本 */
+#log-main.parse-dragging {
+	user-select: none;
+	cursor: row-resize;
+}
+
+#log-main.parse-dragging #serial-logs,
+#log-main.parse-dragging #serial-parse-body {
+	pointer-events: none;
 }
 
 /* ========== Scrollbar Styling ========== */
@@ -1126,13 +1366,143 @@ hr {
 	background-color: var(--bg-surface) !important;
 }
 
-/* ========== GitHub link in sidebar ========== */
-#serial-options .text-muted {
-	color: var(--text-muted) !important;
+/* ======================================================
+   Serial Connect Bar — 顶部连接条 + 参数浮层
+   ====================================================== */
+
+#serial-connect-bar {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	height: 44px;
+	padding: 0 10px;
+	background: var(--bg-sidebar);
+	border-bottom: 1px solid var(--border-color);
+	transition: background-color var(--transition-normal), border-color var(--transition-normal);
+	position: relative;
+	z-index: 30;
 }
 
-#serial-options .text-muted:hover {
-	color: var(--text-link) !important;
+.connect-bar-section {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.connect-bar-left {
+	flex: 0 1 auto;
+}
+
+.connect-bar-center {
+	flex: 1 1 auto;
+	justify-content: center;
+	position: relative;
+	min-width: 0;
+}
+
+.connect-bar-right {
+	flex: 0 0 auto;
+	margin-left: auto;
+}
+
+.connect-bar-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+#serial-connect-bar .serial-port-btn,
+#serial-connect-bar .serial-open-btn {
+	white-space: nowrap;
+	padding: 5px 12px;
+}
+
+#serial-connect-bar .serial-status-indicator {
+	padding: 5px 10px;
+	white-space: nowrap;
+}
+
+/* ---- 参数摘要按钮 ---- */
+.serial-params-summary {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	max-width: 100%;
+	padding: 5px 12px;
+	font-size: 0.8rem;
+	font-weight: 600;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	color: var(--text-primary);
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	cursor: pointer;
+	transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.serial-params-summary:hover {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+
+.serial-params-summary > i {
+	font-size: 0.8rem;
+	color: var(--text-muted);
+}
+
+.serial-params-summary:hover > i,
+.serial-params-summary[aria-expanded='true'] > i {
+	color: var(--accent);
+}
+
+.serial-params-summary[aria-expanded='true'] {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+
+#serial-params-summary-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.serial-params-summary-arrow {
+	transition: transform var(--transition-fast);
+}
+
+.serial-params-summary[aria-expanded='true'] .serial-params-summary-arrow {
+	transform: rotate(180deg);
+}
+
+/* ---- 参数浮层 ---- */
+#serial-params-popover {
+	position: absolute;
+	top: calc(100% + 6px);
+	left: 50%;
+	transform: translateX(-50%);
+	width: 300px;
+	max-width: calc(100vw - 40px);
+	padding: 10px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-lg);
+	z-index: 60;
+}
+
+#serial-params-popover[hidden] {
+	display: none;
+}
+
+/* 浮层自身已经是一块卡片，内部卡片去掉重复的边框和阴影 */
+#serial-params-popover .serial-settings-card {
+	background: transparent;
+	border: none;
+	box-shadow: none;
+	padding: 0;
+	margin-bottom: 0;
 }
 
 /* ========== Responsive / Mobile (Android phones etc.) ========== */
@@ -1173,27 +1543,58 @@ hr {
 		padding: 14px 10px;
 	}
 
-	/* Stack the three columns vertically */
+	/* Stack the columns vertically */
 	#main {
-		flex-direction: column;
+		grid-template-columns: minmax(0, 1fr);
 		height: auto !important;
 	}
 
+	/* 窄屏：连接条允许换行，三区各自占满一行 */
+	#serial-connect-bar {
+		flex-wrap: wrap;
+		height: auto;
+		min-height: 0;
+		padding: 8px 10px;
+		row-gap: 8px;
+	}
+
+	.connect-bar-section {
+		flex: 1 1 100%;
+		min-width: 0;
+	}
+
+	.connect-bar-center {
+		justify-content: stretch;
+	}
+
+	.serial-params-summary {
+		width: 100%;
+	}
+
+	/* 浮层占满连接条宽度，不再居中定位 */
+	#serial-params-popover {
+		position: absolute;
+		left: 0;
+		right: 0;
+		transform: none;
+		width: auto;
+		min-width: 0;
+		max-width: none;
+	}
+
+	.connect-bar-right .serial-open-btn {
+		flex: 1 1 auto;
+	}
+
 	/* Sidebars span the full width and size to their content */
-	#serial-options,
 	#serial-tools {
 		width: 100% !important;
 		max-width: 100%;
 		height: auto !important;
 		border-left: none !important;
 		border-right: none !important;
-	}
-
-	#serial-options {
-		border-bottom: 1px solid var(--border-color);
-	}
-
-	#serial-tools {
+		flex-direction: column;
+		overflow: visible;
 		border-top: 1px solid var(--border-color);
 	}
 
@@ -1215,20 +1616,61 @@ hr {
 		width: 100% !important;
 		height: 40px;
 		border-top: 1px solid var(--border-color);
+		cursor: pointer;
+		order: 1;
 	}
 
 	.toggle-button i {
 		transform: rotate(-90deg);
 	}
 
-	/* Center log panel keeps a definite height so the log scrolls internally */
+	/* 窄屏：日志区自己保持固定高度并内部滚动，#log-main 随内容增高，
+	   这样展开解析面板也不会把发送区挤出可视区(页面整体滚动) */
 	#log-main {
-		height: 78vh;
+		height: auto;
 		padding: 0 8px;
 	}
 
+	/* 窄屏整页滚动，日志工具栏要粘在顶部才不会被滚走 */
+	#log-main > div:first-child {
+		position: sticky;
+		top: 0;
+		z-index: 3;
+		background-color: var(--bg-body);
+	}
+
 	#serial-logs {
+		flex: 0 0 auto;
+		height: 55vh;
 		min-height: 200px;
+	}
+
+	/* 窄屏：解析面板退化为纯折叠面板，不再可拖拽 */
+	#serial-parse-header {
+		cursor: pointer;
+	}
+
+	#serial-parse-panel {
+		height: auto;
+		max-height: 60vh;
+	}
+
+	/* 窄屏面板高度随内容走，页面整体滚动 */
+	#serial-parse-body {
+		flex: 0 0 auto;
+		flex-direction: column;
+	}
+
+	#serial-parse-input {
+		flex: 0 0 auto;
+	}
+
+	#serial-parse-input textarea {
+		flex: 0 0 auto;
+	}
+
+	#serial-protocol-output {
+		min-height: 120px;
 	}
 
 	/* Tools tab content grows with its content; the page scrolls instead */
@@ -1732,7 +2174,7 @@ hr {
 }
 
 /* ======================================================
-   Serial Settings Sidebar — Modern Redesign
+   Serial Settings Card — Modern Redesign
    ====================================================== */
 
 .serial-settings-card {
@@ -1954,6 +2396,8 @@ hr {
     display: flex;
     align-items: center;
     gap: 6px;
+    flex: 0 0 auto;
+    white-space: nowrap;
     font-weight: 700;
     color: var(--text-primary);
     margin: 0;
@@ -2150,128 +2594,169 @@ hr {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-/* ========== Preset Cascade Menu ========== */
-.preset-cascade {
-	position: relative;
-	flex: 0 0 auto;
-	width: 180px;
-}
-.preset-cascade-btn {
-	width: 100%;
-	text-align: left;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	cursor: pointer;
-}
-.input-group .preset-cascade-btn {
-	border-top-left-radius: 0;
-	border-bottom-left-radius: 0;
-}
-.preset-cascade-dropdown {
+
+/* ========== 命令面板 (Cmd+K) ========== */
+#serial-cmdk-overlay {
 	position: fixed;
-	z-index: 1050;
-	min-width: 160px;
+	inset: 0;
+	z-index: 9000;
+	background: rgba(15, 23, 42, 0.45);
+	backdrop-filter: blur(2px);
+	display: flex;
+	align-items: flex-start;
+	justify-content: center;
+	padding: 12vh 16px 16px;
+}
+
+#serial-cmdk-overlay[hidden] {
+	display: none;
+}
+
+#serial-cmdk-panel {
+	width: 100%;
+	max-width: 620px;
+	max-height: 70vh;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
 	background: var(--bg-surface);
+	color: var(--text-primary);
 	border: 1px solid var(--border-color);
-	border-radius: var(--radius-md);
+	border-radius: var(--radius-lg);
 	box-shadow: var(--shadow-lg);
-	padding: 4px 0;
-	max-height: 420px;
-	overflow-y: auto;
 }
-.preset-cascade-dropdown.has-groups {
-	max-height: none;
-	overflow: visible;
-}
-.preset-cascade-item {
-	position: relative;
+
+#serial-cmdk-inputbar {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
-	padding: 6px 10px;
-	font-size: 0.8rem;
-	color: var(--text-primary);
-	cursor: pointer;
-	white-space: nowrap;
-	user-select: none;
-}
-.preset-cascade-item:hover {
-	background: var(--accent-light);
-	color: var(--accent);
-}
-.preset-cascade-item.has-sub::after {
-	content: '';
-	display: inline-block;
-	width: 0;
-	height: 0;
-	margin-left: 6px;
-	border-top: 4px solid transparent;
-	border-bottom: 4px solid transparent;
-	border-left: 5px solid var(--text-muted);
+	gap: 8px;
+	padding: 10px 12px;
+	border-bottom: 1px solid var(--border-color);
 	flex-shrink: 0;
 }
-.preset-cascade-item.has-sub:hover::after {
-	border-left-color: var(--accent);
+
+#serial-cmdk-inputbar .bi-search {
+	color: var(--text-muted);
+	flex-shrink: 0;
 }
-.preset-cascade-submenu {
-	display: none;
-	position: absolute;
-	top: -4px;
-	left: 100%;
-	z-index: 1051;
-	min-width: 200px;
-	background: var(--bg-surface);
-	border: 1px solid var(--border-color);
-	border-radius: var(--radius-md);
-	box-shadow: var(--shadow-lg);
-	padding: 4px 0;
-	max-height: 380px;
+
+#serial-cmdk-input {
+	flex: 1 1 auto;
+	min-width: 0;
+	border: none;
+	outline: none;
+	background: transparent;
+	color: var(--text-primary);
+	font-size: 0.95rem;
+	padding: 2px 0;
+}
+
+#serial-cmdk-input::placeholder {
+	color: var(--text-muted);
+}
+
+#serial-cmdk-list {
+	flex: 1 1 auto;
 	overflow-y: auto;
+	overflow-x: hidden;
+	padding: 6px 0;
 }
-.preset-cascade-item.has-sub:hover > .preset-cascade-submenu {
-	display: block;
+
+.serial-cmdk-group {
+	padding: 6px 14px 2px;
+	font-size: 0.7rem;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
 }
-.preset-cascade-submenu.flip-left {
-	left: auto;
-	right: 100%;
-}
-.preset-cascade-subitem {
+
+.serial-cmdk-item {
 	display: flex;
 	align-items: center;
+	gap: 8px;
 	padding: 6px 12px;
-	font-size: 0.78rem;
-	color: var(--text-primary);
+	margin: 0 6px;
+	border-radius: var(--radius-sm);
 	cursor: pointer;
-	white-space: nowrap;
 }
-.preset-cascade-subitem:hover {
+
+.serial-cmdk-item.active {
 	background: var(--accent-light);
-	color: var(--accent);
 }
-.preset-cascade-subitem.selected {
-	background: var(--accent);
-	color: #fff;
+
+[data-theme="dark"] .serial-cmdk-item.active {
+	background: var(--bg-surface-hover);
 }
-.preset-cascade-leaf {
+
+.serial-cmdk-text {
+	flex: 1 1 auto;
+	min-width: 0;
 	display: flex;
-	align-items: center;
-	padding: 6px 10px;
-	font-size: 0.8rem;
+	flex-direction: column;
+}
+
+.serial-cmdk-title {
+	font-size: 0.88rem;
 	color: var(--text-primary);
-	cursor: pointer;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.preset-cascade-leaf:hover {
-	background: var(--accent-light);
-	color: var(--accent);
+
+.serial-cmdk-detail {
+	font-size: 0.72rem;
+	color: var(--text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
-.preset-cascade-leaf.selected {
-	background: var(--accent);
-	color: #fff;
+
+.serial-cmdk-badge {
+	flex-shrink: 0;
+	font-size: 0.68rem;
+	padding: 1px 6px;
+	border-radius: 999px;
+	color: var(--text-secondary);
+	background: var(--bg-code);
 }
-.preset-cascade-sep {
-	height: 1px;
-	background: var(--border-light);
-	margin: 4px 8px;
+
+.serial-cmdk-kbd {
+	flex-shrink: 0;
+	font-size: 0.68rem;
+	padding: 1px 5px;
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-sm);
+	color: var(--text-muted);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.serial-cmdk-empty {
+	padding: 24px 14px;
+	text-align: center;
+	font-size: 0.85rem;
+	color: var(--text-muted);
+}
+
+#serial-cmdk-footer {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	padding: 6px 12px;
+	border-top: 1px solid var(--border-color);
+	font-size: 0.7rem;
+	color: var(--text-muted);
+	flex-shrink: 0;
+}
+
+@media (max-width: 480px) {
+	#serial-cmdk-overlay {
+		padding: 6vh 8px 8px;
+	}
+
+	#serial-cmdk-panel {
+		max-height: 80vh;
+	}
+
+	.serial-cmdk-badge {
+		display: none;
+	}
 }

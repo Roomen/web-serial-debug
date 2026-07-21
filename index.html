@@ -98,10 +98,28 @@
         <div id="views">
             <!--串口调试视图-->
             <div id="view-serial" class="app-view active">
-                <div id="main" class="d-flex">
-                    <!--左侧串口配置-->
-                    <div id="serial-options" class="col-auto m-0 bg-light sidebar">
-                        <div class="collapse show p-2 float-start">
+                <!--顶部连接条-->
+                <div id="serial-connect-bar">
+                    <div class="connect-bar-section connect-bar-left">
+                        <button class="btn btn-outline-secondary serial-port-btn" id="serial-select-port">
+                            <i class="bi bi-usb-plug"></i> 选择串口
+                        </button>
+                        <div id="serial-status">
+                            <div class="serial-status-indicator disconnected">
+                                <span class="serial-status-dot"></span>
+                                <span class="serial-status-text">未连接</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="connect-bar-section connect-bar-center">
+                        <button type="button" class="serial-params-summary" id="serial-params-summary"
+                            aria-expanded="false" aria-controls="serial-params-popover" title="串口参数">
+                            <i class="bi bi-sliders2"></i>
+                            <span id="serial-params-summary-text">115200 8-N-1</span>
+                            <i class="bi bi-chevron-down serial-params-summary-arrow"></i>
+                        </button>
+                        <div id="serial-params-popover" hidden>
                             <div class="serial-settings-card">
                                 <div class="serial-settings-title">
                                     <i class="bi bi-sliders2"></i> 串口参数
@@ -161,38 +179,24 @@
                                     </select>
                                 </div>
                             </div>
-
-                            <div class="d-flex mt-2 gap-2">
-                                <button class="btn btn-outline-secondary serial-port-btn" id="serial-select-port">
-                                    <i class="bi bi-usb-plug"></i> 选择串口
-                                </button>
-                                <button class="btn btn-primary serial-open-btn flex-grow-1" id="serial-open-or-close">
-                                    <i class="bi bi-play-circle"></i> 打开串口
-                                </button>
-                            </div>
-
-                            <div id="serial-status" class="mt-2">
-                                <div class="serial-status-indicator disconnected">
-                                    <span class="serial-status-dot"></span>
-                                    <span class="serial-status-text">未连接</span>
-                                </div>
-                            </div>
-
-                            <div class="d-flex gap-1 mt-2">
-                                <button class="btn btn-sm btn-outline-secondary flex-fill" id="serial-reset" title="重置所有参数"><i class="bi bi-arrow-repeat"></i></button>
-                                <button class="btn btn-sm btn-outline-secondary flex-fill" id="serial-export" title="导出配置"><i class="bi bi-folder-symlink"></i></button>
-                                <button class="btn btn-sm btn-outline-secondary flex-fill" id="serial-import" title="导入配置"><i class="bi bi-folder-plus"></i></button>
-                                <input type="file" id="serial-import-file" style="display: none;" accept="application/json" />
-                            </div>
                         </div>
-                        <button class="toggle-button float-end" title="隐藏/打开边栏">
-                            <i class="bi bi-chevron-compact-left"></i>
-                        </button>
-                        <div class="text-center mt-2 mb-1">&nbsp;</div>
                     </div>
-                    <div class="clear"></div>
+
+                    <div class="connect-bar-section connect-bar-right">
+                        <button class="btn btn-primary serial-open-btn" id="serial-open-or-close">
+                            <i class="bi bi-play-circle"></i> 打开串口
+                        </button>
+                        <div class="connect-bar-actions">
+                            <button class="btn btn-sm btn-outline-secondary" id="serial-reset" title="重置所有参数"><i class="bi bi-arrow-repeat"></i></button>
+                            <button class="btn btn-sm btn-outline-secondary" id="serial-export" title="导出配置"><i class="bi bi-folder-symlink"></i></button>
+                            <button class="btn btn-sm btn-outline-secondary" id="serial-import" title="导入配置"><i class="bi bi-folder-plus"></i></button>
+                            <input type="file" id="serial-import-file" style="display: none;" accept="application/json" />
+                        </div>
+                    </div>
+                </div>
+                <div id="main">
                     <!--中间串口日志-->
-                    <div id="log-main" class="flex-fill px-md-2">
+                    <div id="log-main" class="px-md-2">
                         <div
                             class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
                             <h1 class="h4 serial-log-title"><i class="bi bi-journal-text"></i> 串口日志</h1>
@@ -202,6 +206,12 @@
                                     <span class="input-group-text">分包超时</span>
                                     <input type="number" id="serial-timer-out" class="form-control" placeholder="0不分包" value="200"
                                         style="width: 90px;" />
+                                </div>
+
+                                <div class="input-group input-group-sm me-2">
+                                    <span class="input-group-text">最大行数</span>
+                                    <input type="number" id="serial-max-rows" class="form-control" min="100" step="100"
+                                        title="日志超过该行数后从顶部裁剪" value="5000" style="width: 90px;" />
                                 </div>
 
                                 <div class="input-group input-group-sm me-2">
@@ -223,6 +233,30 @@
                             </div>
                         </div>
                         <div id="serial-logs" class="flex-grow-1 border border-2 rounded mb-2"></div>
+                        <!--协议解析底部面板：header 同时是垂直拖拽手柄，原地点击折叠-->
+                        <div id="serial-parse-panel">
+                            <div id="serial-parse-header" title="拖动调整高度 · 点击折叠/展开">
+                                <span class="serial-parse-title">
+                                    <i class="bi bi-chevron-down serial-parse-chevron"></i>
+                                    <i class="bi bi-diagram-3"></i> 协议解析
+                                </span>
+                                <span class="serial-parse-actions">
+                                    <button class="btn btn-sm btn-outline-secondary" id="serial-parse-clear"
+                                        type="button">清空</button>
+                                </span>
+                            </div>
+                            <div id="serial-parse-body">
+                                <div id="serial-parse-input">
+                                    <label class="form-label small mb-1">手动解析 HEX 报文</label>
+                                    <textarea class="form-control form-control-sm" rows="3" id="serial-protocol-input"
+                                        placeholder="粘贴 HEX 报文（空格/换行/0x前缀均可）"></textarea>
+                                    <button class="btn btn-sm btn-outline-secondary mt-1"
+                                        id="serial-protocol-parse">解析</button>
+                                </div>
+                                <div id="serial-protocol-output" class="border border-2 rounded p-2 overflow-auto">
+                                </div>
+                            </div>
+                        </div>
                         <div class="flex-shrink-0 mb-2 serial-send-area">
                             <textarea class="form-control serial-send-textarea" rows="3" id="serial-send-content"
                                 placeholder="在此输入要发送的内容,可以是字符串(如:你好,世界!),也可以是HEX(如:49544c4447)"></textarea>
@@ -252,14 +286,12 @@
                             </div>
                         </div>
                     </div>
-                    <div class="clear"></div>
-
                     <!--右侧串口工具-->
-                    <div id="serial-tools" class="col-auto m-0 bg-light sidebar">
-                        <button class="toggle-button float-start" title="隐藏/打开边栏">
+                    <div id="serial-tools" class="sidebar">
+                        <button class="toggle-button" data-pane="right" title="拖动调整宽度 · 点击隐藏/打开边栏">
                             <i class="bi bi-chevron-compact-right"></i>
                         </button>
-                        <div class="collapse show p-1 float-start overflow-hidden" style="width:428px">
+                        <div class="collapse show p-1 overflow-hidden sidebar-body">
 
                             <nav>
                                 <div class="nav nav-tabs" id="nav-tab" role="tablist">
@@ -360,17 +392,7 @@
                                             <label class="form-check-label" for="serial-protocol-hover">悬停提示(静默解析)</label>
                                         </div>
                                     </div>
-                                    <div class="mb-2">
-                                        <label class="form-label small mb-1">手动解析 HEX 报文</label>
-                                        <textarea class="form-control form-control-sm" rows="4" id="serial-protocol-input"
-                                            placeholder="粘贴 HEX 报文（空格/换行/0x前缀均可）"></textarea>
-                                        <button class="btn btn-sm btn-outline-secondary mt-1" id="serial-protocol-parse">解析</button>
-                                    </div>
-                                    <div id="serial-protocol-output"
-                                        class="flex-grow-1 border border-2 rounded p-2 mb-2 overflow-auto bg-white" style="min-height: 80px;">
-                                    </div>
-                                    <hr class="my-2">
-                                    <div class="mb-2">
+                                    <div class="mb-2 flex-grow-1">
                                         <h6 class="mb-2">下行下发</h6>
                                         <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
                                             <div class="input-group input-group-sm" style="width: auto;">
@@ -383,13 +405,9 @@
                                             </div>
                                             <div class="input-group input-group-sm" style="width: auto;">
                                                 <span class="input-group-text">常用指令</span>
-                                                <div class="preset-cascade">
-                                                    <input type="hidden" id="serial-protocol-down-preset" value="">
-                                                    <button class="preset-cascade-btn form-select form-select-sm" id="preset-cascade-btn" type="button" title="选择常用指令">
-                                                        <span class="preset-cascade-text">选择指令...</span>
-                                                    </button>
-                                                    <div class="preset-cascade-dropdown" id="preset-cascade-dropdown" style="display:none;"></div>
-                                                </div>
+                                                <select class="form-select" id="serial-protocol-down-preset" title="选择常用指令">
+                                                    <option value="">选择指令...</option>
+                                                </select>
                                             </div>
                                             <div class="input-group input-group-sm" id="serial-protocol-down-param-group" style="display:none;width:auto;">
                                                 <span class="input-group-text" id="serial-protocol-down-param-label">参数</span>
@@ -645,6 +663,7 @@
     <script src="js/protocol.js"></script>
     <script src="js/protocol-presets.js"></script>
     <script src="js/common.js"></script>
+    <script src="js/command-palette.js"></script>
     <script src="js/firmware-upgrade.js"></script>
     <script src="js/hdiffi.js"></script>
     <script src="js/hdiffi-data.js"></script>
