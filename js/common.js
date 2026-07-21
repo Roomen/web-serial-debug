@@ -863,59 +863,7 @@
 	quickSend.dispatchEvent(new Event('change'))
 	resetLoopSend()
 
-	//波特率预设选择联动
-	var baudPresetEl = document.getElementById('serial-baud-preset')
-	var baudInputEl = document.getElementById('serial-baud')
-	if (baudPresetEl && baudInputEl) {
-		baudPresetEl.addEventListener('change', function () {
-			var val = this.value
-			if (val === 'custom') {
-				baudInputEl.style.display = ''
-				baudInputEl.focus()
-			} else {
-				baudInputEl.style.display = 'none'
-				baudInputEl.value = val
-				baudInputEl.dispatchEvent(new Event('change'))
-			}
-		})
-		baudInputEl.addEventListener('change', function () {
-			// 如果手动输入的值匹配某个预设，同步回 select
-			var val = String(this.value)
-			var found = Array.from(baudPresetEl.options).some(function (o) { return o.value === val })
-			if (found) {
-				baudPresetEl.value = val
-				this.style.display = 'none'
-			}
-		})
-	}
-
-	//波特率预设选择联动
-	var baudPresetEl = document.getElementById('serial-baud-preset')
-	var baudInputEl = document.getElementById('serial-baud')
-	if (baudPresetEl && baudInputEl) {
-		baudPresetEl.addEventListener('change', function () {
-			var val = this.value
-			if (val === 'custom') {
-				baudInputEl.style.display = ''
-				baudInputEl.focus()
-			} else {
-				baudInputEl.style.display = 'none'
-				baudInputEl.value = val
-				baudInputEl.dispatchEvent(new Event('change'))
-			}
-		})
-		baudInputEl.addEventListener('change', function () {
-			// 如果手动输入的值匹配某个预设，同步回 select
-			var val = String(this.value)
-			var found = Array.from(baudPresetEl.options).some(function (o) { return o.value === val })
-			if (found) {
-				baudPresetEl.value = val
-				this.style.display = 'none'
-			}
-		})
-	}
-
-	// 波特率二合一下拉输入框
+	// 波特率二合一下拉输入框：可点选预设，也可直接手输
 	;(function () {
 		var combo = document.getElementById('baud-combo')
 		var input = document.getElementById('serial-baud')
@@ -923,7 +871,8 @@
 		if (!combo || !input || !dropdown) return
 
 		var isOpen = false
-		var userFiltering = false
+		//这次 click 之前，focus 是不是刚把面板打开过
+		var openedByFocus = false
 
 		function openDropdown() {
 			isOpen = true
@@ -933,7 +882,7 @@
 		}
 		function closeDropdown() {
 			isOpen = false
-			userFiltering = false
+			openedByFocus = false
 			combo.classList.remove('open')
 		}
 		function selectValue(val) {
@@ -953,21 +902,37 @@
 			})
 		}
 
+		input.addEventListener('focus', function () {
+			if (isOpen) return
+			openDropdown()
+			openedByFocus = true
+		})
 		input.addEventListener('click', function (e) {
 			e.stopPropagation()
+			//同一次点击先触发 focus 打开、再触发 click，
+			//如果这里照常 toggle 就会立刻关掉，逼用户点第二下
+			if (openedByFocus) {
+				openedByFocus = false
+				return
+			}
 			if (isOpen) { closeDropdown(); return }
 			openDropdown()
 		})
 		input.addEventListener('input', function () {
-			userFiltering = true
+			openedByFocus = false
 			if (!isOpen) openDropdown()
 			filterOptions(this.value)
 		})
-		input.addEventListener('focus', function () {
-			if (!isOpen) openDropdown()
-		})
 		input.addEventListener('keydown', function (e) {
-			if (e.key === 'Escape') { closeDropdown(); input.blur(); return }
+			openedByFocus = false
+			if (e.key === 'Escape') {
+				if (!isOpen) return
+				//外层串口参数浮层也监听 Esc，这一次先只关自己
+				e.stopPropagation()
+				closeDropdown()
+				input.blur()
+				return
+			}
 			if (e.key === 'Enter') {
 				var active = dropdown.querySelector('li.active')
 				if (active && active.style.display !== 'none') {
@@ -1004,9 +969,12 @@
 			visible[idx].scrollIntoView({ block: 'nearest' })
 		}
 
-		dropdown.addEventListener('click', function (e) {
+		//用 mousedown 而不是 click：input 会先 blur 再收到 click，
+		//blur 的重绘时机下 li 可能已经被隐藏，点击就落空了
+		dropdown.addEventListener('mousedown', function (e) {
 			var li = e.target.closest('li')
 			if (!li) return
+			e.preventDefault()
 			selectValue(li.getAttribute('data-value'))
 		})
 
@@ -1784,12 +1752,10 @@
 		return `${hour}:${minute}:${second}.${millisecond}`
 	}
 
-	// 顶部连接条：参数摘要按钮 + 参数浮层
+	// 顶部连接条：参数摘要文案(浮层开合交给 Bootstrap dropdown)
 	;(function () {
-		const summary = document.getElementById('serial-params-summary')
 		const summaryText = document.getElementById('serial-params-summary-text')
-		const popover = document.getElementById('serial-params-popover')
-		if (!summary || !summaryText || !popover) return
+		if (!summaryText) return
 
 		const PARITY_ABBR = { none: 'N', even: 'E', odd: 'O' }
 		const FIELDS = ['serial-baud', 'serial-data-bits', 'serial-stop-bits', 'serial-parity']
@@ -1810,31 +1776,14 @@
 		})
 		updateSummary()
 
-		function isOpen() {
-			return !popover.hidden
+		//浮层里是原生表单控件而不是 dropdown-item，
+		//上下键要留给 select/input 自己，别让 Bootstrap 的菜单键盘导航截走
+		const popover = document.getElementById('serial-params-popover')
+		if (popover) {
+			popover.addEventListener('keydown', function (e) {
+				if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.stopPropagation()
+			})
 		}
-		function setOpen(open) {
-			popover.hidden = !open
-			summary.setAttribute('aria-expanded', open ? 'true' : 'false')
-		}
-
-		summary.addEventListener('click', function () {
-			setOpen(!isOpen())
-		})
-		//点击外部关闭。用 contains 判断而不是 stopPropagation，
-		//否则会吞掉波特率下拉自己的"点击外部关闭"逻辑
-		document.addEventListener('click', function (e) {
-			if (!isOpen()) return
-			if (summary.contains(e.target) || popover.contains(e.target)) return
-			setOpen(false)
-		})
-		document.addEventListener('keydown', function (e) {
-			if (e.key !== 'Escape' || !isOpen()) return
-			//波特率下拉自己在用 Esc，这一次先让给它
-			const combo = document.getElementById('baud-combo')
-			if (combo && combo.classList.contains('open')) return
-			setOpen(false)
-		})
 	})()
 
 	// 右栏：折叠条既是拖拽手柄(改宽度)也是折叠按钮(原地点击)

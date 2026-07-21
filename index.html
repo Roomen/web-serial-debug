@@ -80,6 +80,19 @@
                 </button>
             </div>
             <div class="rail-bottom">
+                <button class="rail-item" id="serial-import" title="导入配置">
+                    <i class="bi bi-folder-plus"></i>
+                    <span class="rail-label">导入配置</span>
+                </button>
+                <button class="rail-item" id="serial-export" title="导出配置">
+                    <i class="bi bi-folder-symlink"></i>
+                    <span class="rail-label">导出配置</span>
+                </button>
+                <button class="rail-item" id="serial-reset" title="重置所有参数">
+                    <i class="bi bi-arrow-repeat"></i>
+                    <span class="rail-label">重置参数</span>
+                </button>
+                <div class="rail-divider"></div>
                 <button id="theme-toggle" class="theme-toggle-btn" title="切换亮色/暗色模式">
                     <span class="theme-toggle-track">
                         <i class="bi bi-sun-fill"></i>
@@ -100,10 +113,85 @@
             <div id="view-serial" class="app-view active">
                 <!--顶部连接条-->
                 <div id="serial-connect-bar">
-                    <div class="connect-bar-section connect-bar-left">
+                    <div class="connect-bar-section connect-bar-main">
                         <button class="btn btn-outline-secondary serial-port-btn" id="serial-select-port">
                             <i class="bi bi-usb-plug"></i> 选择串口
                         </button>
+
+                        <div class="dropdown" id="serial-params-dropdown">
+                            <button type="button" class="serial-params-summary" id="serial-params-summary"
+                                data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false"
+                                title="串口参数">
+                                <i class="bi bi-sliders2"></i>
+                                <span id="serial-params-summary-text">115200 8-N-1</span>
+                                <i class="bi bi-chevron-down serial-params-summary-arrow"></i>
+                            </button>
+                            <div class="dropdown-menu" id="serial-params-popover">
+                                <div class="serial-settings-card">
+                                    <div class="serial-settings-title">
+                                        <i class="bi bi-sliders2"></i> 串口参数
+                                    </div>
+                                    <div class="serial-field">
+                                        <label class="serial-field-label"><i class="bi bi-speedometer2"></i> 波特率</label>
+                                        <div class="serial-baud-combo" id="baud-combo">
+                                            <input type="text" id="serial-baud" class="form-control serial-field-input" placeholder="选择或输入" value="115200" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+                                            <i class="bi bi-chevron-down serial-baud-arrow"></i>
+                                            <ul class="serial-baud-dropdown" id="baud-dropdown">
+                                                <li data-value="2400">2400</li>
+                                                <li data-value="4800">4800</li>
+                                                <li data-value="9600">9600</li>
+                                                <li data-value="14400">14400</li>
+                                                <li data-value="19200">19200</li>
+                                                <li data-value="28800">28800</li>
+                                                <li data-value="38400">38400</li>
+                                                <li data-value="57600">57600</li>
+                                                <li data-value="76800">76800</li>
+                                                <li data-value="115200">115200</li>
+                                                <li data-value="230400">230400</li>
+                                                <li data-value="460800">460800</li>
+                                                <li data-value="921600">921600</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                    <div class="serial-field">
+                                        <label class="serial-field-label"><i class="bi bi-123"></i> 数据位</label>
+                                        <select class="form-select serial-field-input" id="serial-data-bits">
+                                            <option>8</option><option>7</option>
+                                        </select>
+                                    </div>
+                                    <div class="serial-field">
+                                        <label class="serial-field-label"><i class="bi bi-stop-circle"></i> 停止位</label>
+                                        <select class="form-select serial-field-input" id="serial-stop-bits">
+                                            <option>1</option><option>2</option>
+                                        </select>
+                                    </div>
+                                    <div class="serial-field">
+                                        <label class="serial-field-label"><i class="bi bi-shield-check"></i> 校验位</label>
+                                        <select class="form-select serial-field-input" id="serial-parity">
+                                            <Option value="none">None</Option><Option value="even">Even</Option><Option value="odd">Odd</Option>
+                                        </select>
+                                    </div>
+                                    <div class="serial-field">
+                                        <label class="serial-field-label"><i class="bi bi-database"></i> 缓冲区</label>
+                                        <input type="number" id="serial-buffer-size" class="form-control serial-field-input" placeholder="1024" list="buffer-size-list" max="1677216" value="1024">
+                                        <datalist id="buffer-size-list">
+                                            <option>255</option><option>512</option><option>1024</option><option>2048</option><option>4096</option><option>8192</option>
+                                        </datalist>
+                                    </div>
+                                    <div class="serial-field">
+                                        <label class="serial-field-label"><i class="bi bi-send-check"></i> 流控制</label>
+                                        <select class="form-select serial-field-input" id="serial-flow-control">
+                                            <Option value="none">None</Option><Option value="hardware">HardWare</Option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button class="btn btn-primary serial-open-btn" id="serial-open-or-close">
+                            <i class="bi bi-play-circle"></i> 打开串口
+                        </button>
+
                         <div id="serial-status">
                             <div class="serial-status-indicator disconnected">
                                 <span class="serial-status-dot"></span>
@@ -111,88 +199,7 @@
                             </div>
                         </div>
                     </div>
-
-                    <div class="connect-bar-section connect-bar-center">
-                        <button type="button" class="serial-params-summary" id="serial-params-summary"
-                            aria-expanded="false" aria-controls="serial-params-popover" title="串口参数">
-                            <i class="bi bi-sliders2"></i>
-                            <span id="serial-params-summary-text">115200 8-N-1</span>
-                            <i class="bi bi-chevron-down serial-params-summary-arrow"></i>
-                        </button>
-                        <div id="serial-params-popover" hidden>
-                            <div class="serial-settings-card">
-                                <div class="serial-settings-title">
-                                    <i class="bi bi-sliders2"></i> 串口参数
-                                </div>
-                                <div class="serial-field">
-                                    <label class="serial-field-label"><i class="bi bi-speedometer2"></i> 波特率</label>
-                                    <div class="serial-baud-combo" id="baud-combo">
-                                        <input type="text" id="serial-baud" class="form-control serial-field-input" placeholder="选择或输入" value="115200" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-                                        <i class="bi bi-chevron-down serial-baud-arrow"></i>
-                                        <ul class="serial-baud-dropdown" id="baud-dropdown">
-                                            <li data-value="2400">2400</li>
-                                            <li data-value="4800">4800</li>
-                                            <li data-value="9600">9600</li>
-                                            <li data-value="14400">14400</li>
-                                            <li data-value="19200">19200</li>
-                                            <li data-value="28800">28800</li>
-                                            <li data-value="38400">38400</li>
-                                            <li data-value="57600">57600</li>
-                                            <li data-value="76800">76800</li>
-                                            <li data-value="115200">115200</li>
-                                            <li data-value="230400">230400</li>
-                                            <li data-value="460800">460800</li>
-                                            <li data-value="921600">921600</li>
-                                        </ul>
-                                    </div>
-                                    <!-- 隐藏的 ID 保存，保持兼容 get('serial-baud') 可用 -->
-                                </div>
-                                <div class="serial-field">
-                                    <label class="serial-field-label"><i class="bi bi-123"></i> 数据位</label>
-                                    <select class="form-select serial-field-input" id="serial-data-bits">
-                                        <option>8</option><option>7</option>
-                                    </select>
-                                </div>
-                                <div class="serial-field">
-                                    <label class="serial-field-label"><i class="bi bi-stop-circle"></i> 停止位</label>
-                                    <select class="form-select serial-field-input" id="serial-stop-bits">
-                                        <option>1</option><option>2</option>
-                                    </select>
-                                </div>
-                                <div class="serial-field">
-                                    <label class="serial-field-label"><i class="bi bi-shield-check"></i> 校验位</label>
-                                    <select class="form-select serial-field-input" id="serial-parity">
-                                        <Option value="none">None</Option><Option value="even">Even</Option><Option value="odd">Odd</Option>
-                                    </select>
-                                </div>
-                                <div class="serial-field">
-                                    <label class="serial-field-label"><i class="bi bi-database"></i> 缓冲区</label>
-                                    <input type="number" id="serial-buffer-size" class="form-control serial-field-input" placeholder="1024" list="buffer-size-list" max="1677216" value="1024">
-                                    <datalist id="buffer-size-list">
-                                        <option>255</option><option>512</option><option>1024</option><option>2048</option><option>4096</option><option>8192</option>
-                                    </datalist>
-                                </div>
-                                <div class="serial-field">
-                                    <label class="serial-field-label"><i class="bi bi-send-check"></i> 流控制</label>
-                                    <select class="form-select serial-field-input" id="serial-flow-control">
-                                        <Option value="none">None</Option><Option value="hardware">HardWare</Option>
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="connect-bar-section connect-bar-right">
-                        <button class="btn btn-primary serial-open-btn" id="serial-open-or-close">
-                            <i class="bi bi-play-circle"></i> 打开串口
-                        </button>
-                        <div class="connect-bar-actions">
-                            <button class="btn btn-sm btn-outline-secondary" id="serial-reset" title="重置所有参数"><i class="bi bi-arrow-repeat"></i></button>
-                            <button class="btn btn-sm btn-outline-secondary" id="serial-export" title="导出配置"><i class="bi bi-folder-symlink"></i></button>
-                            <button class="btn btn-sm btn-outline-secondary" id="serial-import" title="导入配置"><i class="bi bi-folder-plus"></i></button>
-                            <input type="file" id="serial-import-file" style="display: none;" accept="application/json" />
-                        </div>
-                    </div>
+                    <input type="file" id="serial-import-file" style="display: none;" accept="application/json" />
                 </div>
                 <div id="main">
                     <!--中间串口日志-->
@@ -383,11 +390,13 @@
                                             <input type="text" class="form-control" id="serial-protocol-key-hex"
                                                 placeholder="如 01020304...16/32字节 AES256需32字节">
                                         </div>
-                                        <div class="form-check form-switch align-self-center">
+                                    </div>
+                                    <div class="protocol-switch-row mb-2">
+                                        <div class="form-check form-switch">
                                             <input class="form-check-input" type="checkbox" id="serial-protocol-enable">
                                             <label class="form-check-label" for="serial-protocol-enable">串口实时解析</label>
                                         </div>
-                                        <div class="form-check form-switch align-self-center" title="开启后日志 HEX 视图的每个字节可悬停查看其协议字段含义,不展开文本">
+                                        <div class="form-check form-switch" title="开启后日志 HEX 视图的每个字节可悬停查看其协议字段含义,不展开文本">
                                             <input class="form-check-input" type="checkbox" id="serial-protocol-hover">
                                             <label class="form-check-label" for="serial-protocol-hover">悬停提示(静默解析)</label>
                                         </div>
