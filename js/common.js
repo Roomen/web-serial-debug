@@ -39,10 +39,10 @@
 		}
 	})
 	let serialPort = null
-	navigator.serial.getPorts().then((ports) => {
+	navigator.serial.getPorts().then(async (ports) => {
 		if (ports.length > 0) {
 			serialPort = ports[0]
-			serialStatuChange(true)
+			await openSerial()
 		}
 	})
 	let reader
@@ -50,6 +50,8 @@
 	let serialOpen = false
 	//串口目前是手动关闭状态
 	let serialClose = true
+	//串口正在打开中(防止并发)
+	let serialOpening = false
 	//串口分包合并时钟
 	let serialTimer = null
 	//串口循环发送时钟
@@ -1028,13 +1030,15 @@
 
 	document.querySelectorAll('#serial-options .input-group input,#serial-options .input-group select').forEach((item) => {
 		item.addEventListener('change', async (e) => {
-			if (!serialOpen) {
+			if (!serialOpen || serialOpening) {
 				return
 			}
 			//未找到API可以动态修改串口参数,先关闭再重新打开
+			serialOpening = true
 			await closeSerial()
 			//立即打开会提示串口已打开,延迟50ms再打开
 			setTimeout(() => {
+				serialOpening = false
 				openSerial()
 			}, 50)
 		})
@@ -1137,9 +1141,8 @@
 		// 客户端授权
 		try {
 			await navigator.serial.requestPort().then(async (port) => {
-				closeSerial()
+				await closeSerial()
 				serialPort = port
-				serialStatuChange(true)
 				addLogErr('串口已选择')
 			})
 		} catch (e) {
@@ -1161,17 +1164,28 @@
 		if (serialOpen) {
 			serialOpen = false
 			try {
-				reader?.cancel()
+				await reader?.cancel()
 			} catch (e) {
 				console.error('取消读取器时出错:', e)
 			}
-			serialToggle.innerHTML = '<i class="bi bi-play-circle"></i> 打开串口'
+			try {
+				reader?.releaseLock()
+			} catch (e) {}
+			reader = null
 		}
+		if (serialPort) {
+			try {
+				await serialPort.close()
+			} catch (e) {}
+		}
+		serialStatuChange(false)
+		serialToggle.innerHTML = '<i class="bi bi-play-circle"></i> 打开串口'
 	}
 
 	//打开串口
 	async function openSerial() {
 		if (serialOpen) return
+		if (!serialPort) return
 		let SerialOptions = {
 			baudRate: parseInt(get('serial-baud')),
 			dataBits: parseInt(get('serial-data-bits')),
@@ -1180,48 +1194,59 @@
 			bufferSize: parseInt(get('serial-buffer-size')),
 			flowControl: get('serial-flow-control'),
 		}
-		// console.log('串口配置', JSON.stringify(SerialOptions))
-		serialPort
-			.open(SerialOptions)
-			.then(() => {
-				serialToggle.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭串口'
-				serialOpen = true
-				serialClose = false
-				localStorage.setItem('serialOptions', JSON.stringify(SerialOptions))
-				readData()
-			})
-			.catch((e) => {
-				const errorType = e.name || 'UnknownError'
-				const errorMsg = e.message || '未知错误'
-				
-				addLogErr(`打开串口失败: ${errorType} - ${errorMsg}`)
-				
-				if (errorType === 'SecurityError') {
-					addLogErr('权限错误：请检查浏览器串口权限设置')
-				} else if (errorType === 'InvalidStateError') {
-					addLogErr('串口状态错误：设备可能已被占用')
-				} else if (errorType === 'NetworkError') {
-					addLogErr('网络错误：设备可能已断开连接')
-				}
-				
-				showMsg('打开串口失败:' + e.toString())
-			})
+		try {
+			await serialPort.open(SerialOptions)
+			serialToggle.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭串口'
+			serialOpen = true
+			serialClose = false
+			serialStatuChange(true)
+			localStorage.setItem('serialOptions', JSON.stringify(SerialOptions))
+			readData()
+		} catch (e) {
+			const errorType = e.name || 'UnknownError'
+			const errorMsg = e.message || '未知错误'
+			
+			addLogErr(`打开串口失败: ${errorType} - ${errorMsg}`)
+			
+			if (errorType === 'SecurityError') {
+				addLogErr('权限错误：请检查浏览器串口权限设置')
+			} else if (errorType === 'InvalidStateError') {
+				addLogErr('串口状态错误：设备可能已被占用')
+			} else if (errorType === 'NetworkError') {
+				addLogErr('网络错误：设备可能已断开连接')
+			}
+			
+			showMsg('打开串口失败:' + e.toString())
+		}
 	}
 
 	//打开或关闭串口
 	serialToggle.addEventListener('click', async () => {
+		if (serialOpening) return
+
 		if (!serialPort) {
 			showMsg('请先选择串口')
 			return
 		}
 
-		if (serialPort.writable && serialPort.readable) {
-			closeSerial()
+		if (serialOpen) {
 			serialClose = true
+			serialOpening = true
+			try {
+				await closeSerial()
+			} finally {
+				serialOpening = false
+			}
 			return
 		}
 
-		openSerial()
+		serialOpening = true
+		serialClose = false
+		try {
+			await openSerial()
+		} finally {
+			serialOpening = false
+		}
 	})
 
 	//设置读取元素
@@ -1245,10 +1270,9 @@
 		const productId = portInfo.usbProductId ? `0x${portInfo.usbProductId.toString(16).padStart(4, '0')}` : '未知'
 
 		addLogErr(`设备已连接 (Vendor: ${vendorId}, Product: ${productId})`)
-		serialStatuChange(true)
 		serialPort = e.target
 		//未主动关闭连接的情况下,设备重插,自动重连
-		if (!serialClose) {
+		if (!serialClose && !serialOpening) {
 			openSerial()
 		}
 	})
@@ -1259,6 +1283,7 @@
 		
 		addLogErr(`设备断开连接 (Vendor: ${vendorId}, Product: ${productId})`)
 		
+		serialOpen = false
 		serialStatuChange(false)
 		
 		// 如果不是手动关闭，尝试自动重连
@@ -1271,7 +1296,7 @@
 			}, 5000)
 		}
 		
-		setTimeout(closeSerial, 500)
+		closeSerial()
 	})
 	function serialStatuChange(statu) {
 		var el = document.getElementById('serial-status')
@@ -1312,7 +1337,7 @@
 	//发送文本到串口
 	async function sendText(text) {
 		const encoder = new TextEncoder()
-		writeData(encoder.encode(text))
+		await writeData(encoder.encode(text))
 	}
 
 	//写串口数据
@@ -1321,19 +1346,23 @@
 			addLogErr('请先打开串口再发送数据')
 			return
 		}
+		let writer
 		try {
-			const writer = serialPort.writable.getWriter()
+			writer = serialPort.writable.getWriter()
 			if (toolOptions.addCRLF) {
 				data = new Uint8Array([...data, 0x0d, 0x0a])
 			}
 			await writer.write(data)
-			writer.releaseLock()
 			addLog(data, false)
 			addParseLog([...data], false)
 		} catch (error) {
 			const errorType = error.name || 'UnknownError'
 			const errorMsg = error.message || '未知错误'
 			addLogErr(`串口写入失败: ${errorType} - ${errorMsg}`)
+		} finally {
+			if (writer) {
+				try { writer.releaseLock() } catch (e) {}
+			}
 		}
 	}
 
