@@ -592,19 +592,32 @@
 		if (!presetSel) return
 		var proto = window.getActiveProtocol()
 		var presets = (proto && proto.presets) ? proto.presets : (window.SK_DOWN_PRESETS || [])
-		while (presetSel.options.length > 1) presetSel.remove(1)
+		presetSel.innerHTML = ''
+		var matchingGroups = []
 		for (const grp of presets) {
 			const filtered = grp.items.filter(it => it.func === funcCode)
-			if (!filtered.length) continue
-			const og = document.createElement('optgroup')
-			og.label = grp.group
-			for (const it of filtered) {
-				const op = document.createElement('option')
-				op.value = it.name
-				op.textContent = it.name
-				og.appendChild(op)
+			if (filtered.length) matchingGroups.push({ grp, filtered })
+		}
+		if (matchingGroups.length === 0) return
+		for (const { grp, filtered } of matchingGroups) {
+			if (matchingGroups.length === 1) {
+				for (const it of filtered) {
+					const op = document.createElement('option')
+					op.value = it.name
+					op.textContent = it.name
+					presetSel.appendChild(op)
+				}
+			} else {
+				const og = document.createElement('optgroup')
+				og.label = grp.group
+				for (const it of filtered) {
+					const op = document.createElement('option')
+					op.value = it.name
+					op.textContent = it.name
+					og.appendChild(op)
+				}
+				presetSel.appendChild(og)
 			}
-			presetSel.appendChild(og)
 		}
 	}
 	let _skipFuncEvent = false
