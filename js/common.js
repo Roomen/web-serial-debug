@@ -164,6 +164,8 @@
 		logType: 'hex',
 		//分包合并时间
 		timeOut: 200,
+		//日志最大行数,超出后从顶部裁剪
+		maxLogRows: 5000,
 		//末尾加回车换行
 		addCRLF: false,
 		//HEX发送
@@ -527,7 +529,7 @@
 				keyHex: toolOptions.skKeyHex || undefined,
 				decryptMode: toolOptions.skDecryptMode,
 			})
-			const prompt = r.needKey ? '<div class="sk-parse-err">⚠ 加密报文,请在上方「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>' : ''
+			const prompt = r.needKey ? '<div class="sk-parse-err">⚠ 加密报文,请在右侧「第三方协议」中的「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>' : ''
 			document.getElementById('serial-protocol-output').innerHTML = prompt + skFormatFrame(r)
 		} catch (err) {
 			document.getElementById('serial-protocol-output').innerHTML = '<div class="sk-parse-err">解析异常:' + HTMLEncode(String(err)) + '</div>'
@@ -588,9 +590,6 @@
 	//常用指令(下行下发)初始化
 	const presetSel = document.getElementById('serial-protocol-down-preset')
 	const funcSel = document.getElementById('serial-protocol-down-func')
-	const cascadeBtn = document.getElementById('preset-cascade-btn')
-	const cascadeText = cascadeBtn ? cascadeBtn.querySelector('.preset-cascade-text') : null
-	const cascadeDrop = document.getElementById('preset-cascade-dropdown')
 
 	function rebuildPresets(funcCode) {
 		if (!presetSel) return
@@ -601,119 +600,38 @@
 			const filtered = grp.items.filter(it => it.func === funcCode)
 			if (filtered.length) matchingGroups.push({ grp, filtered })
 		}
-		syncCascadeMenu(matchingGroups)
-	}
-
-	function syncCascadeMenu(matchingGroups) {
-		if (!cascadeDrop) return
-		cascadeDrop.innerHTML = ''
-		cascadeDrop.classList.toggle('has-groups', matchingGroups.length > 1)
-		if (matchingGroups.length === 0) {
-			if (cascadeText) cascadeText.textContent = '无可用指令'
-			return
-		}
-		if (matchingGroups.length === 1) {
-			// flat list — no sub-menus
-			const { filtered } = matchingGroups[0]
+		const keep = presetSel.value
+		presetSel.innerHTML = ''
+		const ph = document.createElement('option')
+		ph.value = ''
+		ph.textContent = matchingGroups.length ? '选择指令...' : '无可用指令'
+		presetSel.appendChild(ph)
+		for (const { grp, filtered } of matchingGroups) {
+			// 单分组时不加 optgroup 标题，避免菜单里出现一条无意义的分组行
+			const parent = matchingGroups.length > 1 ? document.createElement('optgroup') : presetSel
+			if (parent !== presetSel) {
+				parent.label = shortGroupName(grp.group, funcCode)
+				presetSel.appendChild(parent)
+			}
 			for (const it of filtered) {
-				const el = document.createElement('div')
-				el.className = 'preset-cascade-leaf'
-				el.textContent = it.name
-				el.dataset.name = it.name
-				if (presetSel.value === it.name) el.classList.add('selected')
-				el.addEventListener('click', () => selectCascadeItem(it.name))
-				cascadeDrop.appendChild(el)
-			}
-		} else {
-			// groups with hover sub-menus
-			for (const { grp, filtered } of matchingGroups) {
-				const el = document.createElement('div')
-				el.className = 'preset-cascade-item has-sub'
-				el.innerHTML = '<span>' + htmlEscape(grp.group) + '</span>'
-				const sub = document.createElement('div')
-				sub.className = 'preset-cascade-submenu'
-				for (const it of filtered) {
-					const si = document.createElement('div')
-					si.className = 'preset-cascade-subitem'
-					si.textContent = it.name
-					si.dataset.name = it.name
-					if (presetSel.value === it.name) si.classList.add('selected')
-					si.addEventListener('click', (e) => {
-						e.stopPropagation()
-						selectCascadeItem(it.name)
-					})
-					sub.appendChild(si)
-				}
-				el.appendChild(sub)
-				el.addEventListener('mouseenter', () => positionSubmenu(el, sub))
-				cascadeDrop.appendChild(el)
+				const opt = document.createElement('option')
+				opt.value = it.name
+				opt.textContent = it.name
+				parent.appendChild(opt)
 			}
 		}
+		presetSel.value = keep
+		if (presetSel.selectedIndex < 0) presetSel.selectedIndex = 0
 	}
 
-	function positionSubmenu(item, sub) {
-		sub.classList.remove('flip-left')
-		sub.style.top = ''
-		sub.style.display = 'block'
-		const ir = item.getBoundingClientRect()
-		const sr = sub.getBoundingClientRect()
-		if (ir.right + sr.width > window.innerWidth - 8) {
-			sub.classList.add('flip-left')
-		}
-		const overBottom = sr.bottom - (window.innerHeight - 8)
-		if (overBottom > 0) {
-			sub.style.top = (-4 - overBottom) + 'px'
-		}
-		sub.style.display = ''
-	}
-
-	function selectCascadeItem(name) {
-		presetSel.value = name
-		if (cascadeText) cascadeText.textContent = name
-		cascadeDrop.style.display = 'none'
-		presetSel.dispatchEvent(new Event('change', { bubbles: true }))
-	}
-
-	function htmlEscape(s) {
-		var d = document.createElement('div')
-		d.textContent = s
-		return d.innerHTML
-	}
-
-	// toggle cascade dropdown (position: fixed, anchored to the button,
-	// so it escapes the overflow clipping of #nav-protocol / #nav-tabContent)
-	function openCascadeDropdown() {
-		const r = cascadeBtn.getBoundingClientRect()
-		cascadeDrop.style.minWidth = r.width + 'px'
-		cascadeDrop.style.left = r.left + 'px'
-		cascadeDrop.style.top = (r.bottom + 2) + 'px'
-		cascadeDrop.style.display = 'block'
-		const h = cascadeDrop.offsetHeight
-		const spaceBelow = window.innerHeight - r.bottom - 10
-		if (h > spaceBelow && r.top - 10 > spaceBelow) {
-			cascadeDrop.style.top = Math.max(8, r.top - 2 - h) + 'px'
-		}
-	}
-	if (cascadeBtn) {
-		cascadeBtn.addEventListener('click', (e) => {
-			e.stopPropagation()
-			if (cascadeDrop.style.display === 'none' || !cascadeDrop.style.display) {
-				openCascadeDropdown()
-			} else {
-				cascadeDrop.style.display = 'none'
-			}
-		})
-		document.addEventListener('click', (e) => {
-			if (!cascadeBtn.contains(e.target) && !cascadeDrop.contains(e.target)) {
-				cascadeDrop.style.display = 'none'
-			}
-		})
-		// the anchor moves if an ancestor pane scrolls; just close the menu
-		window.addEventListener('scroll', (e) => {
-			if (cascadeDrop.style.display === 'block' && !cascadeDrop.contains(e.target)) {
-				cascadeDrop.style.display = 'none'
-			}
-		}, true)
+	// 分组名形如「参数设置-告警阈值 (0x01)」，功能码已由上方选择框决定，
+	// 这里去掉重复的功能码名前缀和 (0xNN) 后缀，只留下真正区分分组的部分
+	function shortGroupName(name, funcCode) {
+		let s = String(name).replace(/\s*\(0x[0-9a-fA-F]+\)\s*$/, '')
+		const opt = funcSel ? funcSel.options[funcSel.selectedIndex] : null
+		const funcName = opt ? opt.textContent.replace(/\s*0x[0-9a-fA-F]+\s*$/, '').trim() : ''
+		if (funcName && s.startsWith(funcName + '-')) s = s.slice(funcName.length + 1)
+		return s || name
 	}
 
 	let _skipFuncEvent = false
@@ -722,7 +640,6 @@
 		funcSel.addEventListener('change', () => {
 			if (_skipFuncEvent) { _skipFuncEvent = false; return }
 			presetSel.value = ''
-			if (cascadeText) cascadeText.textContent = '选择指令...'
 			rebuildPresets(funcSel.value)
 		})
 	}
@@ -912,6 +829,11 @@
 		toolOptions = JSON.parse(options)
 	}
 	document.getElementById('serial-timer-out').value = toolOptions.timeOut
+	//老配置里没有该字段时回落到默认值
+	if (!toolOptions.maxLogRows) {
+		toolOptions.maxLogRows = 5000
+	}
+	document.getElementById('serial-max-rows').value = toolOptions.maxLogRows
 	document.getElementById('serial-log-type').value = toolOptions.logType
 	document.getElementById('serial-auto-scroll').innerText = toolOptions.autoScroll ? '自动滚动' : '暂停滚动'
 	document.getElementById('serial-add-crlf').checked = toolOptions.addCRLF
@@ -1113,6 +1035,15 @@
 	document.getElementById('serial-timer-out').addEventListener('change', (e) => {
 		changeOption('timeOut', parseInt(e.target.value))
 	})
+	document.getElementById('serial-max-rows').addEventListener('change', (e) => {
+		let max = parseInt(e.target.value)
+		if (isNaN(max) || max < 100) {
+			max = 100
+		}
+		e.target.value = max
+		changeOption('maxLogRows', max)
+		trimLogRows()
+	})
 	document.getElementById('serial-log-type').addEventListener('change', (e) => {
 		changeOption('logType', e.target.value)
 		if (e.target.value.includes('ansi')) {
@@ -1162,7 +1093,7 @@
 		changeOption('skEncType', this.value)
 	})
 
-	document.querySelectorAll('#serial-options .input-group input,#serial-options .input-group select').forEach((item) => {
+	document.querySelectorAll('#serial-params-popover .serial-field input,#serial-params-popover .serial-field select').forEach((item) => {
 		item.addEventListener('change', async (e) => {
 			if (!serialOpen || serialOpening) {
 				return
@@ -1188,20 +1119,41 @@
 		}
 	}
 
+	//日志纯文本(复制/导出用):结构化行拼成 "时间 方向 内容",其余节点回退到 innerText
+	function getLogsText() {
+		let lines = []
+		for (const node of serialLogs.children) {
+			if (node.classList.contains('log-row')) {
+				const time = node.querySelector('.log-time')
+				const dir = node.querySelector('.log-dir')
+				const body = node.querySelector('.log-body')
+				let head = []
+				if (time && time.innerText) head.push(time.innerText)
+				if (dir && dir.innerText) head.push(dir.innerText)
+				const content = body ? body.innerText : ''
+				lines.push((head.join(' ') + ' ' + content).trim())
+			} else {
+				const t = node.innerText
+				if (t) lines.push(t)
+			}
+		}
+		return lines.join('\n')
+	}
 	//清空
 	document.getElementById('serial-clear').addEventListener('click', (e) => {
 		serialLogs.innerHTML = ''
+		selectedLogRow = null
 	})
 	//复制
 	document.getElementById('serial-copy').addEventListener('click', (e) => {
-		let text = serialLogs.innerText
+		let text = getLogsText()
 		if (text) {
 			copyText(text)
 		}
 	})
 	//保存
 	document.getElementById('serial-save').addEventListener('click', (e) => {
-		let text = serialLogs.innerText
+		let text = getLogsText()
 		if (text) {
 			saveText(text)
 		}
@@ -1268,6 +1220,32 @@
 	serialLogs.addEventListener('mouseleave', () => {
 		clearSkHoverActive()
 		skHoverTip.style.display = 'none'
+	})
+
+	//点击日志行:把该行的原始HEX灌进底部解析面板并解析(事件委托,不影响悬停提示)
+	let selectedLogRow = null
+	serialLogs.addEventListener('click', (e) => {
+		if (!e.target || !e.target.closest) return
+		const row = e.target.closest('.log-row')
+		if (!row || !serialLogs.contains(row)) return
+		const hex = row.getAttribute('data-hex')
+		if (!hex) return
+		//选中文本时不触发解析,避免影响复制
+		const sel = window.getSelection()
+		if (sel && !sel.isCollapsed && sel.toString()) return
+		if (selectedLogRow && selectedLogRow !== row) {
+			selectedLogRow.classList.remove('selected')
+		}
+		row.classList.add('selected')
+		selectedLogRow = row
+		const input = document.getElementById('serial-protocol-input')
+		const parseBtn = document.getElementById('serial-protocol-parse')
+		if (!input || !parseBtn) return
+		if (typeof window.expandParsePanel === 'function') {
+			window.expandParsePanel()
+		}
+		input.value = hex
+		parseBtn.click()
 	})
 
 	//选择串口
@@ -1595,21 +1573,42 @@
 		},
 	}
 	var ansi_up = new AnsiUp()
+	//日志行裁剪:超过 maxLogRows 时从顶部批量删除,并保持非自动滚动时的视觉位置不跳
+	function trimLogRows() {
+		const max = parseInt(toolOptions.maxLogRows, 10)
+		if (!max || max < 1) return
+		let over = serialLogs.childElementCount - max
+		if (over <= 0) return
+		const beforeTop = serialLogs.scrollTop
+		const beforeHeight = serialLogs.scrollHeight
+		while (over-- > 0 && serialLogs.firstElementChild) {
+			serialLogs.removeChild(serialLogs.firstElementChild)
+		}
+		if (toolOptions.autoScroll) return
+		const want = Math.max(0, beforeTop - (beforeHeight - serialLogs.scrollHeight))
+		if (Math.abs(serialLogs.scrollTop - want) > 1) {
+			serialLogs.scrollTop = want
+		}
+	}
+	//统一的日志追加入口:裁剪 + 自动滚动
+	function appendLogNode(node) {
+		serialLogs.append(node)
+		trimLogRows()
+		if (toolOptions.autoScroll) {
+			serialLogs.scrollTop = serialLogs.scrollHeight - serialLogs.clientHeight
+		}
+	}
 	//添加日志
 	function addLog(data, isReceive = true) {
-		let classname = 'text-primary'
-		let form = '→'
-		if (isReceive) {
-			classname = 'text-success'
-			form = '←'
+		let form = isReceive ? '←' : '→'
+		//无论当前 logType 是什么都算出 HEX,点击行解析要用
+		let dataHex = []
+		for (const d of data) {
+			//转16进制并补0
+			dataHex.push(('0' + d.toString(16).toLocaleUpperCase()).slice(-2))
 		}
 		newmsg = ''
 		if (toolOptions.logType.includes('hex')) {
-			let dataHex = []
-			for (const d of data) {
-				//转16进制并补0
-				dataHex.push(('0' + d.toString(16).toLocaleUpperCase()).slice(-2))
-			}
 			if (toolOptions.logType.includes('&')) {
 				newmsg += 'HEX:'
 			}
@@ -1652,14 +1651,17 @@
 			const html = ansi_up.ansi_to_html(dataText)
 			newmsg += html
 		}
-		let time = toolOptions.showTime ? formatDate(new Date()) + '&nbsp;' : ''
-		const template = '<div><span class="' + classname + '">' + time + form + '</span><br>' + newmsg + '</div>'
-		let tempNode = document.createElement('div')
-		tempNode.innerHTML = template
-		serialLogs.append(tempNode)
-		if (toolOptions.autoScroll) {
-			serialLogs.scrollTop = serialLogs.scrollHeight - serialLogs.clientHeight
-		}
+		//行尾多余的换行会撑出一条空行
+		newmsg = newmsg.replace(/<br\/?>$/i, '')
+		let time = toolOptions.showTime ? formatDate(new Date()) : ''
+		let row = document.createElement('div')
+		row.className = 'log-row'
+		row.setAttribute('data-dir', isReceive ? 'rx' : 'tx')
+		row.setAttribute('data-hex', dataHex.join(' '))
+		row.innerHTML = '<span class="log-time">' + time + '</span>' +
+			'<span class="log-dir">' + form + '</span>' +
+			'<span class="log-body">' + newmsg + '</span>'
+		appendLogNode(row)
 	}
 	//第三方协议解析日志
 	function addParseLog(data, isReceive) {
@@ -1679,17 +1681,14 @@
 			const form = isReceive ? '←' : '→'
 			const dirCls = isReceive ? 'sk-parse-up' : 'sk-parse-down'
 			const time = toolOptions.showTime ? formatDate(new Date()) + '&nbsp;' : ''
-			const prompt = r.needKey ? '<div class="sk-parse-err">⚠ 加密报文,请在上方「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>' : ''
+			const prompt = r.needKey ? '<div class="sk-parse-err">⚠ 加密报文,请在右侧「第三方协议」中的「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>' : ''
 			html = '<div class="sk-parse-block ' + dirCls + '"><span class="text-muted small">' + time + form + ' 解析</span>' + prompt + skFormatFrame(r) + '</div>'
 		} catch (err) {
 			html = '<div class="sk-parse-block sk-parse-error"><span class="text-danger small">第三方协议解析异常:' + HTMLEncode(String(err)) + '</span></div>'
 		}
 		let tempNode = document.createElement('div')
 		tempNode.innerHTML = html
-		serialLogs.append(tempNode)
-		if (toolOptions.autoScroll) {
-			serialLogs.scrollTop = serialLogs.scrollHeight - serialLogs.clientHeight
-		}
+		appendLogNode(tempNode)
 	}
 	//HTML转义
 	function HTMLEncode(html) {
@@ -1718,14 +1717,14 @@
 	}
 	//系统日志
 	function addLogErr(msg) {
-		let time = toolOptions.showTime ? formatDate(new Date()) + '&nbsp;' : ''
-		const template = '<div><span class="text-danger">' + time + ' 系统消息</span><br>' + msg + '</div>'
-		let tempNode = document.createElement('div')
-		tempNode.innerHTML = template
-		serialLogs.append(tempNode)
-		if (toolOptions.autoScroll) {
-			serialLogs.scrollTop = serialLogs.scrollHeight - serialLogs.clientHeight
-		}
+		let time = toolOptions.showTime ? formatDate(new Date()) : ''
+		let row = document.createElement('div')
+		row.className = 'log-row'
+		row.setAttribute('data-dir', 'sys')
+		row.innerHTML = '<span class="log-time">' + time + '</span>' +
+			'<span class="log-dir">!</span>' +
+			'<span class="log-body text-danger">' + msg + '</span>'
+		appendLogNode(row)
 	}
 
 	//复制文本
@@ -1785,46 +1784,293 @@
 		return `${hour}:${minute}:${second}.${millisecond}`
 	}
 
-	//左右折叠
-	document.querySelectorAll('.toggle-button').forEach((element) => {
-		element.addEventListener('click', (e) => {
-			var parent = e.currentTarget.parentElement
-			var collapse = parent.querySelector('.collapse')
-			collapse.classList.toggle('show')
-			var icon = e.currentTarget.querySelector('i')
-			icon.classList.toggle('bi-chevron-compact-right')
-			icon.classList.toggle('bi-chevron-compact-left')
-			saveSidebarState()
-		})
-	})
-
-	function saveSidebarState() {
-		var state = {}
-		document.querySelectorAll('.sidebar .collapse').forEach(function (el) {
-			state[el.parentElement.id || ''] = el.classList.contains('show')
-		})
-		localStorage.setItem('sidebarCollapsed', JSON.stringify(state))
-	}
-
-	// 恢复侧边栏折叠状态
+	// 顶部连接条：参数摘要按钮 + 参数浮层
 	;(function () {
-		try {
-			var raw = localStorage.getItem('sidebarCollapsed')
-			if (!raw) return
-			var state = JSON.parse(raw)
-			document.querySelectorAll('.sidebar').forEach(function (sidebar) {
-				var id = sidebar.id
-				if (state[id] === false) {
-					var collapse = sidebar.querySelector('.collapse')
-					if (collapse) collapse.classList.remove('show')
-					var icon = sidebar.querySelector('.toggle-button i')
-					if (icon) {
-						icon.classList.remove('bi-chevron-compact-left')
-						icon.classList.add('bi-chevron-compact-right')
-					}
-				}
+		const summary = document.getElementById('serial-params-summary')
+		const summaryText = document.getElementById('serial-params-summary-text')
+		const popover = document.getElementById('serial-params-popover')
+		if (!summary || !summaryText || !popover) return
+
+		const PARITY_ABBR = { none: 'N', even: 'E', odd: 'O' }
+		const FIELDS = ['serial-baud', 'serial-data-bits', 'serial-stop-bits', 'serial-parity']
+
+		function updateSummary() {
+			const baud = (get('serial-baud') || '').trim() || '-'
+			const dataBits = get('serial-data-bits') || '-'
+			const stopBits = get('serial-stop-bits') || '-'
+			const parity = PARITY_ABBR[get('serial-parity')] || 'N'
+			summaryText.textContent = `${baud} ${dataBits}-${parity}-${stopBits}`
+		}
+
+		FIELDS.forEach(function (id) {
+			const el = document.getElementById(id)
+			if (!el) return
+			el.addEventListener('change', updateSummary)
+			el.addEventListener('input', updateSummary)
+		})
+		updateSummary()
+
+		function isOpen() {
+			return !popover.hidden
+		}
+		function setOpen(open) {
+			popover.hidden = !open
+			summary.setAttribute('aria-expanded', open ? 'true' : 'false')
+		}
+
+		summary.addEventListener('click', function () {
+			setOpen(!isOpen())
+		})
+		//点击外部关闭。用 contains 判断而不是 stopPropagation，
+		//否则会吞掉波特率下拉自己的"点击外部关闭"逻辑
+		document.addEventListener('click', function (e) {
+			if (!isOpen()) return
+			if (summary.contains(e.target) || popover.contains(e.target)) return
+			setOpen(false)
+		})
+		document.addEventListener('keydown', function (e) {
+			if (e.key !== 'Escape' || !isOpen()) return
+			//波特率下拉自己在用 Esc，这一次先让给它
+			const combo = document.getElementById('baud-combo')
+			if (combo && combo.classList.contains('open')) return
+			setOpen(false)
+		})
+	})()
+
+	// 右栏：折叠条既是拖拽手柄(改宽度)也是折叠按钮(原地点击)
+	;(function () {
+		const main = document.getElementById('main')
+		if (!main) return
+		const WIDTH_KEY = 'sidebarWidths'
+		//左栏已被顶部连接条取代，这里只剩右栏；left 分支保留但会安全退化
+		const DEFAULTS = { right: 428 }
+		//拖拽宽度上下限，避免被拖成不可用的窄条或吃掉整个日志区
+		const LIMITS = { right: [280, 760] }
+		const PANES = Object.keys(LIMITS)
+		const DRAG_THRESHOLD = 4
+		//折叠时暂存被拖出来的内联宽度，展开后还回去
+		const stashedWidth = {}
+
+		function sidebarOf(pane) {
+			return pane === 'right' ? document.getElementById('serial-tools') : null
+		}
+		function isCollapsed(pane) {
+			return main.classList.contains(pane + '-collapsed')
+		}
+		function isNarrow() {
+			return window.matchMedia('(max-width: 768px)').matches
+		}
+		function applyWidth(pane, px) {
+			const lim = LIMITS[pane]
+			if (!lim) return
+			px = Math.min(lim[1], Math.max(lim[0], Math.round(px)))
+			main.style.setProperty('--pane-' + pane, px + 'px')
+			return px
+		}
+		function saveWidths() {
+			const cs = getComputedStyle(main)
+			const o = {}
+			for (const p of PANES) {
+				if (isCollapsed(p)) continue
+				const v = parseInt(cs.getPropertyValue('--pane-' + p), 10)
+				if (!isNaN(v)) o[p] = v
+			}
+			localStorage.setItem(WIDTH_KEY, JSON.stringify(o))
+		}
+		function saveSidebarState() {
+			const state = {}
+			document.querySelectorAll('.sidebar .collapse').forEach(function (el) {
+				state[el.parentElement.id || ''] = el.classList.contains('show')
 			})
+			localStorage.setItem('sidebarCollapsed', JSON.stringify(state))
+		}
+		function setCollapsed(pane, collapsed) {
+			const sidebar = sidebarOf(pane)
+			if (!sidebar) return
+			const body = sidebar.querySelector('.collapse')
+			const icon = sidebar.querySelector('.toggle-button i')
+			main.classList.toggle(pane + '-collapsed', collapsed)
+			//拖过宽度后 --pane-* 是内联的，优先级高于 .*-collapsed 规则，折叠时要先让位
+			if (collapsed) {
+				stashedWidth[pane] = main.style.getPropertyValue('--pane-' + pane)
+				main.style.removeProperty('--pane-' + pane)
+			} else if (stashedWidth[pane]) {
+				main.style.setProperty('--pane-' + pane, stashedWidth[pane])
+				stashedWidth[pane] = ''
+			}
+			if (body) body.classList.toggle('show', !collapsed)
+			if (icon) {
+				//箭头永远指向"点下去会往哪边动"
+				const pointRight = pane === 'left' ? collapsed : !collapsed
+				icon.classList.toggle('bi-chevron-compact-right', pointRight)
+				icon.classList.toggle('bi-chevron-compact-left', !pointRight)
+			}
+			saveSidebarState()
+		}
+
+		document.querySelectorAll('.toggle-button[data-pane]').forEach(function (bar) {
+			const pane = bar.dataset.pane === 'right' ? 'right' : 'left'
+			if (!sidebarOf(pane)) return
+			let dragging = false, moved = false, startX = 0, startW = 0
+
+			bar.addEventListener('pointerdown', function (e) {
+				//每次按下都重置，否则上一次拖拽的残留会吞掉这一次的 click
+				moved = false
+				//折叠态和窄屏只保留点击语义
+				if (e.button !== 0 || isCollapsed(pane) || isNarrow()) return
+				dragging = true
+				startX = e.clientX
+				startW = sidebarOf(pane).getBoundingClientRect().width
+				bar.setPointerCapture(e.pointerId)
+				main.classList.add('pane-dragging')
+			})
+			bar.addEventListener('pointermove', function (e) {
+				if (!dragging) return
+				const dx = e.clientX - startX
+				if (Math.abs(dx) > DRAG_THRESHOLD) moved = true
+				applyWidth(pane, pane === 'left' ? startW + dx : startW - dx)
+			})
+			function endDrag(e) {
+				if (!dragging) return
+				dragging = false
+				main.classList.remove('pane-dragging')
+				try { bar.releasePointerCapture(e.pointerId) } catch (err) {}
+				if (moved) saveWidths()
+			}
+			bar.addEventListener('pointerup', endDrag)
+			bar.addEventListener('pointercancel', endDrag)
+			bar.addEventListener('click', function (e) {
+				//拖拽结束时浏览器仍会补一个 click，这里吞掉
+				if (moved) { moved = false; return }
+				if (e.altKey && !isCollapsed(pane)) {
+					applyWidth(pane, DEFAULTS[pane])
+					saveWidths()
+					return
+				}
+				setCollapsed(pane, !isCollapsed(pane))
+			})
+		})
+
+		//恢复上次的宽度与折叠状态
+		try {
+			const w = JSON.parse(localStorage.getItem(WIDTH_KEY) || '{}')
+			for (const p of PANES) {
+				if (w[p]) applyWidth(p, w[p])
+			}
 		} catch (e) {}
+		try {
+			const state = JSON.parse(localStorage.getItem('sidebarCollapsed') || '{}')
+			if (state['serial-tools'] === false) setCollapsed('right', true)
+		} catch (e) {}
+	})()
+
+	// 协议解析面板：面板头既是垂直拖拽手柄(改高度)也是折叠按钮(原地点击)
+	;(function () {
+		const logMain = document.getElementById('log-main')
+		const panel = document.getElementById('serial-parse-panel')
+		const header = document.getElementById('serial-parse-header')
+		if (!logMain || !panel || !header) return
+		const STATE_KEY = 'parsePanelState'
+		const DEFAULT_H = 220
+		//面板最矮 120px；上限保证日志区不被压到 120px 以下(按 #log-main 实际高度动态算)
+		const MIN_H = 120
+		const MIN_LOG_H = 120
+		const DRAG_THRESHOLD = 4
+
+		function isNarrow() {
+			return window.matchMedia('(max-width: 768px)').matches
+		}
+		function isCollapsed() {
+			return panel.classList.contains('collapsed')
+		}
+		function maxHeight() {
+			const logs = document.getElementById('serial-logs')
+			const cur = panel.getBoundingClientRect().height
+			const logH = logs ? logs.getBoundingClientRect().height : 0
+			//面板+日志的总可用高度是固定的，面板多吃多少日志就少多少
+			return Math.max(MIN_H, Math.round(cur + logH - MIN_LOG_H))
+		}
+		function applyHeight(px) {
+			px = Math.min(maxHeight(), Math.max(MIN_H, Math.round(px)))
+			logMain.style.setProperty('--parse-h', px + 'px')
+			return px
+		}
+		function saveState() {
+			const v = parseInt(logMain.style.getPropertyValue('--parse-h'), 10)
+			localStorage.setItem(STATE_KEY, JSON.stringify({
+				height: isNaN(v) ? DEFAULT_H : v,
+				collapsed: isCollapsed()
+			}))
+		}
+		function setCollapsed(collapsed) {
+			panel.classList.toggle('collapsed', collapsed)
+			const icon = header.querySelector('.serial-parse-chevron')
+			if (icon) {
+				icon.classList.toggle('bi-chevron-down', !collapsed)
+				icon.classList.toggle('bi-chevron-right', collapsed)
+			}
+			saveState()
+		}
+		//供日志行点击调用:折叠态自动展开
+		window.expandParsePanel = function () {
+			if (isCollapsed()) setCollapsed(false)
+		}
+
+		let dragging = false, moved = false, startY = 0, startH = 0
+
+		header.addEventListener('pointerdown', function (e) {
+			//每次按下都重置，否则上一次拖拽的残留会吞掉这一次的 click
+			moved = false
+			//清空按钮不参与拖拽
+			if (e.target.closest('button')) return
+			//折叠态和窄屏只保留点击语义
+			if (e.button !== 0 || isCollapsed() || isNarrow()) return
+			dragging = true
+			startY = e.clientY
+			startH = panel.getBoundingClientRect().height
+			header.setPointerCapture(e.pointerId)
+			logMain.classList.add('parse-dragging')
+		})
+		header.addEventListener('pointermove', function (e) {
+			if (!dragging) return
+			const dy = e.clientY - startY
+			if (Math.abs(dy) > DRAG_THRESHOLD) moved = true
+			//往上拖(dy 为负)是把面板拉高
+			applyHeight(startH - dy)
+		})
+		function endDrag(e) {
+			if (!dragging) return
+			dragging = false
+			logMain.classList.remove('parse-dragging')
+			try { header.releasePointerCapture(e.pointerId) } catch (err) {}
+			if (moved) saveState()
+		}
+		header.addEventListener('pointerup', endDrag)
+		header.addEventListener('pointercancel', endDrag)
+		header.addEventListener('click', function (e) {
+			if (e.target.closest('button')) return
+			//拖拽结束时浏览器仍会补一个 click，这里吞掉
+			if (moved) { moved = false; return }
+			setCollapsed(!isCollapsed())
+		})
+
+		const clearBtn = document.getElementById('serial-parse-clear')
+		if (clearBtn) {
+			clearBtn.addEventListener('click', function (e) {
+				e.stopPropagation()
+				document.getElementById('serial-protocol-output').innerHTML = ''
+			})
+		}
+
+		//恢复上次的高度与折叠状态；窄屏默认折叠
+		let saved = {}
+		try { saved = JSON.parse(localStorage.getItem(STATE_KEY) || '{}') } catch (e) {}
+		if (saved.height) applyHeight(saved.height)
+		if (typeof saved.collapsed === 'boolean') {
+			setCollapsed(saved.collapsed)
+		} else {
+			setCollapsed(isNarrow())
+		}
 	})()
 
 	//设置名称
