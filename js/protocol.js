@@ -65,6 +65,11 @@
 		for (let i = 0; i < r.length; i++) s += (r[i] >> 4).toString(10) + (r[i] & 0xf).toString(10)
 		return s
 	}
+	function bcdDecodeNoReverse(b) {
+		let s = ''
+		for (let i = 0; i < b.length; i++) s += (b[i] >> 4).toString(10) + (b[i] & 0xf).toString(10)
+		return s
+	}
 	function bcdEncode(digits) {
 		let s = digits
 		if (s.length % 2 !== 0) s = '0' + s
@@ -74,8 +79,10 @@
 		return a.reverse()
 	}
 	function bcdTime(b) {
-		const s = bcdDecode(b)
+		const s = bcdDecodeNoReverse(b)
 		if (s.length < 14) return s
+		const year = parseInt(s.slice(0, 4), 10)
+		if (year < 1970 || year > 2080) return bcdDecode(b)
 		return s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8) + ' ' + s.slice(8, 10) + ':' + s.slice(10, 12) + ':' + s.slice(12, 14)
 	}
 
