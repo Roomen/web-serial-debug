@@ -588,44 +588,141 @@
 	//常用指令(下行下发)初始化
 	const presetSel = document.getElementById('serial-protocol-down-preset')
 	const funcSel = document.getElementById('serial-protocol-down-func')
+	const cascadeBtn = document.getElementById('preset-cascade-btn')
+	const cascadeText = cascadeBtn ? cascadeBtn.querySelector('.preset-cascade-text') : null
+	const cascadeDrop = document.getElementById('preset-cascade-dropdown')
+
 	function rebuildPresets(funcCode) {
 		if (!presetSel) return
 		var proto = window.getActiveProtocol()
 		var presets = (proto && proto.presets) ? proto.presets : (window.SK_DOWN_PRESETS || [])
-		presetSel.innerHTML = ''
 		var matchingGroups = []
 		for (const grp of presets) {
 			const filtered = grp.items.filter(it => it.func === funcCode)
 			if (filtered.length) matchingGroups.push({ grp, filtered })
 		}
-		if (matchingGroups.length === 0) return
-		for (const { grp, filtered } of matchingGroups) {
-			if (matchingGroups.length === 1) {
+		syncCascadeMenu(matchingGroups)
+	}
+
+	function syncCascadeMenu(matchingGroups) {
+		if (!cascadeDrop) return
+		cascadeDrop.innerHTML = ''
+		cascadeDrop.classList.toggle('has-groups', matchingGroups.length > 1)
+		if (matchingGroups.length === 0) {
+			if (cascadeText) cascadeText.textContent = '无可用指令'
+			return
+		}
+		if (matchingGroups.length === 1) {
+			// flat list — no sub-menus
+			const { filtered } = matchingGroups[0]
+			for (const it of filtered) {
+				const el = document.createElement('div')
+				el.className = 'preset-cascade-leaf'
+				el.textContent = it.name
+				el.dataset.name = it.name
+				if (presetSel.value === it.name) el.classList.add('selected')
+				el.addEventListener('click', () => selectCascadeItem(it.name))
+				cascadeDrop.appendChild(el)
+			}
+		} else {
+			// groups with hover sub-menus
+			for (const { grp, filtered } of matchingGroups) {
+				const el = document.createElement('div')
+				el.className = 'preset-cascade-item has-sub'
+				el.innerHTML = '<span>' + htmlEscape(grp.group) + '</span>'
+				const sub = document.createElement('div')
+				sub.className = 'preset-cascade-submenu'
 				for (const it of filtered) {
-					const op = document.createElement('option')
-					op.value = it.name
-					op.textContent = it.name
-					presetSel.appendChild(op)
+					const si = document.createElement('div')
+					si.className = 'preset-cascade-subitem'
+					si.textContent = it.name
+					si.dataset.name = it.name
+					if (presetSel.value === it.name) si.classList.add('selected')
+					si.addEventListener('click', (e) => {
+						e.stopPropagation()
+						selectCascadeItem(it.name)
+					})
+					sub.appendChild(si)
 				}
-			} else {
-				const og = document.createElement('optgroup')
-				og.label = grp.group
-				for (const it of filtered) {
-					const op = document.createElement('option')
-					op.value = it.name
-					op.textContent = it.name
-					og.appendChild(op)
-				}
-				presetSel.appendChild(og)
+				el.appendChild(sub)
+				el.addEventListener('mouseenter', () => positionSubmenu(el, sub))
+				cascadeDrop.appendChild(el)
 			}
 		}
 	}
+
+	function positionSubmenu(item, sub) {
+		sub.classList.remove('flip-left')
+		sub.style.top = ''
+		sub.style.display = 'block'
+		const ir = item.getBoundingClientRect()
+		const sr = sub.getBoundingClientRect()
+		if (ir.right + sr.width > window.innerWidth - 8) {
+			sub.classList.add('flip-left')
+		}
+		const overBottom = sr.bottom - (window.innerHeight - 8)
+		if (overBottom > 0) {
+			sub.style.top = (-4 - overBottom) + 'px'
+		}
+		sub.style.display = ''
+	}
+
+	function selectCascadeItem(name) {
+		presetSel.value = name
+		if (cascadeText) cascadeText.textContent = name
+		cascadeDrop.style.display = 'none'
+		presetSel.dispatchEvent(new Event('change', { bubbles: true }))
+	}
+
+	function htmlEscape(s) {
+		var d = document.createElement('div')
+		d.textContent = s
+		return d.innerHTML
+	}
+
+	// toggle cascade dropdown (position: fixed, anchored to the button,
+	// so it escapes the overflow clipping of #nav-protocol / #nav-tabContent)
+	function openCascadeDropdown() {
+		const r = cascadeBtn.getBoundingClientRect()
+		cascadeDrop.style.minWidth = r.width + 'px'
+		cascadeDrop.style.left = r.left + 'px'
+		cascadeDrop.style.top = (r.bottom + 2) + 'px'
+		cascadeDrop.style.display = 'block'
+		const h = cascadeDrop.offsetHeight
+		const spaceBelow = window.innerHeight - r.bottom - 10
+		if (h > spaceBelow && r.top - 10 > spaceBelow) {
+			cascadeDrop.style.top = Math.max(8, r.top - 2 - h) + 'px'
+		}
+	}
+	if (cascadeBtn) {
+		cascadeBtn.addEventListener('click', (e) => {
+			e.stopPropagation()
+			if (cascadeDrop.style.display === 'none' || !cascadeDrop.style.display) {
+				openCascadeDropdown()
+			} else {
+				cascadeDrop.style.display = 'none'
+			}
+		})
+		document.addEventListener('click', (e) => {
+			if (!cascadeBtn.contains(e.target) && !cascadeDrop.contains(e.target)) {
+				cascadeDrop.style.display = 'none'
+			}
+		})
+		// the anchor moves if an ancestor pane scrolls; just close the menu
+		window.addEventListener('scroll', (e) => {
+			if (cascadeDrop.style.display === 'block' && !cascadeDrop.contains(e.target)) {
+				cascadeDrop.style.display = 'none'
+			}
+		}, true)
+	}
+
 	let _skipFuncEvent = false
 	if (funcSel) {
 		rebuildPresets(funcSel.value)
 		funcSel.addEventListener('change', () => {
 			if (_skipFuncEvent) { _skipFuncEvent = false; return }
 			presetSel.value = ''
+			if (cascadeText) cascadeText.textContent = '选择指令...'
 			rebuildPresets(funcSel.value)
 		})
 	}
@@ -642,6 +739,19 @@
 	function asciiToHexBytes(s, fillLen) {
 		let a = []
 		for (let i = 0; i < s.length; i++) a.push(s.charCodeAt(i) & 0xff)
+		if (fillLen != null) {
+			while (a.length < fillLen) a.push(0x00)
+		}
+		return a
+	}
+	function bcdToBytes(s, fillLen) {
+		let digits = s.replace(/\D/g, '')
+		if (!digits) return []
+		if (digits.length % 2 !== 0) digits = '0' + digits
+		let a = []
+		for (let i = digits.length - 2; i >= 0; i -= 2) {
+			a.push((parseInt(digits.charAt(i), 10) << 4) | parseInt(digits.charAt(i + 1), 10))
+		}
 		if (fillLen != null) {
 			while (a.length < fillLen) a.push(0x00)
 		}
@@ -703,6 +813,10 @@
 					const s = paramVal.value
 					if (!s) return
 					bytes = asciiToHexBytes(s, preset.param.fillLen)
+				} else if (preset.param.type === 'bcd') {
+					const s = paramVal.value
+					if (!s) return
+					bytes = bcdToBytes(s, preset.param.fillLen)
 				} else {
 					const rawVal = parseInt(paramVal.value.trim(), 10)
 					if (isNaN(rawVal)) return
@@ -751,6 +865,13 @@
 					paramVal.value = preset.param.default || ''
 					paramUnit.textContent = ''
 					_currentParamType = 'ascii'
+				} else if (preset.param.type === 'bcd') {
+					paramVal.style.display = ''
+					paramVal.style.width = '180px'
+					paramSelEnum.style.display = 'none'
+					paramVal.value = preset.param.default || ''
+					paramUnit.textContent = '(BCD LE)'
+					_currentParamType = 'bcd'
 				} else {
 					paramVal.style.display = ''
 					paramVal.style.width = '100px'

@@ -383,8 +383,13 @@
                                             </div>
                                             <div class="input-group input-group-sm" style="width: auto;">
                                                 <span class="input-group-text">常用指令</span>
-                                                <select class="form-select" id="serial-protocol-down-preset" style="max-width: 180px;">
-                                                </select>
+                                                <div class="preset-cascade">
+                                                    <input type="hidden" id="serial-protocol-down-preset" value="">
+                                                    <button class="preset-cascade-btn form-select form-select-sm" id="preset-cascade-btn" type="button" title="选择常用指令">
+                                                        <span class="preset-cascade-text">选择指令...</span>
+                                                    </button>
+                                                    <div class="preset-cascade-dropdown" id="preset-cascade-dropdown" style="display:none;"></div>
+                                                </div>
                                             </div>
                                             <div class="input-group input-group-sm" id="serial-protocol-down-param-group" style="display:none;width:auto;">
                                                 <span class="input-group-text" id="serial-protocol-down-param-label">参数</span>
