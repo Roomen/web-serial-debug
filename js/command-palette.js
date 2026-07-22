@@ -319,6 +319,20 @@
 				clickEl('serial-parse-header')
 			}
 		})
+		const sendPanel = el('serial-send-panel')
+		const sendCollapsed = !!(sendPanel && sendPanel.classList.contains('collapsed'))
+		list.push({
+			group: '视图',
+			title: sendCollapsed ? '展开串口发送面板' : '折叠串口发送面板',
+			alias: 'fasong mianban send panel',
+			run: function () {
+				if (sendCollapsed && typeof window.expandSendPanel === 'function') {
+					window.expandSendPanel()
+					return
+				}
+				clickEl('serial-send-header')
+			}
+		})
 		return list
 	}
 

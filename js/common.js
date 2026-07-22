@@ -385,10 +385,10 @@
 		saveQuickList()
 	})
 	function getQuickItemHtml(item) {
-		return `<div class="d-flex p-1 border-bottom quick-item">
-			<button type="button" title="移除该项" class="btn btn-sm btn-outline-secondary me-1 quick-remove"><i class="bi bi-x"></i></button>
-			<input class="form-control form-control-sm me-1" placeholder="要发送的内容,双击改名" value="${item.content}">
-			<button class="flex-shrink-0 me-1 align-self-center btn btn-secondary btn-sm  quick-send" title="${item.name}">${item.name}</button>
+		return `<div class="d-flex quick-item">
+			<button type="button" title="移除该项" class="btn btn-sm btn-outline-secondary quick-remove"><i class="bi bi-x"></i></button>
+			<input class="form-control form-control-sm" placeholder="要发送的内容,双击改名" value="${item.content}">
+			<button class="flex-shrink-0 align-self-center btn btn-outline-secondary btn-sm quick-send" title="${item.name}">${item.name}</button>
 			<input class="form-check-input flex-shrink-0 align-self-center" type="checkbox" ${item.hex ? 'checked' : ''}>
 		</div>`
 	}
@@ -507,34 +507,145 @@
 		}
 		reader.readAsText(file)
 	})
-	//第三方协议手动解析
-	document.getElementById('serial-protocol-parse').addEventListener('click', (e) => {
-		const raw = document.getElementById('serial-protocol-input').value
-		if (!raw) {
-			addLogErr('请输入HEX报文')
-			return
-		}
-		let hex = raw.replace(/0x/gi, '').replace(/[\s,;]+/g, '')
-		if (!/^[0-9A-Fa-f]*$/.test(hex) || hex.length % 2 !== 0) {
-			addLogErr('HEX格式错误:' + raw)
-			return
-		}
-		let bytes = new Uint8Array(hex.length / 2)
+	//协议解析 HEX：归一化 / 转字节 / 0-F 转储渲染
+	function normalizeHexRaw(raw) {
+		return String(raw || '').replace(/0x/gi, '').replace(/[\s,;:\-_]+/g, '')
+	}
+	function hexRawToBytes(hex) {
+		if (!hex || hex.length % 2 !== 0 || !/^[0-9A-Fa-f]+$/.test(hex)) return null
+		const bytes = new Uint8Array(hex.length / 2)
 		for (let i = 0; i < bytes.length; i++) {
 			bytes[i] = parseInt(hex.substr(i * 2, 2), 16)
 		}
+		return bytes
+	}
+	let _hexDumpState = { bytes: null, bm: null, cols: 0 }
+	function getHexDumpCols(view) {
+		if (!view) return 16
+		const style = window.getComputedStyle(view)
+		const pad = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0)
+		const avail = Math.max(0, view.clientWidth - pad)
+		const fs = parseFloat(style.fontSize) || 11.5
+		// 左偏移列 + gap + N 个字节格
+		const offW = 2.6 * fs + 8
+		const cellW = 1.55 * fs + 2
+		const n = Math.floor((avail - offW) / cellW)
+		if (n >= 32) return 32
+		return 16
+	}
+	function renderProtocolHexDump(bytes, bm) {
+		const view = document.getElementById('serial-protocol-hexview')
+		if (!view) return
+		if (arguments.length >= 1) {
+			_hexDumpState.bytes = bytes && bytes.length ? bytes : null
+			_hexDumpState.bm = (bytes && bytes.length && bm) ? bm : null
+		}
+		bytes = _hexDumpState.bytes
+		bm = _hexDumpState.bm
+		if (!bytes || !bytes.length) {
+			view.innerHTML = ''
+			view.classList.add('is-empty')
+			_hexDumpState.cols = 0
+			return
+		}
+		view.classList.remove('is-empty')
+		const COLS = getHexDumpCols(view)
+		_hexDumpState.cols = COLS
+		const gridStyle = 'grid-template-columns:repeat(' + COLS + ',1.55em)'
+		let h = '<div class="sk-hex-dump-head"><span class="sk-hex-off"></span><span class="sk-hex-bytes" style="' + gridStyle + '">'
+		for (let c = 0; c < COLS; c++) {
+			h += '<span class="sk-hex-col">' + c.toString(16).toUpperCase() + '</span>'
+		}
+		h += '</span></div>'
+		for (let i = 0; i < bytes.length; i += COLS) {
+			h += '<div class="sk-hex-dump-row"><span class="sk-hex-off">' +
+				i.toString(16).toUpperCase().padStart(4, '0') +
+				'</span><span class="sk-hex-bytes" style="' + gridStyle + '">'
+			for (let j = 0; j < COLS; j++) {
+				const idx = i + j
+				if (idx >= bytes.length) {
+					h += '<span class="sk-hex-pad"></span>'
+					continue
+				}
+				const hb = ('0' + bytes[idx].toString(16).toUpperCase()).slice(-2)
+				const cell = bm && bm[idx]
+				if (cell && cell.tip) {
+					h += '<span class="sk-hex-byte" data-grp="' + attrEscape(cell.grp) +
+						'" data-tip="' + attrEscape(cell.tip) + '">' + hb + '</span>'
+				} else {
+					h += '<span class="sk-hex-byte">' + hb + '</span>'
+				}
+			}
+			h += '</span></div>'
+		}
+		view.innerHTML = h
+	}
+	function parseProtocolBytes(bytes) {
+		if (!bytes || !bytes.length) {
+			renderProtocolHexDump(null)
+			document.getElementById('serial-protocol-output').innerHTML = ''
+			return
+		}
+		renderProtocolHexDump(bytes)
 		try {
 			const r = skParseFrame(bytes, {
 				keyAscii: toolOptions.skKeyAscii || undefined,
 				keyHex: toolOptions.skKeyHex || undefined,
 				decryptMode: toolOptions.skDecryptMode,
 			})
+			if (typeof skByteMap === 'function') {
+				try {
+					renderProtocolHexDump(bytes, skByteMap(r))
+				} catch (mapErr) { /* keep plain dump */ }
+			}
 			const prompt = r.needKey ? '<div class="sk-parse-err">⚠ 加密报文,请在右侧「第三方协议」中的「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>' : ''
 			document.getElementById('serial-protocol-output').innerHTML = prompt + skFormatFrame(r)
 		} catch (err) {
 			document.getElementById('serial-protocol-output').innerHTML = '<div class="sk-parse-err">解析异常:' + HTMLEncode(String(err)) + '</div>'
 		}
-	})
+	}
+	function applyProtocolHexInput(raw) {
+		const hex = normalizeHexRaw(raw)
+		const bytes = hexRawToBytes(hex)
+		if (!bytes) {
+			renderProtocolHexDump(null)
+			return false
+		}
+		parseProtocolBytes(bytes)
+		return true
+	}
+	//HEX 转储区：粘贴即格式化并解析；宽度变化时在 16/32 列间切换
+	const protocolHexView = document.getElementById('serial-protocol-hexview')
+	if (protocolHexView) {
+		protocolHexView.addEventListener('paste', (e) => {
+			e.preventDefault()
+			const text = (e.clipboardData || window.clipboardData).getData('text')
+			if (!applyProtocolHexInput(text)) {
+				addLogErr('HEX格式错误:' + text)
+			}
+		})
+		protocolHexView.addEventListener('keydown', (e) => {
+			if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+				e.preventDefault()
+				const sel = window.getSelection()
+				const range = document.createRange()
+				range.selectNodeContents(protocolHexView)
+				sel.removeAllRanges()
+				sel.addRange(range)
+			}
+		})
+		if (typeof ResizeObserver !== 'undefined') {
+			let _hexRoT = 0
+			const ro = new ResizeObserver(function () {
+				if (!_hexDumpState.bytes) return
+				const next = getHexDumpCols(protocolHexView)
+				if (next === _hexDumpState.cols) return
+				clearTimeout(_hexRoT)
+				_hexRoT = setTimeout(function () { renderProtocolHexDump() }, 50)
+			})
+			ro.observe(protocolHexView)
+		}
+	}
 	//生成下发HEX
 	let _downSeq = 1
 	document.getElementById('serial-protocol-build').addEventListener('click', (e) => {
@@ -577,6 +688,18 @@
 			addLogErr('生成帧失败:' + err.toString())
 		}
 	})
+	//点击生成的 HEX 预览即可复制
+	const downPreview = document.getElementById('serial-protocol-down-preview')
+	if (downPreview) {
+		downPreview.addEventListener('click', () => {
+			const text = (downPreview.value || '').trim()
+			if (!text) return
+			copyText(text)
+			downPreview.classList.add('is-copied')
+			clearTimeout(downPreview._copyT)
+			downPreview._copyT = setTimeout(() => downPreview.classList.remove('is-copied'), 800)
+		})
+	}
 	//立即下发
 	document.getElementById('serial-protocol-send').addEventListener('click', (e) => {
 		const preview = document.getElementById('serial-protocol-down-preview').value
@@ -682,6 +805,27 @@
 			default: return []
 		}
 	}
+	// BCD 一字节：十进制 0-99 → 0xNN
+	function toBcdByte(n) {
+		n = Math.max(0, Math.min(99, n | 0))
+		return ((Math.floor(n / 10) & 0xf) << 4) | (n % 10)
+	}
+	// Tag10-ID9 日结：YY MM DD(各1B BCD) + 个数1B
+	function dailyQueryBytes(count) {
+		const d = new Date()
+		const yy = d.getFullYear() % 100
+		return [toBcdByte(yy), toBcdByte(d.getMonth() + 1), toBcdByte(d.getDate()), (count | 0) & 0xff]
+	}
+	// Tag10-ID23 错误日志：YYMMDDhhmmss 6B BCD + 条数1B
+	function errLogQueryBytes(count) {
+		const d = new Date()
+		const yy = d.getFullYear() % 100
+		return [
+			toBcdByte(yy), toBcdByte(d.getMonth() + 1), toBcdByte(d.getDate()),
+			toBcdByte(d.getHours()), toBcdByte(d.getMinutes()), toBcdByte(d.getSeconds()),
+			(count | 0) & 0xff
+		]
+	}
 	function presetToTlvJson(preset) {
 		const out = []
 		for (const blk of (preset.tlv || [])) {
@@ -734,6 +878,14 @@
 					const s = paramVal.value
 					if (!s) return
 					bytes = bcdToBytes(s, preset.param.fillLen)
+				} else if (preset.param.type === 'dailyQuery') {
+					const rawVal = parseInt(paramVal.value.trim(), 10)
+					if (isNaN(rawVal)) return
+					bytes = dailyQueryBytes(rawVal)
+				} else if (preset.param.type === 'errLogQuery') {
+					const rawVal = parseInt(paramVal.value.trim(), 10)
+					if (isNaN(rawVal)) return
+					bytes = errLogQueryBytes(rawVal)
 				} else {
 					const rawVal = parseInt(paramVal.value.trim(), 10)
 					if (isNaN(rawVal)) return
@@ -789,6 +941,20 @@
 					paramVal.value = preset.param.default || ''
 					paramUnit.textContent = '(BCD LE)'
 					_currentParamType = 'bcd'
+				} else if (preset.param.type === 'dailyQuery') {
+					paramVal.style.display = ''
+					paramVal.style.width = '80px'
+					paramSelEnum.style.display = 'none'
+					paramVal.value = preset.param.default || '7'
+					paramUnit.textContent = '条(日起=今天)'
+					_currentParamType = 'dailyQuery'
+				} else if (preset.param.type === 'errLogQuery') {
+					paramVal.style.display = ''
+					paramVal.style.width = '80px'
+					paramSelEnum.style.display = 'none'
+					paramVal.value = preset.param.default || '4'
+					paramUnit.textContent = '条(起点=现在)'
+					_currentParamType = 'errLogQuery'
 				} else {
 					paramVal.style.display = ''
 					paramVal.style.width = '100px'
@@ -1162,17 +1328,17 @@
 		skHoverTip.style.top = top + 'px'
 	}
 	function clearSkHoverActive() {
-		const act = serialLogs.querySelectorAll('.sk-hex-byte-active')
+		const act = document.querySelectorAll('.sk-hex-byte-active')
 		for (const el of act) el.classList.remove('sk-hex-byte-active')
 	}
-	serialLogs.addEventListener('mouseover', (e) => {
+	function onSkHexHover(e) {
 		if (!e.target || !e.target.closest) return
 		const span = e.target.closest('.sk-hex-byte')
 		if (span) {
 			clearSkHoverActive()
 			const grp = span.getAttribute('data-grp')
 			if (grp) {
-				const peers = serialLogs.querySelectorAll('.sk-hex-byte[data-grp="' + grp + '"]')
+				const peers = document.querySelectorAll('.sk-hex-byte[data-grp="' + grp + '"]')
 				for (const el of peers) el.classList.add('sk-hex-byte-active')
 			}
 			showSkHoverTip(span)
@@ -1180,15 +1346,20 @@
 			clearSkHoverActive()
 			skHoverTip.style.display = 'none'
 		}
-	})
-	serialLogs.addEventListener('scroll', () => {
+	}
+	function hideSkHover() {
 		clearSkHoverActive()
 		skHoverTip.style.display = 'none'
-	})
-	serialLogs.addEventListener('mouseleave', () => {
-		clearSkHoverActive()
-		skHoverTip.style.display = 'none'
-	})
+	}
+	serialLogs.addEventListener('mouseover', onSkHexHover)
+	serialLogs.addEventListener('scroll', hideSkHover)
+	serialLogs.addEventListener('mouseleave', hideSkHover)
+	const protocolHexViewHover = document.getElementById('serial-protocol-hexview')
+	if (protocolHexViewHover) {
+		protocolHexViewHover.addEventListener('mouseover', onSkHexHover)
+		protocolHexViewHover.addEventListener('scroll', hideSkHover)
+		protocolHexViewHover.addEventListener('mouseleave', hideSkHover)
+	}
 
 	//点击日志行:把该行的原始HEX灌进底部解析面板并解析(事件委托,不影响悬停提示)
 	let selectedLogRow = null
@@ -1206,14 +1377,10 @@
 		}
 		row.classList.add('selected')
 		selectedLogRow = row
-		const input = document.getElementById('serial-protocol-input')
-		const parseBtn = document.getElementById('serial-protocol-parse')
-		if (!input || !parseBtn) return
 		if (typeof window.expandParsePanel === 'function') {
 			window.expandParsePanel()
 		}
-		input.value = hex
-		parseBtn.click()
+		applyProtocolHexInput(hex)
 	})
 
 	//选择串口
@@ -1913,18 +2080,18 @@
 		} catch (e) {}
 	})()
 
-	// 协议解析面板：面板头既是垂直拖拽手柄(改高度)也是折叠按钮(原地点击)
+	// 协议解析面板：顶缝拖高度，header 只负责点击折叠(与串口发送一致)
 	;(function () {
 		const logMain = document.getElementById('log-main')
 		const panel = document.getElementById('serial-parse-panel')
 		const header = document.getElementById('serial-parse-header')
+		const resizer = document.getElementById('serial-parse-resizer')
 		if (!logMain || !panel || !header) return
 		const STATE_KEY = 'parsePanelState'
 		const DEFAULT_H = 220
 		//面板最矮 120px；上限保证日志区不被压到 120px 以下(按 #log-main 实际高度动态算)
 		const MIN_H = 120
 		const MIN_LOG_H = 120
-		const DRAG_THRESHOLD = 4
 
 		function isNarrow() {
 			return window.matchMedia('(max-width: 768px)').matches
@@ -1965,41 +2132,37 @@
 			if (isCollapsed()) setCollapsed(false)
 		}
 
-		let dragging = false, moved = false, startY = 0, startH = 0
-
-		header.addEventListener('pointerdown', function (e) {
-			//每次按下都重置，否则上一次拖拽的残留会吞掉这一次的 click
-			moved = false
-			//清空按钮不参与拖拽
-			if (e.target.closest('button')) return
-			//折叠态和窄屏只保留点击语义
-			if (e.button !== 0 || isCollapsed() || isNarrow()) return
-			dragging = true
-			startY = e.clientY
-			startH = panel.getBoundingClientRect().height
-			header.setPointerCapture(e.pointerId)
-			logMain.classList.add('parse-dragging')
-		})
-		header.addEventListener('pointermove', function (e) {
-			if (!dragging) return
-			const dy = e.clientY - startY
-			if (Math.abs(dy) > DRAG_THRESHOLD) moved = true
-			//往上拖(dy 为负)是把面板拉高
-			applyHeight(startH - dy)
-		})
-		function endDrag(e) {
-			if (!dragging) return
-			dragging = false
-			logMain.classList.remove('parse-dragging')
-			try { header.releasePointerCapture(e.pointerId) } catch (err) {}
-			if (moved) saveState()
+		// 顶缝拖高度
+		if (resizer) {
+			let dragging = false, startY = 0, startH = 0
+			resizer.addEventListener('pointerdown', function (e) {
+				if (e.button !== 0 || isCollapsed() || isNarrow()) return
+				e.preventDefault()
+				dragging = true
+				startY = e.clientY
+				startH = panel.getBoundingClientRect().height
+				resizer.setPointerCapture(e.pointerId)
+				logMain.classList.add('parse-dragging')
+			})
+			resizer.addEventListener('pointermove', function (e) {
+				if (!dragging) return
+				//往上拖(dy 为负)是把面板拉高
+				applyHeight(startH - (e.clientY - startY))
+			})
+			function endDrag(e) {
+				if (!dragging) return
+				dragging = false
+				logMain.classList.remove('parse-dragging')
+				try { resizer.releasePointerCapture(e.pointerId) } catch (err) {}
+				saveState()
+			}
+			resizer.addEventListener('pointerup', endDrag)
+			resizer.addEventListener('pointercancel', endDrag)
 		}
-		header.addEventListener('pointerup', endDrag)
-		header.addEventListener('pointercancel', endDrag)
+
+		// 标题栏只折叠
 		header.addEventListener('click', function (e) {
 			if (e.target.closest('button')) return
-			//拖拽结束时浏览器仍会补一个 click，这里吞掉
-			if (moved) { moved = false; return }
 			setCollapsed(!isCollapsed())
 		})
 
@@ -2008,6 +2171,7 @@
 			clearBtn.addEventListener('click', function (e) {
 				e.stopPropagation()
 				document.getElementById('serial-protocol-output').innerHTML = ''
+				if (typeof renderProtocolHexDump === 'function') renderProtocolHexDump(null)
 			})
 		}
 
@@ -2019,6 +2183,43 @@
 			setCollapsed(saved.collapsed)
 		} else {
 			setCollapsed(isNarrow())
+		}
+	})()
+
+	// 串口发送面板：点击标题栏折叠/展开（对齐协议解析面板）
+	;(function () {
+		const panel = document.getElementById('serial-send-panel')
+		const header = document.getElementById('serial-send-header')
+		if (!panel || !header) return
+		const STATE_KEY = 'sendPanelState'
+
+		function isCollapsed() {
+			return panel.classList.contains('collapsed')
+		}
+		function saveState() {
+			localStorage.setItem(STATE_KEY, JSON.stringify({ collapsed: isCollapsed() }))
+		}
+		function setCollapsed(collapsed) {
+			panel.classList.toggle('collapsed', collapsed)
+			const icon = header.querySelector('.serial-send-chevron')
+			if (icon) {
+				icon.classList.toggle('bi-chevron-down', !collapsed)
+				icon.classList.toggle('bi-chevron-right', collapsed)
+			}
+			saveState()
+		}
+		window.expandSendPanel = function () {
+			if (isCollapsed()) setCollapsed(false)
+		}
+
+		header.addEventListener('click', function () {
+			setCollapsed(!isCollapsed())
+		})
+
+		let saved = {}
+		try { saved = JSON.parse(localStorage.getItem(STATE_KEY) || '{}') } catch (e) {}
+		if (typeof saved.collapsed === 'boolean') {
+			setCollapsed(saved.collapsed)
 		}
 	})()
 
