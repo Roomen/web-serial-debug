@@ -385,10 +385,10 @@
 		saveQuickList()
 	})
 	function getQuickItemHtml(item) {
-		return `<div class="d-flex p-1 border-bottom quick-item">
-			<button type="button" title="移除该项" class="btn btn-sm btn-outline-secondary me-1 quick-remove"><i class="bi bi-x"></i></button>
-			<input class="form-control form-control-sm me-1" placeholder="要发送的内容,双击改名" value="${item.content}">
-			<button class="flex-shrink-0 me-1 align-self-center btn btn-secondary btn-sm  quick-send" title="${item.name}">${item.name}</button>
+		return `<div class="d-flex quick-item">
+			<button type="button" title="移除该项" class="btn btn-sm btn-outline-secondary quick-remove"><i class="bi bi-x"></i></button>
+			<input class="form-control form-control-sm" placeholder="要发送的内容,双击改名" value="${item.content}">
+			<button class="flex-shrink-0 align-self-center btn btn-outline-secondary btn-sm quick-send" title="${item.name}">${item.name}</button>
 			<input class="form-check-input flex-shrink-0 align-self-center" type="checkbox" ${item.hex ? 'checked' : ''}>
 		</div>`
 	}
@@ -1913,18 +1913,18 @@
 		} catch (e) {}
 	})()
 
-	// 协议解析面板：面板头既是垂直拖拽手柄(改高度)也是折叠按钮(原地点击)
+	// 协议解析面板：顶缝拖高度，header 只负责点击折叠(与串口发送一致)
 	;(function () {
 		const logMain = document.getElementById('log-main')
 		const panel = document.getElementById('serial-parse-panel')
 		const header = document.getElementById('serial-parse-header')
+		const resizer = document.getElementById('serial-parse-resizer')
 		if (!logMain || !panel || !header) return
 		const STATE_KEY = 'parsePanelState'
 		const DEFAULT_H = 220
 		//面板最矮 120px；上限保证日志区不被压到 120px 以下(按 #log-main 实际高度动态算)
 		const MIN_H = 120
 		const MIN_LOG_H = 120
-		const DRAG_THRESHOLD = 4
 
 		function isNarrow() {
 			return window.matchMedia('(max-width: 768px)').matches
@@ -1965,41 +1965,37 @@
 			if (isCollapsed()) setCollapsed(false)
 		}
 
-		let dragging = false, moved = false, startY = 0, startH = 0
-
-		header.addEventListener('pointerdown', function (e) {
-			//每次按下都重置，否则上一次拖拽的残留会吞掉这一次的 click
-			moved = false
-			//清空按钮不参与拖拽
-			if (e.target.closest('button')) return
-			//折叠态和窄屏只保留点击语义
-			if (e.button !== 0 || isCollapsed() || isNarrow()) return
-			dragging = true
-			startY = e.clientY
-			startH = panel.getBoundingClientRect().height
-			header.setPointerCapture(e.pointerId)
-			logMain.classList.add('parse-dragging')
-		})
-		header.addEventListener('pointermove', function (e) {
-			if (!dragging) return
-			const dy = e.clientY - startY
-			if (Math.abs(dy) > DRAG_THRESHOLD) moved = true
-			//往上拖(dy 为负)是把面板拉高
-			applyHeight(startH - dy)
-		})
-		function endDrag(e) {
-			if (!dragging) return
-			dragging = false
-			logMain.classList.remove('parse-dragging')
-			try { header.releasePointerCapture(e.pointerId) } catch (err) {}
-			if (moved) saveState()
+		// 顶缝拖高度
+		if (resizer) {
+			let dragging = false, startY = 0, startH = 0
+			resizer.addEventListener('pointerdown', function (e) {
+				if (e.button !== 0 || isCollapsed() || isNarrow()) return
+				e.preventDefault()
+				dragging = true
+				startY = e.clientY
+				startH = panel.getBoundingClientRect().height
+				resizer.setPointerCapture(e.pointerId)
+				logMain.classList.add('parse-dragging')
+			})
+			resizer.addEventListener('pointermove', function (e) {
+				if (!dragging) return
+				//往上拖(dy 为负)是把面板拉高
+				applyHeight(startH - (e.clientY - startY))
+			})
+			function endDrag(e) {
+				if (!dragging) return
+				dragging = false
+				logMain.classList.remove('parse-dragging')
+				try { resizer.releasePointerCapture(e.pointerId) } catch (err) {}
+				saveState()
+			}
+			resizer.addEventListener('pointerup', endDrag)
+			resizer.addEventListener('pointercancel', endDrag)
 		}
-		header.addEventListener('pointerup', endDrag)
-		header.addEventListener('pointercancel', endDrag)
+
+		// 标题栏只折叠
 		header.addEventListener('click', function (e) {
 			if (e.target.closest('button')) return
-			//拖拽结束时浏览器仍会补一个 click，这里吞掉
-			if (moved) { moved = false; return }
 			setCollapsed(!isCollapsed())
 		})
 

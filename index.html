@@ -203,7 +203,7 @@
                 </div>
                 <div id="main">
                     <!--中间串口日志-->
-                    <div id="log-main" class="px-md-2">
+                    <div id="log-main">
                         <div
                             class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
                             <h1 class="h4 serial-log-title"><i class="bi bi-journal-text"></i> 串口日志</h1>
@@ -239,10 +239,11 @@
                                 </div>
                             </div>
                         </div>
-                        <div id="serial-logs" class="flex-grow-1 border border-2 rounded mb-2"></div>
-                        <!--协议解析底部面板：header 同时是垂直拖拽手柄，原地点击折叠-->
+                        <div id="serial-logs" class="flex-grow-1 rounded mb-2"></div>
+                        <!--协议解析底部面板：顶缝拖高度，header 只负责折叠-->
                         <div id="serial-parse-panel">
-                            <div id="serial-parse-header" title="拖动调整高度 · 点击折叠/展开">
+                            <div id="serial-parse-resizer" title="拖动调整高度"></div>
+                            <div id="serial-parse-header" title="点击折叠/展开">
                                 <span class="serial-parse-title">
                                     <i class="bi bi-chevron-down serial-parse-chevron"></i>
                                     <i class="bi bi-diagram-3"></i> 协议解析
@@ -260,7 +261,7 @@
                                     <button class="btn btn-sm btn-outline-secondary mt-1"
                                         id="serial-protocol-parse">解析</button>
                                 </div>
-                                <div id="serial-protocol-output" class="border border-2 rounded p-2 overflow-auto">
+                                <div id="serial-protocol-output" class="rounded p-2 overflow-auto">
                                 </div>
                             </div>
                         </div>
@@ -306,7 +307,7 @@
                         <button class="toggle-button" data-pane="right" title="拖动调整宽度 · 点击隐藏/打开边栏">
                             <i class="bi bi-chevron-compact-right"></i>
                         </button>
-                        <div class="collapse show p-1 overflow-hidden sidebar-body">
+                        <div class="collapse show overflow-hidden sidebar-body">
 
                             <nav>
                                 <div class="nav nav-tabs" id="nav-tab" role="tablist">
@@ -321,7 +322,7 @@
                                         aria-selected="false">固件升级</button>
                                 </div>
                             </nav>
-                            <div class="tab-content pt-2 flex-fill" id="nav-tabContent">
+                            <div class="tab-content flex-fill" id="nav-tabContent">
                                 <div class="tab-pane fade show active d-flex flex-column" id="nav-quick-send" role="tabpanel"
                                     aria-labelledby="nav-quick-send-tab">
                                     <div class="btn-toolbar">
@@ -340,10 +341,10 @@
                                                 id="serial-quick-send-remove-group">删除</button>
                                         </div>
                                     </div>
-                                    <div class="d-flex mt-2">
-                                        <button id="serial-quick-send-add" class="btn btn-sm btn-outline-secondary me-5"><i
+                                    <div class="d-flex mt-2 gap-2">
+                                        <button id="serial-quick-send-add" class="btn btn-sm btn-outline-secondary"><i
                                                 class="bi bi-plus-square"></i> 增加一条</button>
-                                        <button class="btn btn-sm btn-outline-secondary me-2 flex-grow-1"
+                                        <button class="btn btn-sm btn-outline-secondary flex-grow-1"
                                             id="serial-quick-send-import-btn"><i class="bi bi-folder-plus"></i>
                                             导入</button>
                                         <input type="file" id="serial-quick-send-import" style="display: none;"
@@ -352,65 +353,75 @@
                                             id="serial-quick-send-export"><i class="bi bi-folder-symlink"></i>
                                             导出</button>
                                     </div>
-                                    <div class="mt-2">
-                                        <div class="d-flex">
-                                            <span class="me-2 ms-3">移除</span>
-                                            <span class="flex-grow-1 me-1">发送内容,点击修改,双击改名</span>
-                                            <span class="flex-shrink-0 me-3">显示名称</span>
-                                            <span class="flex-shrink-0 me-2">HEX</span>
-                                        </div>
+                                    <div class="quick-send-head mt-2">
+                                        <span class="col-remove">移除</span>
+                                        <span class="col-content">发送内容 · 点击修改 / 双击改名</span>
+                                        <span class="col-name">名称</span>
+                                        <span class="col-hex">HEX</span>
                                     </div>
                                     <div id="serial-quick-send-content"
-                                        class="flex-grow-1 border border-2 p-2 rounded overflow-auto">
+                                        class="flex-grow-1 overflow-auto">
                                     </div>
                                 </div>
                                 <div class="tab-pane d-flex flex-column fade flex-grow-1" id="nav-protocol" role="tabpanel"
                                     aria-labelledby="nav-protocol-tab">
-                                    <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
-                                        <div class="input-group input-group-sm" style="width: auto;">
-                                            <span class="input-group-text">协议</span>
-                                            <select class="form-select" id="serial-protocol-select">
-                                                <option value="sek">SEK（默认）</option>
-                                            </select>
+                                    <div class="protocol-basic-card mb-2">
+                                        <div class="protocol-basic-row">
+                                            <div class="input-group input-group-sm protocol-basic-proto">
+                                                <span class="input-group-text">协议</span>
+                                                <select class="form-select" id="serial-protocol-select">
+                                                    <option value="sek">SEK（默认）</option>
+                                                </select>
+                                            </div>
+                                            <div class="protocol-switch-inline">
+                                                <div class="form-check form-switch">
+                                                    <input class="form-check-input" type="checkbox" id="serial-protocol-enable">
+                                                    <label class="form-check-label" for="serial-protocol-enable">实时解析</label>
+                                                </div>
+                                                <div class="form-check form-switch" title="开启后日志 HEX 视图的每个字节可悬停查看其协议字段含义,不展开文本">
+                                                    <input class="form-check-input" type="checkbox" id="serial-protocol-hover">
+                                                    <label class="form-check-label" for="serial-protocol-hover">悬停提示</label>
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div class="input-group input-group-sm" style="width: auto;">
-                                            <span class="input-group-text">加解密</span>
-                                            <select class="form-select" id="serial-protocol-decrypt">
-                                                <option value="auto">自动</option>
-                                                <option value="always">强制解密</option>
-                                                <option value="never">不解密</option>
-                                            </select>
-                                        </div>
-                                        <div class="input-group input-group-sm" style="width: auto;" title="报文加解密算法 A ES128/256-ECB">
-                                            <span class="input-group-text">加密方式</span>
-                                            <select class="form-select" id="serial-protocol-enc-type">
-                                                <option value="aes128">AES-128-ECB</option>
-                                                <option value="aes256">AES-256-ECB</option>
-                                            </select>
-                                        </div>
-                                        <div class="input-group input-group-sm" style="width: auto;">
-                                            <span class="input-group-text">密钥(ASCII)</span>
-                                            <input type="text" class="form-control" id="serial-protocol-key-ascii"
-                                                placeholder="留空则不解密(加密报文需输入密钥 16/32字节)">
-                                        </div>
-                                        <div class="input-group input-group-sm" style="width: auto;">
-                                            <span class="input-group-text">密钥(HEX，优先)</span>
-                                            <input type="text" class="form-control" id="serial-protocol-key-hex"
-                                                placeholder="如 01020304...16/32字节 AES256需32字节">
-                                        </div>
+                                        <details class="protocol-advanced" id="serial-protocol-advanced">
+                                            <summary class="protocol-advanced-summary">
+                                                <i class="bi bi-chevron-right protocol-advanced-chevron"></i>
+                                                高级 · 加解密与密钥
+                                            </summary>
+                                            <div class="protocol-advanced-body">
+                                                <div class="protocol-advanced-grid">
+                                                    <div class="input-group input-group-sm">
+                                                        <span class="input-group-text">加解密</span>
+                                                        <select class="form-select" id="serial-protocol-decrypt">
+                                                            <option value="auto">自动</option>
+                                                            <option value="always">强制解密</option>
+                                                            <option value="never">不解密</option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="input-group input-group-sm" title="报文加解密算法 AES128/256-ECB">
+                                                        <span class="input-group-text">加密方式</span>
+                                                        <select class="form-select" id="serial-protocol-enc-type">
+                                                            <option value="aes128">AES-128-ECB</option>
+                                                            <option value="aes256">AES-256-ECB</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div class="input-group input-group-sm mt-2">
+                                                    <span class="input-group-text">密钥(ASCII)</span>
+                                                    <input type="text" class="form-control" id="serial-protocol-key-ascii"
+                                                        placeholder="留空则不解密 · 16/32 字节">
+                                                </div>
+                                                <div class="input-group input-group-sm mt-2">
+                                                    <span class="input-group-text">密钥(HEX，优先)</span>
+                                                    <input type="text" class="form-control" id="serial-protocol-key-hex"
+                                                        placeholder="如 01020304… · AES256 需 32 字节">
+                                                </div>
+                                            </div>
+                                        </details>
                                     </div>
-                                    <div class="protocol-switch-row mb-2">
-                                        <div class="form-check form-switch">
-                                            <input class="form-check-input" type="checkbox" id="serial-protocol-enable">
-                                            <label class="form-check-label" for="serial-protocol-enable">串口实时解析</label>
-                                        </div>
-                                        <div class="form-check form-switch" title="开启后日志 HEX 视图的每个字节可悬停查看其协议字段含义,不展开文本">
-                                            <input class="form-check-input" type="checkbox" id="serial-protocol-hover">
-                                            <label class="form-check-label" for="serial-protocol-hover">悬停提示(静默解析)</label>
-                                        </div>
-                                    </div>
-                                    <div class="mb-2 flex-grow-1">
-                                        <h6 class="mb-2">下行下发</h6>
+                                    <div class="protocol-down-card mb-2 flex-grow-1">
+                                        <h6 class="pane-section-title"><i class="bi bi-arrow-down-circle"></i> 下行下发</h6>
                                         <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
                                             <div class="input-group input-group-sm" style="width: auto;">
                                                 <span class="input-group-text">功能码</span>
@@ -446,7 +457,8 @@
                                 <div class="tab-pane d-flex flex-column fade" id="nav-firmware" role="tabpanel"
                                     aria-labelledby="nav-firmware-tab">
                                     <div class="d-flex flex-column flex-grow-1 min-h-0">
-                                        <div class="border rounded p-2 mb-2">
+                                        <div class="fw-upgrade-card">
+                                            <h6 class="pane-section-title"><i class="bi bi-file-earmark-binary"></i> 固件文件</h6>
                                             <input type="file" id="fw-file" class="d-none" accept=".bin,.hex,.fw">
                                             <div class="fw-upgrade-dropzone" id="fw-drop-zone">
                                                 <div class="fw-upgrade-dropzone-inner">
@@ -473,9 +485,10 @@
                                                 <button class="btn btn-sm btn-outline-secondary" id="fw-diagnose">诊断固件</button>
                                             </div>
                                             <pre id="fw-info"
-                                                class="border rounded p-2 mb-0 bg-white small text-monospace mt-2" style="min-height: 60px; white-space: pre-wrap;"></pre>
+                                                class="p-2 mb-0 small text-monospace mt-2" style="min-height: 60px; white-space: pre-wrap;"></pre>
                                         </div>
-                                        <div class="border rounded p-2 mb-2">
+                                        <div class="fw-upgrade-card mb-0">
+                                            <h6 class="pane-section-title"><i class="bi bi-upload"></i> 升级控制</h6>
                                             <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
                                                 <button class="btn btn-sm btn-primary" id="fw-start" disabled><i
                                                         class="bi bi-upload"></i> 开始升级</button>
@@ -489,7 +502,7 @@
                                                     aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
                                             </div>
                                             <pre id="fw-log"
-                                                class="border rounded p-2 mb-0 bg-white small text-monospace flex-grow-1 overflow-auto" style="min-height: 100px; white-space: pre-wrap;"></pre>
+                                                class="p-2 mb-0 small text-monospace flex-grow-1 overflow-auto" style="min-height: 100px; white-space: pre-wrap;"></pre>
                                         </div>
                                     </div>
                                 </div>

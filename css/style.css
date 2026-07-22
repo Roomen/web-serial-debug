@@ -522,9 +522,10 @@ footer a:hover {
 	color: var(--text-muted) !important;
 }
 
-/* ========== Sidebar ========== */
+/* ========== Sidebar ==========
+   右栏与左栏同一底色(bg-body)，内容用 surface 卡片，避免左右“一块灰一块白” */
 .sidebar {
-	background: var(--bg-sidebar);
+	background: var(--bg-body);
 	border-right: 1px solid var(--border-color);
 	transition: background-color var(--transition-normal), border-color var(--transition-normal);
 	position: relative;
@@ -539,43 +540,108 @@ footer a:hover {
 	min-width: 0;
 	overflow-x: hidden;
 	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	/* 左侧贴分割线，少留空隙 */
+	padding: 8px 10px 10px 6px;
+	gap: 0;
 }
 
+/* 右栏左边框即“卡片缝”；拖拽细线贴在这条框上(对齐解析面板顶缝) */
 #serial-tools.sidebar {
+	position: relative;
 	border-right: none;
 	border-left: 1px solid var(--border-color);
 }
 
 .sidebar .collapse.show {
-	background: var(--bg-sidebar);
+	background: var(--bg-body);
 }
 
-/* 折叠条同时是拖拽手柄：拖动改宽度，原地点击(位移 < 4px)则折叠 */
+/* 竖缝拖拽：绝对定位贴在右栏左边框上，上下各缩 radius，
+   与 #serial-parse-resizer 的 left/right inset 同一语言；
+   不占 flex 宽度。拖动改宽，原地点击(位移 < 4px)折叠 */
 .toggle-button {
-	align-items: center;
-	background: var(--bg-sidebar-toggle);
+	position: absolute;
+	left: -4px;
+	top: var(--radius-md, 8px);
+	bottom: var(--radius-md, 8px);
+	width: 8px;
+	margin: 0;
+	padding: 0;
 	border: 0;
+	z-index: 5;
 	display: flex;
-	flex: none;
-	font-size: 20px;
-	height: 100%;
+	align-items: center;
 	justify-content: center;
-	width: 22px;
-	z-index: 1;
+	background: transparent;
+	color: transparent;
+	font-size: 11px;
 	cursor: col-resize;
-	color: var(--text-secondary);
-	transition: background var(--transition-fast), color var(--transition-fast);
 	touch-action: none;
 }
 
-.toggle-button:hover {
-	background: var(--accent-light);
-	color: var(--accent);
+/* 视觉细线：落在边框中线，默认透明，hover/拖动显 accent */
+.toggle-button::before {
+	content: '';
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 50%;
+	width: 2px;
+	transform: translateX(-50%);
+	border-radius: 1px;
+	background: transparent;
+	transition: background var(--transition-fast);
+	pointer-events: none;
 }
 
-/* 折叠状态下不该再能拖宽 */
+.toggle-button i {
+	position: relative;
+	z-index: 1;
+	opacity: 0;
+	pointer-events: none;
+}
+
+.toggle-button:hover,
+.toggle-button:focus-visible {
+	outline: none;
+}
+
+.toggle-button:hover::before,
+.toggle-button:focus-visible::before,
+#main.pane-dragging .toggle-button::before {
+	background: var(--accent);
+}
+
+/* 折叠后：恢复占位条，方便点开 */
+#main.right-collapsed #serial-tools {
+	border-left: none;
+}
+
 #main.right-collapsed #serial-tools .toggle-button {
+	position: relative;
+	left: auto;
+	top: auto;
+	bottom: auto;
+	width: 12px;
+	height: 100%;
 	cursor: pointer;
+	color: var(--text-muted);
+	background: var(--bg-sidebar-toggle);
+}
+
+#main.right-collapsed #serial-tools .toggle-button::before {
+	display: none;
+}
+
+#main.right-collapsed #serial-tools .toggle-button i {
+	opacity: 1;
+}
+
+#main.right-collapsed #serial-tools .toggle-button:hover {
+	color: var(--accent);
+	background: var(--accent-light);
 }
 
 /* ========== Inputs & Form Controls ========== */
@@ -663,9 +729,15 @@ footer a:hover {
 	border-radius: var(--radius-sm);
 }
 
-/* ========== Nav Tabs ========== */
+/* ========== Nav Tabs（右栏顶部，风格对齐左栏面板 header） ========== */
+#serial-tools > .sidebar-body > nav {
+	flex: 0 0 auto;
+	margin: 0 -2px 0;
+}
+
 #nav-tab {
-	border-bottom-color: var(--border-color);
+	border-bottom: 1px solid var(--border-color);
+	gap: 2px;
 }
 
 .nav-tabs .nav-link {
@@ -673,15 +745,17 @@ footer a:hover {
 	border: none;
 	border-bottom: 2px solid transparent;
 	border-radius: 0;
-	padding: 8px 14px;
-	font-size: 0.82rem;
+	padding: 8px 12px;
+	font-size: 0.8rem;
 	font-weight: 500;
-	transition: all var(--transition-fast);
+	transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+	background: transparent;
 }
 
 .nav-tabs .nav-link:hover {
 	color: var(--text-primary);
 	border-bottom-color: var(--border-color);
+	background: transparent;
 }
 
 .nav-tabs .nav-link.active {
@@ -709,7 +783,7 @@ footer a:hover {
 	word-break: break-all;
 	background-color: var(--bg-surface);
 	color: var(--text-primary);
-	border-color: var(--border-color) !important;
+	border: 1px solid var(--border-color) !important;
 	border-radius: var(--radius-md);
 	padding: 12px;
 	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -863,9 +937,18 @@ footer a:hover {
 
 /* ========== Quick Send Items ========== */
 .quick-item {
-	background: var(--bg-surface);
+	background: transparent;
+	align-items: center;
+	gap: 4px;
+	padding: 4px 6px !important;
+	border: 0 !important;
+	border-bottom: 1px solid var(--border-light) !important;
+	border-radius: var(--radius-sm);
 	transition: background-color var(--transition-fast);
-	border-color: var(--border-light) !important;
+}
+
+.quick-item:last-child {
+	border-bottom: 0 !important;
 }
 
 .quick-item:hover {
@@ -874,6 +957,20 @@ footer a:hover {
 
 .quick-item .form-control-sm {
 	font-size: 0.8rem;
+}
+
+.quick-item .quick-send {
+	min-width: 64px;
+	max-width: 96px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-size: 0.75rem;
+	font-weight: 500;
+}
+
+.quick-item .quick-remove {
+	padding: 2px 6px;
+	line-height: 1.2;
 }
 
 /* ========== Protocol Parse (compact) ========== */
@@ -1022,7 +1119,7 @@ footer a:hover {
 
 /* ========== Firmware Panels ========== */
 #fw-info, #fw-log, #fp-log {
-	background-color: var(--bg-surface) !important;
+	background-color: var(--bg-code) !important;
 	color: var(--text-primary) !important;
 	border-color: var(--border-color) !important;
 	transition: background-color var(--transition-normal), color var(--transition-normal);
@@ -1031,11 +1128,41 @@ footer a:hover {
 #serial-protocol-output {
 	background-color: var(--bg-surface) !important;
 	color: var(--text-primary);
-	border-color: var(--border-color) !important;
+	border: 1px solid var(--border-color) !important;
+	border-radius: var(--radius-md) !important;
+	box-shadow: var(--shadow-sm) inset;
 	flex: 1 1 0;
 	min-height: 0;
 	min-width: 0;
 	transition: background-color var(--transition-normal), color var(--transition-normal);
+}
+
+/* 协议下行区：卡片容器 */
+.protocol-down-card {
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	padding: 10px 12px;
+	box-shadow: var(--shadow-sm);
+	transition: background-color var(--transition-normal), border-color var(--transition-normal);
+}
+
+/* 固件升级分区卡片 */
+.fw-upgrade-card {
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color) !important;
+	border-radius: var(--radius-md) !important;
+	padding: 12px !important;
+	margin-bottom: 10px;
+	box-shadow: var(--shadow-sm);
+	transition: background-color var(--transition-normal), border-color var(--transition-normal);
+}
+
+#fw-info, #fw-log {
+	background-color: var(--bg-code) !important;
+	color: var(--text-primary) !important;
+	border: 1px solid var(--border-color) !important;
+	border-radius: var(--radius-sm) !important;
 }
 
 /* ========== Pre / Code ========== */
@@ -1081,10 +1208,65 @@ select option {
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
-	background: var(--bg-sidebar);
+	background: transparent;
 	flex: 1 1 0 !important;
 	min-height: 0;
+	padding-top: 10px !important;
 	transition: background-color var(--transition-normal);
+}
+
+/* 右栏内容卡片：与左栏 #serial-logs / 解析面板同款 surface */
+.pane-surface {
+	background-color: var(--bg-surface);
+	color: var(--text-primary);
+	border: 1px solid var(--border-color) !important;
+	border-radius: var(--radius-md) !important;
+	box-shadow: var(--shadow-sm);
+	transition: background-color var(--transition-normal), border-color var(--transition-normal), color var(--transition-normal);
+}
+
+/* 右栏分区小标题，对齐左栏 serial-parse-title 气质 */
+.pane-section-title {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0 0 8px;
+	font-size: 0.8rem;
+	font-weight: 600;
+	color: var(--text-secondary);
+	line-height: 1.2;
+}
+
+.pane-section-title i {
+	color: var(--accent);
+}
+
+/* 快捷发送列表表头 */
+.quick-send-head {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 4px 8px;
+	margin-bottom: 4px;
+	font-size: 0.7rem;
+	font-weight: 600;
+	color: var(--text-muted);
+	letter-spacing: 0.02em;
+	user-select: none;
+}
+
+.quick-send-head .col-remove { flex: 0 0 34px; text-align: center; }
+.quick-send-head .col-content { flex: 1 1 auto; min-width: 0; }
+.quick-send-head .col-name { flex: 0 0 72px; }
+.quick-send-head .col-hex { flex: 0 0 36px; text-align: center; }
+
+#serial-quick-send-content {
+	background-color: var(--bg-surface);
+	border: 1px solid var(--border-color) !important;
+	border-radius: var(--radius-md) !important;
+	box-shadow: var(--shadow-sm) inset;
+	padding: 4px !important;
+	min-height: 0;
 }
 
 #nav-tabContent > .tab-pane {
@@ -1100,26 +1282,102 @@ select option {
 	overflow: auto;
 }
 
-/* 两个解析开关自成一行，不再跟着上面的输入框在右栏收窄时乱换行 */
-.protocol-switch-row {
+/* 协议 Tab：基础卡（协议 + 开关）+ 可折叠高级（加解密/密钥） */
+.protocol-basic-card {
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-sm);
+	padding: 10px 12px;
+	transition: background-color var(--transition-normal), border-color var(--transition-normal);
+}
+
+.protocol-basic-row {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 8px 18px;
-	padding: 6px 10px;
-	background: var(--bg-subtle, rgba(127, 127, 127, 0.06));
-	border: 1px solid var(--border-color);
-	border-radius: var(--radius-sm);
+	gap: 10px 14px;
 }
 
-.protocol-switch-row .form-check {
+.protocol-basic-proto {
+	flex: 1 1 140px;
+	min-width: 0;
+	width: auto;
+	max-width: 220px;
+}
+
+.protocol-switch-inline {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 16px;
+}
+
+.protocol-switch-inline .form-check {
 	margin-bottom: 0;
 	white-space: nowrap;
 }
 
-.protocol-switch-row .form-check-label {
+.protocol-switch-inline .form-check-label {
 	font-size: 0.8rem;
 	cursor: pointer;
+}
+
+.protocol-advanced {
+	margin-top: 8px;
+	border-top: 1px dashed var(--border-color);
+	padding-top: 6px;
+}
+
+.protocol-advanced-summary {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	list-style: none;
+	cursor: pointer;
+	user-select: none;
+	font-size: 0.78rem;
+	font-weight: 600;
+	color: var(--text-secondary);
+	padding: 2px 0;
+	transition: color var(--transition-fast);
+}
+
+.protocol-advanced-summary::-webkit-details-marker {
+	display: none;
+}
+
+.protocol-advanced-summary::marker {
+	content: '';
+}
+
+.protocol-advanced-summary:hover {
+	color: var(--accent);
+}
+
+.protocol-advanced-chevron {
+	font-size: 0.7rem;
+	transition: transform var(--transition-fast);
+}
+
+.protocol-advanced[open] .protocol-advanced-chevron {
+	transform: rotate(90deg);
+}
+
+.protocol-advanced-body {
+	padding: 8px 0 2px;
+}
+
+.protocol-advanced-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 8px;
+}
+
+@media (max-width: 520px) {
+	.protocol-advanced-grid {
+		grid-template-columns: 1fr;
+	}
 }
 
 #nav-firmware, #nav-firmware-pack {
@@ -1260,20 +1518,26 @@ hr {
 	flex-direction: column;
 	height: 100%;
 	min-width: 0;
+	/* 右侧贴分割线，少留空隙；左侧/上下保持可读间距 */
+	padding: 8px 6px 10px 10px;
+	background: var(--bg-body);
 }
 
 #log-main > div:first-child {
 	border-bottom: 1px solid var(--border-color);
 	margin-bottom: 8px;
+	padding-bottom: 6px;
 }
 
 /* ========== 协议解析底部面板 ==========
-   高度由 --parse-h 控制，header 既是拖拽手柄也是折叠按钮(见 common.js)。 */
+   高度由 --parse-h 控制；顶缝 #serial-parse-resizer 拖高度，
+   header 只负责点击折叠(与串口发送一致，见 common.js)。 */
 #log-main {
 	--parse-h: 220px;
 }
 
 #serial-parse-panel {
+	position: relative;
 	flex: 0 0 auto;
 	display: flex;
 	flex-direction: column;
@@ -1283,7 +1547,7 @@ hr {
 	border: 1px solid var(--border-color);
 	border-radius: var(--radius-md);
 	background-color: var(--bg-surface);
-	overflow: hidden;
+	overflow: visible;
 	transition: background-color var(--transition-normal), border-color var(--transition-normal);
 }
 
@@ -1296,6 +1560,40 @@ hr {
 	display: none;
 }
 
+/* 顶缝拖拽热区：落在日志与面板之间的缝上，hover 才显 accent 细线 */
+#serial-parse-resizer {
+	position: absolute;
+	top: -4px;
+	left: 8px;
+	right: 8px;
+	height: 8px;
+	z-index: 5;
+	cursor: row-resize;
+	touch-action: none;
+}
+
+#serial-parse-resizer::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 50%;
+	height: 2px;
+	transform: translateY(-50%);
+	border-radius: 1px;
+	background: transparent;
+	transition: background var(--transition-fast);
+}
+
+#serial-parse-resizer:hover::before,
+#log-main.parse-dragging #serial-parse-resizer::before {
+	background: var(--accent);
+}
+
+#serial-parse-panel.collapsed #serial-parse-resizer {
+	display: none;
+}
+
 #serial-parse-header {
 	flex: 0 0 auto;
 	display: flex;
@@ -1304,9 +1602,11 @@ hr {
 	gap: 8px;
 	min-height: 28px;
 	padding: 4px 10px;
-	cursor: row-resize;
+	cursor: pointer;
 	user-select: none;
 	border-bottom: 1px solid var(--border-color);
+	border-radius: var(--radius-md) var(--radius-md) 0 0;
+	background-color: var(--bg-surface);
 	color: var(--text-secondary);
 	font-size: 0.8rem;
 	line-height: 1.2;
@@ -1314,6 +1614,7 @@ hr {
 
 #serial-parse-panel.collapsed #serial-parse-header {
 	border-bottom: 0;
+	border-radius: var(--radius-md);
 }
 
 .serial-parse-title {
@@ -1352,6 +1653,9 @@ hr {
 	display: flex;
 	gap: 8px;
 	padding: 8px;
+	overflow: hidden;
+	border-radius: 0 0 var(--radius-md) var(--radius-md);
+	background-color: var(--bg-surface);
 }
 
 #serial-parse-input {
@@ -1408,7 +1712,7 @@ hr {
 
 /* ========== Background utility overrides ========== */
 .bg-light {
-	background-color: var(--bg-sidebar) !important;
+	background-color: var(--bg-body) !important;
 }
 
 .bg-white {
@@ -1426,7 +1730,7 @@ hr {
 	gap: 10px;
 	height: 44px;
 	padding: 0 10px;
-	background: var(--bg-sidebar);
+	background: var(--bg-surface);
 	border-bottom: 1px solid var(--border-color);
 	transition: background-color var(--transition-normal), border-color var(--transition-normal);
 	position: relative;
@@ -1635,23 +1939,39 @@ hr {
 
 	/* Turn the full-height vertical toggle bars into horizontal collapse headers */
 	.toggle-button {
+		position: relative !important;
+		left: auto !important;
+		top: auto !important;
+		bottom: auto !important;
 		float: none !important;
 		width: 100% !important;
-		height: 40px;
+		height: 36px;
 		border-top: 1px solid var(--border-color);
 		cursor: pointer;
 		order: 1;
+		color: var(--text-muted);
+		background: var(--bg-sidebar-toggle);
+	}
+
+	.toggle-button::before {
+		display: none;
 	}
 
 	.toggle-button i {
+		opacity: 1;
 		transform: rotate(-90deg);
+	}
+
+	.toggle-button:hover {
+		color: var(--accent);
+		background: var(--accent-light);
 	}
 
 	/* 窄屏：日志区自己保持固定高度并内部滚动，#log-main 随内容增高，
 	   这样展开解析面板也不会把发送区挤出可视区(页面整体滚动) */
 	#log-main {
 		height: auto;
-		padding: 0 8px;
+		padding: 8px;
 	}
 
 	/* 窄屏整页滚动，日志工具栏要粘在顶部才不会被滚走 */
@@ -1669,13 +1989,14 @@ hr {
 	}
 
 	/* 窄屏：解析面板退化为纯折叠面板，不再可拖拽 */
-	#serial-parse-header {
-		cursor: pointer;
+	#serial-parse-resizer {
+		display: none;
 	}
 
 	#serial-parse-panel {
 		height: auto;
 		max-height: 60vh;
+		overflow: hidden;
 	}
 
 	/* 窄屏面板高度随内容走，页面整体滚动 */
@@ -1743,13 +2064,13 @@ hr {
 
 /* ---- Banner ---- */
 .fw-banner {
-    background: linear-gradient(135deg, var(--accent), #6366f1);
+    background: linear-gradient(135deg, var(--accent), var(--accent-hover));
     border-radius: var(--radius-lg);
     padding: 22px 28px;
     margin-bottom: 22px;
     position: relative;
     overflow: hidden;
-    box-shadow: 0 4px 24px rgba(59, 130, 246, 0.2);
+    box-shadow: 0 4px 24px rgba(59, 130, 246, 0.18);
 }
 .fw-banner::after {
     content: '';
@@ -2102,7 +2423,7 @@ hr {
     justify-content: center;
     gap: 10px;
     padding: 16px 24px;
-    background: linear-gradient(135deg, var(--accent), #6366f1);
+    background: linear-gradient(135deg, var(--accent), var(--accent-hover));
     color: #fff;
     font-size: 1rem;
     font-weight: 600;
@@ -2124,14 +2445,14 @@ hr {
     position: absolute;
     inset: -3px;
     border-radius: calc(var(--radius-lg) + 3px);
-    background: linear-gradient(135deg, var(--accent), #6366f1, #a78bfa);
+    background: var(--accent);
     opacity: 0;
     transition: opacity var(--transition-normal);
     filter: blur(12px);
     z-index: 0;
 }
 .fw-generate-btn:hover .fw-generate-btn-glow {
-    opacity: 0.25;
+    opacity: 0.22;
 }
 
 /* ---- Log Card ---- */
