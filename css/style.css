@@ -1302,12 +1302,14 @@ hr {
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
+	min-height: 28px;
 	padding: 4px 10px;
 	cursor: row-resize;
 	user-select: none;
 	border-bottom: 1px solid var(--border-color);
 	color: var(--text-secondary);
 	font-size: 0.8rem;
+	line-height: 1.2;
 }
 
 #serial-parse-panel.collapsed #serial-parse-header {
@@ -1334,6 +1336,14 @@ hr {
 .serial-parse-actions {
 	flex: 0 0 auto;
 	cursor: default;
+}
+
+.serial-parse-actions .btn {
+	padding: 0 6px;
+	font-size: 0.72rem;
+	line-height: 1.4;
+	min-height: 0;
+	border-radius: var(--radius-sm);
 }
 
 #serial-parse-body {
@@ -2428,13 +2438,65 @@ hr {
     font-weight: 500;
 }
 
-/* ---- Send Area ---- */
+/* ---- Send Area（可折叠，样式对齐协议解析面板）---- */
 .serial-send-area {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: 12px;
-    box-shadow: var(--shadow-sm);
+	flex: 0 0 auto;
+	display: flex;
+	flex-direction: column;
+	width: 100%;
+	min-width: 0;
+	margin-bottom: 8px;
+	background-color: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	overflow: hidden;
+	transition: background-color var(--transition-normal), border-color var(--transition-normal);
+}
+
+#serial-send-panel.collapsed #serial-send-body {
+	display: none;
+}
+
+#serial-send-header {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	min-height: 28px;
+	padding: 4px 10px;
+	cursor: pointer;
+	user-select: none;
+	border-bottom: 1px solid var(--border-color);
+	color: var(--text-secondary);
+	font-size: 0.8rem;
+	line-height: 1.2;
+}
+
+#serial-send-panel.collapsed #serial-send-header {
+	border-bottom: 0;
+}
+
+.serial-send-title {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.serial-send-chevron {
+	transition: transform var(--transition-fast);
+}
+
+#serial-send-panel.collapsed .serial-send-chevron {
+	transform: rotate(-90deg);
+}
+
+#serial-send-body {
+	flex: 0 0 auto;
+	padding: 8px;
 }
 
 .serial-send-textarea {

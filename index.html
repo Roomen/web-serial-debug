@@ -264,32 +264,40 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="flex-shrink-0 mb-2 serial-send-area">
-                            <textarea class="form-control serial-send-textarea" rows="3" id="serial-send-content"
-                                placeholder="在此输入要发送的内容,可以是字符串(如:你好,世界!),也可以是HEX(如:49544c4447)"></textarea>
-                            <div
-                                class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
-                                <div class="btn-toolbar">
-                                    <div class="form-check align-self-center me-2">
-                                        <input class="form-check-input" type="checkbox" id="serial-add-crlf">
-                                        <label class="form-check-label" for="serial-add-crlf">末尾加回车换行</label>
+                        <div id="serial-send-panel" class="serial-send-area">
+                            <div id="serial-send-header" title="点击折叠/展开">
+                                <span class="serial-send-title">
+                                    <i class="bi bi-chevron-down serial-send-chevron"></i>
+                                    <i class="bi bi-send"></i> 串口发送
+                                </span>
+                            </div>
+                            <div id="serial-send-body">
+                                <textarea class="form-control serial-send-textarea" rows="3" id="serial-send-content"
+                                    placeholder="在此输入要发送的内容,可以是字符串(如:你好,世界!),也可以是HEX(如:49544c4447)"></textarea>
+                                <div
+                                    class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
+                                    <div class="btn-toolbar">
+                                        <div class="form-check align-self-center me-2">
+                                            <input class="form-check-input" type="checkbox" id="serial-add-crlf">
+                                            <label class="form-check-label" for="serial-add-crlf">末尾加回车换行</label>
+                                        </div>
+                                        <div class="form-check align-self-center me-2">
+                                            <input class="form-check-input" type="checkbox" id="serial-hex-send">
+                                            <label class="form-check-label" for="serial-hex-send">HEX发送</label>
+                                        </div>
+                                        <div class="form-check align-self-center me-2">
+                                            <input class="form-check-input" type="checkbox" id="serial-loop-send">
+                                            <label class="form-check-label" for="serial-loop-send">循环发送</label>
+                                        </div>
+                                        <div class="input-group input-group-sm">
+                                            <span class="input-group-text">发送间隔(MS)</span>
+                                            <input type="number" id="serial-loop-send-time" class="form-control" min="1" value="1000" style="width: 90px;" />
+                                        </div>
                                     </div>
-                                    <div class="form-check align-self-center me-2">
-                                        <input class="form-check-input" type="checkbox" id="serial-hex-send">
-                                        <label class="form-check-label" for="serial-hex-send">HEX发送</label>
-                                    </div>
-                                    <div class="form-check align-self-center me-2">
-                                        <input class="form-check-input" type="checkbox" id="serial-loop-send">
-                                        <label class="form-check-label" for="serial-loop-send">循环发送</label>
-                                    </div>
-                                    <div class="input-group input-group-sm">
-                                        <span class="input-group-text">发送间隔(MS)</span>
-                                        <input type="number" id="serial-loop-send-time" class="form-control" min="1" value="1000" style="width: 90px;" />
-                                    </div>
+                                    <button id="serial-send" class="btn btn-primary serial-send-btn h-10 px-4">
+                                        <i class="bi bi-send-fill"></i> 发送
+                                    </button>
                                 </div>
-                                <button id="serial-send" class="btn btn-primary serial-send-btn h-10 px-4">
-                                    <i class="bi bi-send-fill"></i> 发送
-                                </button>
                             </div>
                         </div>
                     </div>

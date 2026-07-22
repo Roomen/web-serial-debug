@@ -2022,6 +2022,43 @@
 		}
 	})()
 
+	// 串口发送面板：点击标题栏折叠/展开（对齐协议解析面板）
+	;(function () {
+		const panel = document.getElementById('serial-send-panel')
+		const header = document.getElementById('serial-send-header')
+		if (!panel || !header) return
+		const STATE_KEY = 'sendPanelState'
+
+		function isCollapsed() {
+			return panel.classList.contains('collapsed')
+		}
+		function saveState() {
+			localStorage.setItem(STATE_KEY, JSON.stringify({ collapsed: isCollapsed() }))
+		}
+		function setCollapsed(collapsed) {
+			panel.classList.toggle('collapsed', collapsed)
+			const icon = header.querySelector('.serial-send-chevron')
+			if (icon) {
+				icon.classList.toggle('bi-chevron-down', !collapsed)
+				icon.classList.toggle('bi-chevron-right', collapsed)
+			}
+			saveState()
+		}
+		window.expandSendPanel = function () {
+			if (isCollapsed()) setCollapsed(false)
+		}
+
+		header.addEventListener('click', function () {
+			setCollapsed(!isCollapsed())
+		})
+
+		let saved = {}
+		try { saved = JSON.parse(localStorage.getItem(STATE_KEY) || '{}') } catch (e) {}
+		if (typeof saved.collapsed === 'boolean') {
+			setCollapsed(saved.collapsed)
+		}
+	})()
+
 	//设置名称
 	const modalNewName = new bootstrap.Modal('#model-change-name')
 	function changeName(callback, oldName = '') {
