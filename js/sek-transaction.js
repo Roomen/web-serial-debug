@@ -65,18 +65,47 @@
 		return s == null ? null : (s & 0xffff)
 	}
 
-	// Tag11: schema 中 ID 即结果码 (0处理中 1成功 2无法解析 3超范围 4失败)
+	// 0x81/0x91 应答: 各 ID 的 Value 为处理结果码 (0处理中 1成功 2无法解析 3超范围 4失败)
+	// 聚合: 有失败取首个失败码; 否则有处理中取 0; 全成功取 1
 	function tag11Result(frame) {
 		if (!frame || !frame.tlv) return null
+		let fail = null
+		let hasOk = false
+		let hasProcessing = false
+		let found = false
 		for (let i = 0; i < frame.tlv.length; i++) {
 			const blk = frame.tlv[i]
-			if (blk.tag !== 11) continue
 			const items = blk.items || []
-			if (!items.length) return null
-			const it = items[0]
-			if (it.id >= 0 && it.id <= 4) return it.id
-			if (it.raw && it.raw.length) return it.raw[0] & 0xff
+			// 兼容旧形态: 独立 Tag11, ID 即结果码
+			if (blk.tag === 11) {
+				for (let j = 0; j < items.length; j++) {
+					const it = items[j]
+					let c = null
+					if (it.resultCode != null) c = it.resultCode & 0xff
+					else if (it.id >= 0 && it.id <= 4) c = it.id
+					else if (it.raw && it.raw.length) c = it.raw[0] & 0xff
+					if (c == null) continue
+					found = true
+					if (c === 1) hasOk = true
+					else if (c === 0) hasProcessing = true
+					else if (fail == null) fail = c
+				}
+				continue
+			}
+			for (let j = 0; j < items.length; j++) {
+				const it = items[j]
+				if (it.resultCode == null) continue
+				const c = it.resultCode & 0xff
+				found = true
+				if (c === 1) hasOk = true
+				else if (c === 0) hasProcessing = true
+				else if (fail == null) fail = c
+			}
 		}
+		if (!found) return null
+		if (fail != null) return fail
+		if (hasProcessing) return 0
+		if (hasOk) return 1
 		return null
 	}
 
