@@ -825,10 +825,10 @@ footer a:hover {
 	gap: 8px;
 	min-width: 0;
 	padding: 1px 6px;
-	border-left: 2px solid transparent;
+	border-left: 3px solid transparent;
 	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 	cursor: pointer;
-	transition: background-color var(--transition-fast);
+	transition: background-color var(--transition-fast), border-left-color var(--transition-fast);
 }
 
 .log-row .log-time {
@@ -854,7 +854,7 @@ footer a:hover {
 
 .log-row[data-dir='rx'] {
 	border-left-color: var(--success);
-	background-color: var(--success-light);
+	background-color: rgba(34, 197, 94, 0.1);
 }
 
 .log-row[data-dir='rx'] .log-dir {
@@ -863,7 +863,7 @@ footer a:hover {
 
 .log-row[data-dir='tx'] {
 	border-left-color: var(--accent);
-	background-color: var(--accent-light);
+	background-color: rgba(59, 130, 246, 0.1);
 }
 
 .log-row[data-dir='tx'] .log-dir {
@@ -881,6 +881,14 @@ footer a:hover {
 
 .log-row:hover {
 	background-color: var(--bg-surface-hover);
+}
+
+.log-row[data-dir='rx']:hover {
+	background-color: rgba(34, 197, 94, 0.15);
+}
+
+.log-row[data-dir='tx']:hover {
+	background-color: rgba(59, 130, 246, 0.15);
 }
 
 .log-row.selected {
