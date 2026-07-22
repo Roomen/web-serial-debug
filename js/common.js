@@ -507,6 +507,108 @@
 		}
 		reader.readAsText(file)
 	})
+	//协议解析 HEX：归一化 / 转字节 / 0-F 转储渲染
+	function normalizeHexRaw(raw) {
+		return String(raw || '').replace(/0x/gi, '').replace(/[\s,;:\-_]+/g, '')
+	}
+	function hexRawToBytes(hex) {
+		if (!hex || hex.length % 2 !== 0 || !/^[0-9A-Fa-f]+$/.test(hex)) return null
+		const bytes = new Uint8Array(hex.length / 2)
+		for (let i = 0; i < bytes.length; i++) {
+			bytes[i] = parseInt(hex.substr(i * 2, 2), 16)
+		}
+		return bytes
+	}
+	function formatHexSpaced(bytes) {
+		const out = []
+		for (let i = 0; i < bytes.length; i++) {
+			out.push(('0' + bytes[i].toString(16).toUpperCase()).slice(-2))
+		}
+		return out.join(' ')
+	}
+	let _hexDumpState = { bytes: null, bm: null, cols: 0 }
+	function getHexDumpCols(view) {
+		if (!view) return 16
+		const style = window.getComputedStyle(view)
+		const pad = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0)
+		const avail = Math.max(0, view.clientWidth - pad)
+		const fs = parseFloat(style.fontSize) || 11.5
+		// 左偏移列 + gap + N 个字节格
+		const offW = 2.6 * fs + 8
+		const cellW = 1.55 * fs + 2
+		const n = Math.floor((avail - offW) / cellW)
+		if (n >= 32) return 32
+		return 16
+	}
+	function renderProtocolHexDump(bytes, bm) {
+		const view = document.getElementById('serial-protocol-hexview')
+		if (!view) return
+		if (arguments.length >= 1) {
+			_hexDumpState.bytes = bytes && bytes.length ? bytes : null
+			_hexDumpState.bm = (bytes && bytes.length && bm) ? bm : null
+		}
+		bytes = _hexDumpState.bytes
+		bm = _hexDumpState.bm
+		if (!bytes || !bytes.length) {
+			view.innerHTML = ''
+			view.classList.add('is-empty')
+			_hexDumpState.cols = 0
+			return
+		}
+		view.classList.remove('is-empty')
+		const COLS = getHexDumpCols(view)
+		_hexDumpState.cols = COLS
+		const gridStyle = 'grid-template-columns:repeat(' + COLS + ',1.55em)'
+		let h = '<div class="sk-hex-dump-head"><span class="sk-hex-off"></span><span class="sk-hex-bytes" style="' + gridStyle + '">'
+		for (let c = 0; c < COLS; c++) {
+			h += '<span class="sk-hex-col">' + c.toString(16).toUpperCase() + '</span>'
+		}
+		h += '</span></div>'
+		for (let i = 0; i < bytes.length; i += COLS) {
+			h += '<div class="sk-hex-dump-row"><span class="sk-hex-off">' +
+				i.toString(16).toUpperCase().padStart(4, '0') +
+				'</span><span class="sk-hex-bytes" style="' + gridStyle + '">'
+			for (let j = 0; j < COLS; j++) {
+				const idx = i + j
+				if (idx >= bytes.length) {
+					h += '<span class="sk-hex-pad"></span>'
+					continue
+				}
+				const hb = ('0' + bytes[idx].toString(16).toUpperCase()).slice(-2)
+				const cell = bm && bm[idx]
+				if (cell && cell.tip) {
+					h += '<span class="sk-hex-byte" data-grp="' + attrEscape(cell.grp) +
+						'" data-tip="' + attrEscape(cell.tip) + '">' + hb + '</span>'
+				} else {
+					h += '<span class="sk-hex-byte">' + hb + '</span>'
+				}
+			}
+			h += '</span></div>'
+		}
+		view.innerHTML = h
+	}
+	function applyProtocolHexInput(raw, autoParse) {
+		const input = document.getElementById('serial-protocol-input')
+		if (!input) return false
+		const hex = normalizeHexRaw(raw)
+		const bytes = hexRawToBytes(hex)
+		if (!bytes) {
+			if (raw && String(raw).trim()) {
+				input.value = String(raw)
+				renderProtocolHexDump(null)
+				return false
+			}
+			input.value = ''
+			renderProtocolHexDump(null)
+			return false
+		}
+		input.value = formatHexSpaced(bytes)
+		renderProtocolHexDump(bytes)
+		if (autoParse) {
+			document.getElementById('serial-protocol-parse').click()
+		}
+		return true
+	}
 	//第三方协议手动解析
 	document.getElementById('serial-protocol-parse').addEventListener('click', (e) => {
 		const raw = document.getElementById('serial-protocol-input').value
@@ -514,27 +616,64 @@
 			addLogErr('请输入HEX报文')
 			return
 		}
-		let hex = raw.replace(/0x/gi, '').replace(/[\s,;]+/g, '')
-		if (!/^[0-9A-Fa-f]*$/.test(hex) || hex.length % 2 !== 0) {
+		const hex = normalizeHexRaw(raw)
+		const bytes = hexRawToBytes(hex)
+		if (!bytes) {
 			addLogErr('HEX格式错误:' + raw)
+			renderProtocolHexDump(null)
 			return
 		}
-		let bytes = new Uint8Array(hex.length / 2)
-		for (let i = 0; i < bytes.length; i++) {
-			bytes[i] = parseInt(hex.substr(i * 2, 2), 16)
-		}
+		document.getElementById('serial-protocol-input').value = formatHexSpaced(bytes)
+		renderProtocolHexDump(bytes)
 		try {
 			const r = skParseFrame(bytes, {
 				keyAscii: toolOptions.skKeyAscii || undefined,
 				keyHex: toolOptions.skKeyHex || undefined,
 				decryptMode: toolOptions.skDecryptMode,
 			})
+			if (typeof skByteMap === 'function') {
+				try {
+					renderProtocolHexDump(bytes, skByteMap(r))
+				} catch (mapErr) { /* keep plain dump */ }
+			}
 			const prompt = r.needKey ? '<div class="sk-parse-err">⚠ 加密报文,请在右侧「第三方协议」中的「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>' : ''
 			document.getElementById('serial-protocol-output').innerHTML = prompt + skFormatFrame(r)
 		} catch (err) {
 			document.getElementById('serial-protocol-output').innerHTML = '<div class="sk-parse-err">解析异常:' + HTMLEncode(String(err)) + '</div>'
 		}
 	})
+	//HEX 转储区：粘贴即格式化并解析；宽度变化时在 16/32 列间切换
+	const protocolHexView = document.getElementById('serial-protocol-hexview')
+	if (protocolHexView) {
+		protocolHexView.addEventListener('paste', (e) => {
+			e.preventDefault()
+			const text = (e.clipboardData || window.clipboardData).getData('text')
+			if (!applyProtocolHexInput(text, true)) {
+				addLogErr('HEX格式错误:' + text)
+			}
+		})
+		protocolHexView.addEventListener('keydown', (e) => {
+			if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+				e.preventDefault()
+				const sel = window.getSelection()
+				const range = document.createRange()
+				range.selectNodeContents(protocolHexView)
+				sel.removeAllRanges()
+				sel.addRange(range)
+			}
+		})
+		if (typeof ResizeObserver !== 'undefined') {
+			let _hexRoT = 0
+			const ro = new ResizeObserver(function () {
+				if (!_hexDumpState.bytes) return
+				const next = getHexDumpCols(protocolHexView)
+				if (next === _hexDumpState.cols) return
+				clearTimeout(_hexRoT)
+				_hexRoT = setTimeout(function () { renderProtocolHexDump() }, 50)
+			})
+			ro.observe(protocolHexView)
+		}
+	}
 	//生成下发HEX
 	let _downSeq = 1
 	document.getElementById('serial-protocol-build').addEventListener('click', (e) => {
@@ -1162,17 +1301,17 @@
 		skHoverTip.style.top = top + 'px'
 	}
 	function clearSkHoverActive() {
-		const act = serialLogs.querySelectorAll('.sk-hex-byte-active')
+		const act = document.querySelectorAll('.sk-hex-byte-active')
 		for (const el of act) el.classList.remove('sk-hex-byte-active')
 	}
-	serialLogs.addEventListener('mouseover', (e) => {
+	function onSkHexHover(e) {
 		if (!e.target || !e.target.closest) return
 		const span = e.target.closest('.sk-hex-byte')
 		if (span) {
 			clearSkHoverActive()
 			const grp = span.getAttribute('data-grp')
 			if (grp) {
-				const peers = serialLogs.querySelectorAll('.sk-hex-byte[data-grp="' + grp + '"]')
+				const peers = document.querySelectorAll('.sk-hex-byte[data-grp="' + grp + '"]')
 				for (const el of peers) el.classList.add('sk-hex-byte-active')
 			}
 			showSkHoverTip(span)
@@ -1180,15 +1319,20 @@
 			clearSkHoverActive()
 			skHoverTip.style.display = 'none'
 		}
-	})
-	serialLogs.addEventListener('scroll', () => {
+	}
+	function hideSkHover() {
 		clearSkHoverActive()
 		skHoverTip.style.display = 'none'
-	})
-	serialLogs.addEventListener('mouseleave', () => {
-		clearSkHoverActive()
-		skHoverTip.style.display = 'none'
-	})
+	}
+	serialLogs.addEventListener('mouseover', onSkHexHover)
+	serialLogs.addEventListener('scroll', hideSkHover)
+	serialLogs.addEventListener('mouseleave', hideSkHover)
+	const protocolHexViewHover = document.getElementById('serial-protocol-hexview')
+	if (protocolHexViewHover) {
+		protocolHexViewHover.addEventListener('mouseover', onSkHexHover)
+		protocolHexViewHover.addEventListener('scroll', hideSkHover)
+		protocolHexViewHover.addEventListener('mouseleave', hideSkHover)
+	}
 
 	//点击日志行:把该行的原始HEX灌进底部解析面板并解析(事件委托,不影响悬停提示)
 	let selectedLogRow = null
@@ -1206,14 +1350,10 @@
 		}
 		row.classList.add('selected')
 		selectedLogRow = row
-		const input = document.getElementById('serial-protocol-input')
-		const parseBtn = document.getElementById('serial-protocol-parse')
-		if (!input || !parseBtn) return
 		if (typeof window.expandParsePanel === 'function') {
 			window.expandParsePanel()
 		}
-		input.value = hex
-		parseBtn.click()
+		applyProtocolHexInput(hex, true)
 	})
 
 	//选择串口
@@ -2004,6 +2144,9 @@
 			clearBtn.addEventListener('click', function (e) {
 				e.stopPropagation()
 				document.getElementById('serial-protocol-output').innerHTML = ''
+				const input = document.getElementById('serial-protocol-input')
+				if (input) input.value = ''
+				if (typeof renderProtocolHexDump === 'function') renderProtocolHexDump(null)
 			})
 		}
 

@@ -1651,6 +1651,7 @@ hr {
 	flex: 1 1 0;
 	min-height: 0;
 	display: flex;
+	flex-direction: column;
 	gap: 8px;
 	padding: 8px;
 	overflow: hidden;
@@ -1659,16 +1660,110 @@ hr {
 }
 
 #serial-parse-input {
-	flex: 0 0 260px;
+	flex: 0 0 auto;
 	min-width: 0;
 	display: flex;
 	flex-direction: column;
+	position: relative;
 }
 
-#serial-parse-input textarea {
-	flex: 1 1 0;
-	min-height: 0;
-	resize: none;
+.sk-hex-raw-input {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+.sk-hex-dump {
+	flex: 0 0 auto;
+	max-height: 132px;
+	min-height: 64px;
+	overflow: auto;
+	padding: 6px 8px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+	font-size: 0.72rem;
+	line-height: 1.45;
+	background-color: var(--bg-code);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-sm);
+	color: var(--text-primary);
+	outline: none;
+	cursor: text;
+	user-select: text;
+}
+
+.sk-hex-dump:focus {
+	border-color: var(--accent);
+	box-shadow: 0 0 0 2px var(--accent-light);
+}
+
+.sk-hex-dump.is-empty {
+	display: flex;
+	align-items: center;
+	color: var(--text-muted, #94a3b8);
+	cursor: pointer;
+}
+
+.sk-hex-dump.is-empty::before {
+	content: attr(data-placeholder);
+	font-family: inherit;
+	font-size: 0.78rem;
+	line-height: 1.4;
+	white-space: normal;
+}
+
+.sk-hex-dump-head,
+.sk-hex-dump-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	white-space: nowrap;
+}
+
+.sk-hex-dump-head {
+	color: var(--text-muted, #94a3b8);
+	font-weight: 600;
+	position: sticky;
+	top: 0;
+	background: var(--bg-code);
+	z-index: 1;
+	padding-bottom: 2px;
+	margin-bottom: 1px;
+	border-bottom: 1px solid var(--border-color);
+}
+
+.sk-hex-off {
+	flex: 0 0 2.6em;
+	width: 2.6em;
+	color: var(--text-muted, #94a3b8);
+	text-align: right;
+}
+
+.sk-hex-bytes {
+	display: grid;
+	grid-template-columns: repeat(16, 1.55em);
+	gap: 0 2px;
+	justify-items: center;
+	flex: 0 0 auto;
+}
+
+.sk-hex-col,
+.sk-hex-pad {
+	display: inline-block;
+	min-width: 1.55em;
+	text-align: center;
+}
+
+.sk-hex-dump .sk-hex-byte {
+	display: inline-block;
+	min-width: 1.55em;
+	text-align: center;
+	padding: 0 1px;
 }
 
 /* 拖动解析面板时禁掉内部交互，避免选中文本 */
@@ -2009,8 +2104,8 @@ hr {
 		flex: 0 0 auto;
 	}
 
-	#serial-parse-input textarea {
-		flex: 0 0 auto;
+	.sk-hex-dump {
+		max-height: 160px;
 	}
 
 	#serial-protocol-output {

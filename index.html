@@ -255,11 +255,15 @@
                             </div>
                             <div id="serial-parse-body">
                                 <div id="serial-parse-input">
-                                    <label class="form-label small mb-1">手动解析 HEX 报文</label>
-                                    <textarea class="form-control form-control-sm" rows="3" id="serial-protocol-input"
-                                        placeholder="粘贴 HEX 报文（空格/换行/0x前缀均可）"></textarea>
-                                    <button class="btn btn-sm btn-outline-secondary mt-1"
-                                        id="serial-protocol-parse">解析</button>
+                                    <div class="d-flex justify-content-between align-items-center mb-1">
+                                        <label class="form-label small mb-0">手动解析 HEX 报文</label>
+                                        <button class="btn btn-sm btn-outline-secondary"
+                                            id="serial-protocol-parse" type="button">解析</button>
+                                    </div>
+                                    <textarea id="serial-protocol-input" class="sk-hex-raw-input" tabindex="-1"
+                                        aria-hidden="true"></textarea>
+                                    <div id="serial-protocol-hexview" class="sk-hex-dump is-empty" tabindex="0"
+                                        data-placeholder="点击此处后粘贴 HEX 报文（空格/换行/0x 前缀均可）"></div>
                                 </div>
                                 <div id="serial-protocol-output" class="rounded p-2 overflow-auto">
                                 </div>
