@@ -688,6 +688,18 @@
 			addLogErr('生成帧失败:' + err.toString())
 		}
 	})
+	//点击生成的 HEX 预览即可复制
+	const downPreview = document.getElementById('serial-protocol-down-preview')
+	if (downPreview) {
+		downPreview.addEventListener('click', () => {
+			const text = (downPreview.value || '').trim()
+			if (!text) return
+			copyText(text)
+			downPreview.classList.add('is-copied')
+			clearTimeout(downPreview._copyT)
+			downPreview._copyT = setTimeout(() => downPreview.classList.remove('is-copied'), 800)
+		})
+	}
 	//立即下发
 	document.getElementById('serial-protocol-send').addEventListener('click', (e) => {
 		const preview = document.getElementById('serial-protocol-down-preview').value
@@ -793,6 +805,27 @@
 			default: return []
 		}
 	}
+	// BCD 一字节：十进制 0-99 → 0xNN
+	function toBcdByte(n) {
+		n = Math.max(0, Math.min(99, n | 0))
+		return ((Math.floor(n / 10) & 0xf) << 4) | (n % 10)
+	}
+	// Tag10-ID9 日结：YY MM DD(各1B BCD) + 个数1B
+	function dailyQueryBytes(count) {
+		const d = new Date()
+		const yy = d.getFullYear() % 100
+		return [toBcdByte(yy), toBcdByte(d.getMonth() + 1), toBcdByte(d.getDate()), (count | 0) & 0xff]
+	}
+	// Tag10-ID23 错误日志：YYMMDDhhmmss 6B BCD + 条数1B
+	function errLogQueryBytes(count) {
+		const d = new Date()
+		const yy = d.getFullYear() % 100
+		return [
+			toBcdByte(yy), toBcdByte(d.getMonth() + 1), toBcdByte(d.getDate()),
+			toBcdByte(d.getHours()), toBcdByte(d.getMinutes()), toBcdByte(d.getSeconds()),
+			(count | 0) & 0xff
+		]
+	}
 	function presetToTlvJson(preset) {
 		const out = []
 		for (const blk of (preset.tlv || [])) {
@@ -845,6 +878,14 @@
 					const s = paramVal.value
 					if (!s) return
 					bytes = bcdToBytes(s, preset.param.fillLen)
+				} else if (preset.param.type === 'dailyQuery') {
+					const rawVal = parseInt(paramVal.value.trim(), 10)
+					if (isNaN(rawVal)) return
+					bytes = dailyQueryBytes(rawVal)
+				} else if (preset.param.type === 'errLogQuery') {
+					const rawVal = parseInt(paramVal.value.trim(), 10)
+					if (isNaN(rawVal)) return
+					bytes = errLogQueryBytes(rawVal)
 				} else {
 					const rawVal = parseInt(paramVal.value.trim(), 10)
 					if (isNaN(rawVal)) return
@@ -900,6 +941,20 @@
 					paramVal.value = preset.param.default || ''
 					paramUnit.textContent = '(BCD LE)'
 					_currentParamType = 'bcd'
+				} else if (preset.param.type === 'dailyQuery') {
+					paramVal.style.display = ''
+					paramVal.style.width = '80px'
+					paramSelEnum.style.display = 'none'
+					paramVal.value = preset.param.default || '7'
+					paramUnit.textContent = '条(日起=今天)'
+					_currentParamType = 'dailyQuery'
+				} else if (preset.param.type === 'errLogQuery') {
+					paramVal.style.display = ''
+					paramVal.style.width = '80px'
+					paramSelEnum.style.display = 'none'
+					paramVal.value = preset.param.default || '4'
+					paramUnit.textContent = '条(起点=现在)'
+					_currentParamType = 'errLogQuery'
 				} else {
 					paramVal.style.display = ''
 					paramVal.style.width = '100px'

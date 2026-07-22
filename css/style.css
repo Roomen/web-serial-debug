@@ -1147,6 +1147,20 @@ footer a:hover {
 	transition: background-color var(--transition-normal), border-color var(--transition-normal);
 }
 
+.sk-hex-copyable {
+	cursor: pointer;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	letter-spacing: 0.02em;
+}
+.sk-hex-copyable:hover:not(:placeholder-shown) {
+	border-color: var(--accent);
+	background: var(--accent-light);
+}
+.sk-hex-copyable.is-copied {
+	border-color: var(--success) !important;
+	background: var(--success-light) !important;
+}
+
 /* 固件升级分区卡片 */
 .fw-upgrade-card {
 	background: var(--bg-surface);

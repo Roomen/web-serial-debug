@@ -70,6 +70,7 @@
 		for (let i = 0; i < b.length; i++) s += (b[i] >> 4).toString(10) + (b[i] & 0xf).toString(10)
 		return s
 	}
+	// LE BCD（表号/唯一码等小端字段）
 	function bcdEncode(digits) {
 		let s = digits
 		if (s.length % 2 !== 0) s = '0' + s
@@ -77,6 +78,34 @@
 		const a = new Uint8Array(n)
 		for (let i = 0; i < n; i++) a[i] = (parseInt(s[i * 2], 10) << 4) | parseInt(s[i * 2 + 1], 10)
 		return a.reverse()
+	}
+	// 平台时间等顺序 BCD：YYYYMMDDhhmmss → 7 字节高位在前（与 C writeBcdTimeToBytes / 协议一致）
+	function bcdEncodeForward(digits) {
+		let s = String(digits || '').replace(/\D/g, '')
+		if (s.length % 2 !== 0) s = '0' + s
+		const n = s.length / 2
+		const a = new Uint8Array(n)
+		for (let i = 0; i < n; i++) a[i] = (parseInt(s[i * 2], 10) << 4) | parseInt(s[i * 2 + 1], 10)
+		return a
+	}
+	function platformTimeBytes(src) {
+		const pad = (n, l) => String(n).padStart(l, '0')
+		let digits
+		if (src instanceof Date && !isNaN(src.getTime())) {
+			digits = pad(src.getFullYear(), 4) + pad(src.getMonth() + 1, 2) + pad(src.getDate(), 2) +
+				pad(src.getHours(), 2) + pad(src.getMinutes(), 2) + pad(src.getSeconds(), 2)
+		} else if (typeof src === 'string') {
+			digits = src.replace(/[^0-9]/g, '').padStart(14, '0').slice(-14)
+		} else {
+			const now = new Date()
+			digits = pad(now.getFullYear(), 4) + pad(now.getMonth() + 1, 2) + pad(now.getDate(), 2) +
+				pad(now.getHours(), 2) + pad(now.getMinutes(), 2) + pad(now.getSeconds(), 2)
+		}
+		const b = bcdEncodeForward(digits)
+		if (b.length >= 7) return b.subarray(0, 7)
+		const out = new Uint8Array(7)
+		out.set(b)
+		return out
 	}
 	//把纯数字日期串格式化为 yyyy-MM-dd HH:mm:ss[.S…]
 	function formatTimeDigits(s) {
@@ -218,10 +247,13 @@
 		return Number(v)
 	}
 	function numUnit(desc) {
-		let m = desc.match(/([\d.]+)([a-zA-Zμ℃%\/]+)/)
-		if (m) return { scale: parseFloat(m[1]), unit: m[2] }
+		if (!desc) return { scale: 1, unit: '' }
+		// 先匹配明确单位词,避免把 0x00 / 3B / 2B 等字节说明当成 scale+unit
 		const w = desc.match(/(L\/h|us\/cm|mg\/L|uA|kPa|NTU|mAH|pH|℃|L|V|秒|分钟|天|小时|次|us)/)
 		if (w) return { scale: 1, unit: w[1] }
+		// 仅接受「数值+单位」且单位不是单独的 x/B/b(易与 0x00、3B 冲突)
+		let m = desc.match(/(?:^|[^\w.])([\d.]+)\s*(mAH|kPa|NTU|pH|℃|L\/h|mg\/L|us\/cm|uA|mm|mV|mA|kHz|MHz|%)/i)
+		if (m) return { scale: parseFloat(m[1]), unit: m[2] }
 		return { scale: 1, unit: '' }
 	}
 	function readNum(raw, desc) {
@@ -243,6 +275,7 @@
 	}
 	function parseEnumMap(desc) {
 		const map = {}
+		if (!desc) return map
 		if (/=/.test(desc)) {
 			for (const tok of desc.split(/\s+/)) {
 				const m = tok.match(/^(\d+)=(.*)$/)
@@ -250,9 +283,13 @@
 			}
 			if (Object.keys(map).length) return map
 		}
-		const re = /(^|\s)(\d+)([关开正常异常报警使能未检测未知]?[\u4e00-\u9fff]+)/g
+		// 0停止 1启用 2运输模式 / 1二值压缩 2标准图片 …
+		const re = /(^|[\s,;，；])(\d+)\s*([^\d\s=:][^\s,;，；]*)/g
 		let m
-		while ((m = re.exec(desc)) !== null) map[+m[2]] = m[3]
+		while ((m = re.exec(desc)) !== null) {
+			const label = m[3].replace(/[)）].*$/, '')
+			if (label && !/^(B|字节|次|秒|分钟|天|小时|位)$/.test(label)) map[+m[2]] = label
+		}
 		return map
 	}
 	function bcdTimeOrEmpty(raw) {
@@ -418,9 +455,32 @@
 			const s = bcdDecode(raw)
 			return /^0+$/.test(s) ? '(空)' : s
 		}
-		if (/[关开正常异常报警使能未检测未知]/.test(desc) || /=/.test(desc)) {
+		// 日结查询 BYTE[3+1]：起始日期3B(BCD 年月日) + 个数1B
+		if (type === 'BYTE[3+1]' && raw.length >= 4) {
+			const ds = bcdDecodeNoReverse(raw.subarray(0, 3))
+			let dateStr = ds
+			if (/^\d{6}$/.test(ds)) {
+				const yy = parseInt(ds.slice(0, 2), 10)
+				const y = (yy >= 70 ? 1900 : 2000) + yy
+				dateStr = y + '-' + ds.slice(2, 4) + '-' + ds.slice(4, 6)
+			} else if (/^\d{8}$/.test(ds)) {
+				dateStr = ds.slice(0, 4) + '-' + ds.slice(4, 6) + '-' + ds.slice(6, 8)
+			}
+			return '起始' + dateStr + ' 个数' + raw[3]
+		}
+		// 指定ID数据：2B一组 tag+id，0xFF 填充
+		if ((def && def.name === '指定ID数据') || (type === 'BYTE[32]' && /tag\s*\+?\s*id|每组tag/i.test(desc))) {
+			const pairs = []
+			for (let i = 0; i + 1 < raw.length; i += 2) {
+				if (raw[i] === 0xff && raw[i + 1] === 0xff) continue
+				const tn = W.SK_TAG_NAME[raw[i]] || ('Tag' + raw[i])
+				pairs.push(tn + '/ID' + raw[i + 1])
+			}
+			return pairs.length ? pairs.join(' ') : '(空)'
+		}
+		if (/=/.test(desc) || /\d+\s*[\u4e00-\u9fff]/.test(desc) || /\d+[关开停启]/.test(desc)) {
 			const map = parseEnumMap(desc)
-			if (map[raw[0]] != null) return raw[0] + ':' + map[raw[0]]
+			if (raw.length === 1 && map[raw[0]] != null) return raw[0] + ':' + map[raw[0]]
 		}
 		const nu = numUnit(desc)
 		if (nu.unit || nu.scale !== 1 || /Uint32 LE|uint32 LE|int16 LE signed|uint16 LE|Uint16 LE|int8|int32 LE signed|float/i.test(desc)) {
@@ -479,7 +539,17 @@
 					items.push({ id, name: 'ID' + id + '(未知)', raw: Array.from(raw), decoded: hexbytes(raw) })
 					continue
 				}
-				//定长 0 的字段(多为嵌套 TLV 容器):消费剩余字节并递归解析,避免 j+=0 死循环
+				// NULL: 无 Value,仅 ID(信息查询码等)
+				if (vlen === 0 && def && def.type === 'NULL') {
+					items.push({
+						id,
+						name: def.name || ('ID' + id),
+						raw: [],
+						decoded: '(无参数)'
+					})
+					continue
+				}
+				//定长 0 的其它字段(嵌套 TLV 容器):消费剩余字节并递归解析,避免 j+=0 死循环
 				if (vlen === 0) {
 					const raw = payload.subarray(j)
 					items.push({
@@ -689,13 +759,39 @@
 		if (b[0] !== 0xA9 || b[1] !== 0x9A) errors.push('帧起始符错误')
 		const up = tryParseUp(b, opt)
 		const down = tryParseDown(b, opt)
+		// 短下行帧数据域末尾若为 00 00，上行 dataLen=0 会与下行 CRC 覆盖范围重合，
+		// 不能简单优先 up，需按长度吻合 + 功能码语义打分。
+		const scoreParse = (p) => {
+			if (!p) return -1e9
+			let s = 0
+			if (p.endOk) s += 20
+			if (p.crcOk) s += 40
+			const dataLen = p.fields && p.fields['数据域字节数'] != null ? p.fields['数据域字节数'] : -1
+			const exp = (p.dir === 'up' ? 24 : 16) + dataLen + 3
+			if (b.length === exp) s += 50
+			else s -= 30
+			const fcObj = p.fields && p.fields['功能码']
+			const fc = fcObj && typeof fcObj === 'object' ? fcObj.value : fcObj
+			const downFc = [0x01, 0x03, 0x04, 0x11]
+			const upFc = [0x02, 0x81, 0x82, 0x83, 0x84, 0x91]
+			if (p.dir === 'down' && downFc.indexOf(fc) >= 0) s += 25
+			if (p.dir === 'up' && upFc.indexOf(fc) >= 0) s += 25
+			if (p.dir === 'down' && upFc.indexOf(fc) >= 0) s -= 15
+			if (p.dir === 'up' && downFc.indexOf(fc) >= 0) s -= 15
+			if (p.tlv && p.tlv.length) s += 8
+			if (p.tlv && p.tlv.some(function (t) { return t.error })) s -= 12
+			// 退化：上行 dataLen=0 但帧明显长于空数据域最小长度时降权
+			if (p.dir === 'up' && dataLen === 0 && b.length > 27) s -= 20
+			return s
+		}
 		let chosen = null
-		if (up && up.crcOk && up.endOk) chosen = up
-		else if (down && down.crcOk && down.endOk) chosen = down
-		else if (up && up.endOk) chosen = up
-		else if (down && down.endOk) chosen = down
-		else if (up) chosen = up
-		else if (down) chosen = down
+		const su = scoreParse(up)
+		const sd = scoreParse(down)
+		if (up || down) {
+			if (sd > su) chosen = down
+			else if (su > sd) chosen = up
+			else chosen = (up && up.crcOk && up.endOk) ? up : (down && down.crcOk && down.endOk) ? down : (up || down)
+		}
 		if (!chosen) {
 			errors.push('无法解析')
 			return result
@@ -709,6 +805,8 @@
 		result.needKey = !!chosen.needKey
 		result.fields = chosen.fields
 		result.tlv = chosen.tlv
+		result.dataBytes = chosen.dataBytes || []
+		result.plainBytes = chosen.plainBytes || []
 		result.ok = chosen.crcOk && chosen.endOk
 		if (chosen.needKey) errors.push('加密报文,请输入密钥')
 		else if (!chosen.endOk) errors.push('帧结束符错误 期望0x16 实际0x' + chosen.fields.帧结束符.toString(16))
@@ -808,11 +906,19 @@
 			if (v == null) s = ''
 			else if (typeof v === 'object') {
 				if (Array.isArray(v)) s = v.join(' ')
-				else {
+				else if (v.name !== undefined && v.value !== undefined) {
+					s = v.value + (v.name ? ' (' + v.name + ')' : '')
+				} else {
 					const parts = []
 					for (const key in v) {
 						const val = v[key]
-						parts.push(key + '=' + (val && typeof val === 'object' && val.name !== undefined ? (val.name ? val.value + '(' + val.name + ')' : val.value) : val))
+						if (val && typeof val === 'object' && val.name !== undefined) {
+							parts.push(key + '=' + (val.name ? val.value + '(' + val.name + ')' : val.value))
+						} else if (typeof val === 'boolean') {
+							parts.push(key + '=' + (val ? '是' : '否'))
+						} else {
+							parts.push(key + '=' + val)
+						}
 					}
 					s = parts.join(' ')
 				}
@@ -890,8 +996,9 @@
 			const plainLen = u16leRead(region, 0)
 			if (2 + plainLen <= region.length) {
 				const trial = region.subarray(2, 2 + plainLen)
-				const tags = parseTlv(trial)
-				if (tags.length && !tags[tags.length - 1].error) {
+				const tags = plainLen === 0 ? [] : parseTlv(trial)
+				// plainLen=0 的空数据域也要标明文长度;有 TLV 且末项无 error 时同样剥离前缀
+				if (plainLen === 0 || (tags.length && !tags[tags.length - 1].error)) {
 					set(baseOff, 2, prefix + '数据域-明文长度 = ' + plainLen, 'p' + baseOff)
 					if (2 + plainLen < region.length) {
 						set(baseOff + 2 + plainLen, region.length - 2 - plainLen, prefix + '数据域-填充', 'pad' + (baseOff + 2 + plainLen))
@@ -943,6 +1050,11 @@
 					j = k
 					continue
 				}
+				// NULL: 仅 ID,无 Value
+				if (vlen === 0 && def && def.type === 'NULL') {
+					set(pBase + idOff, 1, prefix + '数据域-' + tagName + ' ' + name + ' (无参数)', itemGrp)
+					continue
+				}
 				//定长 0:嵌套 TLV 容器,ID 已消费,剩余全部递归(不再剥离明文长度)
 				if (vlen === 0) {
 					set(pBase + idOff, 1, prefix + '数据域-' + tagName + ' ' + name + ' [嵌套TLV]', itemGrp)
@@ -965,21 +1077,7 @@
 		opt = opt || {}
 		const seq = opt.frameSeq != null ? opt.frameSeq : 1
 		const funcCode = typeof opt.funcCode === 'string' ? parseInt(opt.funcCode, opt.funcCode.indexOf('0x') === 0 ? 16 : 10) : opt.funcCode
-		let timeBytes
-		if (opt.time instanceof Date) {
-			const p = opt.time
-			const pad = (n, l) => String(n).padStart(l, '0')
-			const digits = pad(p.getFullYear(), 4) + pad(p.getMonth() + 1, 2) + pad(p.getDate(), 2) + pad(p.getHours(), 2) + pad(p.getMinutes(), 2) + pad(p.getSeconds(), 2)
-			timeBytes = bcdEncode(digits)
-		} else if (typeof opt.time === 'string') {
-			const digits = opt.time.replace(/[^0-9]/g, '').padStart(14, '0').slice(-14)
-			timeBytes = bcdEncode(digits)
-		} else {
-			const now = new Date()
-			const pad = (n, l) => String(n).padStart(l, '0')
-			const digits = pad(now.getFullYear(), 4) + pad(now.getMonth() + 1, 2) + pad(now.getDate(), 2) + pad(now.getHours(), 2) + pad(now.getMinutes(), 2) + pad(now.getSeconds(), 2)
-			timeBytes = bcdEncode(digits)
-		}
+		const timeBytes = platformTimeBytes(opt.time != null ? opt.time : new Date())
 
 		const tlvArr = []
 		for (const blk of (opt.tlv || [])) {

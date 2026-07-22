@@ -107,7 +107,7 @@ window.SK_TAGS = {
 		{ id: 6, name: '服务器地址端口', type: 'BYTE[32]', desc: 'ASCII ip与端口逗号分隔' },
 		{ id: 7, name: 'APN信息', type: 'BYTE[32]', desc: '驻网后从模组读取 ASCII' },
 		{ id: 8, name: '上报时间参数', type: 'BYTE[1+1+2]', desc: '起始DD+hh+最大上报时长(分钟,预留)', dec: { t: 'reportTime' } },
-		{ id: 9, name: '上报频率（间隔）', type: 'BYTE[2]', desc: '分钟 0x00不上报 须30整数倍' },
+		{ id: 9, name: '上报频率（间隔）', type: 'BYTE[2]', desc: '单位分钟 0不上报 须30整数倍', dec: { t: 'num', unit: '分钟' } },
 		{ id: 10, name: '上报重发次数', type: 'BYTE', desc: '默认1 0-4次' },
 		{ id: 11, name: '上报重发间隔', type: 'BYTE', desc: '分钟 默认20' },
 		{ id: 12, name: '数据采样间隔', type: 'BYTE[2]', desc: '分钟 1-1440 须30整数倍' },
@@ -116,11 +116,11 @@ window.SK_TAGS = {
 		{ id: 15, name: '密集数据采样间隔', type: 'BYTE', desc: '分钟 默认5 须5整数倍' },
 		{ id: 16, name: 'SN密钥', type: 'BYTE[16]', desc: 'ASCII' },
 		{ id: 17, name: '计量底度', type: 'BYTE[4]', desc: 'L' },
-		{ id: 18, name: '水表口径', type: 'BYTE', desc: '1=15 2=20 3=25 4=32 5=40 6=50 7=65 8=80 9=100 10=125 11=150 12=200 13=250 14=300' },
+		{ id: 18, name: '水表口径', type: 'BYTE', desc: '1=15mm 2=20mm 3=25mm 4=32mm 5=40mm 6=50mm 7=65mm 8=80mm 9=100mm 10=125mm 11=150mm 12=200mm 13=250mm 14=300mm' },
 		{ id: 19, name: '用户表号', type: 'BYTE[10]', desc: 'BCD 高位补0' },
 		{ id: 20, name: '水表实时时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
 		{ id: 21, name: '维护后台服务器地址端口', type: 'BYTE[32]', desc: 'ASCII ip与端口逗号分隔' },
-		{ id: 22, name: '维护后台上报频率（间隔）', type: 'BYTE[2]', desc: '分钟 0x00不上报 须1440整数倍' },
+		{ id: 22, name: '维护后台上报频率（间隔）', type: 'BYTE[2]', desc: '单位分钟 0不上报 须1440整数倍', dec: { t: 'num', unit: '分钟' } },
 		{ id: 23, name: '通信方式', type: 'BYTE', desc: 'bit7-5运营商 bit4-0协议:0UDP 1TCP 2OneNet 3OCCoap 4AEP 5MQTT 6SSL 7DTSL 8MQTT_SSL 9LwM2M 10HTTP 11BLE', dec: { t: 'bits', fields: [
 			{ bits: [7, 5], name: '运营商', map: { 0: '通用', 1: '移动', 2: '联通', 3: '电信' } },
 			{ bits: [4, 0], name: '协议类型', map: { 0: 'UDP直连', 1: 'TCP', 2: 'OneNet', 3: 'OCCoap', 4: 'AEP', 5: 'MQTT', 6: 'SSL', 7: 'DTSL', 8: 'MQTT_SSL', 9: 'LwM2M', 10: 'HTTP', 11: 'BLE' } }
@@ -376,9 +376,9 @@ window.SK_TAGS = {
 		{ id: 14, name: '信号强度RSSI', type: 'BYTE[2]', desc: 'int16 LE signed LoRa/LoRaWAN' }
 	],
 	'93': [
-		{ id: 0, name: '开猫（上报）', type: 'BYTE', desc: '0业务+设备信息 1业务 2设备 注:周期数据不上报' },
+		{ id: 0, name: '开猫（上报）', type: 'BYTE', desc: '1业务 2维护 3both 注:周期数据不上报', dec: { t: 'enum', map: { 1: '业务', 2: '维护', 3: '业务+维护' } } },
 		{ id: 1, name: '复位', type: 'BYTE', desc: '延时时间 秒 默认2' },
-		{ id: 2, name: '初始化', type: 'BYTE', desc: '0数据初始化 1参数初始化 2恢复出厂 3信息初始化' },
+		{ id: 2, name: '初始化', type: 'BYTE', desc: '0数据初始化 1参数初始化 2恢复出厂 3信息初始化', dec: { t: 'enum', map: { 0: '数据初始化', 1: '参数初始化', 2: '恢复出厂', 3: '信息初始化' } } },
 		{ id: 3, name: '阀门控制', type: 'BYTE', desc: '0关阀 1开阀 3除锈 4开关到位检测' },
 		{ id: 4, name: '启动模组FOTA', type: 'BYTE', desc: '预留' },
 		{ id: 5, name: '总线表底度设置', type: 'BYTE[1+(7+4)*n]', desc: '表数量1B+每表:地址7B高字节在前+底度4B(单位L)' },
@@ -398,7 +398,7 @@ window.SK_TAGS = {
 		{ id: 19, name: '屏幕轮显', type: 'BYTE', desc: '预留' }
 	],
 	'10': [
-		{ id: 0, name: '指定ID数据', type: 'BYTE[32]', desc: '2B一组共16组 每组tag+id 不满补0xFF' },
+		{ id: 0, name: '指定ID数据', type: 'BYTE[32]', desc: '2字节一组共16组 每组tag+id 不满补0xFF' },
 		{ id: 1, name: '基础数据', type: 'NULL', desc: '响应返回tag1' },
 		{ id: 2, name: '核心数据', type: 'NULL', desc: '响应返回tag2' },
 		{ id: 3, name: '终端参数', type: 'NULL', desc: '响应返回tag3' },

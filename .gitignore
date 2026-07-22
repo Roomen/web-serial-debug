@@ -1,6 +1,10 @@
 /.vscode
 /.gitea_token
 
+# host-side cross-test build artifacts (do not commit binaries)
+tools/sk-cross-test/sk_c_mirror
+tools/sk-cross-test/*.o
+
 # wrangler files
 .wrangler
 .dev.vars*
