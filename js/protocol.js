@@ -1309,10 +1309,8 @@
 
 		let ctrl = 0x00
 		if (opt.encKey && dataField.length > 0) {
-			try {
-				dataField = W.skAesEcbEncrypt(dataField, new Uint8Array(opt.encKey))
-				ctrl |= 0x01
-			} catch (e) {}
+			dataField = W.skAesEcbEncrypt(dataField, new Uint8Array(opt.encKey))
+			ctrl |= 0x01
 		}
 
 		const ver = opt.version != null ? (opt.version & 0xff) : 0x02
