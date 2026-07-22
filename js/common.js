@@ -519,13 +519,6 @@
 		}
 		return bytes
 	}
-	function formatHexSpaced(bytes) {
-		const out = []
-		for (let i = 0; i < bytes.length; i++) {
-			out.push(('0' + bytes[i].toString(16).toUpperCase()).slice(-2))
-		}
-		return out.join(' ')
-	}
 	let _hexDumpState = { bytes: null, bm: null, cols: 0 }
 	function getHexDumpCols(view) {
 		if (!view) return 16
@@ -587,43 +580,12 @@
 		}
 		view.innerHTML = h
 	}
-	function applyProtocolHexInput(raw, autoParse) {
-		const input = document.getElementById('serial-protocol-input')
-		if (!input) return false
-		const hex = normalizeHexRaw(raw)
-		const bytes = hexRawToBytes(hex)
-		if (!bytes) {
-			if (raw && String(raw).trim()) {
-				input.value = String(raw)
-				renderProtocolHexDump(null)
-				return false
-			}
-			input.value = ''
+	function parseProtocolBytes(bytes) {
+		if (!bytes || !bytes.length) {
 			renderProtocolHexDump(null)
-			return false
-		}
-		input.value = formatHexSpaced(bytes)
-		renderProtocolHexDump(bytes)
-		if (autoParse) {
-			document.getElementById('serial-protocol-parse').click()
-		}
-		return true
-	}
-	//第三方协议手动解析
-	document.getElementById('serial-protocol-parse').addEventListener('click', (e) => {
-		const raw = document.getElementById('serial-protocol-input').value
-		if (!raw) {
-			addLogErr('请输入HEX报文')
+			document.getElementById('serial-protocol-output').innerHTML = ''
 			return
 		}
-		const hex = normalizeHexRaw(raw)
-		const bytes = hexRawToBytes(hex)
-		if (!bytes) {
-			addLogErr('HEX格式错误:' + raw)
-			renderProtocolHexDump(null)
-			return
-		}
-		document.getElementById('serial-protocol-input').value = formatHexSpaced(bytes)
 		renderProtocolHexDump(bytes)
 		try {
 			const r = skParseFrame(bytes, {
@@ -641,14 +603,24 @@
 		} catch (err) {
 			document.getElementById('serial-protocol-output').innerHTML = '<div class="sk-parse-err">解析异常:' + HTMLEncode(String(err)) + '</div>'
 		}
-	})
+	}
+	function applyProtocolHexInput(raw) {
+		const hex = normalizeHexRaw(raw)
+		const bytes = hexRawToBytes(hex)
+		if (!bytes) {
+			renderProtocolHexDump(null)
+			return false
+		}
+		parseProtocolBytes(bytes)
+		return true
+	}
 	//HEX 转储区：粘贴即格式化并解析；宽度变化时在 16/32 列间切换
 	const protocolHexView = document.getElementById('serial-protocol-hexview')
 	if (protocolHexView) {
 		protocolHexView.addEventListener('paste', (e) => {
 			e.preventDefault()
 			const text = (e.clipboardData || window.clipboardData).getData('text')
-			if (!applyProtocolHexInput(text, true)) {
+			if (!applyProtocolHexInput(text)) {
 				addLogErr('HEX格式错误:' + text)
 			}
 		})
@@ -1353,7 +1325,7 @@
 		if (typeof window.expandParsePanel === 'function') {
 			window.expandParsePanel()
 		}
-		applyProtocolHexInput(hex, true)
+		applyProtocolHexInput(hex)
 	})
 
 	//选择串口
@@ -2144,8 +2116,6 @@
 			clearBtn.addEventListener('click', function (e) {
 				e.stopPropagation()
 				document.getElementById('serial-protocol-output').innerHTML = ''
-				const input = document.getElementById('serial-protocol-input')
-				if (input) input.value = ''
 				if (typeof renderProtocolHexDump === 'function') renderProtocolHexDump(null)
 			})
 		}
