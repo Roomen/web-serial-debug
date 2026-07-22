@@ -3741,7 +3741,7 @@ hr {
 	pointer-events: none;
 }
 
-/* 轻量 toast：顶部居中，不挡主操作区 */
+/* 轻量 toast：顶部居中；深浅色用主题 token 反色（浅色页深底白字，深色页浅底黑字） */
 .serial-toast {
 	position: fixed;
 	left: 50%;
@@ -3749,21 +3749,17 @@ hr {
 	transform: translateX(-50%) translateY(-8px);
 	z-index: 2000;
 	padding: 8px 16px;
-	border-radius: 8px;
-	background: rgba(32, 33, 36, 0.92);
-	color: #fff;
+	border-radius: var(--radius-md);
+	background: var(--bg-tooltip);
+	color: var(--text-inverse);
 	font-size: 0.85rem;
 	line-height: 1.3;
-	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
+	box-shadow: var(--shadow-md);
 	opacity: 0;
 	pointer-events: none;
-	transition: opacity 0.18s ease, transform 0.18s ease;
+	transition: opacity 0.18s ease, transform 0.18s ease, background-color var(--transition-normal), color var(--transition-normal);
 }
 .serial-toast.is-show {
 	opacity: 1;
 	transform: translateX(-50%) translateY(0);
-}
-[data-theme="dark"] .serial-toast {
-	background: rgba(240, 240, 240, 0.94);
-	color: #111;
 }

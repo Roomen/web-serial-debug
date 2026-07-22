@@ -35,7 +35,7 @@
 			{ id: 'rw-t3-18', name: '水表口径', tag: 3, fid: 18, type: 'enum', values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] },
 			{ id: 'rw-t3-22', name: '维护上报频率', tag: 3, fid: 22, type: 'uint16le', min: 1440, max: 10080, step: 1440 },
 			{ id: 'rw-t3-28', name: '脉冲形式', tag: 3, fid: 28, type: 'enum', values: [0, 1, 2, 3, 4, 5, 8, 9] },
-			{ id: 'rw-t3-29', name: '基准水量', tag: 3, fid: 29, type: 'enum', values: [0, 1, 2, 3] },
+			{ id: 'rw-t3-29', name: '基准水量', tag: 3, fid: 29, type: 'enum', values: [0, 1, 2, 3, 4, 5, 6] },
 			{ id: 'rw-t3-30', name: '基表整数位数', tag: 3, fid: 30, type: 'uint8', min: 4, max: 8 },
 			{ id: 'rw-t3-32', name: '设备校时类型', tag: 3, fid: 32, type: 'enum', values: [0, 1] },
 			{ id: 'rw-t3-34', name: '机电分离状态', tag: 3, fid: 34, type: 'enum', values: [0, 1] },

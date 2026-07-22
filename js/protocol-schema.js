@@ -79,7 +79,7 @@ window.SK_TAGS = {
 		{ id: 26, name: '日最高瞬时流量（大口径）', type: 'BYTE[1+3]', desc: 'BYTE0状态bit0异常 BYTE1-3有符号LE L/h' },
 		{ id: 27, name: '当前实时净累积流量（大口径）', type: 'BYTE[1+7]', desc: 'BYTE0状态bit0异常 BYTE1-7有符号LE 单位同基准水量' },
 		{ id: 28, name: '结算日净累积流量（大口径）', type: 'BYTE[1+7]', desc: 'BYTE0状态bit0异常 BYTE1-7有符号LE 单位同基准水量' },
-		{ id: 29, name: '基准水量', type: 'BYTE', desc: '0=1000L 1=100L 2=10L 3=1L 每圈', dec: { t: 'enum', map: { 0: '1000L每圈', 1: '100L每圈', 2: '10L每圈', 3: '1圈代表1L' } } },
+		{ id: 29, name: '基准水量', type: 'BYTE', desc: '0=1000L 1=100L 2=10L 3=1L 4=100mL 5=10mL 6=1mL 每圈', dec: { t: 'enum', map: { 0: '1000L每圈', 1: '100L每圈', 2: '10L每圈', 3: '1L每圈', 4: '100mL每圈', 5: '10mL每圈', 6: '1mL每圈' } } },
 		{ id: 30, name: '通讯电池电量', type: 'BYTE', desc: '0-100%' },
 		{ id: 31, name: '计量电池电量', type: 'BYTE', desc: '0-100%' },
 		{ id: 32, name: '阀门电池电量', type: 'BYTE', desc: '0-100%' },
@@ -122,7 +122,7 @@ window.SK_TAGS = {
 		{ id: 21, name: '维护后台服务器地址端口', type: 'BYTE[32]', desc: 'ASCII ip与端口逗号分隔' },
 		{ id: 22, name: '维护后台上报频率（间隔）', type: 'BYTE[2]', desc: '单位分钟 0不上报 须1440整数倍', dec: { t: 'num', unit: '分钟' } },
 		{ id: 23, name: '通信方式', type: 'BYTE', desc: 'bit7-5运营商 bit4-0协议:0UDP 1TCP 2OneNet 3OCCoap 4AEP 5MQTT 6SSL 7DTSL 8MQTT_SSL 9LwM2M 10HTTP 11BLE', dec: { t: 'bits', fields: [
-			{ bits: [7, 5], name: '运营商', map: { 0: '通用', 1: '移动', 2: '联通', 3: '电信' } },
+			{ bits: [7, 5], name: '运营商', map: { 0: '通用', 1: '移动', 2: '电信', 3: '联通' } },
 			{ bits: [4, 0], name: '协议类型', map: { 0: 'UDP直连', 1: 'TCP', 2: 'OneNet', 3: 'OCCoap', 4: 'AEP', 5: 'MQTT', 6: 'SSL', 7: 'DTSL', 8: 'MQTT_SSL', 9: 'LwM2M', 10: 'HTTP', 11: 'BLE' } }
 		] } },
 		{ id: 24, name: '采集方式', type: 'BYTE', desc: '0未知 1数字状态 2厚膜 3光电 4脉冲 5无磁 6超声波 7电磁式 8摄像 9总线式 10无磁摄像' },
@@ -130,7 +130,7 @@ window.SK_TAGS = {
 		{ id: 26, name: '基表号', type: 'BYTE[10]', desc: 'BCD 高位补0' },
 		{ id: 27, name: '维护后台上报时间参数', type: 'BYTE[1+1+2]', desc: 'DD+hh+最大上报时长(分钟,预留)', dec: { t: 'reportTime' } },
 		{ id: 28, name: '脉冲形式', type: 'BYTE', desc: '0未知 1单脉冲 2双脉冲 3正反单脉冲 4方向单脉冲 5HRI 8三霍尔 9双霍尔' },
-		{ id: 29, name: '基准水量', type: 'BYTE', desc: '0=1000L 1=100L 2=10L 3=1L 每圈', dec: { t: 'enum', map: { 0: '1000L每圈', 1: '100L每圈', 2: '10L每圈', 3: '1圈代表1L' } } },
+		{ id: 29, name: '基准水量', type: 'BYTE', desc: '0=1000L 1=100L 2=10L 3=1L 4=100mL 5=10mL 6=1mL 每圈', dec: { t: 'enum', map: { 0: '1000L每圈', 1: '100L每圈', 2: '10L每圈', 3: '1L每圈', 4: '100mL每圈', 5: '10mL每圈', 6: '1mL每圈' } } },
 		{ id: 30, name: '基表整数位数', type: 'BYTE', desc: '字轮框内数字个数' },
 		{ id: 31, name: '设备启用标志', type: 'BYTE', desc: '0停止 1启用 2运输模式' },
 		{ id: 32, name: '设备校时类型', type: 'BYTE', desc: '0基站校时 1服务器校时' },
@@ -376,7 +376,7 @@ window.SK_TAGS = {
 		{ id: 14, name: '信号强度RSSI', type: 'BYTE[2]', desc: 'int16 LE signed LoRa/LoRaWAN' }
 	],
 	'93': [
-		{ id: 0, name: '开猫（上报）', type: 'BYTE', desc: '1业务 2维护 3both 注:周期数据不上报', dec: { t: 'enum', map: { 1: '业务', 2: '维护', 3: '业务+维护' } } },
+		{ id: 0, name: '开猫（上报）', type: 'BYTE', desc: '1业务数据(核心+告警) 2设备信息(基础+参数+运行+上行) 3全部 注:周期数据不上报', dec: { t: 'enum', map: { 1: '业务数据', 2: '设备信息', 3: '全部' } } },
 		{ id: 1, name: '复位', type: 'BYTE', desc: '延时时间 秒 默认2' },
 		{ id: 2, name: '初始化', type: 'BYTE', desc: '0数据初始化 1参数初始化 2恢复出厂 3信息初始化', dec: { t: 'enum', map: { 0: '数据初始化', 1: '参数初始化', 2: '恢复出厂', 3: '信息初始化' } } },
 		{ id: 3, name: '阀门控制', type: 'BYTE', desc: '0关阀 1开阀 3除锈 4开关到位检测' },
