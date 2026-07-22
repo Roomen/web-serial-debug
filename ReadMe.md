@@ -1,90 +1,50 @@
 # Web Serial Debug
 
-浏览器串口调试工具
+浏览器串口调试工具（基于 [Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API)）。
 
-仅测试了 Edge 和 Chrome 浏览器,其他浏览器未测试是否可用
-
-## 界面预览
-
-![界面预览](/imgs/main.png)
-
-## 实现功能
-
--   自动重连,设备插拔自动重连
--   所有串口参数可设置更改,配置自动保存
--   串口日志支持 HEX, TEXT 和 彩色ANSI,自动滚动
--   分包合并,设定超时时间
--   快捷发送列表,自定义分组,快捷导入导出
--   配置文件导入导出,方便迁移
--   自定义脚本,支持发送和接收数据处理
+推荐使用 **Chrome** 或 **Edge**（需浏览器支持 Web Serial）。
 
 ## 使用方法
 
-先选择一个电脑连接的串口
+1. 用本地静态服务或直接打开 `index.html`（部分能力在 `file://` 下受限，建议 `python3 -m http.server`）
+2. 选择串口并设置波特率等参数，打开串口
+3. 中间为收发日志；底部可发送 HEX / TEXT，支持循环发送
+4. 右侧按需使用：设置、快捷发送、第三方协议、固件升级、固件打包
 
-调整串口参数后打开串口即可开始通讯
+快捷键：`Ctrl/Cmd + K` 打开命令面板。
 
-中间区域是串口日志,可以选择 HEX ,TEXT 或者 彩色ANSI 显示
+## 主要功能
 
-下方是发送区域,可以选择 HEX 或者 TEXT 发送,定时循环发送
+- **串口连接**：参数可配、本地记忆；插拔自动重连
+- **日志**：HEX / TEXT / HEX+TEXT / 彩色 ANSI；自动滚动；清空 / 复制 / 导出
+- **发送**：HEX 或 TEXT、追加 CRLF、循环发送
+- **快捷发送**：分组管理、导入导出
+- **配置**：导入导出，便于迁移
+- **主题**：亮色 / 暗色
+- **协议解析（SEK）**
+  - 实时解析收发帧、底部结构化解析面板
+  - HEX 字节悬停字段提示
+  - AES-ECB 加解密（ASCII / HEX 密钥）
+  - 下行预设指令：参数设置 / 信息查询 / 指令操作
+  - **随机读写测试**：真随机读/写/查询交错，seed 可复现；写后可恢复原值；结束输出失败 / 不支持 / 跳过报告（不含开猫、复位及表号/IP/时间等敏感项）
+- **固件升级**：PCP 协议升级流程
+- **固件打包**：差分 / 压缩等相关工具
 
-右侧可以自己添加一些常用指令,快捷发送
+## 本地运行
 
-## 自定义脚本
-
-自定义脚本可以在发送和接收数据时进行处理
-
-脚本支持 JavaScript 语法,通过`postMessage`和`onmessage`进行通讯
-
-如下是一个简单的脚本示例
-
-```javascript
-addEventListener('message', function ({data}) {
-    if(data.type=='uart_receive')
-    {
-        postMessage({type:'log',data:'消息长度:'+data.data.length});
-        //原文答复
-        postMessage({type:'uart_send',data:data.data});
-    }
-})
-setInterval(function(){
-    //定时发送
-    postMessage({type:'uart_send_txt',data:'hello world'});
-},1000);
+```bash
+# 无需安装依赖
+open index.html
+# 或
+python3 -m http.server 8000
 ```
 
-`onmessage`接收到的数据格式如下
-
-```js
-{
-    "type":"uart_receive", //消息类型 String,目前仅支持 uart_receive
-    "data":[0,1] //消息内容 Uint8Array
-}
-```
-
-`postMessage`发送的数据格式如下
-
-```js
-{
-    "type":"uart_send", 
-    "data":[0,1]
-}
-```
-
-| TYPE 类型     | DATA 数据格式 | 说明               |
-| ------------- | ------------- | ------------------ |
-| uart_send     | Uint8Array    | 发送字节数据       |
-| uart_send_txt | String        | 发送文本数据       |
-| uart_send_hex | String        | 发送十六进制字符串 |
-| log           | String        | 打印日志           |
-
+版本号见 `js/version.js` 的 `window.APP_VERSION`。
 
 ## 开源
 
-代码凌乱不堪，无学习价值
+欢迎通过 [Issues](https://github.com/Roomen/web-serial-debug/issues) 反馈问题与建议，也欢迎 PR。
 
-希望各位大佬可以协助添砖加瓦，让其更加完善
+本仓库：https://github.com/Roomen/web-serial-debug  
 
-常用的朋友也可以提交一些常用的指令集,后续做一下常用指令集的整理
-
-原项目地址：[GitHub](https://github.com/itldg/web-serial-debug)
+上游参考：https://github.com/itldg/web-serial-debug
