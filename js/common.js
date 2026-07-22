@@ -214,6 +214,8 @@
 		skKeyHex: '',
 		//加密方式 aes128|aes256
 		skEncType: 'aes128',
+		//下行是否加密(默认关: 有密钥也明文下发, 密钥仍用于上行解析)
+		skDownEncrypt: false,
 		//当前协议
 		skProtocol: 'sek',
 	}
@@ -614,6 +616,30 @@
 			decryptMode: toolOptions.skDecryptMode,
 		}
 	}
+	//仅解析密钥材料; 不代表下发要加密
+	function resolveToolEncKey() {
+		if (toolOptions.skKeyHex) {
+			const hex = String(toolOptions.skKeyHex).trim().replace(/\s+/g, '')
+			if (/^[0-9a-fA-F]+$/.test(hex) && hex.length % 2 === 0) {
+				const a = []
+				for (let i = 0; i < hex.length; i += 2) a.push(parseInt(hex.substr(i, 2), 16))
+				return new Uint8Array(a)
+			}
+			return null
+		}
+		if (toolOptions.skKeyAscii) {
+			const s = String(toolOptions.skKeyAscii)
+			const a = new Uint8Array(s.length)
+			for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) & 0xff
+			return a
+		}
+		return null
+	}
+	//下发用密钥: 仅当「下发加密」开启且密钥有效时返回, 否则 null → 明文帧
+	function getDownlinkEncKey() {
+		if (!toolOptions.skDownEncrypt) return null
+		return resolveToolEncKey()
+	}
 	function getHexDumpCols(view) {
 		if (!view) return 16
 		const style = window.getComputedStyle(view)
@@ -806,33 +832,27 @@
 			return
 		}
 		try {
-			let encKey = null
-			if (toolOptions.skKeyHex) {
-				const hex = toolOptions.skKeyHex.trim().replace(/\s+/g, '')
-				if (/^[0-9a-fA-F]+$/.test(hex) && hex.length % 2 === 0) {
-					const a = []
-					for (let i = 0; i < hex.length; i += 2) a.push(parseInt(hex.substr(i, 2), 16))
-					encKey = new Uint8Array(a)
-				}
-			} else if (toolOptions.skKeyAscii) {
-				const s = toolOptions.skKeyAscii
-				const a = new Uint8Array(s.length)
-				for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) & 0xff
-				encKey = a
+			if (toolOptions.skDownEncrypt && !resolveToolEncKey()) {
+				addLogErr('已勾选下发加密, 但密钥无效或为空(请填写高级·密钥)')
+				return
 			}
+			const encKey = getDownlinkEncKey()
 			const frame = skBuildDownFrame({
 				funcCode: document.getElementById('serial-protocol-down-func').value,
 				version: 2,
 				time: new Date(),
 				frameSeq: _downSeq++,
 				tlv: tlv,
-				encKey: encKey ? encKey : null,
+				encKey: encKey,
 			})
 			let hex = []
 			for (const b of frame) {
 				hex.push(('0' + b.toString(16).toUpperCase()).slice(-2))
 			}
 			document.getElementById('serial-protocol-down-preview').value = hex.join(' ')
+			if (encKey) {
+				addLogErr('已生成加密下行帧 (ctrl 加密位=1)')
+			}
 		} catch (err) {
 			addLogErr('生成帧失败:' + err.toString())
 		}
@@ -1148,6 +1168,9 @@
 	if (!toolOptions.maxLogRows) {
 		toolOptions.maxLogRows = 5000
 	}
+	if (toolOptions.skDownEncrypt == null) {
+		toolOptions.skDownEncrypt = false
+	}
 	document.getElementById('serial-max-rows').value = toolOptions.maxLogRows
 	document.getElementById('serial-log-type').value = toolOptions.logType
 	document.getElementById('serial-auto-scroll').innerText = toolOptions.autoScroll ? '自动滚动' : '暂停滚动'
@@ -1163,6 +1186,8 @@
 	}
 	document.getElementById('serial-protocol-key-ascii').value = toolOptions.skKeyAscii
 	document.getElementById('serial-protocol-key-hex').value = toolOptions.skKeyHex
+	const downEncEl = document.getElementById('serial-protocol-down-encrypt')
+	if (downEncEl) downEncEl.checked = !!toolOptions.skDownEncrypt
 	if (toolOptions.skEncType) {
 		set('serial-protocol-enc-type', toolOptions.skEncType)
 	}
@@ -1473,6 +1498,12 @@
 	document.getElementById('serial-protocol-enc-type').addEventListener('change', function (e) {
 		changeOption('skEncType', this.value)
 	})
+	const downEncryptToggle = document.getElementById('serial-protocol-down-encrypt')
+	if (downEncryptToggle) {
+		downEncryptToggle.addEventListener('change', function () {
+			changeOption('skDownEncrypt', this.checked)
+		})
+	}
 
 	document.querySelectorAll('#serial-params-popover .serial-field input,#serial-params-popover .serial-field select').forEach((item) => {
 		item.addEventListener('change', async (e) => {
@@ -1983,22 +2014,9 @@
 				}
 			}
 		},
+		//下行加密密钥; 未勾选「下发加密」时返回 null(明文)。解析密钥见 getParseOpts
 		getEncKey() {
-			let encKey = null
-			if (toolOptions.skKeyHex) {
-				const hex = toolOptions.skKeyHex.trim().replace(/\s+/g, '')
-				if (/^[0-9a-fA-F]+$/.test(hex) && hex.length % 2 === 0) {
-					const a = []
-					for (let i = 0; i < hex.length; i += 2) a.push(parseInt(hex.substr(i, 2), 16))
-					encKey = new Uint8Array(a)
-				}
-			} else if (toolOptions.skKeyAscii) {
-				const s = toolOptions.skKeyAscii
-				const a = new Uint8Array(s.length)
-				for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) & 0xff
-				encKey = a
-			}
-			return encKey
+			return getDownlinkEncKey()
 		},
 		getParseOpts() {
 			return getProtocolParseOpts()

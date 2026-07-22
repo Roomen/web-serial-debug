@@ -445,12 +445,12 @@
                                                 <div class="input-group input-group-sm mt-2">
                                                     <span class="input-group-text">密钥(ASCII)</span>
                                                     <input type="text" class="form-control" id="serial-protocol-key-ascii"
-                                                        placeholder="留空则不解密 · 16/32 字节">
+                                                        placeholder="解析/下发共用 · 16/32 字节">
                                                 </div>
                                                 <div class="input-group input-group-sm mt-2">
                                                     <span class="input-group-text">密钥(HEX，优先)</span>
                                                     <input type="text" class="form-control" id="serial-protocol-key-hex"
-                                                        placeholder="如 01020304… · AES256 需 32 字节">
+                                                        placeholder="如 01020304… · 下发加密需勾选下方开关">
                                                 </div>
                                             </div>
                                         </details>
@@ -481,7 +481,11 @@
                                         </div>
                                         <textarea class="form-control form-control-sm" rows="4" id="serial-protocol-down-tlv"
                                             placeholder='TLV JSON，例如：[{"tag":10,"items":[{"id":1,"value":[]}]}]，value 可为空数组(查询) 或 十六进制字符串 或 字节数组'></textarea>
-                                        <div class="d-flex gap-2 mt-1">
+                                        <div class="d-flex flex-wrap align-items-center gap-2 mt-1">
+                                            <div class="form-check form-switch mb-0" title="关闭时始终明文下发(ctrl 不置加密位)；开启后用上方密钥加密数据域。解析/解密密钥可单独保留。">
+                                                <input class="form-check-input" type="checkbox" id="serial-protocol-down-encrypt">
+                                                <label class="form-check-label" for="serial-protocol-down-encrypt">下发加密</label>
+                                            </div>
                                             <button class="btn btn-sm btn-outline-secondary" id="serial-protocol-build">生成HEX</button>
                                             <button class="btn btn-sm btn-primary flex-grow-1" id="serial-protocol-send">立即下发</button>
                                         </div>
