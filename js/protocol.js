@@ -496,6 +496,136 @@
 		return hexbytes(raw)
 	}
 
+	// Tag5/Tag9 记录值按「记录个数」重复 N 次
+	function isSeriesValueId(tag, id) {
+		if (tag === 5) return (id >= 3 && id <= 17) || id === 19
+		if (tag === 9) return id === 2
+		return false
+	}
+
+	function addMinutesToTimeStr(timeStr, mins) {
+		const m = String(timeStr || '').match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/)
+		if (!m) return null
+		const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])
+		if (isNaN(d.getTime())) return null
+		d.setMinutes(d.getMinutes() + mins)
+		return formatDateTime(d, 0)
+	}
+
+	function renderSeries(def, raw, meta) {
+		const elem = def ? typeLen(def.type) : null
+		if (!elem || elem <= 0) return hexbytes(raw)
+		const n = Math.floor(raw.length / elem)
+		if (n <= 0) return hexbytes(raw)
+		const interval = meta && meta.interval != null ? meta.interval : null
+		const startStr = meta && meta.startStr
+		const declared = meta && meta.count != null ? meta.count : null
+		let head = n + '条'
+		if (declared != null && declared !== n) head += '(声明' + declared + ')'
+		if (interval != null) head += ' 间隔' + interval + '分钟'
+		if (startStr) head += ' 起始' + startStr
+		const lines = [head]
+		for (let i = 0; i < n; i++) {
+			const slice = raw.subarray(i * elem, (i + 1) * elem)
+			const val = renderValue(def, slice)
+			let label = '#' + (i + 1)
+			if (startStr && interval != null) {
+				const t = addMinutesToTimeStr(startStr, i * interval)
+				if (t) label = t
+			}
+			lines.push(label + ' → ' + val)
+		}
+		return lines.join('\n')
+	}
+
+	function parseTagItems(tag, payload) {
+		const defs = W.SK_TAGS[tag] || []
+		const idMap = {}
+		for (const d of defs) idMap[d.id] = d
+		const items = []
+		const seriesMeta = {
+			startStr: null,
+			interval: tag === 9 ? 1440 : null,
+			count: null
+		}
+		let j = 0
+		while (j < payload.length) {
+			const id = payload[j++]
+			const def = idMap[id]
+			let vlen = def ? typeLen(def.type) : null
+			if (vlen === null) {
+				let k = j
+				while (k < payload.length && !idMap[payload[k]]) k++
+				vlen = k - j
+				if (vlen <= 0) vlen = 1
+				const raw = payload.subarray(j, j + vlen)
+				j = k
+				items.push({ id, name: 'ID' + id + '(未知)', raw: Array.from(raw), decoded: hexbytes(raw) })
+				continue
+			}
+			// NULL: 无 Value,仅 ID(信息查询码等)
+			if (vlen === 0 && def && def.type === 'NULL') {
+				items.push({
+					id,
+					name: def.name || ('ID' + id),
+					raw: [],
+					decoded: '(无参数)'
+				})
+				continue
+			}
+			//定长 0 的其它字段(嵌套 TLV 容器):消费剩余字节并递归解析,避免 j+=0 死循环
+			if (vlen === 0) {
+				const raw = payload.subarray(j)
+				items.push({
+					id,
+					name: def ? def.name : ('ID' + id),
+					raw: Array.from(raw),
+					decoded: '嵌套TLV: ' + nestedTlvText(raw)
+				})
+				j = payload.length
+				break
+			}
+			// Tag5/9 记录值: Value = 记录个数 × 单条长度
+			if (isSeriesValueId(tag, id) && vlen > 0) {
+				const elem = vlen
+				let cnt = seriesMeta.count
+				if (cnt == null || cnt <= 0) cnt = Math.floor((payload.length - j) / elem)
+				let need = cnt * elem
+				const remain = payload.length - j
+				if (need > remain) need = Math.floor(remain / elem) * elem
+				if (need < elem && remain >= elem) need = elem
+				if (need <= 0) need = Math.min(elem, remain)
+				const raw = payload.subarray(j, j + need)
+				j += need
+				items.push({
+					id,
+					name: def ? def.name : ('ID' + id),
+					raw: Array.from(raw),
+					decoded: renderSeries(def, raw, seriesMeta),
+					series: true
+				})
+				continue
+			}
+			if (j + vlen > payload.length) vlen = payload.length - j
+			const raw = payload.subarray(j, j + vlen)
+			j += vlen
+			const decoded = renderValue(def, raw)
+			items.push({
+				id,
+				name: def ? def.name : ('ID' + id),
+				raw: Array.from(raw),
+				decoded
+			})
+			if (tag === 5 || tag === 9) {
+				if (id === 0 && raw.length >= 6) seriesMeta.startStr = bcdTime(raw)
+				if (tag === 5 && id === 1 && raw.length >= 2) seriesMeta.interval = u16leRead(raw, 0)
+				if (tag === 5 && id === 2 && raw.length >= 1) seriesMeta.count = raw[0]
+				if (tag === 9 && id === 1 && raw.length >= 1) seriesMeta.count = raw[0]
+			}
+		}
+		return items
+	}
+
 	function parseTlv(data) {
 		const tlv = []
 		let i = 0
@@ -507,75 +637,25 @@
 				continue
 			}
 			if (i + 3 + len > data.length) {
-				tlv.push({ tag, name: W.SK_TAG_NAME[tag] || ('Tag' + tag), payloadBytes: [...data.subarray(i + 3)], items: [], error: 'truncated', len })
-				let j = i + 1
-				let found = -1
-				while (j + 3 <= data.length) {
-					if (W.SK_TAGS[data[j]]) { found = j; break }
-					j++
-				}
-				if (found < 0) break
-				i = found
-				continue
+				const payload = data.subarray(i + 3)
+				tlv.push({
+					tag,
+					name: W.SK_TAG_NAME[tag] || ('Tag' + tag),
+					payloadBytes: Array.from(payload),
+					items: parseTagItems(tag, payload),
+					error: 'truncated',
+					len,
+					actualLen: payload.length
+				})
+				break
 			}
 			const payload = data.subarray(i + 3, i + 3 + len)
 			i += 3 + len
-			const defs = W.SK_TAGS[tag] || []
-			const idMap = {}
-			for (const d of defs) idMap[d.id] = d
-			const items = []
-			let j = 0
-			while (j < payload.length) {
-				const id = payload[j++]
-				const def = idMap[id]
-				let vlen = def ? typeLen(def.type) : null
-				if (vlen === null) {
-					let k = j
-					while (k < payload.length && !idMap[payload[k]]) k++
-					vlen = k - j
-					if (vlen <= 0) vlen = 1
-					const raw = payload.subarray(j, j + vlen)
-					j = k
-					items.push({ id, name: 'ID' + id + '(未知)', raw: Array.from(raw), decoded: hexbytes(raw) })
-					continue
-				}
-				// NULL: 无 Value,仅 ID(信息查询码等)
-				if (vlen === 0 && def && def.type === 'NULL') {
-					items.push({
-						id,
-						name: def.name || ('ID' + id),
-						raw: [],
-						decoded: '(无参数)'
-					})
-					continue
-				}
-				//定长 0 的其它字段(嵌套 TLV 容器):消费剩余字节并递归解析,避免 j+=0 死循环
-				if (vlen === 0) {
-					const raw = payload.subarray(j)
-					items.push({
-						id,
-						name: def ? def.name : ('ID' + id),
-						raw: Array.from(raw),
-						decoded: '嵌套TLV: ' + nestedTlvText(raw)
-					})
-					j = payload.length
-					break
-				}
-				if (j + vlen > payload.length) vlen = payload.length - j
-				const raw = payload.subarray(j, j + vlen)
-				j += vlen
-				items.push({
-					id,
-					name: def ? def.name : ('ID' + id),
-					raw: Array.from(raw),
-					decoded: renderValue(def, raw)
-				})
-			}
 			tlv.push({
 				tag,
 				name: W.SK_TAG_NAME[tag] || ('Tag' + tag),
 				payloadBytes: Array.from(payload),
-				items,
+				items: parseTagItems(tag, payload),
 				len
 			})
 		}
@@ -588,7 +668,11 @@
 			if (2 + plainLen <= pt.length) {
 				const region = pt.subarray(2, 2 + plainLen)
 				const tags = parseTlv(region)
-				if (tags.length && !tags[tags.length - 1].error) return tags
+				if (tags.length) return tags
+			} else if (plainLen > 0 && pt.length > 2) {
+				// 明文长度超出实际数据(截断帧):仍按去掉 2B 前缀解析
+				const tags = parseTlv(pt.subarray(2))
+				if (tags.length) return tags
 			}
 		}
 		return parseTlv(pt)
@@ -644,10 +728,16 @@
 
 	function tryParseUp(b, opt) {
 		if (b.length < 24) return null
-		const dataLen = u16leRead(b, 22)
+		let dataLen = u16leRead(b, 22)
 		const dataOffset = 24
-		const crcOffset = dataOffset + dataLen
-		if (crcOffset + 3 > b.length) return null
+		let crcOffset = dataOffset + dataLen
+		// 声明长度超出帧:若以 0x16 结尾则按实际长度回退
+		if (crcOffset + 3 > b.length) {
+			if (b.length >= 27 && b[b.length - 1] === 0x16) {
+				dataLen = b.length - 24 - 3
+				crcOffset = dataOffset + dataLen
+			} else return null
+		}
 		const dataBytes = b.subarray(dataOffset, crcOffset)
 		const crcRecv = u16leRead(b, crcOffset)
 		const crcCalc = W.skCrc16(b.subarray(0, crcOffset))
@@ -870,7 +960,14 @@
 				if (t.items && t.items.length) {
 					h += '<div class="sk-parse-items">'
 					for (const it of t.items) {
-						h += '<span class="sk-parse-item" title="raw:' + escHtml(hexbytes(it.raw)) + '">ID' + it.id + ' ' + escHtml(it.name || '') + ' = ' + escHtml(it.decoded || hexbytes(it.raw)) + '</span>'
+						const body = escHtml(it.decoded || hexbytes(it.raw))
+						const tip = 'raw:' + escHtml(hexbytes(it.raw))
+						const label = 'ID' + it.id + ' ' + escHtml(it.name || '') + ' = '
+						if (it.series) {
+							h += '<div class="sk-parse-series" title="' + tip + '">' + label + body + '</div>'
+						} else {
+							h += '<span class="sk-parse-item" title="' + tip + '">' + label + body + '</span>'
+						}
 					}
 					h += '</div>'
 				}
@@ -997,8 +1094,8 @@
 			if (2 + plainLen <= region.length) {
 				const trial = region.subarray(2, 2 + plainLen)
 				const tags = plainLen === 0 ? [] : parseTlv(trial)
-				// plainLen=0 的空数据域也要标明文长度;有 TLV 且末项无 error 时同样剥离前缀
-				if (plainLen === 0 || (tags.length && !tags[tags.length - 1].error)) {
+				// plainLen=0 的空数据域也要标明文长度;能解析出 TLV 则剥离前缀
+				if (plainLen === 0 || tags.length) {
 					set(baseOff, 2, prefix + '数据域-明文长度 = ' + plainLen, 'p' + baseOff)
 					if (2 + plainLen < region.length) {
 						set(baseOff + 2 + plainLen, region.length - 2 - plainLen, prefix + '数据域-填充', 'pad' + (baseOff + 2 + plainLen))
@@ -1006,6 +1103,11 @@
 					work = trial
 					workOff = baseOff + 2
 				}
+			} else if (plainLen > 0 && region.length > 2) {
+				// 截断帧:声明长度超出实际,仍剥离 2B 前缀
+				set(baseOff, 2, prefix + '数据域-明文长度 = ' + plainLen + '(截断)', 'p' + baseOff)
+				work = region.subarray(2)
+				workOff = baseOff + 2
 			}
 		}
 		let i = 0
@@ -1017,19 +1119,22 @@
 				i += 3
 				continue
 			}
-			if (i + 3 + len > work.length) {
-				set(workOff + i, work.length - i, prefix + '数据域-截断', 'tr' + (workOff + i))
-				break
-			}
+			const truncated = i + 3 + len > work.length
 			const tagName = W.SK_TAG_NAME[tag] || ('Tag' + tag)
 			const tagGrp = 't' + tag + 'h' + (workOff + i)
-			set(workOff + i, 1, prefix + '数据域-' + tagName + ' [Tag]', tagGrp)
-			set(workOff + i + 1, 2, prefix + '数据域-' + tagName + ' [长度=' + len + ']', tagGrp)
-			const payload = work.subarray(i + 3, i + 3 + len)
+			const payEnd = truncated ? work.length : i + 3 + len
+			set(workOff + i, 1, prefix + '数据域-' + tagName + ' [Tag]' + (truncated ? '(截断)' : ''), tagGrp)
+			set(workOff + i + 1, Math.min(2, work.length - i - 1), prefix + '数据域-' + tagName + ' [长度=' + len + ']', tagGrp)
+			const payload = work.subarray(i + 3, payEnd)
 			const pBase = workOff + i + 3
 			const defs = W.SK_TAGS[tag] || []
 			const idMap = {}
 			for (const d of defs) idMap[d.id] = d
+			const seriesMeta = {
+				startStr: null,
+				interval: tag === 9 ? 1440 : null,
+				count: null
+			}
 			let j = 0
 			while (j < payload.length) {
 				//与 parseTlv 一致:先取 ID,再取 Value
@@ -1063,12 +1168,34 @@
 					j = payload.length
 					break
 				}
+				if (isSeriesValueId(tag, id) && vlen > 0) {
+					const elem = vlen
+					let cnt = seriesMeta.count
+					if (cnt == null || cnt <= 0) cnt = Math.floor((payload.length - j) / elem)
+					let need = cnt * elem
+					const remain = payload.length - j
+					if (need > remain) need = Math.floor(remain / elem) * elem
+					if (need < elem && remain >= elem) need = elem
+					if (need <= 0) need = Math.min(elem, remain)
+					const rawb = payload.subarray(j, j + need)
+					const tip = prefix + '数据域-' + tagName + ' ' + name + ' = ' + renderSeries(def, rawb, seriesMeta)
+					set(pBase + idOff, 1 + need, tip, itemGrp)
+					j += need
+					continue
+				}
 				if (j + vlen > payload.length) vlen = payload.length - j
 				const rawb = payload.subarray(j, j + vlen)
 				const tip = prefix + '数据域-' + tagName + ' ' + name + ' = ' + renderValue(def, rawb)
 				set(pBase + idOff, 1 + vlen, tip, itemGrp)
 				j += vlen
+				if (tag === 5 || tag === 9) {
+					if (id === 0 && rawb.length >= 6) seriesMeta.startStr = bcdTime(rawb)
+					if (tag === 5 && id === 1 && rawb.length >= 2) seriesMeta.interval = u16leRead(rawb, 0)
+					if (tag === 5 && id === 2 && rawb.length >= 1) seriesMeta.count = rawb[0]
+					if (tag === 9 && id === 1 && rawb.length >= 1) seriesMeta.count = rawb[0]
+				}
 			}
+			if (truncated) break
 			i += 3 + len
 		}
 	}

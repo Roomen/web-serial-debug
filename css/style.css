@@ -1077,6 +1077,22 @@ footer a:hover {
 .sk-parse-item:hover {
 	background: var(--accent-light);
 }
+.sk-parse-series {
+	flex: 1 1 100%;
+	font-size: 0.65rem;
+	padding: 2px 6px;
+	background: var(--bg-code);
+	border-radius: 2px;
+	white-space: pre-wrap;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	line-height: 1.35;
+	max-height: 220px;
+	overflow: auto;
+	cursor: help;
+}
+.sk-parse-series:hover {
+	background: var(--accent-light);
+}
 
 .sk-parse-errors {
 	color: var(--danger);
