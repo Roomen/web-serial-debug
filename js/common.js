@@ -1923,8 +1923,17 @@
 
 	//串口分包合并
 	function dataReceived(data) {
-		//立即把原始字节交给固件升级等模块,由其自行按协议帧边界组装
-		if (window.serialApi && window.serialApi._onReceive) window.serialApi._onReceive(data)
+		//立即把原始字节交给固件升级/协议测试等模块,由其自行按协议帧边界组装
+		if (window.serialApi) {
+			const api = window.serialApi
+			if (api._receivers && api._receivers.length) {
+				for (let i = 0; i < api._receivers.length; i++) {
+					try { api._receivers[i](data) } catch (e) { /* ignore */ }
+				}
+			} else if (api._onReceive) {
+				api._onReceive(data)
+			}
+		}
 		serialData.push(...data)
 		if (toolOptions.timeOut == 0) {
 			addLog(serialData, true)
@@ -1942,7 +1951,8 @@
 		}, toolOptions.timeOut)
 	}
 
-	//对外暴露的串口接口(供固件升级等模块使用)
+	//对外暴露的串口接口(供固件升级/协议测试等模块使用)
+	//onReceive 支持多订阅者; 旧单回调 _onReceive 仍兼容
 	window.serialApi = {
 		async writeData(data) {
 			await writeData(data)
@@ -1953,8 +1963,42 @@
 		//升级进行中时禁止第三方协议解析日志,避免干扰
 		suppressParse: false,
 		_onReceive: null,
+		_receivers: [],
 		onReceive(cb) {
+			if (typeof cb !== 'function') return function () {}
+			this._receivers.push(cb)
+			//兼容旧固件升级模块: 保留最后一个单回调
 			this._onReceive = cb
+			const self = this
+			return function unsubscribe() {
+				const idx = self._receivers.indexOf(cb)
+				if (idx !== -1) self._receivers.splice(idx, 1)
+				if (self._onReceive === cb) {
+					self._onReceive = self._receivers.length
+						? self._receivers[self._receivers.length - 1]
+						: null
+				}
+			}
+		},
+		getEncKey() {
+			let encKey = null
+			if (toolOptions.skKeyHex) {
+				const hex = toolOptions.skKeyHex.trim().replace(/\s+/g, '')
+				if (/^[0-9a-fA-F]+$/.test(hex) && hex.length % 2 === 0) {
+					const a = []
+					for (let i = 0; i < hex.length; i += 2) a.push(parseInt(hex.substr(i, 2), 16))
+					encKey = new Uint8Array(a)
+				}
+			} else if (toolOptions.skKeyAscii) {
+				const s = toolOptions.skKeyAscii
+				const a = new Uint8Array(s.length)
+				for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) & 0xff
+				encKey = a
+			}
+			return encKey
+		},
+		getParseOpts() {
+			return getProtocolParseOpts()
 		},
 	}
 	var ansi_up = new AnsiUp()
@@ -2112,7 +2156,26 @@
 		appendLogNode(row)
 	}
 
-	//复制文本
+	//轻量 toast 提示(非确认框)
+	let _toastTimer = null
+	function showToast(msg, ms) {
+		let tip = document.getElementById('serial-toast')
+		if (!tip) {
+			tip = document.createElement('div')
+			tip.id = 'serial-toast'
+			tip.className = 'serial-toast'
+			tip.setAttribute('role', 'status')
+			document.body.appendChild(tip)
+		}
+		tip.textContent = msg
+		tip.classList.add('is-show')
+		clearTimeout(_toastTimer)
+		_toastTimer = setTimeout(function () {
+			tip.classList.remove('is-show')
+		}, ms != null ? ms : 1400)
+	}
+
+	//复制文本 — 成功后 toast 提示, 不弹确认框
 	function copyText(text) {
 		let textarea = document.createElement('textarea')
 		textarea.value = text
@@ -2124,7 +2187,7 @@
 		textarea.setSelectionRange(0, textarea.value.length)
 		document.execCommand('copy')
 		document.body.removeChild(textarea)
-		showMsg('已复制到剪贴板')
+		showToast('复制成功')
 	}
 
 	//保存文本
