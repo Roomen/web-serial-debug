@@ -218,6 +218,7 @@
 				name: 'SEK',
 				parseFrame: skParseFrame,
 				formatFrame: skFormatFrame,
+				findFrame: typeof skFindFrame === 'function' ? skFindFrame : null,
 				byteMap: typeof skByteMap === 'function' ? skByteMap : null,
 				buildDownFrame: typeof skBuildDownFrame === 'function' ? skBuildDownFrame : null,
 				presets: window.SK_DOWN_PRESETS || [],
@@ -229,6 +230,7 @@
 	;(function () {
 		var _parse = typeof skParseFrame === 'function' ? skParseFrame : null
 		var _fmt = typeof skFormatFrame === 'function' ? skFormatFrame : null
+		var _find = typeof skFindFrame === 'function' ? skFindFrame : null
 		var _bmap = typeof skByteMap === 'function' ? skByteMap : null
 		var _build = typeof skBuildDownFrame === 'function' ? skBuildDownFrame : null
 
@@ -245,6 +247,12 @@
 			if (p && p.formatFrame) return p.formatFrame(r)
 			if (_fmt) return _fmt(r)
 			return ''
+		}
+		skFindFrame = function (data, opts) {
+			var p = window.getActiveProtocol()
+			if (p && p.findFrame) return p.findFrame(data, opts)
+			if (_find) return _find(data, opts)
+			return null
 		}
 		if (_bmap) {
 			skByteMap = function (r) {
@@ -519,7 +527,63 @@
 		}
 		return bytes
 	}
+	//剪贴板读取权限：在线 HTTPS 下首次授权后浏览器会记住，后续 click 静默 readText
+	let _clipReadPerm = 'unknown' // granted | denied | prompt | unknown
+	let _clipPermWatching = false
+	function buildHexEmptyHtml() {
+		const granted = _clipReadPerm === 'granted'
+		const denied = _clipReadPerm === 'denied'
+		const main = denied
+			? '权限已拒绝，请用 Ctrl/Cmd+V 粘贴'
+			: granted
+				? '点击读取剪贴板 HEX'
+				: '点击允许读取剪贴板'
+		const sub = denied
+			? '可在地址栏站点设置中重新允许剪贴板 · 也可点上方日志行'
+			: granted
+				? '已授权，点击即读 · 也支持 Ctrl/Cmd+V · 或点上方日志行'
+				: '首次需浏览器授权一次，之后点击不再弹窗 · 也可 Ctrl/Cmd+V'
+		return '<div class="sk-hex-empty" aria-hidden="true">' +
+			'<div class="sk-hex-empty-main"><i class="bi bi-clipboard-plus"></i><span>' + main + '</span></div>' +
+			'<div class="sk-hex-empty-sub">' + sub + '</div></div>'
+	}
+	function refreshHexEmptyHtml() {
+		const view = document.getElementById('serial-protocol-hexview')
+		if (view && view.classList.contains('is-empty')) {
+			view.innerHTML = buildHexEmptyHtml()
+		}
+	}
+	async function queryClipboardReadPerm() {
+		try {
+			if (!navigator.permissions || !navigator.permissions.query) return _clipReadPerm
+			const st = await navigator.permissions.query({ name: 'clipboard-read' })
+			_clipReadPerm = st.state || 'unknown'
+			if (!_clipPermWatching) {
+				_clipPermWatching = true
+				st.addEventListener('change', function () {
+					_clipReadPerm = st.state || 'unknown'
+					refreshHexEmptyHtml()
+				})
+			}
+		} catch (e) {
+			// Firefox 等可能不支持 clipboard-read 查询，保持 unknown，靠首次 read 结果缓存
+		}
+		return _clipReadPerm
+	}
+	async function readClipboardTextOnce() {
+		const text = await navigator.clipboard.readText()
+		_clipReadPerm = 'granted'
+		refreshHexEmptyHtml()
+		return text
+	}
 	let _hexDumpState = { bytes: null, bm: null, cols: 0 }
+	function getProtocolParseOpts() {
+		return {
+			keyAscii: toolOptions.skKeyAscii || undefined,
+			keyHex: toolOptions.skKeyHex || undefined,
+			decryptMode: toolOptions.skDecryptMode,
+		}
+	}
 	function getHexDumpCols(view) {
 		if (!view) return 16
 		const style = window.getComputedStyle(view)
@@ -543,7 +607,7 @@
 		bytes = _hexDumpState.bytes
 		bm = _hexDumpState.bm
 		if (!bytes || !bytes.length) {
-			view.innerHTML = ''
+			view.innerHTML = buildHexEmptyHtml()
 			view.classList.add('is-empty')
 			_hexDumpState.cols = 0
 			return
@@ -580,7 +644,7 @@
 		}
 		view.innerHTML = h
 	}
-	function parseProtocolBytes(bytes) {
+	function parseProtocolBytes(bytes, note) {
 		if (!bytes || !bytes.length) {
 			renderProtocolHexDump(null)
 			document.getElementById('serial-protocol-output').innerHTML = ''
@@ -588,40 +652,95 @@
 		}
 		renderProtocolHexDump(bytes)
 		try {
-			const r = skParseFrame(bytes, {
-				keyAscii: toolOptions.skKeyAscii || undefined,
-				keyHex: toolOptions.skKeyHex || undefined,
-				decryptMode: toolOptions.skDecryptMode,
-			})
+			const r = skParseFrame(bytes, getProtocolParseOpts())
 			if (typeof skByteMap === 'function') {
 				try {
 					renderProtocolHexDump(bytes, skByteMap(r))
 				} catch (mapErr) { /* keep plain dump */ }
 			}
-			const prompt = r.needKey ? '<div class="sk-parse-err">⚠ 加密报文,请在右侧「第三方协议」中的「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>' : ''
-			document.getElementById('serial-protocol-output').innerHTML = prompt + skFormatFrame(r)
+			let head = ''
+			if (note) head += '<div class="sk-parse-note">' + HTMLEncode(note) + '</div>'
+			if (r.needKey) head += '<div class="sk-parse-err">⚠ 加密报文,请在右侧「第三方协议」中的「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>'
+			document.getElementById('serial-protocol-output').innerHTML = head + skFormatFrame(r)
 		} catch (err) {
 			document.getElementById('serial-protocol-output').innerHTML = '<div class="sk-parse-err">解析异常:' + HTMLEncode(String(err)) + '</div>'
 		}
 	}
-	function applyProtocolHexInput(raw) {
+	// opts.requireValid: 仅在扫到 CRC+EOF 有效帧时填充（点击剪贴板用，失败不覆盖已有内容）
+	function applyProtocolHexInput(raw, opts) {
+		opts = opts || {}
 		const hex = normalizeHexRaw(raw)
 		const bytes = hexRawToBytes(hex)
 		if (!bytes) {
-			renderProtocolHexDump(null)
+			if (!opts.requireValid) renderProtocolHexDump(null)
 			return false
 		}
-		parseProtocolBytes(bytes)
+		let frameBytes = bytes
+		let note = ''
+		const found = typeof skFindFrame === 'function' ? skFindFrame(bytes, getProtocolParseOpts()) : null
+		if (found && found.found) {
+			frameBytes = found.frame
+			if (found.prefix || found.suffix) {
+				note = '已从偏移 0x' + found.offset.toString(16).toUpperCase() +
+					' 截取有效帧（丢弃前 ' + found.prefix + ' / 后 ' + found.suffix + ' 字节）'
+			}
+		} else if (opts.requireValid) {
+			return false
+		}
+		parseProtocolBytes(frameBytes, note)
 		return true
 	}
-	//HEX 转储区：粘贴即格式化并解析；宽度变化时在 16/32 列间切换
+	//HEX 转储区：点击读剪贴板 / 粘贴即格式化并解析；宽度变化时在 16/32 列间切换
 	const protocolHexView = document.getElementById('serial-protocol-hexview')
 	if (protocolHexView) {
+		queryClipboardReadPerm().then(refreshHexEmptyHtml)
+		if (protocolHexView.classList.contains('is-empty')) {
+			protocolHexView.innerHTML = buildHexEmptyHtml()
+		}
+		function applyClipboardHexText(text) {
+			if (!text || !String(text).trim()) {
+				addLogErr('剪贴板为空')
+				return
+			}
+			if (!applyProtocolHexInput(text, { requireValid: true })) {
+				const hex = normalizeHexRaw(text)
+				if (!hexRawToBytes(hex)) addLogErr('剪贴板不是合法 HEX')
+				else addLogErr('剪贴板中未找到有效协议帧（需 A9 9A … CRC … 16）')
+			}
+		}
 		protocolHexView.addEventListener('paste', (e) => {
 			e.preventDefault()
 			const text = (e.clipboardData || window.clipboardData).getData('text')
 			if (!applyProtocolHexInput(text)) {
 				addLogErr('HEX格式错误:' + text)
+			}
+		})
+		protocolHexView.addEventListener('click', async () => {
+			//选中文本时不抢剪贴板，避免影响复制
+			const sel = window.getSelection()
+			if (sel && !sel.isCollapsed && protocolHexView.contains(sel.anchorNode)) return
+			if (!navigator.clipboard || !navigator.clipboard.readText) {
+				addLogErr('当前环境不支持读取剪贴板，请用 Ctrl/Cmd+V 粘贴')
+				return
+			}
+			const perm = await queryClipboardReadPerm()
+			if (perm === 'denied') {
+				addLogErr('剪贴板权限已拒绝，请在地址栏站点设置中允许，或使用 Ctrl/Cmd+V')
+				refreshHexEmptyHtml()
+				return
+			}
+			try {
+				//已授权时浏览器不再弹窗；首次 prompt 时由本次用户点击触发一次授权
+				const text = await readClipboardTextOnce()
+				applyClipboardHexText(text)
+			} catch (err) {
+				const name = err && err.name
+				if (name === 'NotAllowedError' || name === 'SecurityError') {
+					_clipReadPerm = 'denied'
+					refreshHexEmptyHtml()
+					addLogErr('未获得剪贴板权限，请在弹窗中选「允许」，或改用 Ctrl/Cmd+V')
+				}
+				//其它错误（空、取消等）静默，仍可用粘贴
 			}
 		})
 		protocolHexView.addEventListener('keydown', (e) => {
