@@ -51,6 +51,19 @@
             </div>
         </div>
     </div>
+    <div id="issue-tip" class="issue-tip" hidden>
+        <i class="bi bi-info-circle issue-tip-icon"></i>
+        <div class="issue-tip-body">
+            <strong>欢迎使用 Web Serial Debug</strong>
+            <p>如发现 Bug 或有改进建议，欢迎到
+                <a href="https://github.com/Roomen/web-serial-debug/issues" target="_blank" rel="noopener">GitHub Issues</a>
+                提交反馈，感谢支持！
+            </p>
+        </div>
+        <button type="button" id="issue-tip-close" class="issue-tip-close" title="关闭" aria-label="关闭">
+            <i class="bi bi-x-lg"></i>
+        </button>
+    </div>
     <header class="bd-header bg-dark py-3 d-flex align-items-stretch border-bottom border-dark">
         <div class="container-fluid d-flex align-items-center">
             <h1 class="d-flex align-items-center fs-4 text-white mb-0">
@@ -100,10 +113,15 @@
                         <span class="theme-toggle-thumb"></span>
                     </span>
                 </button>
-                <a href="https://github.com/Roomen/web-serial-debug" target="_blank" class="rail-item" title="GitHub 仓库">
+                <a href="https://github.com/Roomen/web-serial-debug/issues/new" target="_blank" rel="noopener" class="rail-item" title="提交建议 / Bug">
+                    <i class="bi bi-chat-dots"></i>
+                    <span class="rail-label">反馈</span>
+                </a>
+                <a href="https://github.com/Roomen/web-serial-debug" target="_blank" rel="noopener" class="rail-item" title="GitHub 仓库">
                     <i class="bi bi-github"></i>
                     <span class="rail-label">GitHub</span>
                 </a>
+                <div class="rail-version" id="app-version" title="应用版本"></div>
             </div>
         </nav>
 
@@ -655,6 +673,7 @@
             </div>
         </div>
     </div>
+    <script src="js/version.js"></script>
     <script src="js/auth.js"></script>
     <script src="js/ansi_up.min.js"></script>
     <script>

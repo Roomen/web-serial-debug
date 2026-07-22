@@ -24,11 +24,27 @@
 
 当前没有自动化测试。涉及 UI 或串口逻辑的修改都应进行手动浏览器验证。日志相关修改需检查 HEX、TEXT、ANSI 三种显示模式。发送路径相关修改需验证 HEX/TEXT 输入、循环发送、CRLF 追加和快捷发送按钮。配置相关修改需刷新页面，确认 localStorage 中保存的设置仍能正确恢复。
 
+## 版本号
+
+网站版本写在 `js/version.js` 的 `window.APP_VERSION`（SemVer，`MAJOR.MINOR.PATCH`），左下角导航栏会显示为 `vX.Y.Z`。**这是唯一来源**，不要在 HTML 里再写死一份。
+
+每次提交用户可见改动前，必须先按改动类型 bump 版本再提交：
+
+| 改动类型 | bump | 示例 |
+| --- | --- | --- |
+| 破坏性变更 / 不兼容 | MAJOR | 布局大改导致旧配置失效 |
+| 新功能 `feat:` | MINOR | 新增反馈入口、协议预设 |
+| 缺陷修复 `fix:` | PATCH | 串口重连失败 |
+| 样式/文案/小优化 `style:` `refactor:` `docs:` | PATCH | 间距调整、文案润色 |
+| 仅内部/无用户感知（注释、忽略文件等） | 不 bump | |
+
+同一提交含多种改动时取最高级别（feat+fix → MINOR）。版本与 commit 同批提交，commit message 仍用 Conventional Commit，无需把版本写进 message。
+
 ## 提交与 Pull Request 规范
 
 近期提交使用简洁的 Conventional Commit 风格前缀，包括 `feat:`、`fix:`、`style:`。继续沿用该格式，例如 `fix: handle serial reconnect failure` 或 `feat: add quick-send import validation`。
 
-PR 应说明用户可见变化、列出已测试浏览器；涉及界面变化时附截图或录屏。若修复串口设备兼容性问题，请关联对应 issue 或说明设备/浏览器环境。
+PR 应说明用户可见变化、版本号变化、列出已测试浏览器；涉及界面变化时附截图或录屏。若修复串口设备兼容性问题，请关联对应 issue 或说明设备/浏览器环境。
 
 ## 安全与隐私
 

@@ -57,11 +57,30 @@
 		}
 	}
 
+	function showIssueTip() {
+		var tip = document.getElementById('issue-tip')
+		var closeBtn = document.getElementById('issue-tip-close')
+		if (!tip || !closeBtn) return
+		if (localStorage.getItem('issueTipDismissed')) return
+		tip.hidden = false
+		closeBtn.addEventListener('click', function () {
+			tip.hidden = true
+			localStorage.setItem('issueTipDismissed', '1')
+		})
+	}
+
+	var verEl = document.getElementById('app-version')
+	if (verEl && window.APP_VERSION) {
+		verEl.textContent = 'v' + window.APP_VERSION
+		verEl.title = '应用版本 v' + window.APP_VERSION
+	}
+
 	var overlay = document.getElementById('login-overlay')
 	if (!overlay) return
 
 	if (window.__auth.authed()) {
 		overlay.style.display = 'none'
+		showIssueTip()
 		return
 	}
 
