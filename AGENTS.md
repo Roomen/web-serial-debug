@@ -40,11 +40,17 @@
 
 同一提交含多种改动时取最高级别（feat+fix → MINOR）。版本与 commit 同批提交，commit message 仍用 Conventional Commit，无需把版本写进 message。
 
+## 分支与工作流
+
+**先开分支再改代码**，不要在 `main` 或无关分支上直接改。流程：`git checkout main && git pull` → `git checkout -b feat/xxx` 或 `fix/xxx` → 修改 → commit → push → PR。合入并删除远端分支后，本地切回 `main` 并 `git pull`，删掉本地功能分支。
+
 ## 提交与 Pull Request 规范
 
 近期提交使用简洁的 Conventional Commit 风格前缀，包括 `feat:`、`fix:`、`style:`。继续沿用该格式，例如 `fix: handle serial reconnect failure` 或 `feat: add quick-send import validation`。
 
-PR 应说明用户可见变化、版本号变化、列出已测试浏览器；涉及界面变化时附截图或录屏。若修复串口设备兼容性问题，请关联对应 issue 或说明设备/浏览器环境。
+PR 正文只写：**Summary**（用户可见变化、版本号变化）；涉及界面变化时附截图或录屏；若修复串口设备兼容性问题，关联 issue 或说明设备/浏览器环境。
+
+**不要写 Test plan**（本仓库 PR 不需要该章节）。
 
 ## 安全与隐私
 
