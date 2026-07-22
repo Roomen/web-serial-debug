@@ -907,6 +907,72 @@
 		return result
 	}
 
+	//在脏字节流中扫描 A9 9A，按声明长度+CRC+EOF 截取首个有效帧
+	W.skFindFrame = function (bytes, opt) {
+		opt = opt || {}
+		const b = toBytes(bytes)
+		const empty = { found: false, offset: 0, length: b.length, frame: b, prefix: 0, suffix: 0 }
+		if (b.length < 19) return empty
+
+		function acceptSlice(slice, offset) {
+			if (!slice || slice.length < 19) return null
+			const r = W.skParseFrame(slice, opt)
+			// skParseFrame.ok = CRC 通过且结束符 0x16（加密缺密钥时仍可为 ok）
+			if (!r || !r.ok) return null
+			const dataLen = r.fields && r.fields['数据域字节数']
+			if (dataLen == null || dataLen < 0) return null
+			const exp = (r.dir === 'up' ? 24 : 16) + dataLen + 3
+			if (exp < 19 || exp > slice.length) return null
+			const frame = exp === slice.length ? new Uint8Array(slice) : new Uint8Array(slice.subarray(0, exp))
+			let parse = r
+			if (exp !== slice.length) {
+				const r2 = W.skParseFrame(frame, opt)
+				if (r2 && r2.ok) parse = r2
+			}
+			return { offset: offset, length: exp, frame: frame, parse: parse }
+		}
+
+		let best = null
+		for (let i = 0; i + 19 <= b.length; i++) {
+			if (b[i] !== 0xA9 || b[i + 1] !== 0x9A) continue
+			const slices = []
+			if (i + 16 <= b.length) {
+				const dl = u16leRead(b, i + 14)
+				const exp = 16 + dl + 3
+				if (dl >= 0 && exp >= 19 && exp <= 8192 && i + exp <= b.length) {
+					slices.push(b.subarray(i, i + exp))
+				}
+			}
+			if (i + 24 <= b.length) {
+				const dl = u16leRead(b, i + 22)
+				const exp = 24 + dl + 3
+				if (dl >= 0 && exp >= 27 && exp <= 8192 && i + exp <= b.length) {
+					slices.push(b.subarray(i, i + exp))
+				}
+			}
+			slices.push(b.subarray(i))
+			for (let s = 0; s < slices.length; s++) {
+				const cand = acceptSlice(slices[s], i)
+				if (!cand) continue
+				if (!best || cand.offset < best.offset || (cand.offset === best.offset && cand.length < best.length)) {
+					best = cand
+				}
+			}
+			if (best && best.offset === i) break
+		}
+
+		if (!best) return empty
+		return {
+			found: true,
+			offset: best.offset,
+			length: best.length,
+			frame: best.frame,
+			parse: best.parse,
+			prefix: best.offset,
+			suffix: b.length - best.offset - best.length
+		}
+	}
+
 	W.skFormatFrame = function (p) {
 		const dirArrow = p.dir === 'up' ? '↑' : p.dir === 'down' ? '↓' : '?'
 		const status = (p.crcOk ? '✓' : '✗') + (p.encrypted ? ' 🔒' : '')

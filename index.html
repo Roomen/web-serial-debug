@@ -273,8 +273,16 @@
                             </div>
                             <div id="serial-parse-body">
                                 <div id="serial-parse-input">
-                                    <div id="serial-protocol-hexview" class="sk-hex-dump is-empty" tabindex="0"
-                                        data-placeholder="粘贴 HEX 报文自动解析（空格/换行/0x 前缀均可），或点击上方日志行"></div>
+                                    <div id="serial-protocol-hexview" class="sk-hex-dump is-empty" tabindex="0" role="button"
+                                        aria-label="协议 HEX 输入区，点击读取剪贴板">
+                                        <div class="sk-hex-empty" aria-hidden="true">
+                                            <div class="sk-hex-empty-main">
+                                                <i class="bi bi-clipboard-plus"></i>
+                                                <span>点击允许读取剪贴板</span>
+                                            </div>
+                                            <div class="sk-hex-empty-sub">首次需浏览器授权一次，之后点击不再弹窗 · 也可 Ctrl/Cmd+V</div>
+                                        </div>
+                                    </div>
                                 </div>
                                 <div id="serial-protocol-output" class="rounded p-2 overflow-auto">
                                 </div>

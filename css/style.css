@@ -1828,16 +1828,63 @@ hr {
 .sk-hex-dump.is-empty {
 	display: flex;
 	align-items: center;
-	color: var(--text-muted, #94a3b8);
+	justify-content: center;
+	min-height: 72px;
 	cursor: pointer;
+	border-style: dashed;
+	background: linear-gradient(180deg, var(--bg-code) 0%, var(--bg-surface, var(--bg-code)) 100%);
+	transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
 }
 
-.sk-hex-dump.is-empty::before {
-	content: attr(data-placeholder);
-	font-family: inherit;
-	font-size: 0.78rem;
-	line-height: 1.4;
-	white-space: normal;
+.sk-hex-dump.is-empty:hover,
+.sk-hex-dump.is-empty:focus {
+	border-color: var(--accent);
+	box-shadow: 0 0 0 2px var(--accent-light);
+	background-color: var(--accent-light);
+}
+
+.sk-hex-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 4px;
+	padding: 4px 8px;
+	text-align: center;
+	pointer-events: none;
+	user-select: none;
+}
+
+.sk-hex-empty-main {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+	font-size: 0.84rem;
+	font-weight: 600;
+	color: var(--text-primary);
+}
+
+.sk-hex-empty-main .bi {
+	font-size: 1.05rem;
+	color: var(--accent);
+}
+
+.sk-hex-empty-sub {
+	font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+	font-size: 0.72rem;
+	line-height: 1.35;
+	color: var(--text-muted, #94a3b8);
+}
+
+.sk-parse-note {
+	color: var(--text-muted, #64748b);
+	background: var(--bg-surface, transparent);
+	border-left: 3px solid var(--accent);
+	padding: 4px 8px;
+	margin: 2px 0 4px;
+	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+	font-size: 0.72rem;
+	line-height: 1.35;
 }
 
 .sk-hex-dump-head,
