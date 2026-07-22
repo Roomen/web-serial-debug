@@ -538,11 +538,26 @@
 		return lines.join('\n')
 	}
 
-	function parseTagItems(tag, payload) {
+	function resultCodeName(code) {
+		const m = W.SK_RESULT_CODES && W.SK_RESULT_CODES.Tag11
+		if (m && m[code] != null) return m[code]
+		return '结果码' + code
+	}
+
+	// 0x81 参数设置应答 / 0x91 指令操作应答: 每个 ID 的 Value 为 1B 处理结果码(Tag11)
+	function isResultValueFunc(fc) {
+		if (fc == null) return false
+		const key = '0x' + (fc & 0xff).toString(16).toUpperCase().padStart(2, '0')
+		const def = W.SK_FUNC_CODES && W.SK_FUNC_CODES[key]
+		return !!(def && def.resultValue)
+	}
+
+	function parseTagItems(tag, payload, opt) {
 		const defs = W.SK_TAGS[tag] || []
 		const idMap = {}
 		for (const d of defs) idMap[d.id] = d
 		const items = []
+		const resultMode = !!(opt && opt.resultMode)
 		const seriesMeta = {
 			startStr: null,
 			interval: tag === 9 ? 1440 : null,
@@ -552,6 +567,23 @@
 		while (j < payload.length) {
 			const id = payload[j++]
 			const def = idMap[id]
+			// 应答帧: ID(1B) + 结果码(1B), 不按参数类型取长度
+			if (resultMode) {
+				const name = def ? def.name : ('ID' + id)
+				if (j >= payload.length) {
+					items.push({ id, name, raw: [], decoded: '(缺结果码)', resultCode: null })
+					break
+				}
+				const code = payload[j++] & 0xff
+				items.push({
+					id,
+					name,
+					raw: [code],
+					decoded: resultCodeName(code),
+					resultCode: code
+				})
+				continue
+			}
 			let vlen = def ? typeLen(def.type) : null
 			if (vlen === null) {
 				let k = j
@@ -626,7 +658,7 @@
 		return items
 	}
 
-	function parseTlv(data) {
+	function parseTlv(data, opt) {
 		const tlv = []
 		let i = 0
 		while (i + 3 <= data.length) {
@@ -642,7 +674,7 @@
 					tag,
 					name: W.SK_TAG_NAME[tag] || ('Tag' + tag),
 					payloadBytes: Array.from(payload),
-					items: parseTagItems(tag, payload),
+					items: parseTagItems(tag, payload, opt),
 					error: 'truncated',
 					len,
 					actualLen: payload.length
@@ -655,27 +687,27 @@
 				tag,
 				name: W.SK_TAG_NAME[tag] || ('Tag' + tag),
 				payloadBytes: Array.from(payload),
-				items: parseTagItems(tag, payload),
+				items: parseTagItems(tag, payload, opt),
 				len
 			})
 		}
 		return tlv
 	}
 
-	function extractTlv(pt) {
+	function extractTlv(pt, opt) {
 		if (pt.length >= 2) {
 			const plainLen = u16leRead(pt, 0)
 			if (2 + plainLen <= pt.length) {
 				const region = pt.subarray(2, 2 + plainLen)
-				const tags = parseTlv(region)
+				const tags = parseTlv(region, opt)
 				if (tags.length) return tags
 			} else if (plainLen > 0 && pt.length > 2) {
 				// 明文长度超出实际数据(截断帧):仍按去掉 2B 前缀解析
-				const tags = parseTlv(pt.subarray(2))
+				const tags = parseTlv(pt.subarray(2), opt)
 				if (tags.length) return tags
 			}
 		}
-		return parseTlv(pt)
+		return parseTlv(pt, opt)
 	}
 
 	//把嵌套 TLV 区域压缩成简短文本(供 NULL 容器字段展示)
@@ -756,6 +788,8 @@
 			tlvBytes = pt
 			plainBytesArr = Array.from(pt)
 		}
+		const fc = b[20]
+		const tlvOpt = isResultValueFunc(fc) ? { resultMode: true } : null
 		const fields = {
 			帧序号: u16leRead(b, 2),
 			协议版本号: { value: b[4], name: W.SK_PROTOCOL_VERSION[b[4]] || '保留' },
@@ -766,7 +800,7 @@
 			信噪比SNR: signed16(b.subarray(16, 18)),
 			覆盖等级ECL: b[18],
 			信号质量CSQ: b[19],
-			功能码: { value: b[20], name: (W.SK_FUNC_CODES['0x' + b[20].toString(16).toUpperCase().padStart(2, '0')] || {}).name || '' },
+			功能码: { value: fc, name: (W.SK_FUNC_CODES['0x' + fc.toString(16).toUpperCase().padStart(2, '0')] || {}).name || '' },
 			控制码: { raw: ctrl, 后续帧: (ctrl & 0x80) === 0x80, 加密: encrypted },
 			数据域字节数: dataLen,
 			帧结束符: endByte
@@ -781,7 +815,7 @@
 			decryptOk: dec.ok,
 			needKey,
 			fields,
-			tlv: extractTlv(tlvBytes),
+			tlv: extractTlv(tlvBytes, tlvOpt),
 			dataBytes: Array.from(dataBytes),
 			plainBytes: plainBytesArr
 		}
@@ -810,12 +844,14 @@
 			plainBytesArr = Array.from(pt)
 		}
 		const timeBytes = b.subarray(5, 12)
+		const fc = b[12]
+		const tlvOpt = isResultValueFunc(fc) ? { resultMode: true } : null
 		const fields = {
 			帧序号: u16leRead(b, 2),
 			协议版本号: { value: b[4], name: W.SK_PROTOCOL_VERSION[b[4]] || '保留' },
 			平台时间: bcdTime(timeBytes),
 			平台时间BCD: hexbytes(timeBytes),
-			功能码: { value: b[12], name: (W.SK_FUNC_CODES['0x' + b[12].toString(16).toUpperCase().padStart(2, '0')] || {}).name || '' },
+			功能码: { value: fc, name: (W.SK_FUNC_CODES['0x' + fc.toString(16).toUpperCase().padStart(2, '0')] || {}).name || '' },
 			控制码: { raw: ctrl, 后续帧: (ctrl & 0x80) === 0x80, 加密: encrypted },
 			数据域字节数: dataLen,
 			帧结束符: endByte
@@ -830,7 +866,7 @@
 			decryptOk: dec.ok,
 			needKey,
 			fields,
-			tlv: extractTlv(tlvBytes),
+			tlv: extractTlv(tlvBytes, tlvOpt),
 			dataBytes: Array.from(dataBytes),
 			plainBytes: plainBytesArr
 		}
@@ -1130,7 +1166,9 @@
 			}
 			if (region && region.length === crcOffset - dataOffset) {
 				//顶层数据域才尝试剥离 2B 明文长度前缀(与 extractTlv 一致)
-				walkTlvRegion(region, dataOffset, map, prefix, true)
+				const fcObj = r.fields && r.fields['功能码']
+				const fc = fcObj && typeof fcObj === 'object' ? fcObj.value : fcObj
+				walkTlvRegion(region, dataOffset, map, prefix, true, isResultValueFunc(fc))
 			}
 		} else if (enc) {
 			set(dataOffset, Math.max(0, crcOffset - dataOffset), '加密数据域(需密钥解密后才有含义)', 'enc' + dataOffset)
@@ -1146,20 +1184,22 @@
 
 	//与 parseTlv / extractTlv 对齐的字节标注:
 	//- allowPlainLen: 仅顶层数据域为 true,嵌套容器为 false
+	//- resultMode: 0x81/0x91 应答, Value 固定 1B 结果码
 	//- 字段布局为 [ID 1B][Value vlen B], ID 单独消费(与 parseTlv 的 j++ 一致)
-	function walkTlvRegion(region, baseOff, map, prefix, allowPlainLen) {
+	function walkTlvRegion(region, baseOff, map, prefix, allowPlainLen, resultMode) {
 		const set = (off, len, tip, grp) => {
 			for (let k = 0; k < len; k++) {
 				if (off + k < map.length) map[off + k] = { tip: tip, grp: grp }
 			}
 		}
+		const tlvOpt = resultMode ? { resultMode: true } : null
 		let work = region
 		let workOff = baseOff
 		if (allowPlainLen && region.length >= 2) {
 			const plainLen = u16leRead(region, 0)
 			if (2 + plainLen <= region.length) {
 				const trial = region.subarray(2, 2 + plainLen)
-				const tags = plainLen === 0 ? [] : parseTlv(trial)
+				const tags = plainLen === 0 ? [] : parseTlv(trial, tlvOpt)
 				// plainLen=0 的空数据域也要标明文长度;能解析出 TLV 则剥离前缀
 				if (plainLen === 0 || tags.length) {
 					set(baseOff, 2, prefix + '数据域-明文长度 = ' + plainLen, 'p' + baseOff)
@@ -1207,9 +1247,20 @@
 				const idOff = j
 				const id = payload[j++]
 				const def = idMap[id]
-				let vlen = def ? typeLen(def.type) : null
 				const name = def ? def.name : ('ID' + id)
 				const itemGrp = 't' + tag + 'i' + id + 'o' + (pBase + idOff)
+				// 0x81/0x91: Value 固定 1B 处理结果码
+				if (resultMode) {
+					if (j >= payload.length) {
+						set(pBase + idOff, 1, prefix + '数据域-' + tagName + ' ' + name + ' (缺结果码)', itemGrp)
+						break
+					}
+					const code = payload[j++] & 0xff
+					const tip = prefix + '数据域-' + tagName + ' ' + name + ' = ' + resultCodeName(code) + '(' + code + ')'
+					set(pBase + idOff, 2, tip, itemGrp)
+					continue
+				}
+				let vlen = def ? typeLen(def.type) : null
 				if (vlen === null) {
 					let k = j
 					while (k < payload.length && !idMap[payload[k]]) k++

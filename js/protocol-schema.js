@@ -28,7 +28,13 @@ window.SK_FUNC_CODES = {
 	'0x02': { name: '终端数据上报', ack: '0x82', ackTag: 12 },
 	'0x03': { name: '信息查询', reqTag: 10, ack: '0x83', ackTags: [1, 2, 3, 4, 5, 7, 8, 9, 10, 31, 32, 33, 34, 35, 36, 37, 90, 91, 92, 93] },
 	'0x04': { name: '数据透传', reqTag: 7, ack: '0x84', ackTag: 7 },
-	'0x11': { name: '指令操作', reqTag: 93, ack: '0x91', ackTag: 93 }
+	'0x11': { name: '指令操作', reqTag: 93, ack: '0x91', ackTag: 93 },
+	// 应答功能码: 0x81/0x91 的 TLV Value 为处理结果码(见 Tag11), 非参数原值
+	'0x81': { name: '参数设置应答', resultValue: true },
+	'0x82': { name: '终端数据上报应答' },
+	'0x83': { name: '信息查询应答' },
+	'0x84': { name: '数据透传应答' },
+	'0x91': { name: '指令操作应答', resultValue: true }
 }
 
 window.SK_TAGS = {
