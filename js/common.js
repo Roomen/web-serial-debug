@@ -947,7 +947,8 @@
 	}
 	function asciiToHexBytes(s, fillLen) {
 		let a = []
-		for (let i = 0; i < s.length; i++) a.push(s.charCodeAt(i) & 0xff)
+		const n = fillLen != null ? Math.min(s.length, fillLen) : s.length
+		for (let i = 0; i < n; i++) a.push(s.charCodeAt(i) & 0xff)
 		if (fillLen != null) {
 			while (a.length < fillLen) a.push(0x00)
 		}
@@ -1101,6 +1102,7 @@
 					paramVal.style.width = '180px'
 					paramSelEnum.style.display = 'none'
 					paramVal.value = preset.param.default || ''
+					paramVal.placeholder = preset.param.placeholder || '值'
 					paramUnit.textContent = ''
 					_currentParamType = 'ascii'
 				} else if (preset.param.type === 'bcd') {
