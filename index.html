@@ -239,14 +239,27 @@
                                         title="日志超过该行数后从顶部裁剪" value="5000" style="width: 90px;" />
                                 </div>
 
-                                <div class="input-group input-group-sm me-2">
-                                    <span class="input-group-text">日志类型</span>
-                                    <select class="form-select" id="serial-log-type" style="width: 120px;">
-                                        <Option value="hex&text">Hex和Text</Option>
-                                        <Option value="hex">Hex</Option>
-                                        <Option value="text">Text</Option>
-                                        <Option value="ansi">彩色Ansi</Option>
-                                    </select>
+                                <div class="serial-log-type-wrap me-2">
+                                    <span class="serial-log-type-label-text">日志类型</span>
+                                    <div class="serial-log-type-combo" id="log-type-combo">
+                                        <button type="button" class="serial-log-type-btn" id="serial-log-type-btn"
+                                            aria-haspopup="listbox" aria-expanded="false">
+                                            <span id="serial-log-type-text">Hex</span>
+                                            <i class="bi bi-chevron-down serial-log-type-arrow"></i>
+                                        </button>
+                                        <ul class="serial-log-type-menu" id="serial-log-type-menu" role="listbox">
+                                            <li role="option" data-value="hex&text">Hex和Text</li>
+                                            <li role="option" data-value="hex">Hex</li>
+                                            <li role="option" data-value="text">Text</li>
+                                            <li role="option" data-value="ansi">彩色Ansi</li>
+                                        </ul>
+                                        <select id="serial-log-type" class="serial-log-type-native" tabindex="-1" aria-hidden="true">
+                                            <option value="hex&text">Hex和Text</option>
+                                            <option value="hex">Hex</option>
+                                            <option value="text">Text</option>
+                                            <option value="ansi">彩色Ansi</option>
+                                        </select>
+                                    </div>
                                 </div>
 
                                 <div class="btn-group serial-log-actions">
@@ -377,9 +390,8 @@
                                             导出</button>
                                     </div>
                                     <div class="quick-send-head mt-2">
-                                        <span class="col-remove">移除</span>
-                                        <span class="col-content">发送内容 · 点击修改 / 双击改名</span>
-                                        <span class="col-name">名称</span>
+                                        <span class="col-content">内容 · 单击编辑 / 双击改名</span>
+                                        <span class="col-name">发送</span>
                                         <span class="col-hex">HEX</span>
                                     </div>
                                     <div id="serial-quick-send-content"
@@ -667,16 +679,16 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
-                    <form>
+                    <form id="model-change-name-form">
                         <div class="mb-3">
                             <label for="model-new-name" class="col-form-label">请输入新的名字:</label>
-                            <input type="text" class="form-control" id="model-new-name">
+                            <input type="text" class="form-control" id="model-new-name" autocomplete="off">
                         </div>
                     </form>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                    <button type="button" class="btn btn-primary" id="model-save-name">保存</button>
+                    <button type="submit" form="model-change-name-form" class="btn btn-primary" id="model-save-name">保存</button>
                 </div>
             </div>
         </div>

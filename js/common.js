@@ -39,12 +39,36 @@
 		}
 	})
 	let serialPort = null
-	navigator.serial.getPorts().then(async (ports) => {
-		if (ports.length > 0) {
-			serialPort = ports[0]
-			await openSerial()
+	const SERIAL_WANT_OPEN_KEY = 'serialWantOpen'
+	function setSerialWantOpen(want) {
+		try {
+			if (want) sessionStorage.setItem(SERIAL_WANT_OPEN_KEY, '1')
+			else sessionStorage.removeItem(SERIAL_WANT_OPEN_KEY)
+		} catch (e) {}
+	}
+	function getSerialWantOpen() {
+		try {
+			return sessionStorage.getItem(SERIAL_WANT_OPEN_KEY) === '1'
+		} catch (e) {
+			return false
 		}
-	})
+	}
+	// 仅刷新(reload)且刷新前串口处于打开意图时自动重连；新开/跳转不连
+	;(function () {
+		let navType = 'navigate'
+		try {
+			const nav = performance.getEntriesByType && performance.getEntriesByType('navigation')[0]
+			if (nav && nav.type) navType = nav.type
+			else if (performance.navigation) navType = performance.navigation.type === 1 ? 'reload' : 'navigate'
+		} catch (e) {}
+		if (navType !== 'reload' || !getSerialWantOpen()) return
+		navigator.serial.getPorts().then(async (ports) => {
+			if (ports.length > 0) {
+				serialPort = ports[0]
+				await openSerial()
+			}
+		})
+	})()
 	let reader
 	//串口目前是打开状态
 	let serialOpen = false
@@ -312,22 +336,20 @@
 
 	//快捷发送列表被单击
 	document.getElementById('serial-quick-send-content').addEventListener('click', (e) => {
-		let curr = e.target
-		if (curr.tagName != 'BUTTON') {
-			curr = curr.parentNode
-		}
-		if (curr.tagName != 'BUTTON') {
-			return
-		}
-		const index = Array.from(curr.parentNode.parentNode.children).indexOf(curr.parentNode)
-		if (curr.classList.contains('quick-remove')) {
+		const removeBtn = e.target.closest('.quick-remove')
+		const sendBtn = e.target.closest('.quick-send')
+		const row = e.target.closest('.quick-item')
+		if (!row || !row.parentNode) return
+		const index = Array.from(row.parentNode.children).indexOf(row)
+		if (index < 0) return
+		if (removeBtn) {
 			currQuickSend.list.splice(index, 1)
-			curr.parentNode.remove()
+			row.remove()
 			saveQuickList()
 			return
 		}
-		if (curr.classList.contains('quick-send')) {
-			let item = currQuickSend.list[index]
+		if (sendBtn) {
+			const item = currQuickSend.list[index]
 			if (item.hex) {
 				sendHex(item.content)
 				return
@@ -335,27 +357,28 @@
 			sendText(item.content)
 		}
 	})
-	//快捷列表双击改名
+	//快捷列表双击内容输入框改名
 	document.getElementById('serial-quick-send-content').addEventListener('dblclick', (e) => {
-		let curr = e.target
-		if (curr.tagName != 'INPUT' || curr.type != 'text') {
-			return
-		}
-		const index = Array.from(curr.parentNode.parentNode.children).indexOf(curr.parentNode)
+		const input = e.target.closest('input.quick-content')
+		const row = e.target.closest('.quick-item')
+		if (!input || !row || !row.parentNode) return
+		const index = Array.from(row.parentNode.children).indexOf(row)
+		if (index < 0) return
 		changeName((name) => {
 			currQuickSend.list[index].name = name
-			curr.parentNode.outerHTML = getQuickItemHtml(currQuickSend.list[index])
+			row.outerHTML = getQuickItemHtml(currQuickSend.list[index])
 			saveQuickList()
 		}, currQuickSend.list[index].name)
 	})
 	//快捷发送列表被改变
 	document.getElementById('serial-quick-send-content').addEventListener('change', (e) => {
-		let curr = e.target
-		if (curr.tagName != 'INPUT') {
-			return
-		}
-		const index = Array.from(curr.parentNode.parentNode.children).indexOf(curr.parentNode)
-		if (curr.type == 'text') {
+		const curr = e.target
+		if (curr.tagName != 'INPUT') return
+		const row = curr.closest('.quick-item')
+		if (!row || !row.parentNode) return
+		const index = Array.from(row.parentNode.children).indexOf(row)
+		if (index < 0) return
+		if (curr.type == 'text' || curr.classList.contains('quick-content')) {
 			currQuickSend.list[index].content = curr.value
 		}
 		if (curr.type == 'checkbox') {
@@ -393,11 +416,18 @@
 		saveQuickList()
 	})
 	function getQuickItemHtml(item) {
-		return `<div class="d-flex quick-item">
-			<button type="button" title="移除该项" class="btn btn-sm btn-outline-secondary quick-remove"><i class="bi bi-x"></i></button>
-			<input class="form-control form-control-sm" placeholder="要发送的内容,双击改名" value="${item.content}">
-			<button class="flex-shrink-0 align-self-center btn btn-outline-secondary btn-sm quick-send" title="${item.name}">${item.name}</button>
-			<input class="form-check-input flex-shrink-0 align-self-center" type="checkbox" ${item.hex ? 'checked' : ''}>
+		const rawName = item.name || '发送'
+		const name = HTMLEncode(rawName)
+		const nameAttr = attrEscape(rawName)
+		const content = attrEscape(item.content || '')
+		return `<div class="quick-item">
+			<button type="button" title="移除" class="btn quick-remove" aria-label="移除"><i class="bi bi-x-lg"></i></button>
+			<input class="form-control form-control-sm quick-content" placeholder="发送内容" value="${content}">
+			<button type="button" class="btn btn-sm quick-send" title="发送: ${nameAttr}">${name}</button>
+			<label class="quick-hex" title="HEX 模式">
+				<input type="checkbox" ${item.hex ? 'checked' : ''}>
+				<span>HEX</span>
+			</label>
 		</div>`
 	}
 	//快捷发送分组新增
@@ -1266,6 +1296,26 @@
 		document.addEventListener('click', function (e) {
 			if (!combo.contains(e.target)) closeDropdown()
 		})
+
+		//悬停展开；输入框仍聚焦时移出不关
+		var baudHoverT = 0
+		combo.addEventListener('mouseenter', function () {
+			clearTimeout(baudHoverT)
+			baudHoverT = setTimeout(function () {
+				if (!isOpen) {
+					isOpen = true
+					combo.classList.add('open')
+					showAll()
+				}
+			}, 100)
+		})
+		combo.addEventListener('mouseleave', function () {
+			clearTimeout(baudHoverT)
+			baudHoverT = setTimeout(function () {
+				if (document.activeElement === input) return
+				closeDropdown()
+			}, 200)
+		})
 	})()
 
 	// 记住当前 tab，刷新不丢失
@@ -1297,14 +1347,92 @@
 		changeOption('maxLogRows', max)
 		trimLogRows()
 	})
-	document.getElementById('serial-log-type').addEventListener('change', (e) => {
-		changeOption('logType', e.target.value)
-		if (e.target.value.includes('ansi')) {
-			serialLogs.classList.add('ansi')
-		} else {
-			serialLogs.classList.remove('ansi')
+	// 日志类型：自定义下拉（悬停/点击展开），底层保留隐藏 select 兼容命令面板
+	;(function () {
+		const wrap = document.querySelector('.serial-log-type-wrap')
+		const combo = document.getElementById('log-type-combo')
+		const btn = document.getElementById('serial-log-type-btn')
+		const menu = document.getElementById('serial-log-type-menu')
+		const label = document.getElementById('serial-log-type-text')
+		const select = document.getElementById('serial-log-type')
+		if (!wrap || !combo || !btn || !menu || !label || !select) return
+
+		function labelOf(val) {
+			for (let i = 0; i < select.options.length; i++) {
+				if (select.options[i].value === val) return select.options[i].textContent
+			}
+			return val
 		}
-	})
+		function syncUi(val) {
+			label.textContent = labelOf(val)
+			menu.querySelectorAll('li').forEach(function (li) {
+				const on = li.getAttribute('data-value') === val
+				li.classList.toggle('active', on)
+				li.setAttribute('aria-selected', on ? 'true' : 'false')
+			})
+			const logsEl = document.getElementById('serial-logs')
+			if (!logsEl) return
+			logsEl.classList.toggle('ansi', String(val).includes('ansi'))
+		}
+		function openMenu() {
+			combo.classList.add('open')
+			btn.setAttribute('aria-expanded', 'true')
+		}
+		function closeMenu() {
+			combo.classList.remove('open')
+			btn.setAttribute('aria-expanded', 'false')
+		}
+		function setLogType(val) {
+			if (select.value !== val) select.value = val
+			syncUi(val)
+			changeOption('logType', val)
+		}
+
+		syncUi(select.value || toolOptions.logType || 'hex')
+
+		select.addEventListener('change', function (e) {
+			syncUi(e.target.value)
+			changeOption('logType', e.target.value)
+		})
+
+		btn.addEventListener('click', function (e) {
+			e.preventDefault()
+			e.stopPropagation()
+			if (combo.classList.contains('open')) closeMenu()
+			else openMenu()
+		})
+		menu.addEventListener('mousedown', function (e) {
+			const li = e.target.closest('li[data-value]')
+			if (!li) return
+			e.preventDefault()
+			e.stopPropagation()
+			setLogType(li.getAttribute('data-value'))
+			closeMenu()
+		})
+
+		let hoverT = 0
+		wrap.addEventListener('mouseenter', function () {
+			clearTimeout(hoverT)
+			hoverT = setTimeout(openMenu, 80)
+		})
+		wrap.addEventListener('mouseleave', function () {
+			clearTimeout(hoverT)
+			hoverT = setTimeout(closeMenu, 160)
+		})
+		document.addEventListener('click', function (e) {
+			if (!wrap.contains(e.target)) closeMenu()
+		})
+		btn.addEventListener('keydown', function (e) {
+			if (e.key === 'Escape') {
+				closeMenu()
+				return
+			}
+			if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault()
+				openMenu()
+			}
+		})
+	})()
 	document.getElementById('serial-auto-scroll').addEventListener('click', function (e) {
 		let autoScroll = this.innerText != '自动滚动'
 		this.innerText = autoScroll ? '自动滚动' : '暂停滚动'
@@ -1544,6 +1672,8 @@
 				await serialPort.close()
 			} catch (e) {}
 		}
+		//仅手动关闭时清掉“想打开”标记；异常断开保留，刷新后仍可重连
+		if (serialClose) setSerialWantOpen(false)
 		serialStatuChange(false)
 		serialToggle.innerHTML = '<i class="bi bi-play-circle"></i> 打开串口'
 	}
@@ -1565,6 +1695,7 @@
 			serialToggle.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭串口'
 			serialOpen = true
 			serialClose = false
+			setSerialWantOpen(true)
 			serialStatuChange(true)
 			localStorage.setItem('serialOptions', JSON.stringify(SerialOptions))
 			readData()
@@ -2038,7 +2169,7 @@
 		return `${hour}:${minute}:${second}.${millisecond}`
 	}
 
-	// 顶部连接条：参数摘要文案(浮层开合交给 Bootstrap dropdown)
+	// 顶部连接条：参数摘要文案 + 悬停展开/移出关闭
 	;(function () {
 		const summaryText = document.getElementById('serial-params-summary-text')
 		if (!summaryText) return
@@ -2070,6 +2201,50 @@
 				if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.stopPropagation()
 			})
 		}
+
+		//悬停展开：移入打开，移出延迟关闭，避免经过缝隙时闪断
+		const ddRoot = document.getElementById('serial-params-dropdown')
+		const ddToggle = document.getElementById('serial-params-summary')
+		if (ddRoot && ddToggle && typeof bootstrap !== 'undefined' && bootstrap.Dropdown) {
+			const dd = bootstrap.Dropdown.getOrCreateInstance(ddToggle, { autoClose: 'outside' })
+			let leaveT = 0
+			const OPEN_DELAY = 80
+			const CLOSE_DELAY = 180
+			ddRoot.addEventListener('mouseenter', function () {
+				clearTimeout(leaveT)
+				leaveT = setTimeout(function () { dd.show() }, OPEN_DELAY)
+			})
+			ddRoot.addEventListener('mouseleave', function () {
+				clearTimeout(leaveT)
+				leaveT = setTimeout(function () {
+					//嵌套波特率下拉打开时不关，避免选值时被收起
+					const baudCombo = document.getElementById('baud-combo')
+					if (baudCombo && baudCombo.classList.contains('open')) return
+					dd.hide()
+				}, CLOSE_DELAY)
+			})
+		}
+	})()
+
+	// details「高级·加解密与密钥」：悬停展开，鼠标移出整个 details 范围后延迟收起
+	// 原生 <select>（日志类型/协议/分组等）系统控件无法可靠悬停打开，替换成自定义会伤键盘与移动端，故不做
+	;(function () {
+		const adv = document.getElementById('serial-protocol-advanced')
+		if (!adv) return
+		let hoverT = 0
+		adv.addEventListener('mouseenter', function () {
+			clearTimeout(hoverT)
+			if (adv.open) return
+			hoverT = setTimeout(function () { adv.open = true }, 100)
+		})
+		adv.addEventListener('mouseleave', function () {
+			clearTimeout(hoverT)
+			hoverT = setTimeout(function () {
+				// 内部 select/input 仍聚焦时不收，避免选值或输入时面板被关掉
+				if (adv.contains(document.activeElement)) return
+				adv.open = false
+			}, 200)
+		})
 	})()
 
 	// 右栏：折叠条既是拖拽手柄(改宽度)也是折叠按钮(原地点击)
@@ -2342,15 +2517,35 @@
 		}
 	})()
 
-	//设置名称
+	//设置名称（回车确认，Esc/取消关闭）
 	const modalNewName = new bootstrap.Modal('#model-change-name')
+	const modelChangeNameForm = document.getElementById('model-change-name-form')
+	const modelNewNameInput = document.getElementById('model-new-name')
+	let _changeNameCb = null
 	function changeName(callback, oldName = '') {
+		_changeNameCb = callback
 		set('model-new-name', oldName)
 		modalNewName.show()
-		document.getElementById('model-save-name').onclick = null
-		document.getElementById('model-save-name').onclick = function () {
-			callback(get('model-new-name'))
-			modalNewName.hide()
-		}
 	}
+	function commitChangeName() {
+		if (!_changeNameCb) return
+		const cb = _changeNameCb
+		_changeNameCb = null
+		cb(get('model-new-name'))
+		modalNewName.hide()
+	}
+	if (modelChangeNameForm) {
+		modelChangeNameForm.addEventListener('submit', (e) => {
+			e.preventDefault()
+			commitChangeName()
+		})
+	}
+	document.getElementById('model-change-name').addEventListener('shown.bs.modal', () => {
+		if (!modelNewNameInput) return
+		modelNewNameInput.focus()
+		modelNewNameInput.select()
+	})
+	document.getElementById('model-change-name').addEventListener('hidden.bs.modal', () => {
+		_changeNameCb = null
+	})
 })()

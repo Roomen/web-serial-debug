@@ -952,40 +952,115 @@ footer a:hover {
 
 /* ========== Quick Send Items ========== */
 .quick-item {
-	background: transparent;
+	display: grid;
+	grid-template-columns: 28px minmax(0, 1fr) auto auto;
 	align-items: center;
-	gap: 4px;
-	padding: 4px 6px !important;
-	border: 0 !important;
-	border-bottom: 1px solid var(--border-light) !important;
-	border-radius: var(--radius-sm);
-	transition: background-color var(--transition-fast);
+	gap: 6px;
+	padding: 6px 8px !important;
+	margin-bottom: 4px;
+	background: var(--bg-code);
+	border: 1px solid transparent !important;
+	border-radius: var(--radius-md);
+	transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .quick-item:last-child {
-	border-bottom: 0 !important;
+	margin-bottom: 0;
 }
 
 .quick-item:hover {
 	background: var(--bg-surface-hover);
+	border-color: var(--border-color) !important;
+	box-shadow: var(--shadow-sm);
 }
 
-.quick-item .form-control-sm {
+.quick-item .quick-content {
 	font-size: 0.8rem;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	border-radius: var(--radius-sm);
+	min-width: 0;
 }
 
 .quick-item .quick-send {
 	min-width: 64px;
-	max-width: 96px;
+	max-width: 110px;
 	overflow: hidden;
 	text-overflow: ellipsis;
+	white-space: nowrap;
 	font-size: 0.75rem;
-	font-weight: 500;
+	font-weight: 600;
+	padding: 4px 10px;
+	border-radius: 999px;
+	color: var(--accent);
+	background: var(--accent-light, color-mix(in srgb, var(--accent) 12%, transparent));
+	border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+	transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.quick-item .quick-send:hover {
+	color: #fff;
+	background: var(--accent);
+	border-color: var(--accent);
 }
 
 .quick-item .quick-remove {
-	padding: 2px 6px;
-	line-height: 1.2;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border: none;
+	border-radius: var(--radius-sm);
+	color: var(--text-muted);
+	background: transparent;
+	opacity: 0.45;
+	line-height: 1;
+	transition: opacity var(--transition-fast), color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.quick-item .quick-remove i {
+	font-size: 0.7rem;
+}
+
+.quick-item:hover .quick-remove {
+	opacity: 1;
+}
+
+.quick-item .quick-remove:hover {
+	color: var(--danger);
+	background: var(--danger-light);
+}
+
+.quick-item .quick-hex {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin: 0;
+	padding: 3px 8px;
+	border-radius: 999px;
+	font-size: 0.65rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	cursor: pointer;
+	user-select: none;
+	white-space: nowrap;
+}
+
+.quick-item .quick-hex input {
+	width: 0.85em;
+	height: 0.85em;
+	margin: 0;
+	cursor: pointer;
+}
+
+.quick-item .quick-hex:has(input:checked) {
+	color: var(--accent);
+	border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+	background: var(--accent-light, color-mix(in srgb, var(--accent) 12%, transparent));
 }
 
 /* ========== Protocol Parse (compact) ========== */
@@ -1288,29 +1363,36 @@ select option {
 
 /* 快捷发送列表表头 */
 .quick-send-head {
-	display: flex;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto auto;
 	align-items: center;
-	gap: 4px;
-	padding: 4px 8px;
-	margin-bottom: 4px;
-	font-size: 0.7rem;
+	gap: 6px;
+	padding: 2px 8px 2px 42px;
+	margin-bottom: 6px;
+	font-size: 0.68rem;
 	font-weight: 600;
 	color: var(--text-muted);
 	letter-spacing: 0.02em;
 	user-select: none;
 }
 
-.quick-send-head .col-remove { flex: 0 0 34px; text-align: center; }
-.quick-send-head .col-content { flex: 1 1 auto; min-width: 0; }
-.quick-send-head .col-name { flex: 0 0 72px; }
-.quick-send-head .col-hex { flex: 0 0 36px; text-align: center; }
+.quick-send-head .col-content { min-width: 0; }
+.quick-send-head .col-name {
+	min-width: 64px;
+	max-width: 110px;
+	text-align: center;
+}
+.quick-send-head .col-hex {
+	min-width: 48px;
+	text-align: center;
+}
 
 #serial-quick-send-content {
-	background-color: var(--bg-surface);
-	border: 1px solid var(--border-color) !important;
-	border-radius: var(--radius-md) !important;
-	box-shadow: var(--shadow-sm) inset;
-	padding: 4px !important;
+	background-color: transparent;
+	border: none !important;
+	border-radius: 0 !important;
+	box-shadow: none;
+	padding: 2px 0 !important;
 	min-height: 0;
 }
 
@@ -2306,9 +2388,12 @@ hr {
 
 	/* Release fixed-width inputs so they fit narrow screens */
 	#serial-timer-out,
-	#serial-log-type,
 	#serial-loop-send-time {
 		width: auto !important;
+	}
+	.serial-log-type-wrap {
+		width: auto;
+		max-width: 100%;
 	}
 
     /* Full-width send button once its toolbar wraps */
@@ -2917,6 +3002,129 @@ hr {
     font-weight: 600;
 }
 
+/* ---- 日志类型自定义下拉 ---- */
+.serial-log-type-wrap {
+	position: relative;
+	display: inline-flex;
+	align-items: stretch;
+	height: 31px;
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-sm);
+	background: var(--bg-surface);
+	overflow: visible;
+	vertical-align: middle;
+	z-index: 40;
+}
+
+.serial-log-type-label-text {
+	display: inline-flex;
+	align-items: center;
+	padding: 0 10px;
+	font-size: 0.75rem;
+	font-weight: 500;
+	color: var(--text-secondary);
+	background: var(--bg-code);
+	border-right: 1px solid var(--border-color);
+	border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+	white-space: nowrap;
+	user-select: none;
+}
+
+.serial-log-type-combo {
+	position: relative;
+	min-width: 118px;
+}
+
+.serial-log-type-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 6px;
+	width: 100%;
+	height: 100%;
+	min-height: 29px;
+	padding: 0 10px;
+	border: none;
+	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+	background: transparent;
+	color: var(--text-primary);
+	font-size: 0.78rem;
+	font-weight: 500;
+	line-height: 1.2;
+	cursor: pointer;
+	transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.serial-log-type-btn:hover,
+.serial-log-type-combo.open .serial-log-type-btn {
+	background: var(--bg-surface-hover);
+	color: var(--accent);
+}
+
+.serial-log-type-arrow {
+	font-size: 0.7rem;
+	color: var(--text-muted);
+	transition: transform var(--transition-fast), color var(--transition-fast);
+}
+
+.serial-log-type-combo.open .serial-log-type-arrow {
+	transform: rotate(180deg);
+	color: var(--accent);
+}
+
+.serial-log-type-menu {
+	display: none;
+	position: absolute;
+	top: calc(100% + 4px);
+	left: 0;
+	z-index: 200;
+	margin: 0;
+	padding: 4px;
+	list-style: none;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-lg);
+	min-width: 100%;
+	width: max-content;
+}
+
+.serial-log-type-combo.open .serial-log-type-menu {
+	display: block;
+}
+
+.serial-log-type-menu li {
+	padding: 6px 10px;
+	border-radius: var(--radius-sm);
+	font-size: 0.78rem;
+	color: var(--text-primary);
+	cursor: pointer;
+	transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.serial-log-type-menu li:hover {
+	background: var(--accent-light);
+	color: var(--accent);
+}
+
+.serial-log-type-menu li.active {
+	background: var(--accent-light);
+	color: var(--accent);
+	font-weight: 600;
+}
+
+.serial-log-type-native {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+	pointer-events: none;
+}
 
 /* ---- Port Select & Open Buttons ---- */
 .serial-port-btn {
