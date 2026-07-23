@@ -290,6 +290,12 @@
 			alias: 'gujian dabao firmware pack view',
 			run: function () { clickSel('.rail-item[data-view="view-fw-pack"]') }
 		})
+		list.push({
+			group: '视图',
+			title: '切换到功耗分析',
+			alias: 'gonghao fenxi power emk emk850 emk850+ view',
+			run: function () { clickSel('.rail-item[data-view="view-emk"]') }
+		})
 		const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
 		list.push({
 			group: '视图',

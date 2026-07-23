@@ -3763,3 +3763,520 @@ hr {
 	opacity: 1;
 	transform: translateX(-50%) translateY(0);
 }
+
+/* ========== EMK850+ 功耗分析 ========== */
+
+#view-emk {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.emk-wrapper {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	max-width: none;
+	padding: 16px 20px;
+	font-size: 0.85rem;
+	overflow-y: auto;
+	overflow-x: hidden;
+}
+
+.emk-banner {
+	margin-bottom: 12px;
+	flex-shrink: 0;
+}
+.emk-banner-content {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+.emk-banner-icon {
+	font-size: 1.8rem;
+	color: var(--accent);
+}
+.emk-banner-title {
+	font-size: 1.2rem;
+	font-weight: 700;
+	margin: 0;
+	color: var(--text-primary);
+}
+.emk-banner-sub {
+	margin: 0;
+	font-size: 0.8rem;
+	color: var(--text-secondary);
+}
+
+/*连接条*/
+.emk-connect-bar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	padding: 10px 14px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	margin-bottom: 10px;
+	flex-shrink: 0;
+}
+.emk-connect-bar .btn {
+	flex-shrink: 0;
+}
+.emk-baud-readonly {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 4px 10px;
+	font-size: 0.78rem;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	color: var(--text-muted);
+	background: var(--bg-surface-hover);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-sm);
+	flex-shrink: 0;
+}
+
+/*控制按钮*/
+.emk-controls {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 10px;
+	flex-shrink: 0;
+}
+.emk-controls-left,
+.emk-controls-right {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+	align-items: center;
+}
+
+/*电压设定*/
+.emk-voltage-set {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 2px 6px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-sm);
+}
+.emk-voltage-set-label {
+	font-size: 0.72rem;
+	font-weight: 600;
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+.emk-voltage-input {
+	width: 70px;
+	padding: 2px 4px;
+	font-size: 0.82rem;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	text-align: right;
+	background: var(--bg-input);
+	color: var(--text-primary);
+	border: 1px solid var(--border-color);
+	border-radius: 3px;
+}
+.emk-voltage-input:focus {
+	border-color: var(--accent);
+	outline: none;
+	box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.12);
+}
+.emk-voltage-unit {
+	font-size: 0.72rem;
+	color: var(--text-muted);
+}
+
+/*采样率*/
+.emk-sample-rate-set {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+.emk-sample-rate-label {
+	font-size: 0.72rem;
+	font-weight: 600;
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+.emk-sample-rate-select {
+	font-size: 0.78rem;
+	padding: 3px 6px;
+	background: var(--bg-input);
+	color: var(--text-primary);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-sm);
+}
+
+/*数字面板*/
+.emk-metrics {
+	display: grid;
+	grid-template-columns: repeat(6, minmax(0, 1fr));
+	gap: 8px;
+	margin-bottom: 8px;
+	flex-shrink: 0;
+}
+.emk-metric {
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	padding: 8px 10px;
+	text-align: center;
+	min-width: 0;
+}
+.emk-metric-primary {
+	border-color: color-mix(in srgb, var(--accent) 35%, var(--border-color));
+	background: color-mix(in srgb, var(--accent) 6%, var(--bg-surface));
+}
+.emk-metric-label {
+	display: block;
+	font-size: 0.65rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+	color: var(--text-muted);
+	margin-bottom: 2px;
+}
+.emk-metric-value {
+	display: block;
+	font-size: 1.2rem;
+	font-weight: 700;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	color: var(--text-primary);
+	line-height: 1.25;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.emk-metric-sm {
+	font-size: 0.95rem !important;
+	font-weight: 600 !important;
+}
+
+/*指标下的副行：设备原始流速等*/
+.emk-metric-sub {
+	display: block;
+	font-size: 0.6rem;
+	line-height: 1.2;
+	margin-top: 2px;
+	color: var(--text-muted);
+	font-family: monospace;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/*统计卡片：总体 / 窗口 / 游标 A–B，放在波形下方*/
+.emk-stats-cards {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 8px;
+	margin-bottom: 4px;
+	flex-shrink: 0;
+}
+.emk-stat-card {
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	border-top: 2px solid var(--border-color);
+	overflow: hidden;
+	transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.emk-stat-card:hover {
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+.emk-stat-card-overall {
+	border-top-color: var(--accent);
+}
+.emk-stat-card-window {
+	border-top-color: #22c55e;
+}
+.emk-stat-card-cursor {
+	border-top-color: #f59e0b;
+}
+.emk-stat-card-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 5px 10px;
+	background: var(--bg-surface-hover);
+	border-bottom: 1px solid var(--border-color);
+}
+.emk-stat-card-title {
+	font-size: 0.74rem;
+	font-weight: 700;
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+.emk-stat-card-dur {
+	font-size: 0.72rem;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.emk-stat-card-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 1px;
+	background: var(--border-color);
+}
+.emk-stat-cell {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	padding: 6px 10px;
+	background: var(--bg-surface);
+	min-width: 0;
+}
+.emk-stat-cell-wide {
+	background: color-mix(in srgb, var(--accent) 4%, var(--bg-surface));
+}
+.emk-stat-k {
+	font-size: 0.64rem;
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+.emk-stat-v {
+	font-size: 0.86rem;
+	font-weight: 600;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	color: var(--text-primary);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.emk-stat-v-max {
+	color: #ef4444;
+}
+.emk-stat-v-min {
+	color: #22c55e;
+}
+.emk-pwr-note {
+	font-size: 0.65rem;
+	color: var(--text-muted);
+}
+.emk-pwr-note-foot {
+	font-size: 0.65rem;
+	color: var(--text-muted);
+	margin-top: 3px;
+	padding-left: 4px;
+}
+
+/*波形区*/
+.emk-waveform-area {
+	flex: 1 1 auto;
+	min-height: 320px;
+	display: flex;
+	flex-direction: column;
+	margin-bottom: 8px;
+	overflow: hidden;
+}
+
+.emk-waveform-area.emk-wave-fullscreen {
+	position: fixed;
+	inset: 0;
+	z-index: 1080;
+	margin: 0;
+	padding: 12px;
+	background: var(--bg-body, var(--bg-surface));
+	border-radius: 0;
+	min-height: 0;
+}
+body.emk-wave-fullscreen-open {
+	overflow: hidden;
+}
+
+.emk-waveform-controls {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 4px 8px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-bottom: none;
+	border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+	flex-shrink: 0;
+	flex-wrap: wrap;
+}
+
+.emk-zoom-group {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+}
+
+.emk-zoom-label {
+	font-size: 0.7rem;
+	font-weight: 700;
+	color: var(--text-muted);
+	margin-right: 2px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.emk-zoom-btn {
+	padding: 1px 7px !important;
+	font-size: 0.72rem !important;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	line-height: 1.3 !important;
+}
+
+.emk-cursor-group {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-left: auto;
+	flex-wrap: wrap;
+}
+
+.emk-cursor-mode-select {
+	font-size: 0.72rem;
+	padding: 2px 6px;
+	border-radius: var(--radius-sm);
+	border: 1px solid var(--border-color);
+	background: var(--bg-surface);
+	color: var(--text-primary);
+	line-height: 1.4;
+}
+
+.emk-cursor-info {
+	font-size: 0.72rem;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	color: var(--text-secondary);
+}
+
+/*Canvas*/
+.emk-canvas {
+	flex: 1 1 auto;
+	min-height: 0;
+	width: 100%;
+	border: 1px solid var(--border-color);
+	border-radius: 0 0 var(--radius-md) var(--radius-md);
+	background: var(--bg-surface);
+	display: block;
+	cursor: crosshair;
+	user-select: none;
+}
+
+/*配置*/
+.emk-config {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin-bottom: 8px;
+	padding: 6px 10px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-sm);
+	flex-shrink: 0;
+}
+.emk-config .form-check-label {
+	font-size: 0.78rem;
+}
+
+/*日志*/
+.emk-log-card {
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	overflow: hidden;
+	flex-shrink: 0;
+}
+.emk-log-title {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	cursor: pointer;
+	user-select: none;
+	padding: 6px 12px;
+	font-size: 0.78rem;
+	font-weight: 600;
+	color: var(--text-secondary);
+	border-bottom: 1px solid var(--border-color);
+	background: var(--bg-surface-hover);
+}
+.emk-log-body {
+	margin: 0;
+	padding: 0 12px;
+	font-size: 0.7rem;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	line-height: 1.45;
+	max-height: 0;
+	overflow: hidden;
+	color: var(--text-primary);
+	white-space: pre-wrap;
+	word-break: break-all;
+	transition: max-height 0.18s ease, padding 0.18s ease;
+}
+/*默认收起：悬停展开，点击标题固定*/
+.emk-log-card:hover .emk-log-body,
+.emk-log-card.pinned .emk-log-body {
+	max-height: 160px;
+	padding: 6px 12px;
+	overflow-y: auto;
+}
+.emk-log-card:hover .emk-log-chevron,
+.emk-log-card.pinned .emk-log-chevron {
+	transform: rotate(180deg);
+}
+.emk-log-hint {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	font-weight: 400;
+}
+.emk-log-last {
+	font-size: 0.68rem;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 46vw;
+}
+.emk-log-chevron {
+	font-size: 0.7rem;
+	color: var(--text-muted);
+	transition: transform 0.18s ease;
+}
+
+@media (max-width: 768px) {
+	.emk-wrapper {
+		padding: 10px 8px;
+	}
+	.emk-waveform-area {
+		min-height: 260px;
+	}
+	.emk-metrics {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 6px;
+	}
+	.emk-stats-cards {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.emk-metric {
+		padding: 8px 10px;
+	}
+	.emk-metric-value {
+		font-size: 1rem;
+	}
+	.emk-stat-v {
+		font-size: 0.8rem;
+	}
+	.emk-waveform-controls {
+		gap: 6px;
+		padding: 3px 6px;
+	}
+}
