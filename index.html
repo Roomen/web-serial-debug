@@ -462,7 +462,7 @@
                                     <div class="protocol-down-card mb-2" id="sk-down-card">
                                         <h6 class="pane-section-title"><i class="bi bi-arrow-down-circle"></i> 下行下发</h6>
                                         <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
-                                            <div class="input-group input-group-sm" style="width: auto;">
+                                            <div class="input-group input-group-sm" style="width: auto; flex-shrink: 0;">
                                                 <span class="input-group-text">功能码</span>
                                                 <select class="form-select" id="serial-protocol-down-func">
                                                     <option value="0x01">参数设置 0x01</option>
@@ -470,13 +470,12 @@
                                                     <option value="0x11">指令操作 0x11</option>
                                                 </select>
                                             </div>
-                                            <div class="input-group input-group-sm" style="width: auto;">
+                                            <div class="input-group input-group-sm" style="width: auto; min-width: 120px;">
                                                 <span class="input-group-text">常用指令</span>
                                                 <select class="form-select" id="serial-protocol-down-preset" title="选择常用指令">
-                                                    <option value="">选择指令...</option>
                                                 </select>
                                             </div>
-                                            <div class="input-group input-group-sm" id="serial-protocol-down-param-group" style="display:none;width:auto;">
+                                            <div class="input-group input-group-sm" id="serial-protocol-down-param-group" style="display:none;flex:0 0 100%;">
                                                 <span class="input-group-text" id="serial-protocol-down-param-label">参数</span>
                                                 <input type="text" class="form-control" id="serial-protocol-down-param-val" style="width:100px;" placeholder="值">
                                                 <select class="form-select form-select-sm" id="serial-protocol-down-param-sel" style="display:none;width:130px;"></select>
