@@ -3778,83 +3778,95 @@ hr {
 	display: flex;
 	flex-direction: column;
 	max-width: none;
-	padding: 16px 20px;
+	padding: 10px 16px;
 	font-size: 0.85rem;
 	overflow-y: auto;
 	overflow-x: hidden;
+	--emk-control-h: 26px;
 }
 
-.emk-banner {
-	margin-bottom: 12px;
-	flex-shrink: 0;
-}
-.emk-banner-content {
-	display: flex;
+/*统一控件高度：按钮 (btn-sm)、下拉框、数字输入框视觉对齐*/
+.emk-wrapper .btn-sm {
+	height: var(--emk-control-h);
+	display: inline-flex;
 	align-items: center;
-	gap: 12px;
+	gap: 4px;
+	padding: 0 10px;
+	font-size: 0.78rem;
+	line-height: 1;
+	box-sizing: border-box;
 }
+.emk-wrapper select,
+.emk-wrapper input[type="number"] {
+	height: var(--emk-control-h);
+	box-sizing: border-box;
+	padding: 0 8px;
+	font-size: 0.78rem;
+	background: var(--bg-input);
+	color: var(--text-primary);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-sm);
+}
+.emk-wrapper select:focus,
+.emk-wrapper input[type="number"]:focus {
+	border-color: var(--accent);
+	outline: none;
+	box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.12);
+}
+/*图标按钮：等宽正方形，避免宽窄不一*/
+.emk-icon-btn {
+	width: var(--emk-control-h);
+	padding: 0 !important;
+	justify-content: center;
+}
+
 .emk-banner-icon {
-	font-size: 1.8rem;
+	font-size: 1.15rem;
 	color: var(--accent);
 }
 .emk-banner-title {
-	font-size: 1.2rem;
+	font-size: 0.95rem;
 	font-weight: 700;
 	margin: 0;
 	color: var(--text-primary);
-}
-.emk-banner-sub {
-	margin: 0;
-	font-size: 0.8rem;
-	color: var(--text-secondary);
+	white-space: nowrap;
 }
 
-/*连接条*/
+/*工具条：标题 + 连接，合并为一行*/
+.emk-toolbar-title {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex-shrink: 0;
+}
+.emk-toolbar-sep {
+	width: 1px;
+	height: 18px;
+	background: var(--border-color);
+	flex-shrink: 0;
+}
 .emk-connect-bar {
 	display: flex;
 	align-items: center;
-	gap: 10px;
+	gap: 8px;
 	flex-wrap: wrap;
-	padding: 10px 14px;
+	padding: 5px 10px;
 	background: var(--bg-surface);
 	border: 1px solid var(--border-color);
 	border-radius: var(--radius-md);
-	margin-bottom: 10px;
+	margin-bottom: 6px;
 	flex-shrink: 0;
 }
 .emk-connect-bar .btn {
 	flex-shrink: 0;
 }
-.emk-baud-readonly {
-	display: inline-flex;
-	align-items: center;
-	gap: 5px;
-	padding: 4px 10px;
-	font-size: 0.78rem;
-	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-	color: var(--text-muted);
-	background: var(--bg-surface-hover);
-	border: 1px solid var(--border-color);
-	border-radius: var(--radius-sm);
-	flex-shrink: 0;
-}
-
-/*控制按钮*/
-.emk-controls {
-	display: flex;
-	justify-content: space-between;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 8px;
-	margin-bottom: 10px;
-	flex-shrink: 0;
-}
-.emk-controls-left,
-.emk-controls-right {
+/*右侧次要操作组，随连接条一行自动靠右，挤不下时随行换行*/
+.emk-connect-bar-right {
 	display: flex;
 	gap: 6px;
 	flex-wrap: wrap;
 	align-items: center;
+	margin-left: auto;
 }
 
 /*电压设定*/
@@ -3862,7 +3874,7 @@ hr {
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
-	padding: 2px 6px;
+	padding: 3px 6px;
 	background: var(--bg-surface);
 	border: 1px solid var(--border-color);
 	border-radius: var(--radius-sm);
@@ -3874,20 +3886,9 @@ hr {
 	white-space: nowrap;
 }
 .emk-voltage-input {
-	width: 70px;
-	padding: 2px 4px;
-	font-size: 0.82rem;
+	width: 62px;
 	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 	text-align: right;
-	background: var(--bg-input);
-	color: var(--text-primary);
-	border: 1px solid var(--border-color);
-	border-radius: 3px;
-}
-.emk-voltage-input:focus {
-	border-color: var(--accent);
-	outline: none;
-	box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.12);
 }
 .emk-voltage-unit {
 	font-size: 0.72rem;
@@ -3907,27 +3908,22 @@ hr {
 	white-space: nowrap;
 }
 .emk-sample-rate-select {
-	font-size: 0.78rem;
-	padding: 3px 6px;
-	background: var(--bg-input);
-	color: var(--text-primary);
-	border: 1px solid var(--border-color);
-	border-radius: var(--radius-sm);
+	min-width: 120px;
 }
 
 /*数字面板*/
 .emk-metrics {
 	display: grid;
 	grid-template-columns: repeat(6, minmax(0, 1fr));
-	gap: 8px;
-	margin-bottom: 8px;
+	gap: 6px;
+	margin-bottom: 6px;
 	flex-shrink: 0;
 }
 .emk-metric {
 	background: var(--bg-surface);
 	border: 1px solid var(--border-color);
 	border-radius: var(--radius-md);
-	padding: 8px 10px;
+	padding: 5px 8px;
 	text-align: center;
 	min-width: 0;
 }
@@ -3937,16 +3933,16 @@ hr {
 }
 .emk-metric-label {
 	display: block;
-	font-size: 0.65rem;
+	font-size: 0.62rem;
 	font-weight: 600;
 	text-transform: uppercase;
 	letter-spacing: 0.4px;
 	color: var(--text-muted);
-	margin-bottom: 2px;
+	margin-bottom: 1px;
 }
 .emk-metric-value {
 	display: block;
-	font-size: 1.2rem;
+	font-size: 1.1rem;
 	font-weight: 700;
 	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 	color: var(--text-primary);
@@ -3977,7 +3973,7 @@ hr {
 .emk-stats-cards {
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
-	gap: 8px;
+	gap: 6px;
 	margin-bottom: 4px;
 	flex-shrink: 0;
 }
@@ -4006,7 +4002,7 @@ hr {
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
-	padding: 5px 10px;
+	padding: 4px 8px;
 	background: var(--bg-surface-hover);
 	border-bottom: 1px solid var(--border-color);
 }
@@ -4034,7 +4030,7 @@ hr {
 	display: flex;
 	flex-direction: column;
 	gap: 1px;
-	padding: 6px 10px;
+	padding: 4px 8px;
 	background: var(--bg-surface);
 	min-width: 0;
 }
@@ -4075,10 +4071,10 @@ hr {
 /*波形区*/
 .emk-waveform-area {
 	flex: 1 1 auto;
-	min-height: 320px;
+	min-height: 260px;
 	display: flex;
 	flex-direction: column;
-	margin-bottom: 8px;
+	margin-bottom: 6px;
 	overflow: hidden;
 }
 
@@ -4099,8 +4095,8 @@ body.emk-wave-fullscreen-open {
 .emk-waveform-controls {
 	display: flex;
 	align-items: center;
-	gap: 12px;
-	padding: 4px 8px;
+	gap: 10px;
+	padding: 3px 8px;
 	background: var(--bg-surface);
 	border: 1px solid var(--border-color);
 	border-bottom: none;
@@ -4124,10 +4120,7 @@ body.emk-wave-fullscreen-open {
 }
 
 .emk-zoom-btn {
-	padding: 1px 7px !important;
-	font-size: 0.72rem !important;
 	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-	line-height: 1.3 !important;
 }
 
 .emk-cursor-group {
@@ -4139,13 +4132,7 @@ body.emk-wave-fullscreen-open {
 }
 
 .emk-cursor-mode-select {
-	font-size: 0.72rem;
-	padding: 2px 6px;
-	border-radius: var(--radius-sm);
-	border: 1px solid var(--border-color);
-	background: var(--bg-surface);
-	color: var(--text-primary);
-	line-height: 1.4;
+	min-width: 92px;
 }
 
 .emk-cursor-info {
@@ -4171,10 +4158,10 @@ body.emk-wave-fullscreen-open {
 .emk-config {
 	display: flex;
 	align-items: center;
-	gap: 12px;
+	gap: 10px;
 	flex-wrap: wrap;
-	margin-bottom: 8px;
-	padding: 6px 10px;
+	margin-bottom: 6px;
+	padding: 4px 10px;
 	background: var(--bg-surface);
 	border: 1px solid var(--border-color);
 	border-radius: var(--radius-sm);
@@ -4199,7 +4186,7 @@ body.emk-wave-fullscreen-open {
 	gap: 10px;
 	cursor: pointer;
 	user-select: none;
-	padding: 6px 12px;
+	padding: 4px 12px;
 	font-size: 0.78rem;
 	font-weight: 600;
 	color: var(--text-secondary);
@@ -4278,5 +4265,45 @@ body.emk-wave-fullscreen-open {
 	.emk-waveform-controls {
 		gap: 6px;
 		padding: 3px 6px;
+	}
+}
+
+/*矮屏：进一步压缩非波形区域，让画布多占空间*/
+@media (max-height: 800px) {
+	.emk-wrapper {
+		padding: 6px 16px;
+	}
+	.emk-connect-bar {
+		margin-bottom: 4px;
+	}
+	.emk-metrics {
+		gap: 4px;
+		margin-bottom: 4px;
+	}
+	.emk-metric {
+		padding: 3px 6px;
+	}
+	.emk-metric-value {
+		font-size: 1rem;
+	}
+	.emk-stats-cards {
+		gap: 4px;
+		margin-bottom: 2px;
+	}
+	.emk-stat-card-head {
+		padding: 2px 8px;
+	}
+	.emk-stat-cell {
+		padding: 2px 8px;
+	}
+	.emk-waveform-area {
+		min-height: 180px;
+	}
+	.emk-config {
+		padding: 2px 10px;
+		margin-bottom: 4px;
+	}
+	.emk-pwr-note-foot {
+		display: none;
 	}
 }

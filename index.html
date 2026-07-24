@@ -603,24 +603,18 @@
             <!--功耗分析视图（独立 Web Serial，EMK850+）-->
             <div id="view-emk" class="app-view">
                 <div class="emk-wrapper">
-                    <div class="emk-banner">
-                        <div class="emk-banner-content">
-                            <div class="emk-banner-icon"><i class="bi bi-speedometer2"></i></div>
-                            <div>
-                                <h2 class="emk-banner-title">EMK850+ 功耗分析仪</h2>
-                                <p class="emk-banner-sub">实时采样 · 电流波形 · CSV导出 — 独立串口连接</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!--连接条-->
+                    <!--工具条：标题 + 连接-->
                     <div class="emk-connect-bar">
-                        <button class="btn btn-outline-secondary" id="emk-select-port">
-                            <i class="bi bi-usb-plug"></i> 选择串口
+                        <span class="emk-toolbar-title">
+                            <i class="bi bi-speedometer2 emk-banner-icon"></i>
+                            <span class="emk-banner-title">EMK850+ 功耗分析仪</span>
+                        </span>
+                        <span class="emk-toolbar-sep"></span>
+                        <button class="btn btn-sm btn-outline-secondary" id="emk-select-port">
+                            <i class="bi bi-usb-plug"></i> 选择设备
                         </button>
-                        <span class="emk-baud-readonly"><i class="bi bi-speedometer2"></i> 115200 8N1</span>
-                        <button class="btn btn-primary" id="emk-open">
-                            <i class="bi bi-play-circle"></i> 打开串口
+                        <button class="btn btn-sm btn-primary" id="emk-open">
+                            <i class="bi bi-play-circle"></i> 打开设备
                         </button>
                         <div id="emk-status">
                             <div class="serial-status-indicator disconnected">
@@ -628,47 +622,41 @@
                                 <span class="serial-status-text">未连接</span>
                             </div>
                         </div>
-                    </div>
-
-                    <!--控制区-->
-                    <div class="emk-controls">
-                        <div class="emk-controls-left">
-                            <div class="emk-voltage-set" style="display:none">
-                                <span class="emk-voltage-set-label">设定电压</span>
-                                <input type="number" id="emk-voltage-set" class="emk-voltage-input" value="3.7" step="0.1" min="0" max="13" title="AM 机 0x61 设压：0.1V 步进，上限 13.0V">
-                                <span class="emk-voltage-unit">V</span>
-                                <button class="btn btn-sm btn-outline-secondary" id="emk-apply-volt" title="设电压"><i class="bi bi-check-lg"></i></button>
-                            </div>
-                            <div class="emk-voltage-set" title="自动保护限值（0x72）。设备限值为 0 时一开始采样就会自我保护下电" style="display:none">
-                                <span class="emk-voltage-set-label">保护</span>
-                                <input type="number" id="emk-protect-current" class="emk-voltage-input" value="6000" step="100" min="0" title="过流保护（出厂 6000 mA）">
-                                <span class="emk-voltage-unit">mA</span>
-                                <input type="number" id="emk-protect-volt" class="emk-voltage-input" value="13" step="0.1" min="0" title="过压保护（出厂 13 V）">
-                                <span class="emk-voltage-unit">V</span>
-                                <button class="btn btn-sm btn-outline-secondary" id="emk-apply-protect" title="写入设备保护限值（持久化，会同时限制设备旋钮的可调范围）"><i class="bi bi-shield-check"></i></button>
-                            </div>
-                            <button class="btn btn-sm btn-outline-success" id="emk-poweron" style="display:none">
-                                <i class="bi bi-lightning"></i> 上电
-                            </button>
-                            <button class="btn btn-sm btn-success" id="emk-start">
-                                <i class="bi bi-play-fill"></i> 开始采样
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" id="emk-poweroff" style="display:none">
-                                <i class="bi bi-power"></i> 下电
-                            </button>
-                            <div class="emk-sample-rate-set">
-                                <span class="emk-sample-rate-label">采样率</span>
-                                <select id="emk-sample-rate" class="emk-sample-rate-select" title="设备流 + 本地抽稀。100K 需设备已激活高速档">
-                                     <option value="100k">100K (10µs)</option>
-                                     <option value="10k">10K (100µs)</option>
-                                     <option value="1k" selected>1K (1ms)</option>
-                                     <option value="100">100Hz (10ms)</option>
-                                     <option value="10">10Hz (100ms)</option>
-                                     <option value="1">1Hz (1s)</option>
-                                 </select>
-                            </div>
+                        <button class="btn btn-sm btn-success" id="emk-start">
+                            <i class="bi bi-play-fill"></i> 开始采样
+                        </button>
+                        <div class="emk-voltage-set" style="display:none">
+                            <span class="emk-voltage-set-label">设定电压</span>
+                            <input type="number" id="emk-voltage-set" class="emk-voltage-input" value="3.7" step="0.1" min="0" max="13" title="AM 机 0x61 设压：0.1V 步进，上限 13.0V">
+                            <span class="emk-voltage-unit">V</span>
+                            <button class="btn btn-sm btn-outline-secondary emk-icon-btn" id="emk-apply-volt" title="设电压"><i class="bi bi-check-lg"></i></button>
                         </div>
-                        <div class="emk-controls-right">
+                        <div class="emk-voltage-set" title="自动保护限值（0x72）。设备限值为 0 时一开始采样就会自我保护下电" style="display:none">
+                            <span class="emk-voltage-set-label">保护</span>
+                            <input type="number" id="emk-protect-current" class="emk-voltage-input" value="6000" step="100" min="0" title="过流保护（出厂 6000 mA）">
+                            <span class="emk-voltage-unit">mA</span>
+                            <input type="number" id="emk-protect-volt" class="emk-voltage-input" value="13" step="0.1" min="0" title="过压保护（出厂 13 V）">
+                            <span class="emk-voltage-unit">V</span>
+                            <button class="btn btn-sm btn-outline-secondary emk-icon-btn" id="emk-apply-protect" title="写入设备保护限值（持久化，会同时限制设备旋钮的可调范围）"><i class="bi bi-shield-check"></i></button>
+                        </div>
+                        <button class="btn btn-sm btn-outline-success" id="emk-poweron" style="display:none">
+                            <i class="bi bi-lightning"></i> 上电
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" id="emk-poweroff" style="display:none">
+                            <i class="bi bi-power"></i> 下电
+                        </button>
+                        <div class="emk-sample-rate-set">
+                            <span class="emk-sample-rate-label">采样率</span>
+                            <select id="emk-sample-rate" class="emk-sample-rate-select" title="设备流 + 本地抽稀。100K 需设备已激活高速档">
+                                 <option value="100k">100K (10µs)</option>
+                                 <option value="10k">10K (100µs)</option>
+                                 <option value="1k" selected>1K (1ms)</option>
+                                 <option value="100">100Hz (10ms)</option>
+                                 <option value="10">10Hz (100ms)</option>
+                                 <option value="1">1Hz (1s)</option>
+                             </select>
+                        </div>
+                        <div class="emk-connect-bar-right">
                             <button class="btn btn-sm btn-outline-secondary" id="emk-clear">
                                 <i class="bi bi-eraser"></i> 清空数据
                             </button>
@@ -715,21 +703,21 @@
                         <div class="emk-waveform-controls">
                             <div class="emk-zoom-group">
                                 <span class="emk-zoom-label">X</span>
-                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn" id="emk-zoom-x-in" title="X 轴放大">+</button>
-                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn" id="emk-zoom-x-out" title="X 轴缩小">&minus;</button>
-                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn" id="emk-zoom-x-reset" title="X 轴复位"><i class="bi bi-arrow-repeat"></i></button>
+                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn emk-icon-btn" id="emk-zoom-x-in" title="X 轴放大">+</button>
+                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn emk-icon-btn" id="emk-zoom-x-out" title="X 轴缩小">&minus;</button>
+                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn emk-icon-btn" id="emk-zoom-x-reset" title="X 轴复位"><i class="bi bi-arrow-repeat"></i></button>
                             </div>
                             <div class="emk-zoom-group">
                                 <span class="emk-zoom-label">Y</span>
-                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn" id="emk-zoom-y-in" title="Y 轴放大">+</button>
-                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn" id="emk-zoom-y-out" title="Y 轴缩小">&minus;</button>
-                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn" id="emk-zoom-y-reset" title="Y 轴复位"><i class="bi bi-arrow-repeat"></i></button>
+                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn emk-icon-btn" id="emk-zoom-y-in" title="Y 轴放大">+</button>
+                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn emk-icon-btn" id="emk-zoom-y-out" title="Y 轴缩小">&minus;</button>
+                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn emk-icon-btn" id="emk-zoom-y-reset" title="Y 轴复位"><i class="bi bi-arrow-repeat"></i></button>
                             </div>
                             <div class="emk-zoom-group">
                                 <button class="btn btn-sm btn-outline-secondary" id="emk-pause-scroll" title="暂停波形滚动（数据仍在采集）">
                                     <i class="bi bi-pause-fill"></i> 暂停滚动
                                 </button>
-                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn" id="emk-fullscreen" title="放大波形区（Esc 退出）">
+                                <button class="btn btn-sm btn-outline-secondary emk-icon-btn" id="emk-fullscreen" title="放大波形区（Esc 退出）">
                                     <i class="bi bi-arrows-fullscreen"></i>
                                 </button>
                             </div>
