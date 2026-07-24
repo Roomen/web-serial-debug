@@ -459,7 +459,7 @@
                                             </div>
                                         </details>
                                     </div>
-                                    <div class="protocol-down-card mb-2">
+                                    <div class="protocol-down-card mb-2" id="sk-down-card">
                                         <h6 class="pane-section-title"><i class="bi bi-arrow-down-circle"></i> 下行下发</h6>
                                         <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
                                             <div class="input-group input-group-sm" style="width: auto; flex-shrink: 0;">
@@ -539,6 +539,47 @@
                                         <div class="sk-rw-status" id="sk-rw-status">就绪</div>
                                         <div class="sk-rw-summary" id="sk-rw-summary"></div>
                                         <div class="sk-rw-log" id="sk-rw-log"></div>
+                                    </div>
+                                    <div class="protocol-down-card mb-2 sk-rw-card" id="sk-batch-card">
+                                        <h6 class="pane-section-title">
+                                            <i class="bi bi-list-check"></i> 批量配置写入
+                                            <span class="sk-rw-proto-badge" id="sk-batch-proto-name">SEK</span>
+                                        </h6>
+                                        <p class="sk-rw-hint mb-2">从常用指令预设中添加配置项, 组成清单按顺序逐条下发并整包回读确认 · 仅 SEK 协议</p>
+                                        <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                            <div class="input-group input-group-sm" style="width:auto;">
+                                                <span class="input-group-text">添加配置</span>
+                                                <select class="form-select" id="sk-batch-preset-select" style="min-width:12rem;"></select>
+                                            </div>
+                                            <button class="btn btn-sm btn-outline-secondary" id="sk-batch-add">添加</button>
+                                        </div>
+                                        <div class="sk-batch-list" id="sk-batch-list"></div>
+                                        <div class="d-flex flex-wrap align-items-center gap-3 mb-2 mt-2">
+                                            <div class="input-group input-group-sm" style="width:auto;">
+                                                <span class="input-group-text">超时ms</span>
+                                                <input type="number" class="form-control" id="sk-batch-timeout" value="5000" min="1000" max="60000" style="width:5.5rem;">
+                                            </div>
+                                            <div class="input-group input-group-sm" style="width:auto;">
+                                                <span class="input-group-text">间隔ms</span>
+                                                <input type="number" class="form-control" id="sk-batch-gap" value="200" min="0" max="10000" style="width:5rem;">
+                                            </div>
+                                            <div class="form-check form-switch mb-0">
+                                                <input class="form-check-input" type="checkbox" id="sk-batch-continue" checked>
+                                                <label class="form-check-label" for="sk-batch-continue">失败继续</label>
+                                            </div>
+                                        </div>
+                                        <div class="d-flex gap-2 mb-2">
+                                            <button class="btn btn-sm btn-primary flex-grow-1" id="sk-batch-primary">写入并确认下一台</button>
+                                            <button class="btn btn-sm btn-outline-danger" id="sk-batch-stop" disabled>停止</button>
+                                            <button class="btn btn-sm btn-outline-secondary" id="sk-batch-reset">重置计数</button>
+                                        </div>
+                                        <div class="sk-rw-progress mb-1">
+                                            <div class="sk-rw-progress-bar" id="sk-batch-progress-bar">0/0</div>
+                                        </div>
+                                        <div class="sk-rw-status" id="sk-batch-status">就绪</div>
+                                        <div class="sk-rw-summary" id="sk-batch-summary"></div>
+                                        <div class="sk-batch-readback" id="sk-batch-readback"></div>
+                                        <div class="sk-rw-log" id="sk-batch-log"></div>
                                     </div>
                                 </div>
                                 <div class="tab-pane d-flex flex-column fade" id="nav-firmware" role="tabpanel"
@@ -1038,6 +1079,8 @@
     <script src="js/common.js"></script>
     <script src="js/sek-transaction.js"></script>
     <script src="js/random-rw-test.js"></script>
+    <script src="js/batch-config.js"></script>
+    <script src="js/collapsible-cards.js"></script>
     <script src="js/command-palette.js"></script>
     <script src="js/firmware-upgrade.js"></script>
     <script src="js/hdiffi.js"></script>
