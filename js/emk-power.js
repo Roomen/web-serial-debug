@@ -515,6 +515,16 @@
 		return uw.toFixed(3) + ' µW'
 	}
 
+	function fmtEnergy(uAh) {
+		if (!isFinite(uAh) || uAh < 0) return '--'
+		const a = Math.abs(uAh)
+		if (a >= 1e6) return (uAh / 1e6).toFixed(3) + ' Ah'
+		if (a >= 1e3) return (uAh / 1e3).toFixed(2) + ' mAh'
+		if (a >= 1) return uAh.toFixed(1) + ' µAh'
+		if (a >= 1e-3) return (uAh * 1e3).toFixed(2) + ' nAh'
+		return uAh.toFixed(3) + ' µAh'
+	}
+
 	function fmtDuration(sec) {
 		if (!isFinite(sec) || sec < 0) return '--'
 		if (sec < 1e-3) return (sec * 1e6).toFixed(1) + ' µs'
@@ -821,7 +831,7 @@
 
 	function setWaveFullscreen(on) {
 		waveFullscreen = !!on
-		const area = document.querySelector('.emk-waveform-area')
+		const area = document.querySelector('.emk-wave-wrap')
 		if (area) area.classList.toggle('emk-wave-fullscreen', waveFullscreen)
 		document.body.classList.toggle('emk-wave-fullscreen-open', waveFullscreen)
 		const btn = E('emk-fullscreen')
@@ -1421,6 +1431,7 @@
 			set('max', '--')
 			set('min', '--')
 			set('pwr', '--')
+			set('energy', '--')
 			set('dur', '--')
 			return
 		}
@@ -1428,6 +1439,7 @@
 		set('max', fmtCurrent(st.max))
 		set('min', fmtCurrent(st.min))
 		set('pwr', fmtPower(st.pwr))
+		set('energy', fmtEnergy(st.avg * st.dur / 3600))
 		set('dur', fmtDuration(st.dur))
 	}
 
@@ -1797,9 +1809,13 @@
 				? (label + ' ' + Math.round((cVal) * 100) + '%')
 				: (label + ' ' + fmtTimeAxis(indexToTime(li)))
 			ctx.fillText(tLabel, x, margin.top - 2)
-			// 数值标注
+			// 数值标注：电流 + 功耗
 			const iv = ringIAt(li)
-			ctx.fillText(fmtCurrent(iv).replace(' ', ''), x, margin.top + ph + 26)
+			const vv = ringVAt(li)
+			const hasV = isFinite(vv) && vv > 0.05
+			const pwrText = hasV ? ('P ' + fmtPower(iv * vv).replace(' ', '')) : 'P --'
+			ctx.fillText(fmtCurrent(iv).replace(' ', ''), x, margin.top + ph + 12)
+			ctx.fillText(pwrText, x, margin.top + ph + 24)
 		}
 		drawCursorAt(view.cursorA, 'A', cursorCol)
 		drawCursorAt(view.cursorB, 'B', '#ec4899')
@@ -1915,7 +1931,7 @@
 		if (!el) return
 		const modeTip = view.cursorMode === 'window' ? '视口%' : '数据'
 		if (view.cursorA == null && view.cursorB == null) {
-			el.textContent = '单击放 A/B · 拖动平移 · 滚轮以鼠标为心缩放 · ' + modeTip
+			el.textContent = '单击放 A/B · 拖动游标 · 拖动平移 · 滚轮以鼠标为心缩放 · ' + modeTip
 			return
 		}
 		const vr = getViewRange()
@@ -1936,7 +1952,11 @@
 			const a = cursorToLogical(view.cursorA, vr)
 			const b = cursorToLogical(view.cursorB, vr)
 			if (a != null && b != null) {
-				parts.push('Δt=' + fmtDuration(Math.abs(b - a) * samplePeriodSec))
+				const n = Math.abs(b - a)
+				const dur = n * samplePeriodSec
+				parts.push('Δt=' + fmtDuration(dur))
+				const st = calcStats(Math.min(a, b), Math.max(a, b))
+				if (st && st.n) parts.push('Σ=' + fmtEnergy(st.avg * st.dur / 3600))
 			}
 		}
 		el.textContent = parts.join('  ')
@@ -2135,7 +2155,25 @@
 		if (elRate) {
 			elRate.addEventListener('change', function () {
 				const p = applyRatePreset()
-				emkLog('采样率目标 ' + p.label + (emkSampling ? '（下次开始采样生效）' : ''))
+				if (emkSampling) {
+					clearRing(false)
+					parser.reset()
+					startupDropRemaining = STARTUP_DROP_SAMPLES
+					startSampleTs = performance.now()
+					invalidateOverallStat()
+					if (p.send100k) {
+						emkSendCmd(PROTO.CMD.REQ_100K, '采样流 100K').then(function () {
+							probe100KSupport()
+						})
+					} else if (p.send10k) {
+						emkSendCmd(PROTO.CMD.REQ_10K, '采样流 10K')
+					}
+					emkLog('采样率已切换为 ' + p.label +
+						' · 抽稀 1/' + decimFactor +
+						' · 周期 ' + fmtDuration(samplePeriodSec))
+				} else {
+					emkLog('采样率目标 ' + p.label + '（下次开始采样生效）')
+				}
 				scheduleUIUpdate()
 			})
 		}
@@ -2315,6 +2353,26 @@
 					canvas.style.cursor = 'ns-resize'
 					return
 				}
+				// 点击在现有游标附近 → 拖拽游标
+				const CURSOR_HIT_PX = 8
+				if (e.button === 0 && inPlot(x, y) && !e.altKey) {
+					const near = function (c) {
+						if (c == null) return false
+						const li = cursorToLogical(c, plotLayout.vr)
+						if (li == null) return false
+						return Math.abs(x - plotLayout.toX(li)) <= CURSOR_HIT_PX
+					}
+					if (near(view.cursorB)) {
+						drag = { type: 'cursor', which: 'B', moved: false }
+						canvas.style.cursor = 'ew-resize'
+						return
+					}
+					if (near(view.cursorA)) {
+						drag = { type: 'cursor', which: 'A', moved: false }
+						canvas.style.cursor = 'ew-resize'
+						return
+					}
+				}
 				// 左键按下即准备拖动；移动超过阈值才算平移，没移动就当点击放游标
 				drag = {
 					type: 'pan',
@@ -2336,6 +2394,22 @@
 					const range = (plotLayout.yMax - plotLayout.yMin) || 1
 					const perPx = range / Math.max(1, plotLayout.ph)
 					view.yPanOffset = drag.panOffset0 + dy * perPx
+					scheduleUIUpdate()
+					return
+				}
+				if (drag.type === 'cursor') {
+					const rect = canvas.getBoundingClientRect()
+					const x = e.clientX - rect.left
+					const y = e.clientY - rect.top
+					if (!inPlot(x, y)) return
+					drag.moved = true
+					const li = plotLayout.fromX(x)
+					const cVal = view.cursorMode === 'window'
+						? logicalToCursor(li, plotLayout.vr)
+						: li
+					if (drag.which === 'A') view.cursorA = cVal
+					else view.cursorB = cVal
+					updateCursorInfo()
 					scheduleUIUpdate()
 					return
 				}
@@ -2362,13 +2436,26 @@
 			})
 
 			// 悬停十字线：显示该点时间 / 电流 / 电压 / 功率；不在拖动中时，
-			// 鼠标落在 Y 刻度区给出 ns-resize 提示（可上下拖动平移 Y）
+			// 鼠标落在 Y 刻度区给出 ns-resize 提示（可上下拖动平移 Y），
+			// 鼠标在游标附近给出 ew-resize 提示（可拖动游标）
 			canvas.addEventListener('mousemove', function (e) {
 				const rect = canvas.getBoundingClientRect()
 				const x = e.clientX - rect.left
 				const y = e.clientY - rect.top
 				if (!drag) {
-					canvas.style.cursor = inYAxisArea(x, y) ? 'ns-resize' : ''
+					const nearCur = function () {
+						if (!plotLayout || ringCount < 2) return false
+						const CURSOR_HIT_PX = 8
+						const n = function (c) {
+							if (c == null) return false
+							const li = cursorToLogical(c, plotLayout.vr)
+							if (li == null) return false
+							return Math.abs(x - plotLayout.toX(li)) <= CURSOR_HIT_PX
+						}
+						return n(view.cursorB) || n(view.cursorA)
+					}
+					canvas.style.cursor = inYAxisArea(x, y) ? 'ns-resize'
+						: nearCur() ? 'ew-resize' : ''
 				}
 				if (!plotLayout || ringCount < 2 || !inPlot(x, y)) {
 					if (hover) { hover = null; scheduleUIUpdate() }
