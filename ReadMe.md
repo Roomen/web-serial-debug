@@ -2,7 +2,24 @@
 
 浏览器串口调试工具（基于 [Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API)）。
 
-推荐使用 **Chrome** 或 **Edge**（需浏览器支持 Web Serial）。
+## 浏览器支持
+
+Web Serial API 目前仅桌面端 Chromium 内核浏览器支持：
+
+| 浏览器 | 最低版本 | 备注 |
+|--------|---------|------|
+| Chrome (桌面) | 89+ | ✅ 推荐 |
+| Edge (桌面) | 89+ | ✅ 推荐 |
+| Opera (桌面) | 75+ | ✅ |
+| Brave / Vivaldi / 其他 Chromium 桌面版 | 89+ | ✅ 理论上兼容 |
+
+**不支持：**
+- ❌ **Android Chrome**（Google 暂未在移动端实现）
+- ❌ **iOS 所有浏览器**（iOS 上 Chrome/Edge 等均强制使用 WebKit）
+- ❌ Firefox（Mozilla 明确表示不会实现）
+- ❌ Safari（WebKit 未实现）
+
+> 使用前请确认在桌面端 Chrome/Edge 中打开本工具。
 
 ## 使用方法
 
