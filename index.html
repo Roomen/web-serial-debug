@@ -698,7 +698,8 @@
                         </div>
                     </div>
 
-                    <!--波形区-->
+                    <!--波形区 + 统计 -->
+                    <div class="emk-wave-wrap">
                     <div class="emk-waveform-area">
                         <div class="emk-waveform-controls">
                             <div class="emk-zoom-group">
@@ -739,6 +740,7 @@
                             <div class="emk-stat-card-head">
                                 <span class="emk-stat-card-title"><i class="bi bi-database"></i> 总体</span>
                                 <span class="emk-stat-card-dur" id="emk-stat-overall-dur">--</span>
+                                <span class="emk-stat-card-energy" id="emk-stat-overall-energy">--</span>
                             </div>
                             <div class="emk-stat-card-grid">
                                 <div class="emk-stat-cell emk-stat-cell-wide">
@@ -763,6 +765,7 @@
                             <div class="emk-stat-card-head">
                                 <span class="emk-stat-card-title"><i class="bi bi-bounding-box"></i> 窗口</span>
                                 <span class="emk-stat-card-dur" id="emk-stat-window-dur">--</span>
+                                <span class="emk-stat-card-energy" id="emk-stat-window-energy">--</span>
                             </div>
                             <div class="emk-stat-card-grid">
                                 <div class="emk-stat-cell emk-stat-cell-wide">
@@ -787,6 +790,7 @@
                             <div class="emk-stat-card-head">
                                 <span class="emk-stat-card-title"><i class="bi bi-rulers"></i> 游标 A–B</span>
                                 <span class="emk-stat-card-dur" id="emk-stat-cursor-dur">--</span>
+                                <span class="emk-stat-card-energy" id="emk-stat-cursor-energy">--</span>
                             </div>
                             <div class="emk-stat-card-grid">
                                 <div class="emk-stat-cell emk-stat-cell-wide">
@@ -807,6 +811,7 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
                     </div>
                     <div class="emk-pwr-note-foot">P = 回读电压 × 电流 · 大数字 5Hz 平滑 · 统计随波形实时更新</div>
 
