@@ -46,10 +46,10 @@
 	let isHave5A = false
 	let setVoltageV = 3.7
 	let deviceVoltageSet = null // 设备 0x69 上报的设定电压
-	let deviceProtectCurrentMA = 0 // 0x69 上报的自动保护过流限值
-	let deviceProtectVoltV = 0
+	let deviceProtectCurrentMA = 0 // 0x69 上报的过流保护值 mA（出厂 6000）
+	let deviceProtectVoltV = 0 // 0x69 上报的过压保护值 V（出厂 13）
+	let protectInputsSynced = false // 是否已把设备当前限值回填到输入框
 	let lastVoltSetLogTs = 0
-	let lastProtectWarnTs = 0
 	let isAM = false // AM 机用 0x61 设压/下电
 	let wakeLockSentinel = null
 	let targetRateHz = 1000
@@ -61,6 +61,12 @@
 	let supports100K = null
 	let highSpeedFrames = 0
 	let hsProbeTimer = 0
+	// 采样帧断流监控：设备停发 0x21/0x84 时点名说出来，而不是波形静悄悄不动
+	let lastSampleFrameTs = 0
+	let sampleFrameCount = 0
+	let stallTimer = 0
+	let stallReported = false
+	let startSampleTs = 0
 	// 设备原始流速：档位标称 10K，实测本机约 8.4K，测到后即以实测为准
 	let deviceStreamHz = 0
 	let rawStreamCount = 0
@@ -412,26 +418,48 @@
 		return v
 	}
 
+	// 设备一上报 0x69 就把当前限值回填到输入框，避免用户误按「保护」时
+	// 把设备的过流/过压保护值改小（改小会连设备本机旋钮一起限死）。
+	function syncProtectInputs() {
+		if (protectInputsSynced) return
+		if (!(deviceProtectCurrentMA > 0)) return
+		protectInputsSynced = true
+		const elC = E('emk-protect-current')
+		const elV = E('emk-protect-volt')
+		if (elC) elC.value = String(deviceProtectCurrentMA)
+		// 本机过压位回读为 0（未设过），保持 0 才是原状，不要拿 13 去覆盖
+		if (elV) elV.value = String(deviceProtectVoltV)
+		emkLog('设备保护限值回读：过流 ' + deviceProtectCurrentMA + ' mA · 过压 ' + deviceProtectVoltV + ' V')
+	}
+
 	function readProtectLimits() {
 		const elC = E('emk-protect-current')
 		const elV = E('emk-protect-volt')
-		let ma = elC ? parseFloat(elC.value) : 2000
-		let v = elV ? parseFloat(elV.value) : 5
-		if (!isFinite(ma) || ma <= 0) ma = 2000
-		if (!isFinite(v) || v <= 0) v = 5
+		let ma = elC ? parseFloat(elC.value) : 6000
+		let v = elV ? parseFloat(elV.value) : 13
+		if (!isFinite(ma) || ma <= 0) ma = 6000
+		if (!isFinite(v) || v <= 0) v = 13
 		return { currentMA: ma, voltV: v }
 	}
 
-	// 自动保护限值未配置（0）时，设备一开始采样就自我保护下电，只发一帧 0x21。
-	// 上位机在「用户设置」里连发 3 次 0x72，这里在采样前补上。
+	// 0x72 写的是设备持久化的过流/过压保护值，同时限制设备本机旋钮的可调范围
+	// （出厂 6000 mA / 13 V）。只在用户点「保护」按钮时下发，绝不自动补发。
+	// 上位机在「用户设置」里同样连发 3 次。
 	async function applyAutoProtect(manual) {
 		if (!emkOpen) {
 			if (manual) emkLog('请先打开串口', 'error')
 			return false
 		}
 		const lim = readProtectLimits()
+		if (deviceProtectCurrentMA > 0 && lim.currentMA < deviceProtectCurrentMA) {
+			emkLog('过流保护值将由设备当前的 ' + deviceProtectCurrentMA + ' mA 调低到 ' + lim.currentMA + ' mA', 'warn')
+		}
+		if (deviceProtectVoltV > 0 && lim.voltV < deviceProtectVoltV) {
+			emkLog('过压保护值将由设备当前的 ' + deviceProtectVoltV + ' V 调低到 ' + lim.voltV +
+				' V —— 设备本机旋钮也调不过这个值', 'warn')
+		}
 		const frame = PROTO.buildAutoProtect(lim.currentMA, lim.voltV)
-		const ok = await emkWrite(frame, '自动保护 0x72 过流 ' + lim.currentMA + ' mA · 过压 ' + lim.voltV + ' V')
+		const ok = await emkWrite(frame, '写保护限值 0x72 过流 ' + lim.currentMA + ' mA · 过压 ' + lim.voltV + ' V')
 		for (let i = 0; i < 2; i++) {
 			await new Promise(function (r) { setTimeout(r, 150) })
 			await emkWrite(frame)
@@ -569,6 +597,7 @@
 		}
 		if (emkSampling) {
 			emkSampling = false
+			stopStallWatch()
 			updateSampleBtn()
 			await emkWrite(PROTO.buildStop(false), '停止采样')
 			await new Promise(function (r) { setTimeout(r, 80) })
@@ -615,16 +644,6 @@
 			await new Promise(function (r) { setTimeout(r, 300) })
 		}
 
-		// 采样前确保自动保护限值已下发，否则设备会立刻保护下电、波形只有一帧
-		if (!(deviceProtectCurrentMA > 0) || !(deviceProtectVoltV > 0)) {
-			emkLog('设备自动保护限值为 0，先下发保护限值', 'warn')
-			await applyAutoProtect(false)
-		}
-
-		// 采样前确保输出电压
-		await applyVoltage(readSetVoltage())
-		await new Promise(function (r) { setTimeout(r, 120) })
-
 		if (rate.send100k) {
 			await emkSendCmd(PROTO.CMD.REQ_100K, '采样流 100K')
 			await new Promise(function (r) { setTimeout(r, 40) })
@@ -635,6 +654,8 @@
 
 		emkSampling = true
 		highSpeedFrames = 0
+		startSampleTs = performance.now()
+		startStallWatch()
 		updateSampleBtn()
 		// START 带 threshold payload（默认 32000, 0）
 		const startFrame = PROTO.buildStart(32000, 0)
@@ -712,10 +733,11 @@
 	async function stopSampling() {
 		if (!emkSampling) return
 		emkSampling = false
+		stopStallWatch()
 		updateSampleBtn()
 		await emkWrite(PROTO.buildStop(false), '停止采样')
 		releaseWakeLock()
-		emkLog('采样已停止')
+		emkLog('采样已停止 · 本次收到 ' + sampleFrameCount + ' 帧')
 		invalidateOverallStat()
 		scheduleUIUpdate()
 	}
@@ -843,6 +865,7 @@
 		if (opts.manual !== false) emkManualClose = true
 		if (emkSampling) {
 			emkSampling = false
+			stopStallWatch()
 			updateSampleBtn()
 			if (emkOpen && opts.manual !== false) {
 				try { await emkWrite(PROTO.buildStop(false)) } catch (e) {}
@@ -921,6 +944,49 @@
 		return true
 	}
 
+	function noteSampleFrame() {
+		lastSampleFrameTs = performance.now()
+		sampleFrameCount++
+		stallReported = false
+	}
+
+	function startStallWatch() {
+		clearInterval(stallTimer)
+		lastSampleFrameTs = 0
+		sampleFrameCount = 0
+		stallReported = false
+		stallTimer = setInterval(function () {
+			if (!emkSampling) return
+			const now = performance.now()
+			// 还没收到第一帧的时间从「开始采样」算起
+			const base = lastSampleFrameTs || startSampleTs
+			if (!base || now - base < 1500 || stallReported) return
+			stallReported = true
+			emkLog('设备已停止上报采样帧：最后一帧在 ' + ((now - base) / 1000).toFixed(1) +
+				' s 前，本次共收到 ' + sampleFrameCount + ' 帧 —— 这是设备侧断流，不是页面卡住', 'error')
+		}, 500)
+	}
+
+	function stopStallWatch() {
+		clearInterval(stallTimer)
+		stallTimer = 0
+	}
+
+	// 0x81 CMD_RESULT_PROCESS：payload int16 模块号 + int16 错误码（上位机会弹框）
+	const ERR_MODULES = { 1: 'SAMPLE', 2: 'PROTECTION', 3: 'SECURITY' }
+
+	function logResultProcess(f) {
+		const view = new DataView(f.payload.buffer, f.payload.byteOffset, f.payload.byteLength)
+		const moduleId = view.getInt16(0, true)
+		const code = view.getInt16(2, true)
+		const mod = ERR_MODULES[moduleId] || ('模块' + moduleId)
+		let desc = '未知异常'
+		if (code === 0) desc = '无异常'
+		else if (code === -1) desc = '设置计算参数出错，存储芯片存在问题'
+		else if (code === -2) desc = '设置计算参数出错，存储芯片大小过小'
+		emkLog('设备异常上报 0x81 ' + mod + ' code=' + code + ' · ' + desc, code === 0 ? 'info' : 'error')
+	}
+
 	function hexHead(u8, n) {
 		const a = []
 		const m = Math.min(n || 12, u8.length)
@@ -933,11 +999,13 @@
 		for (let i = 0; i < frames.length; i++) {
 			const f = frames[i]
 			if (f.cmd === PROTO.CMD.RESULT) {
+				noteSampleFrame()
 				handleSampleFrame(f)
 				continue
 			}
 			// 0x84：100K/10µs 高速帧（仅激活了该档的机器上报）
 			if (f.cmd === PROTO.CMD.REQ_HIGH_SPEED_DATA) {
+				noteSampleFrame()
 				highSpeedFrames++
 				ingestSamples(PROTO.parseHighSpeedSamples(f.payload, { isHave5A: isHave5A }))
 				continue
@@ -975,7 +1043,9 @@
 				continue
 			}
 
-			if (f.cmd === PROTO.CMD.RES_READ_CONFIG) {
+			if (f.cmd === 0x81) {
+				logResultProcess(f)
+			} else if (f.cmd === PROTO.CMD.RES_READ_CONFIG) {
 				const parsed = PROTO.tryParseConfig(f.payload)
 				if (parsed) applyConf(parsed, 'RES_CONFIG')
 			} else if (f.cmd === PROTO.CMD.RES_POWERON) {
@@ -1008,11 +1078,8 @@
 					deviceVoltageSet = st.voltageSet
 					if (isFinite(st.protectCurrentMA)) deviceProtectCurrentMA = st.protectCurrentMA
 					if (isFinite(st.protectVoltV)) deviceProtectVoltV = st.protectVoltV
+					syncProtectInputs()
 					const now = performance.now()
-					if (emkSampling && !(deviceProtectCurrentMA > 0) && now - lastProtectWarnTs > 5000) {
-						lastProtectWarnTs = now
-						emkLog('设备自动保护限值为 0，采样会被立即保护中断 — 点击「保护」按钮下发限值', 'warn')
-					}
 					if (now - lastVoltSetLogTs > 3000) {
 						lastVoltSetLogTs = now
 						emkLog('设备设定电压 ' + st.voltageSet.toFixed(2) + ' V' +
@@ -1782,6 +1849,10 @@
 
 		const elApplyProtect = E('emk-apply-protect')
 		if (elApplyProtect) elApplyProtect.addEventListener('click', async function () {
+			const lim = readProtectLimits()
+			// 持久化写设备，且会限制设备本机旋钮的可调范围，必须显式确认
+			if (!window.confirm('将设备的过流/过压保护值改写为 ' + lim.currentMA + ' mA / ' + lim.voltV + ' V？\n' +
+				'这会写入设备并同时限制设备本机旋钮的可调范围（出厂值 6000 mA / 13 V）。')) return
 			await applyAutoProtect(true)
 		})
 

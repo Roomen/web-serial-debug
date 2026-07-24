@@ -633,27 +633,27 @@
                     <!--控制区-->
                     <div class="emk-controls">
                         <div class="emk-controls-left">
-                            <div class="emk-voltage-set">
+                            <div class="emk-voltage-set" style="display:none">
                                 <span class="emk-voltage-set-label">设定电压</span>
                                 <input type="number" id="emk-voltage-set" class="emk-voltage-input" value="3.7" step="0.1" min="0" max="13" title="AM 机 0x61 设压：0.1V 步进，上限 13.0V">
                                 <span class="emk-voltage-unit">V</span>
                                 <button class="btn btn-sm btn-outline-secondary" id="emk-apply-volt" title="设电压"><i class="bi bi-check-lg"></i></button>
                             </div>
-                            <div class="emk-voltage-set" title="自动保护限值（0x72）。设备限值为 0 时一开始采样就会自我保护下电">
+                            <div class="emk-voltage-set" title="自动保护限值（0x72）。设备限值为 0 时一开始采样就会自我保护下电" style="display:none">
                                 <span class="emk-voltage-set-label">保护</span>
-                                <input type="number" id="emk-protect-current" class="emk-voltage-input" value="2000" step="100" min="0" title="过流保护">
+                                <input type="number" id="emk-protect-current" class="emk-voltage-input" value="6000" step="100" min="0" title="过流保护（出厂 6000 mA）">
                                 <span class="emk-voltage-unit">mA</span>
-                                <input type="number" id="emk-protect-volt" class="emk-voltage-input" value="5" step="0.1" min="0" title="过压保护">
+                                <input type="number" id="emk-protect-volt" class="emk-voltage-input" value="13" step="0.1" min="0" title="过压保护（出厂 13 V）">
                                 <span class="emk-voltage-unit">V</span>
-                                <button class="btn btn-sm btn-outline-secondary" id="emk-apply-protect" title="下发保护限值"><i class="bi bi-shield-check"></i></button>
+                                <button class="btn btn-sm btn-outline-secondary" id="emk-apply-protect" title="写入设备保护限值（持久化，会同时限制设备旋钮的可调范围）"><i class="bi bi-shield-check"></i></button>
                             </div>
-                            <button class="btn btn-sm btn-outline-success" id="emk-poweron">
+                            <button class="btn btn-sm btn-outline-success" id="emk-poweron" style="display:none">
                                 <i class="bi bi-lightning"></i> 上电
                             </button>
                             <button class="btn btn-sm btn-success" id="emk-start">
                                 <i class="bi bi-play-fill"></i> 开始采样
                             </button>
-                            <button class="btn btn-sm btn-outline-secondary" id="emk-poweroff">
+                            <button class="btn btn-sm btn-outline-secondary" id="emk-poweroff" style="display:none">
                                 <i class="bi bi-power"></i> 下电
                             </button>
                             <div class="emk-sample-rate-set">
@@ -1010,6 +1010,7 @@
             if (!rail) return
             var items = rail.querySelectorAll('.rail-item[data-view]')
             var KEY = 'serial-debug-active-view'
+            var current = null
             function activate(id) {
                 if (!document.getElementById(id)) return
                 document.querySelectorAll('.app-view').forEach(function (v) {
@@ -1019,12 +1020,22 @@
                     it.classList.toggle('active', it.dataset.view === id)
                 })
                 localStorage.setItem(KEY, id)
+                current = id
+            }
+            function switchTo(id) {
+                if (id === 'view-emk') {
+                    if (!confirm('⚠ 功耗分析功能可能会造成分析仪掉固件、掉激活码等问题（开发测试中已验证），请在充分了解风险后谨慎使用。\n\n确定要打开吗？')) {
+                        if (current) activate(current)
+                        return
+                    }
+                }
+                activate(id)
             }
             items.forEach(function (it) {
-                it.addEventListener('click', function () { activate(it.dataset.view) })
+                it.addEventListener('click', function () { switchTo(it.dataset.view) })
             })
             var saved = localStorage.getItem(KEY)
-            if (saved) activate(saved)
+            if (saved) switchTo(saved)
         })()
     </script>
     <script src="js/pcp.js"></script>
