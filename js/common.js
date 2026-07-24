@@ -1689,8 +1689,30 @@
 	})
 
 	//关闭串口(无论 serialOpen 标志如何都尽量释放 reader/port，避免锁泄漏导致再次打开失败)
+	//屏幕唤醒锁：息屏后系统会挂起 USB 导致设备掉线，长时间挂测必须按住
+	let wakeLockSentinel = null
+	async function requestWakeLock() {
+		try {
+			if (navigator.wakeLock && !wakeLockSentinel) {
+				wakeLockSentinel = await navigator.wakeLock.request('screen')
+				wakeLockSentinel.addEventListener('release', function () { wakeLockSentinel = null })
+			}
+		} catch (e) {}
+	}
+	async function releaseWakeLock() {
+		if (wakeLockSentinel) {
+			try { await wakeLockSentinel.release() } catch (e) {}
+			wakeLockSentinel = null
+		}
+	}
+	//切到后台会被系统自动释放，切回来要重新申请，否则挂久了锁其实早没了
+	document.addEventListener('visibilitychange', function () {
+		if (document.visibilityState === 'visible' && serialOpen) requestWakeLock()
+	})
+
 	async function closeSerial() {
 		serialOpen = false
+		releaseWakeLock()
 		const r = reader
 		reader = null
 		if (r) {
@@ -1736,6 +1758,7 @@
 			setSerialWantOpen(true)
 			serialStatuChange(true)
 			localStorage.setItem('serialOptions', JSON.stringify(SerialOptions))
+			requestWakeLock()
 			readData()
 		} catch (e) {
 			const errorType = e.name || 'UnknownError'
@@ -1908,9 +1931,17 @@
 		}
 	}
 
+	//线路层瞬时错误:设备还在,流只是被这一帧的错误打断,重新取 reader 即可继续收
+	//(长时间挂测时溢出/断帧几乎必然出现一次,不该因此判定断线)
+	const RECOVERABLE_READ_ERRORS = ['BufferOverrunError', 'BreakError', 'FramingError', 'ParityError']
+	const READ_RECOVER_WINDOW_MS = 10000
+	const READ_RECOVER_MAX = 20
+
 	//读串口数据
 	async function readData() {
 		let streamError = false
+		let recoverCount = 0
+		let recoverWindowTs = 0
 
 		while (serialOpen && serialPort && serialPort.readable) {
 			const r = serialPort.readable.getReader()
@@ -1926,14 +1957,29 @@
 				const errorMsg = error.message || '未知错误'
 				//手动 close/cancel 时 read 会失败，不当作异常噪声
 				if (serialOpen) {
-					addLogErr(`串口读取错误: ${errorType} - ${errorMsg}`)
-					if (errorType === 'NetworkError' || errorType === 'DeviceLostError') {
-						addLogErr('设备可能已断开连接')
-						streamError = true
-					} else if (errorType === 'SecurityError') {
-						addLogErr('串口权限错误，请重新授权')
-						streamError = true
+					const canRecover = RECOVERABLE_READ_ERRORS.indexOf(errorType) !== -1 &&
+						serialPort && serialPort.readable
+					if (canRecover) {
+						const now = Date.now()
+						if (now - recoverWindowTs > READ_RECOVER_WINDOW_MS) {
+							recoverCount = 0
+							recoverWindowTs = now
+						}
+						recoverCount++
+						if (recoverCount > READ_RECOVER_MAX) {
+							addLogErr(`串口读取错误: ${errorType} - ${errorMsg}`)
+							addLogErr('短时间内错误过多，已停止自动恢复，请检查波特率/接线/缓冲区大小')
+							streamError = true
+						} else {
+							addLogErr(`串口读取错误: ${errorType} - ${errorMsg}，已自动恢复继续接收`)
+						}
 					} else {
+						addLogErr(`串口读取错误: ${errorType} - ${errorMsg}`)
+						if (errorType === 'NetworkError' || errorType === 'DeviceLostError') {
+							addLogErr('设备可能已断开连接')
+						} else if (errorType === 'SecurityError') {
+							addLogErr('串口权限错误，请重新授权')
+						}
 						streamError = true
 					}
 				}
@@ -1957,6 +2003,9 @@
 		}
 	}
 
+	//单个合并包的字节上限，超过就强制断包，避免连续流下缓冲无限增长
+	const SERIAL_PACK_MAX_BYTES = 65536
+
 	//串口分包合并
 	function dataReceived(data) {
 		//立即把原始字节交给固件升级/协议测试等模块,由其自行按协议帧边界组装
@@ -1970,8 +2019,18 @@
 				api._onReceive(data)
 			}
 		}
-		serialData.push(...data)
+		//不能用 push(...data)：单次读回的块可能上万字节(bufferSize 最大约 1.6M)，
+		//展开成实参会超出调用栈上限抛 RangeError，被外层当成读错误误判为断线
+		for (let i = 0; i < data.length; i++) serialData.push(data[i])
 		if (toolOptions.timeOut == 0) {
+			addLog(serialData, true)
+			addParseLog([...serialData], true)
+			serialData = []
+			return
+		}
+		//持续不断的流永远等不到 timeOut 间隔，缓冲会一直涨到把页面撑爆，超上限就强制断包
+		if (serialData.length >= SERIAL_PACK_MAX_BYTES) {
+			clearTimeout(serialTimer)
 			addLog(serialData, true)
 			addParseLog([...serialData], true)
 			serialData = []

@@ -395,10 +395,11 @@
 		const compensate = opts.compensate != null ? opts.compensate : 0
 		const pv = opts.pv
 		const ov = opts.ov
-		if (pv === -0.000510204 || (typeof pv === 'number' && Math.abs(pv + 0.000510204) < 1e-9)) {
+		// 上位机是精确相等比较（C# double ==），不要放宽成近似匹配：
+		// 本机 ov=-0.79 ≠ -0.78，按上位机语义 base 应保持 3320。
+		if (pv === -0.000510204) {
 			base = 3300
-		} else if (typeof ov === 'number' && Math.abs(ov + 0.78) < 0.05) {
-			// 本机 ov≈-0.79，上位机写死 == -0.78 → 3340
+		} else if (ov === -0.78) {
 			base = 3340
 		}
 		// 与 C# (ushort)(double) 一致：向 0 截断
@@ -477,6 +478,12 @@
 	}
 
 	// 0x69 VOLTSET 状态：int32 序列（isAutoProtect 路径）
+	// 对照 HandleVoltSet：payload 从 offset 0 起是连续 int32。
+	// isFV 分支用 i3/i4，但 isFV 在上位机里从未被置 true，实际走非 isFV 分支：
+	//   i0 设定电压 /100、i1 归零电流 /100000、i2 MCU 下发电压 /100、
+	//   i3 自动归零电流 /100000、i4 过流保护值(mA) /1000、i5 过压保护值(V) /1000
+	// i4/i5 就是上位机「用户设置」里 m_OverCurrent / m_OverVolt 的回显值。
+	// 本机实测 i4=5000（5 A 机型）、i5=0。
 	function parseVoltSetStatus(frame) {
 		if (!frame || frame.cmd !== 0x69) return null
 		const view = new DataView(frame.payload.buffer, frame.payload.byteOffset, frame.payload.byteLength)
@@ -489,17 +496,18 @@
 			currentClear: i1 / 100000,
 			voltMcuSend: i2 / 100,
 		}
-		// AM 机型实机验证：i4/i5 = 自动保护过流(µA)/过压(mV)，未配置时为 0
 		if (frame.payload.length >= 24) {
+			out.currentAutoClear = view.getInt32(12, true) / 100000
 			out.protectCurrentMA = view.getInt32(16, true) / 1000
 			out.protectVoltV = view.getInt32(20, true) / 1000
 		}
 		return out
 	}
 
-	// 0x72 自动保护配置（isAutoProtect 固件，日期 ≥ 22083001）
-	// 实机验证：未配置（过流/过压均为 0）时设备一启动采样就自我保护下电，
-	// 只发一帧 0x21 后再无波形。上位机在「用户设置」里用本帧下发限值。
+	// 0x72 过流/过压保护限值（isAutoProtect 固件，日期 ≥ 22083001）
+	// 对照 UserSetting.ConverToBytePart1：len=60，float 过流(mA) + float 过压(V)。
+	// ⚠ 这是写进设备的持久配置，会同时限制设备本机（旋钮）的输出范围，
+	// 出厂值 6000 mA / 13 V。绝不要自动下发，只在用户显式确认时发。
 	function buildAutoProtect(currentMA, voltV) {
 		const payload = new Uint8Array(60)
 		const view = new DataView(payload.buffer)
