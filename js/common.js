@@ -894,10 +894,12 @@
 		}
 		const keep = presetSel.value
 		presetSel.innerHTML = ''
-		const ph = document.createElement('option')
-		ph.value = ''
-		ph.textContent = matchingGroups.length ? '选择指令...' : '无可用指令'
-		presetSel.appendChild(ph)
+		if (!matchingGroups.length) {
+			const ph = document.createElement('option')
+			ph.value = ''
+			ph.textContent = '无可用指令'
+			presetSel.appendChild(ph)
+		}
 		for (const { grp, filtered } of matchingGroups) {
 			// 单分组时不加 optgroup 标题，避免菜单里出现一条无意义的分组行
 			const parent = matchingGroups.length > 1 ? document.createElement('optgroup') : presetSel
@@ -933,6 +935,7 @@
 			if (_skipFuncEvent) { _skipFuncEvent = false; return }
 			presetSel.value = ''
 			rebuildPresets(funcSel.value)
+			if (presetSel.value) presetSel.dispatchEvent(new Event('change'))
 		})
 	}
 	function presetItemByName(name) {
@@ -1149,6 +1152,7 @@
 		paramSelEnum.addEventListener('change', () => {
 			buildWithParam()
 		})
+		if (presetSel.value) presetSel.dispatchEvent(new Event('change'))
 	}
 	//读取参数
 	let options = localStorage.getItem('serialOptions')
