@@ -13,12 +13,17 @@
 	const DEFAULT_VIEW_POINTS = 2000
 	const DIGIT_UI_HZ = 5 // 大数字刷新率，避免肉眼跟不住
 	const NOMINAL_STREAM_HZ = 10000 // 档位标称流速，仅在实测出来之前用
-	const X_ZOOM_MIN = 0.02 // 更大时间窗
-	const X_ZOOM_MAX = 200  // 更细时间窗
+	const X_ZOOM_MIN = 0.005 // 更大时间窗
+	const X_ZOOM_MAX = 2000  // 更细时间窗
+	const MIN_VIEW_POINTS = 4 // X 轴最少可见点数（放到最大倍数时）
 	const Y_ZOOM_MIN = 0.1
 	const Y_ZOOM_MAX = 100
 	const DRAG_THRESHOLD_PX = 4 // 小于此位移算点击（放游标），大于则算拖动平移
 	const PERIOD_LOCK_SEC = 10 // 采样间隔实测收敛时间，之后锁死时间基准
+	// 开始采样瞬间（继电器/供电切换、ADC 尚未稳定）常见一两个异常尖峰，与真实电流无关；
+	// 若不丢弃，这几个点会长期停在波形最左边（getViewRange 在总点数不足视口宽度、
+	// 或用户缩到查看整段录制时，start 会钳在逻辑下标 0，也就是这几个坏点上）。
+	const STARTUP_DROP_SAMPLES = 3
 
 	// 采样率预设：设备侧 10K 流 + 客户端抽稀（对照上位机 100us/1ms/10ms/100ms 档）
 	const RATE_PRESETS = {
@@ -67,6 +72,7 @@
 	let stallTimer = 0
 	let stallReported = false
 	let startSampleTs = 0
+	let startupDropRemaining = 0 // 见 STARTUP_DROP_SAMPLES：开始采样后还要丢弃的入库点数
 	// 设备原始流速：档位标称 10K，实测本机约 8.4K，测到后即以实测为准
 	let deviceStreamHz = 0
 	let rawStreamCount = 0
@@ -294,6 +300,52 @@
 		const dur = acc.n > 1 ? (acc.n - 1) * samplePeriodSec : samplePeriodSec
 		return { avg: acc.sumI / acc.n, max: acc.mx, min: acc.mn, pwr: acc.sumP / acc.n, n: acc.n, dur: dur }
 	}
+
+	// 逐点扫描绝对序号闭区间 [a0, a1] 求 min/max（供波形每像素列包络用，calcStats 的精简版）
+	function scanAbsMinMax(a0, a1, out) {
+		if (a1 < a0 || ringCap < 1) return
+		let p = logicalToPhys(a0 - (sampleCount - ringCount))
+		for (let a = a0; a <= a1; a++) {
+			const s = p >> CHUNK_BITS
+			const ci = chunkI[s]
+			if (ci) {
+				const v = ci[p & CHUNK_MASK]
+				if (v < out.mn) out.mn = v
+				if (v > out.mx) out.mx = v
+			}
+			p++
+			if (p >= ringCap) p = 0
+		}
+	}
+
+	function addSlotMinMax(slot, out) {
+		if (statMin[slot] < out.mn) out.mn = statMin[slot]
+		if (statMax[slot] > out.mx) out.mx = statMax[slot]
+	}
+
+	// 绝对区间 [aLo, aHi] 的 min/max：与 calcStats 同样的「完整块走摘要、首尾逐点」策略，
+	// 波形每像素列包络在缩得很小时（bucketSize 达到/超过 CHUNK_SIZE）直接命中块摘要，
+	// 避免几十万点的逐点扫描。
+	function bucketMinMaxAbs(aLo, aHi) {
+		const out = { mn: Infinity, mx: -Infinity }
+		if (aHi < aLo || ringCap < 1) return out
+		const fullLo = Math.ceil(aLo / CHUNK_SIZE) * CHUNK_SIZE
+		const fullHi = Math.floor((aHi + 1) / CHUNK_SIZE) * CHUNK_SIZE // 不含
+		if (fullHi <= fullLo) {
+			scanAbsMinMax(aLo, aHi, out)
+		} else {
+			scanAbsMinMax(aLo, fullLo - 1, out)
+			for (let a = fullLo; a < fullHi; a += CHUNK_SIZE) {
+				addSlotMinMax((a % ringCap) / CHUNK_SIZE, out)
+			}
+			if (aHi >= fullHi) {
+				const s = (fullHi % ringCap) / CHUNK_SIZE
+				if (aHi === sampleCount - 1 && statN[s] === aHi - fullHi + 1) addSlotMinMax(s, out)
+				else scanAbsMinMax(fullHi, aHi, out)
+			}
+		}
+		return out
+	}
 	// <<< RINGBUF END >>>
 
 	let sampleRateLastTs = 0
@@ -318,6 +370,7 @@
 		yMin: 0,
 		yMax: 1,
 		yZoom: 1,
+		yPanOffset: 0, // Y 轴手动上下平移量（数据单位 µA），叠加在 auto/manual 算出的 yMin/yMax 之上
 		// 游标：默认窗口比例 [0,1] 固定在视口；可选 data 模式绑逻辑下标
 		cursorMode: 'window', // 'window' | 'data'
 		cursorA: null,
@@ -328,9 +381,91 @@
 	let drag = null
 	let hover = null // { x, y, li } 鼠标悬停十字线
 	let plotLayout = null
+
+	// 波形每像素列 min/max 包络缓存：key 是绝对列号（abs 下标 / bucketSize，bucketSize 为
+	// 2 的幂），value 是 { min, max, first, last }。列划分锚定绝对采样序号，同一列在滚动时
+	// physical 内容不变，因此「完整写入、未被淘汰」的列可以跨帧复用，只有视口最新一端仍在
+	// 写入的列、以及最旧一端被环形淘汰临界的列需要每帧重算。bucketSize 变化（缩放）整体清空。
+	let bucketCache = new Map()
+	let bucketCacheSize = 0
+	let bucketCacheStride = 0 // 缓存内容对应的 bucketSize，变了必须整体清空
+	const BUCKET_CACHE_MAX = 8192 // 足够覆盖若干屏宽度的列数，超过后按插入顺序淘汰最旧
+
+	function clearBucketCache() {
+		bucketCache.clear()
+		bucketCacheSize = 0
+		bucketCacheStride = 0
+	}
+
+	// 把可见区间 vr.count 个点分摊到 pw 个像素列所需的最小 2 的幂列宽
+	function computeBucketSize(count, pw) {
+		if (pw < 1) return 1
+		const raw = Math.ceil(count / pw)
+		if (raw <= 1) return 1
+		let b = 1
+		while (b < raw) b <<= 1
+		return b
+	}
+
+	// 计算单个绝对列号的 min/max/首尾样本；loAbs/hiAbs 已按当前环形缓冲有效区间裁剪
+	function computeBucketEntry(bucketIdx, bucketSize, base, lastAbs) {
+		const bStart = bucketIdx * bucketSize
+		const bEnd = bStart + bucketSize - 1
+		const loAbs = bStart < base ? base : bStart
+		const hiAbs = bEnd > lastAbs ? lastAbs : bEnd
+		if (hiAbs < loAbs) return null
+		const mm = bucketMinMaxAbs(loAbs, hiAbs)
+		const loLi = loAbs - base
+		const hiLi = hiAbs - base
+		const first = ringIAt(loLi)
+		const last = hiLi === loLi ? first : ringIAt(hiLi)
+		return { min: mm.mn, max: mm.mx, first: first, last: last, loAbs: loAbs, hiAbs: hiAbs, bStart: bStart, bEnd: bEnd }
+	}
+
+	// 取一列的包络，能缓存则缓存：只有「列的绝对范围完全落在当前有效数据区间内
+	// （不含被淘汰的旧端、不含仍在写入的新端）」才写入缓存，否则该列内容本帧后还会变，
+	// 每帧都得重算（正常情况下这样的列最多两个：视口两端各一个）。
+	function getBucketEntry(bucketIdx, bucketSize, base, lastAbs) {
+		// key 只有列号，不含列宽：缩放改变 bucketSize 后旧列号会与新列号碰撞，必须先整体清空
+		if (bucketCacheStride !== bucketSize) {
+			clearBucketCache()
+			bucketCacheStride = bucketSize
+		}
+		const cacheable = (bucketIdx * bucketSize) >= base && (bucketIdx * bucketSize + bucketSize - 1) <= lastAbs
+		if (cacheable) {
+			const hit = bucketCache.get(bucketIdx)
+			if (hit) return hit
+		}
+		const entry = computeBucketEntry(bucketIdx, bucketSize, base, lastAbs)
+		if (cacheable && entry) {
+			if (bucketCacheSize >= BUCKET_CACHE_MAX) {
+				const oldestKey = bucketCache.keys().next().value
+				bucketCache.delete(oldestKey)
+				bucketCacheSize--
+			}
+			bucketCache.set(bucketIdx, entry)
+			bucketCacheSize++
+		}
+		return entry
+	}
 	let scrollPaused = false // 暂停波形滚动（仅冻结视口，采集继续）
 	let waveFullscreen = false
 	let logPinned = false
+
+	// Y 自适应量化 + 迟滞状态：target 是量化后、带迟滞更新的目标区间；
+	// disp 是朝 target 做 EMA 平滑后的实际渲染区间。二者分离，避免平滑值
+	// 反过来触发新一轮量化判定形成抖动闭环。
+	let yAutoTargetMin = null
+	let yAutoTargetMax = null
+	let yAutoDispMin = null
+	let yAutoDispMax = null
+
+	function resetYAuto() {
+		yAutoTargetMin = null
+		yAutoTargetMax = null
+		yAutoDispMin = null
+		yAutoDispMax = null
+	}
 
 	function emkLog(msg, level) {
 		const box = E('emk-log')
@@ -447,7 +582,7 @@
 	// 上位机在「用户设置」里同样连发 3 次。
 	async function applyAutoProtect(manual) {
 		if (!emkOpen) {
-			if (manual) emkLog('请先打开串口', 'error')
+			if (manual) emkLog('请先打开设备', 'error')
 			return false
 		}
 		const lim = readProtectLimits()
@@ -489,7 +624,7 @@
 
 	async function emkWrite(data, note) {
 		if (!emkPort || !emkPort.writable || !emkOpen) {
-			emkLog('串口未打开，无法发送', 'error')
+			emkLog('设备未打开，无法发送', 'error')
 			return false
 		}
 		let writer
@@ -549,7 +684,7 @@
 	// 实机验证：AM 机 0x12/0x15 无效；0x61 + u16(V*10) 设压（0.1V 步进，≤13.0V），0 下电
 	async function applyVoltage(volt) {
 		if (!emkOpen) {
-			emkLog('请先打开串口', 'error')
+			emkLog('请先打开设备', 'error')
 			return false
 		}
 		const v = isFinite(volt) ? volt : readSetVoltage()
@@ -592,7 +727,7 @@
 
 	async function doPowerOff() {
 		if (!emkOpen) {
-			emkLog('请先打开串口', 'error')
+			emkLog('请先打开设备', 'error')
 			return
 		}
 		if (emkSampling) {
@@ -629,7 +764,7 @@
 
 	async function startSampling() {
 		if (!emkOpen) {
-			emkLog('请先打开串口', 'error')
+			emkLog('请先打开设备', 'error')
 			return
 		}
 		if (emkSampling) return
@@ -654,6 +789,7 @@
 
 		emkSampling = true
 		highSpeedFrames = 0
+		startupDropRemaining = STARTUP_DROP_SAMPLES
 		startSampleTs = performance.now()
 		startStallWatch()
 		updateSampleBtn()
@@ -778,6 +914,7 @@
 		evictWarned = false
 		pauseTopWarned = false
 		invalidateOverallStat()
+		clearBucketCache()
 		sampleRateLastTs = performance.now()
 		sampleRateCount = 0
 		sampleRateEst = 0
@@ -799,6 +936,7 @@
 		view.xOffset = 0
 		view.cursorA = null
 		view.cursorB = null
+		resetYAuto()
 		updateCursorInfo()
 		if (log !== false) {
 			scheduleUIUpdate()
@@ -837,10 +975,10 @@
 				flowControl: 'none',
 			})
 			emkOpen = true
-			setStatus('EMK850+ · ' + BAUD, true)
+			setStatus('EMK850+', true)
 			const toggle = E('emk-open')
-			if (toggle) toggle.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭串口'
-			emkLog('串口已打开 ' + BAUD + ' 8N1', 'success')
+			if (toggle) toggle.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭设备'
+			emkLog('设备已打开 ' + BAUD + ' 8N1', 'success')
 			emkReadLoop()
 			// 上位机开串口后：STOP + VERSION，VERSION 应答后再读配置
 			await new Promise(function (r) { setTimeout(r, 50) })
@@ -854,7 +992,7 @@
 			setStatus('打开失败', false)
 			emkLog('打开失败：' + (e.message || e), 'error')
 			const toggle = E('emk-open')
-			if (toggle) toggle.innerHTML = '<i class="bi bi-play-circle"></i> 打开串口'
+			if (toggle) toggle.innerHTML = '<i class="bi bi-play-circle"></i> 打开设备'
 		} finally {
 			emkOpening = false
 		}
@@ -884,9 +1022,9 @@
 		}
 		setStatus(opts.manual === false ? '已断开' : '已关闭', false)
 		const toggle = E('emk-open')
-		if (toggle) toggle.innerHTML = '<i class="bi bi-play-circle"></i> 打开串口'
+		if (toggle) toggle.innerHTML = '<i class="bi bi-play-circle"></i> 打开设备'
 		releaseWakeLock()
-		if (opts.manual !== false) emkLog('串口已关闭')
+		if (opts.manual !== false) emkLog('设备已关闭')
 	}
 
 	async function emkReadLoop() {
@@ -915,7 +1053,7 @@
 			emkOpen = false
 			setStatus('读取中断', false)
 			const toggle = E('emk-open')
-			if (toggle) toggle.innerHTML = '<i class="bi bi-play-circle"></i> 打开串口'
+			if (toggle) toggle.innerHTML = '<i class="bi bi-play-circle"></i> 打开设备'
 			releaseWakeLock()
 			if (!emkManualClose) emkLog('读取中断，可重开或等待重连', 'warn')
 		}
@@ -1163,6 +1301,11 @@
 			if (decimCounter < decimFactor) continue
 			decimCounter = 0
 
+			if (startupDropRemaining > 0) {
+				startupDropRemaining--
+				continue
+			}
+
 			ringPush(curUA, volt)
 			sampleRateCount++
 			storedThisBatch++
@@ -1243,7 +1386,7 @@
 	function getViewRange() {
 		if (ringCount < 1) return { start: 0, end: 0, count: 0 }
 		// xZoom 大 = 放大（更少点）；xZoom 小 = 缩小（更长时间）
-		const maxPts = Math.max(20, Math.min(ringCount, Math.round(view.baseViewPoints / view.xZoom)))
+		const maxPts = Math.max(MIN_VIEW_POINTS, Math.min(ringCount, Math.round(view.baseViewPoints / view.xZoom)))
 		let end = ringCount - 1 - Math.floor(view.xOffset)
 		if (end < 0) end = 0
 		if (end > ringCount - 1) end = ringCount - 1
@@ -1387,6 +1530,20 @@
 		updateStats()
 	}
 
+	// 把任意正数取整到最近的「好看」刻度：1/2/5 × 10^n（Y 轴自适应量化用）
+	function niceNumber(raw) {
+		if (!(raw > 0) || !isFinite(raw)) return 1
+		const exp = Math.floor(Math.log10(raw))
+		const base = Math.pow(10, exp)
+		const frac = raw / base
+		let nice
+		if (frac <= 1) nice = 1
+		else if (frac <= 2) nice = 2
+		else if (frac <= 5) nice = 5
+		else nice = 10
+		return nice * base
+	}
+
 	function updateCanvas() {
 		const canvas = E('emk-canvas')
 		if (!canvas) return
@@ -1426,19 +1583,41 @@
 		}
 
 		const vr = getViewRange()
-		// 抽稀步长：描线与 Y 自适应共用，最坏也只扫约 2×像素宽个点
-		const step = Math.max(1, Math.floor(vr.count / (pw * 2)))
+		// 每像素列 min/max 包络：列边界锚定在绝对采样序号（sampleCount - ringCount + li），
+		// 列宽取 2 的幂且 >= 该视口每像素分摊到的点数，保证同一采样点在同一缩放档下永远落在
+		// 同一列——滚动时尖刺高度不再因窗口相位变化而忽隐忽现。bucketSize<=1（放大到每点
+		// 都能占到至少 1 像素）时退回逐点折线。Y 自适应扫描复用同一批列的 min/max，不再单独
+		// 跳点扫一遍。
+		const ringBase = sampleCount - ringCount
+		const ringLastAbs = sampleCount - 1
+		const bucketSize = computeBucketSize(vr.count, pw)
 		let yMin = Infinity
 		let yMax = -Infinity
-		for (let li = vr.start; li <= vr.end; li += step) {
-			const v = ringIAt(li)
-			if (v < yMin) yMin = v
-			if (v > yMax) yMax = v
+		let cols = null // 仅 bucketSize > 1 时使用：[{ x: <li 坐标（可为小数）>, entry }]
+		if (bucketSize <= 1) {
+			for (let li = vr.start; li <= vr.end; li++) {
+				const v = ringIAt(li)
+				if (v < yMin) yMin = v
+				if (v > yMax) yMax = v
+			}
+		} else {
+			const absStart = ringBase + vr.start
+			const absEnd = ringBase + vr.end
+			const firstBucket = Math.floor(absStart / bucketSize)
+			const lastBucket = Math.floor(absEnd / bucketSize)
+			cols = []
+			for (let bi = firstBucket; bi <= lastBucket; bi++) {
+				const entry = getBucketEntry(bi, bucketSize, ringBase, ringLastAbs)
+				if (!entry) continue
+				if (entry.min < yMin) yMin = entry.min
+				if (entry.max > yMax) yMax = entry.max
+				cols.push({ x: (entry.loAbs + entry.hiAbs) / 2 - ringBase, entry: entry })
+			}
 		}
-		if (vr.end > vr.start) {
-			const vLast = ringIAt(vr.end)
-			if (vLast < yMin) yMin = vLast
-			if (vLast > yMax) yMax = vLast
+		if (!isFinite(yMin) || !isFinite(yMax)) {
+			const vv = ringIAt(vr.end)
+			yMin = vv - 1
+			yMax = vv + 1
 		}
 		if (yMax === yMin) {
 			yMax += 1
@@ -1451,11 +1630,47 @@
 		if (view.yMode === 'manual') {
 			yMin = view.yMin
 			yMax = view.yMax
-		} else if (view.yZoom !== 1) {
-			const mid = (yMin + yMax) / 2
-			const half = (yMax - yMin) / 2 / view.yZoom
-			yMin = mid - half
-			yMax = mid + half
+		} else {
+			// nice-number 量化 + 迟滞 + 轻度 EMA：滚动时同一量级的数据不应该让
+			// Y 刻度每帧都跳动，只有数据量级真正变化（超出当前范围，或收缩到
+			// 当前范围的 60% 以下）才重新量化出新的刻度边界。
+			const rawRange = yMax - yMin || 1
+			const step5 = niceNumber(rawRange / 4)
+			const qMin = Math.floor(yMin / step5) * step5
+			const qMax = Math.ceil(yMax / step5) * step5
+			if (yAutoTargetMin == null) {
+				yAutoTargetMin = qMin
+				yAutoTargetMax = qMax
+			} else {
+				const curRange = yAutoTargetMax - yAutoTargetMin || 1
+				const needExpand = qMin < yAutoTargetMin || qMax > yAutoTargetMax
+				const needShrink = (qMax - qMin) < curRange * 0.6
+				if (needExpand || needShrink) {
+					yAutoTargetMin = qMin
+					yAutoTargetMax = qMax
+				}
+			}
+			if (yAutoDispMin == null) {
+				yAutoDispMin = yAutoTargetMin
+				yAutoDispMax = yAutoTargetMax
+			} else {
+				yAutoDispMin += (yAutoTargetMin - yAutoDispMin) * 0.3
+				yAutoDispMax += (yAutoTargetMax - yAutoDispMax) * 0.3
+			}
+			yMin = yAutoDispMin
+			yMax = yAutoDispMax
+			if (view.yZoom !== 1) {
+				const mid = (yMin + yMax) / 2
+				const half = (yMax - yMin) / 2 / view.yZoom
+				yMin = mid - half
+				yMax = mid + half
+			}
+		}
+
+		// Y 手动上下平移：叠加在 auto/manual 算出的区间之上
+		if (view.yPanOffset) {
+			yMin += view.yPanOffset
+			yMax += view.yPanOffset
 		}
 
 		const t0 = indexToTime(vr.start)
@@ -1512,21 +1727,55 @@
 			ctx.fillText(fmtTimeAxis(t), x, margin.top + ph + 14)
 		}
 
-		// current waveform only
+		// current waveform only（列划分锚定绝对采样序号，滚动时同一根尖刺永远落在同一列，
+		// 不会因为窗口相位变化而忽隐忽现）
 		ctx.strokeStyle = accent
 		ctx.lineWidth = 1.3
 		ctx.beginPath()
 		let started = false
-		for (let li = vr.start; li <= vr.end; li += step) {
-			const x = toX(li)
-			const y = toY(ringIAt(li))
-			if (!started) { ctx.moveTo(x, y); started = true }
-			else ctx.lineTo(x, y)
-		}
-		if (vr.end > vr.start) {
-			ctx.lineTo(toX(vr.end), toY(ringIAt(vr.end)))
+		const drawnPts = [] // 点数很少时用于画样本点标记（仅逐点模式）
+		if (bucketSize <= 1) {
+			for (let li = vr.start; li <= vr.end; li++) {
+				const x = toX(li)
+				const y = toY(ringIAt(li))
+				if (!started) { ctx.moveTo(x, y); started = true }
+				else ctx.lineTo(x, y)
+				drawnPts.push(x, y)
+			}
+		} else {
+			// 每列依次连 first → 较近的极值 → 较远的极值 → last，
+			// 既画出 min/max 包络（尖刺不丢），又保持趋势线连续、少折返
+			for (let k = 0; k < cols.length; k++) {
+				const e = cols[k].entry
+				const x = toX(cols[k].x)
+				const yFirst = toY(e.first)
+				const yMinPx = toY(e.min)
+				const yMaxPx = toY(e.max)
+				const yLast = toY(e.last)
+				if (!started) { ctx.moveTo(x, yFirst); started = true }
+				else ctx.lineTo(x, yFirst)
+				if (Math.abs(e.min - e.first) <= Math.abs(e.max - e.first)) {
+					ctx.lineTo(x, yMinPx)
+					ctx.lineTo(x, yMaxPx)
+				} else {
+					ctx.lineTo(x, yMaxPx)
+					ctx.lineTo(x, yMinPx)
+				}
+				ctx.lineTo(x, yLast)
+			}
 		}
 		ctx.stroke()
+
+		// 放到很大倍数（可见点很少）时，光有折线不容易看清具体样本，叠加圆点标记
+		// （仅逐点模式会触发：vr.count<=60 时 bucketSize 必为 1）
+		if (bucketSize <= 1 && vr.count <= 60) {
+			ctx.fillStyle = accent
+			for (let k = 0; k < drawnPts.length; k += 2) {
+				ctx.beginPath()
+				ctx.arc(drawnPts[k], drawnPts[k + 1], 2.2, 0, Math.PI * 2)
+				ctx.fill()
+			}
+		}
 
 		function drawCursorAt(cVal, label, col) {
 			if (cVal == null) return
@@ -1732,12 +1981,22 @@
 		view.xZoom = Math.min(X_ZOOM_MAX, Math.max(X_ZOOM_MIN, view.xZoom * factor))
 		scheduleUIUpdate()
 	}
-	// 以画布 px 处的数据点为锚点缩放：该点缩放前后停在同一屏幕位置
+	// 以画布 px 处的数据点为锚点缩放：该点缩放前后停在同一屏幕位置。
+	// 例外：当前处于「未暂停 + 实时右端（xOffset===0）」时，滚轮缩放只改倍数、
+	// 保持右端锚定，不触发暂停——否则锚点计算把 xOffset 推离 0 会误触发暂停，
+	// 导致实时状态下光缩放也会"卡住"波形。只有用户已经暂停/平移过，才用锚点缩放。
 	function zoomXAt(factor, px) {
 		const lay = plotLayout
 		const oldZoom = view.xZoom
 		const newZoom = Math.min(X_ZOOM_MAX, Math.max(X_ZOOM_MIN, oldZoom * factor))
 		if (newZoom === oldZoom) return
+		const isRealtimeEdge = !scrollPaused && view.xOffset === 0
+		if (isRealtimeEdge) {
+			view.xZoom = newZoom
+			view.xOffset = 0
+			scheduleUIUpdate()
+			return
+		}
 		if (!lay || !lay.vr || lay.vr.count < 2 || px == null || ringCount < 2) {
 			view.xZoom = newZoom
 			scheduleUIUpdate()
@@ -1747,11 +2006,11 @@
 		const t = Math.max(0, Math.min(1, (px - lay.margin.left) / lay.pw))
 		const anchor = vr.start + t * (vr.count - 1) // 鼠标下的逻辑下标（不取整）
 		view.xZoom = newZoom
-		const newCount = Math.max(20, Math.min(ringCount, Math.round(view.baseViewPoints / newZoom)))
+		const newCount = Math.max(MIN_VIEW_POINTS, Math.min(ringCount, Math.round(view.baseViewPoints / newZoom)))
 		const newEnd = anchor + (1 - t) * (newCount - 1)
-		const maxOff = Math.max(0, ringCount - 10)
+		const maxOff = Math.max(0, ringCount - MIN_VIEW_POINTS)
 		view.xOffset = Math.max(0, Math.min(maxOff, (ringCount - 1) - newEnd))
-		// 锚点缩放会把视口挪离右端 = 要停住看，自动暂停滚动
+		// 已经在暂停/平移状态下再缩放，视口仍然离开右端 = 保持暂停
 		if (!scrollPaused && emkSampling && view.xOffset > 0) setScrollPaused(true)
 		scheduleUIUpdate()
 	}
@@ -1770,6 +2029,8 @@
 	function resetY() {
 		view.yZoom = 1
 		view.yMode = 'auto'
+		view.yPanOffset = 0
+		resetYAuto()
 		scheduleUIUpdate()
 	}
 	function resetView() {
@@ -1805,9 +2066,9 @@
 					const port = await navigator.serial.requestPort()
 					if (emkOpen) await emkClosePort({ manual: true })
 					emkPort = port
-					emkLog('串口已选择')
+					emkLog('设备已选择')
 				} catch (e) {
-					if (e && e.name !== 'NotFoundError') emkLog('选择串口：' + (e.message || e), 'error')
+					if (e && e.name !== 'NotFoundError') emkLog('选择设备：' + (e.message || e), 'error')
 				}
 			})
 		}
@@ -1817,7 +2078,7 @@
 			elOpen.addEventListener('click', async function () {
 				if (emkOpening) return
 				if (!emkPort) {
-					emkLog('请先选择串口', 'error')
+					emkLog('请先选择设备', 'error')
 					return
 				}
 				if (emkOpen) {
@@ -1943,7 +2204,7 @@
 		const elReadConf = E('emk-read-config')
 		if (elReadConf) {
 			elReadConf.addEventListener('click', async function () {
-				if (!emkOpen) { emkLog('请先打开串口', 'error'); return }
+				if (!emkOpen) { emkLog('请先打开设备', 'error'); return }
 				await requestConfig()
 			})
 		}
@@ -1977,8 +2238,27 @@
 			canvas.addEventListener('wheel', function (e) {
 				e.preventDefault()
 				const factor = e.deltaY > 0 ? (1 / 1.15) : 1.15
+				const rect = canvas.getBoundingClientRect()
+				const x = e.clientX - rect.left
+				const y = e.clientY - rect.top
+				if (plotLayout) {
+					const m = plotLayout.margin
+					const inYAxis = x < m.left && y >= m.top && y <= m.top + plotLayout.ph
+					const inXAxis = y > m.top + plotLayout.ph
+					if (inYAxis) {
+						// 左侧 Y 刻度区：只缩放 Y
+						zoomY(factor)
+						return
+					}
+					if (inXAxis) {
+						// 底部 X 刻度区：只缩放 X，遵循实时右端不暂停的规则
+						zoomXAt(factor, x)
+						return
+					}
+				}
+				// 绘图区内：默认缩放 X，Shift 缩放 Y
 				if (e.shiftKey) zoomY(factor)
-				else zoomXAt(factor, e.clientX - canvas.getBoundingClientRect().left)
+				else zoomXAt(factor, x)
 			}, { passive: false })
 
 			// 双击只吃掉浏览器默认选中，不动视图（复位请用 X/Y 复位按钮）
@@ -2008,6 +2288,12 @@
 				scheduleUIUpdate()
 			}
 
+			const inYAxisArea = function (x, y) {
+				if (!plotLayout) return false
+				const m = plotLayout.margin
+				return x < m.left && y >= m.top && y <= m.top + plotLayout.ph
+			}
+
 			canvas.addEventListener('mousedown', function (e) {
 				if (!plotLayout || ringCount < 2) return
 				const rect = canvas.getBoundingClientRect()
@@ -2015,6 +2301,20 @@
 				const y = e.clientY - rect.top
 				if (e.button !== 0 && e.button !== 1) return
 				e.preventDefault()
+				// 左键在左侧 Y 刻度区按下、或中键按下、或绘图区内 Alt+左键，都是 Y 平移；
+				// 其余左键按下走原有的 X 平移 / 点击放游标逻辑
+				const wantPanY = e.button === 1 ||
+					(e.button === 0 && (inYAxisArea(x, y) || (e.altKey && inPlot(x, y))))
+				if (wantPanY) {
+					drag = {
+						type: 'pany',
+						y0: e.clientY,
+						panOffset0: view.yPanOffset,
+						moved: false,
+					}
+					canvas.style.cursor = 'ns-resize'
+					return
+				}
 				// 左键按下即准备拖动；移动超过阈值才算平移，没移动就当点击放游标
 				drag = {
 					type: 'pan',
@@ -2028,14 +2328,25 @@
 			})
 
 			window.addEventListener('mousemove', function (e) {
-				if (!drag || drag.type !== 'pan' || !plotLayout) return
+				if (!drag || !plotLayout) return
+				if (drag.type === 'pany') {
+					const dy = e.clientY - drag.y0
+					if (!drag.moved && Math.abs(dy) < DRAG_THRESHOLD_PX) return
+					drag.moved = true
+					const range = (plotLayout.yMax - plotLayout.yMin) || 1
+					const perPx = range / Math.max(1, plotLayout.ph)
+					view.yPanOffset = drag.panOffset0 + dy * perPx
+					scheduleUIUpdate()
+					return
+				}
+				if (drag.type !== 'pan') return
 				const dx = e.clientX - drag.x0
 				if (!drag.moved && Math.abs(dx) < DRAG_THRESHOLD_PX) return
 				drag.moved = true
 				const vr = plotLayout.vr
 				const ptsPerPx = vr.count / Math.max(1, plotLayout.pw)
 				view.xOffset = Math.max(0, drag.off0 + dx * ptsPerPx)
-				const maxOff = Math.max(0, ringCount - 10)
+				const maxOff = Math.max(0, ringCount - MIN_VIEW_POINTS)
 				if (view.xOffset > maxOff) view.xOffset = maxOff
 				// 手动平移即视为要停住看，自动进入暂停滚动
 				if (!scrollPaused && emkSampling && view.xOffset > 0) setScrollPaused(true)
@@ -2050,11 +2361,15 @@
 				canvas.style.cursor = ''
 			})
 
-			// 悬停十字线：显示该点时间 / 电流 / 电压 / 功率
+			// 悬停十字线：显示该点时间 / 电流 / 电压 / 功率；不在拖动中时，
+			// 鼠标落在 Y 刻度区给出 ns-resize 提示（可上下拖动平移 Y）
 			canvas.addEventListener('mousemove', function (e) {
 				const rect = canvas.getBoundingClientRect()
 				const x = e.clientX - rect.left
 				const y = e.clientY - rect.top
+				if (!drag) {
+					canvas.style.cursor = inYAxisArea(x, y) ? 'ns-resize' : ''
+				}
 				if (!plotLayout || ringCount < 2 || !inPlot(x, y)) {
 					if (hover) { hover = null; scheduleUIUpdate() }
 					return
@@ -2117,6 +2432,23 @@
 		ro.observe(target)
 	}
 
+	// 主题切换重绘：updateCanvas() 每次绘制时都从 CSS 变量取色，采样中/UI 有更新时天然跟得上；
+	// 但空闲时切主题不会触发任何重绘，画布会停留在旧配色，看起来像"不支持暗色模式"。
+	// data-theme 是显式切换（common.js 里 #theme-toggle 设置），没有它时跟随系统 prefers-color-scheme。
+	// 只在 init() 里绑定一次，避免重复 observe/listen。
+	function setupThemeWatch() {
+		if (typeof MutationObserver !== 'undefined') {
+			const mo = new MutationObserver(function () { scheduleUIUpdate() })
+			mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+		}
+		try {
+			const mq = window.matchMedia('(prefers-color-scheme: dark)')
+			const onChange = function () { scheduleUIUpdate() }
+			if (mq.addEventListener) mq.addEventListener('change', onChange)
+			else if (mq.addListener) mq.addListener(onChange) // 老 Safari
+		} catch (e) {}
+	}
+
 	// 启动只打这一条容量信息（无界面控件，档位由 deviceMemory 自动判断）
 	function logCapacity() {
 		const mb = RING_CAP_MAX * 4 * 2 / 1024 / 1024
@@ -2144,6 +2476,7 @@
 		setupSerialEvents()
 		setupVisibility()
 		setupCanvasResize()
+		setupThemeWatch()
 		updateSampleBtn()
 		updateCursorInfo()
 		updateCanvas()
