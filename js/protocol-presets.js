@@ -389,6 +389,9 @@ window.SK_DOWN_PRESETS = [
 				tlv: [{ tag: 93, items: [{ id: 17 }] }] },
 			{ name: '休眠', func: '0x11', desc: 'Tag93-ID12 整机休眠',
 				tlv: [{ tag: 93, items: [{ id: 12, value: [0x01] }] }] },
+			{ name: '传感器校准', func: '0x11', desc: 'Tag93-ID8 传感器编号(1-255)',
+				param: { label: '传感器编号', type: 'uint8', default: '1' },
+				tlv: [{ tag: 93, items: [{ id: 8 }] }] },
 		]
 	},
 	{
