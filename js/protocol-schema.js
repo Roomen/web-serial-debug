@@ -431,6 +431,7 @@ window.SK_TAGS = {
 		{ id: 24, name: '历史冻结数据', type: 'BYTE[1]', desc: 'byte1=0往前30日 1=31-60日 按TAG5间隔1440分钟' },
 		{ id: 30, name: '超声波表参数', type: 'NULL', desc: '响应返回tag30' },
 		{ id: 31, name: '超声波表状态参数', type: 'NULL', desc: '响应返回tag31' },
+		{ id: 34, name: '无磁传感器参数', type: 'NULL', desc: '响应返回tag34' },
 		{ id: 35, name: 'Lora参数', type: 'NULL', desc: '响应返回tag35' }
 	],
 	'11': [
