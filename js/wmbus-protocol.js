@@ -83,7 +83,7 @@
 		return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds())
 	}
 	function decodeTypeF(b) {
-		// EN13757-3 Type-F 日期时间(4字节), 与 App/app_commu.c mbusPackTypeF 互逆
+		// EN13757-3 Type-F 日期时间(4字节)
 		const minute = b[0] & 0x3f
 		const hour = b[1] & 0x1f
 		const day = b[2] & 0x1f
@@ -95,7 +95,7 @@
 		return year + '-' + p(month) + '-' + p(day) + ' ' + p(hour) + ':' + p(minute)
 	}
 	function decodeDateTimeT(b) {
-		// Bsp/typed.h DateTimeT: 8 x uint32 LE (year,month,day,hour,minute,second,weekday,zone)
+		// 设备时间结构体: 8 x uint32 LE (year,month,day,hour,minute,second,weekday,zone)
 		if (!b || b.length < 32) return '(数据不足)'
 		const year = u32le(b, 0), month = u32le(b, 4), day = u32le(b, 8)
 		const hour = u32le(b, 12), minute = u32le(b, 16), second = u32le(b, 20)
@@ -175,7 +175,7 @@
 		} catch (e) { console.error('[wmbus] AES-CMAC 自测异常', e) }
 	})()
 
-	// ===== 协议常量 (对齐 Protocol/wmbus/wmbus.h) =====
+	// ===== 协议常量 =====
 	const CI_DOWN = 0x5B, CI_UP = 0x7A
 	const HDR = 15, MACLEN = 8
 
@@ -227,7 +227,7 @@
 		return { ok: o > 0, lines }
 	}
 
-	// 0x20 周期上报明文解码 (与 App/app_commu.c commuWmbusMeterPlainBuild 互逆), plain 不含 CMD 字节
+	// 0x20 周期上报明文解码, plain 不含 CMD 字节
 	function decodeReportMeter(plain) {
 		if (plain.length < 13) return { ok: false, lines: ['数据不足(至少13字节头)'] }
 		let o = 0
@@ -307,18 +307,24 @@
 		for (let i = 0; i < 16; i++) k[i] = BUILTIN_KEY_BASE[i] ^ (role & 0xff)
 		return k
 	}
-	// 复用共享的「密钥(ASCII)/密钥(HEX)」输入框(与 SK 协议共用同一处高级面板):
-	// 若填写则对全部角色统一生效(单密钥调试场景); 留空则回退设备未产线注入时的内置默认密钥(base^role)。
+	// 三个角色各有独立密钥(公开读/操作员/管理员互不相同), 因此不能像 SK 那样用单一密钥字段覆盖全部角色。
+	// 取值优先级: 显式传入的 opt.roleKeys[role] > 页面「高级·密钥」里对应角色的 HEX 输入框 > 内置默认密钥(base^role,
+	// 与设备未经产线注入时的兜底行为一致)。
+	const ROLE_KEY_INPUT_ID = { 0: 'wmbus-key-public', 1: 'wmbus-key-operator', 2: 'wmbus-key-admin' }
+	function roleKeyFromDom(role) {
+		if (typeof document === 'undefined') return ''
+		const el = document.getElementById(ROLE_KEY_INPUT_ID[role])
+		return el ? el.value : ''
+	}
 	function resolveRoleKey(opt, role) {
-		if (opt && opt.keyHex) {
-			const raw = toBytesHex(opt.keyHex)
+		if (opt && opt.roleKeys && opt.roleKeys[role]) {
+			const raw = toBytesHex(opt.roleKeys[role])
 			if (raw.length >= 16) return raw.subarray(0, 16)
 		}
-		if (opt && opt.keyAscii) {
-			const s = String(opt.keyAscii)
-			const b = new Uint8Array(16)
-			for (let i = 0; i < Math.min(16, s.length); i++) b[i] = s.charCodeAt(i) & 0xff
-			return b
+		const domHex = roleKeyFromDom(role)
+		if (domHex) {
+			const raw = toBytesHex(domHex)
+			if (raw.length >= 16) return raw.subarray(0, 16)
 		}
 		return defaultKey(role)
 	}
@@ -681,16 +687,13 @@
 			const mcnt = parseInt(mcntEl.value, 10)
 			if (!mcnt || mcnt < 1) { showErr('计数器MCNT需为正整数,且需大于设备当前已接受值'); return null }
 			try {
-				const keyHexEl = document.getElementById('serial-protocol-key-hex')
-				const keyAsciiEl = document.getElementById('serial-protocol-key-ascii')
+				// 密钥按 keyId 对应角色, 从「高级·密钥」下的 wmbus 角色密钥输入框读取(留空则用内置默认), 见 resolveRoleKey
 				const frame = W.wmbusBuildDownFrame({
 					addr,
 					keyId: parseInt(keyIdSel.value, 10),
 					mcnt,
 					cmd: cmdSel.value,
 					payloadHex: payloadEl.value,
-					keyHex: keyHexEl ? keyHexEl.value : '',
-					keyAscii: keyAsciiEl ? keyAsciiEl.value : '',
 				})
 				localStorage.setItem('wmbusDownAddr', addr)
 				mcntEl.value = String(mcnt + 1)
@@ -717,18 +720,30 @@
 			if (sendEl) sendEl.click()
 		})
 
-		// 与 SK 下行卡片互斥显示: 当前协议切到 wmbus 时显示本卡片, 隐藏 SK 相关卡片
+		// 与 SK 下行卡片/密钥字段互斥显示: 当前协议切到 wmbus 时显示本卡片与角色密钥输入, 隐藏 SK 相关卡片与单密钥输入
 		function applyVisibility() {
 			const sel = document.getElementById('serial-protocol-select')
 			const isWmbus = !!(sel && sel.value === 'wmbus')
-			const ids = ['sk-down-card', 'sk-rw-card', 'sk-batch-card']
-			for (const id of ids) { const el = document.getElementById(id); if (el) el.style.display = isWmbus ? 'none' : '' }
+			const hideWhenWmbus = ['sk-down-card', 'sk-rw-card', 'sk-batch-card', 'sk-key-ascii-group', 'sk-key-hex-group']
+			for (const id of hideWhenWmbus) { const el = document.getElementById(id); if (el) el.style.display = isWmbus ? 'none' : '' }
 			const wm = document.getElementById('wmbus-down-card')
 			if (wm) wm.style.display = isWmbus ? '' : 'none'
+			const wmKeys = document.getElementById('wmbus-key-roles')
+			if (wmKeys) wmKeys.style.display = isWmbus ? '' : 'none'
 		}
 		const protoSel = document.getElementById('serial-protocol-select')
 		if (protoSel) protoSel.addEventListener('change', applyVisibility)
 		applyVisibility()
+
+		// 三个角色密钥持久化(仅存本地 localStorage, 便于刷新后不必重填)
+		const roleKeyEls = { 0: document.getElementById('wmbus-key-public'), 1: document.getElementById('wmbus-key-operator'), 2: document.getElementById('wmbus-key-admin') }
+		const roleKeyStorageId = { 0: 'wmbusKeyPublic', 1: 'wmbusKeyOperator', 2: 'wmbusKeyAdmin' }
+		for (const role in roleKeyEls) {
+			const el = roleKeyEls[role]
+			if (!el) continue
+			el.value = localStorage.getItem(roleKeyStorageId[role]) || ''
+			el.addEventListener('input', () => localStorage.setItem(roleKeyStorageId[role], el.value))
+		}
 	}
 
 	tryRegister()
