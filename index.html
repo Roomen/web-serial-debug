@@ -500,6 +500,49 @@
                                         <textarea class="form-control form-control-sm mt-1 sk-hex-copyable" rows="3" id="serial-protocol-down-preview"
                                             readonly placeholder="待发送的完整 HEX（空格分隔，点击可复制）" title="点击复制生成的 HEX"></textarea>
                                     </div>
+                                    <div class="protocol-down-card mb-2" id="wmbus-down-card" style="display:none;">
+                                        <h6 class="pane-section-title"><i class="bi bi-arrow-down-circle"></i> W-MBUS 下行下发</h6>
+                                        <p class="sk-rw-hint mb-2">EN13757-3/-7 私有 profile · 全程 AES-128-CBC 加密 + AES-128-CMAC 鉴权,无明文选项</p>
+                                        <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
+                                            <div class="input-group input-group-sm" style="width: auto;">
+                                                <span class="input-group-text">命令</span>
+                                                <select class="form-select" id="wmbus-down-cmd"></select>
+                                            </div>
+                                            <div class="input-group input-group-sm" style="width: auto;">
+                                                <span class="input-group-text">密钥角色</span>
+                                                <select class="form-select" id="wmbus-down-keyid">
+                                                    <option value="0">0 公开读</option>
+                                                    <option value="1">1 操作员</option>
+                                                    <option value="2">2 管理员</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
+                                            <div class="input-group input-group-sm" style="width: auto;">
+                                                <span class="input-group-text">设备地址ADDR(8B HEX)</span>
+                                                <input type="text" class="form-control" id="wmbus-down-addr" style="width:160px;" placeholder="厂商LE2+表号后8位BCD4+版本1+类型1">
+                                            </div>
+                                            <div class="input-group input-group-sm" style="width: auto;">
+                                                <span class="input-group-text">计数器MCNT</span>
+                                                <input type="number" class="form-control" id="wmbus-down-mcnt" style="width:100px;" min="1">
+                                            </div>
+                                        </div>
+                                        <div class="input-group input-group-sm mb-2" id="wmbus-down-param-group" style="display:none;">
+                                            <span class="input-group-text" id="wmbus-down-param-label">参数</span>
+                                            <input type="text" class="form-control" id="wmbus-down-param-val" style="width:120px;" placeholder="值">
+                                            <select class="form-select" id="wmbus-down-param-sel" style="display:none;"></select>
+                                        </div>
+                                        <textarea class="form-control form-control-sm" rows="2" id="wmbus-down-payload"
+                                            placeholder="载荷 HEX(不含CMD),按上方命令自动生成,可手动覆盖"></textarea>
+                                        <div class="d-flex flex-wrap align-items-center gap-2 mt-1">
+                                            <span class="small text-muted">密钥: 复用右上「高级·密钥」ASCII/HEX 输入(留空则用设备内置默认密钥)</span>
+                                        </div>
+                                        <div class="small text-danger" id="wmbus-down-err"></div>
+                                        <div class="d-flex flex-wrap align-items-center gap-2 mt-1">
+                                            <button class="btn btn-sm btn-outline-secondary" id="wmbus-down-build">生成HEX</button>
+                                            <button class="btn btn-sm btn-primary flex-grow-1" id="wmbus-down-send">立即下发</button>
+                                        </div>
+                                    </div>
                                     <div class="protocol-down-card mb-2 sk-rw-card" id="sk-rw-card">
                                         <h6 class="pane-section-title">
                                             <i class="bi bi-shuffle"></i> 随机读写测试
@@ -1082,6 +1125,7 @@
     <script src="js/protocol.js"></script>
     <script src="js/protocol-presets.js"></script>
     <script src="js/common.js"></script>
+    <script src="js/wmbus-protocol.js"></script>
     <script src="js/sek-transaction.js"></script>
     <script src="js/random-rw-test.js"></script>
     <script src="js/batch-config.js"></script>
