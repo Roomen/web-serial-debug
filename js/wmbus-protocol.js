@@ -645,7 +645,7 @@
 		//0x87(立即上报)与 0x84(阀控)一样是写类命令里的权限例外: 只需 PUBLIC 角色即可触发,不是 ADMIN
 		//0x12(读当前下行计数器)是读命令里的权限例外: 需要 role>0(操作员/管理员),公开读不可用
 		//未列出的其余命令(0x10/0x11/0x13~0x16,纯读)按协议要求最低角色 0(公开读)即可执行
-		const MIN_ROLE = { 0x12: 1, 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0 }
+		const MIN_ROLE = { 0x12: 1, 0x84: 0, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0 }
 
 		const keyIdSel = document.getElementById('wmbus-down-keyid')
 		const meterIdEl = document.getElementById('wmbus-down-meterid')
