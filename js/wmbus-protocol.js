@@ -732,7 +732,7 @@
 					break
 				case 0x85:
 					paramGroup.style.display = 'none'
-					ipGroup.style.display = ''
+					ipGroup.style.display = 'flex'
 					onIpTypeChange()
 					break
 				case 0x86:
