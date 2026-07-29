@@ -845,6 +845,14 @@ body {
   font-weight: 600;
 }
 
+.log-row .log-len {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.7rem;
+}
+
 .log-row .log-body {
   flex: 1 1 0;
   min-width: 0;

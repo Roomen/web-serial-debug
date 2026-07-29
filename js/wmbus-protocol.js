@@ -50,6 +50,7 @@
 	function u32le(b, o) { o = o || 0; return ((b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0) }
 	function u16le(b, o) { o = o || 0; return (b[o] | (b[o + 1] << 8)) & 0xffff }
 	function signed16(b, o) { o = o || 0; const v = u16le(b, o); return v > 0x7fff ? v - 0x10000 : v }
+	function signed32le(b, o) { o = o || 0; return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) }
 	function signed48le(b) {
 		let v = 0n
 		for (let i = 5; i >= 0; i--) v = (v << 8n) | BigInt(b[i])
@@ -198,6 +199,7 @@
 		0x84: { name: '阀门控制' },
 		0x85: { name: '配置应用平台网络地址' },
 		0x86: { name: '配置APN' },
+		0x87: { name: '立即上报(REPORT_NOW)' },
 	}
 	const RESULT_TABLE = {
 		0: 'OK 成功', 1: 'AUTH_FAIL 鉴权失败(MAC不匹配)', 2: 'REPLAY 重放(计数器≤last_mc)',
@@ -258,7 +260,18 @@
 			records.push('#' + (i + 1) + ' 净累计(正-反) = ' + m3.toFixed(5) + ' m³')
 			o += 8
 		}
-		return { ok: true, baseTime, interval, num, more, records }
+		//固件新增的实时尾块(12字节): DIF04 VIF3B 瞬时流量(有符号) + DIF04 VIF6D 采样时刻unix秒,老固件报文没有这一段
+		let flowRate = null, sampleTs = null, tailNote = null
+		if (o + 12 <= plain.length) {
+			if (plain[o] === 0x04 && plain[o + 1] === 0x3B && plain[o + 6] === 0x04 && plain[o + 7] === 0x6D) {
+				flowRate = signed32le(plain, o + 2)
+				sampleTs = u32le(plain, o + 8)
+				o += 12
+			} else {
+				tailNote = '实时尾块 DIF/VIF 不匹配,原始=' + hexbytes(plain.subarray(o, o + 12))
+			}
+		}
+		return { ok: true, baseTime, interval, num, more, records, flowRate, sampleTs, tailNote }
 	}
 
 	function decodeDownPayload(cmd, payload) {
@@ -459,7 +472,9 @@
 				const rm = decodeReportMeter(plain.subarray(1))
 				result.fields['命令CMD'] = { value: 0x20, name: '周期数据主动上报' }
 				result.decoded = rm.ok
-					? ('基准时间=' + rm.baseTime + '  采样间隔=' + rm.interval + '分钟  条数(声明)=' + rm.num + '  more=' + rm.more + '\n' + rm.records.join('\n'))
+					? ('基准时间=' + rm.baseTime + '  采样间隔=' + rm.interval + '分钟  条数(声明)=' + rm.num + '  more=' + rm.more + '\n' + rm.records.join('\n')
+						+ (rm.flowRate != null ? ('\n瞬时流量 = ' + rm.flowRate + ' L/h  采样时间 = ' + fmtUnix(rm.sampleTs)) : '')
+						+ (rm.tailNote ? ('\n' + rm.tailNote) : ''))
 					: ('结构解析失败: ' + rm.lines.join('; '))
 			} else {
 				const rc = plain[0]
@@ -622,8 +637,9 @@
 		if (!cmdSel || cmdSel.dataset.wmbusInit) return
 		cmdSel.dataset.wmbusInit = '1'
 
-		const SEND_CMDS = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86]
-		const DEFAULT_KEYID = { 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2 }
+		const SEND_CMDS = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87]
+		//0x87(立即上报)与 0x84(阀控)一样是写类命令里的权限例外: 只需 PUBLIC 角色即可触发,不是 ADMIN
+		const DEFAULT_KEYID = { 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0 }
 		for (const c of SEND_CMDS) {
 			const opt = document.createElement('option')
 			opt.value = '0x' + c.toString(16).toUpperCase().padStart(2, '0')
@@ -906,7 +922,7 @@
 		// 写类命令(0x80~0x86)现在仍要求 MCNT > 设备 last_mc, 但 0x10~0x15(读)已不再校验新鲜度(见文件头注释)。
 		// 于是"下发"写命令前可以先用 0x12(读当前下行计数器, KeyID=0 公开读, MCNT随便填1即可)探测 last_mc,
 		// 再用 last_mc+1 重新构造并签名真正要发的帧, 免去用户手动猜/管理 MCNT。
-		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1 }
+		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1, 0x87: 1 }
 		sendBtn.addEventListener('click', async () => {
 			const cmd = parseInt(cmdSel.value, 16)
 			if (!AUTO_PROBE_CMDS[cmd]) {
