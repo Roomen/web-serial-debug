@@ -1,6 +1,9 @@
 // W-MBUS (EN13757-3/-7 私有 profile) 协议解析 + 下行构造
 // 帧: CI(1) ADDR(8) KeyID(1) MCNT(4LE) LEN(1) ENC(roundup16(LEN)) CMAC(8)
 // 安全层: AES-128-CBC 加密 + AES-128-CMAC(RFC4493, 截断8字节) 认证; IV = ADDR(8)||MCNT(4LE)||0,0,0||dir(1)
+// 注意: 空表(未配置表号)设备的 ADDR 后4字节现由固件用硬件UID兜底,不再固定为 00000000,
+// 且写表号(0x80)成功后 ADDR 会立即变化 — 不要把 ADDR 当作长期稳定的设备唯一标识来缓存,一律以设备实际返回的帧为准。
+// MCNT 防重放: 0x10~0x15(纯读)不校验新鲜度、任意值可用、不推进 last_mc; 0x16 及所有写类(≥0x80)命令仍要求 MCNT > last_mc。
 ;(function () {
 	'use strict'
 	const W = window
@@ -193,12 +196,15 @@
 		0x82: { name: '写基表号' },
 		0x83: { name: '写角色密钥' },
 		0x84: { name: '阀门控制' },
+		0x85: { name: '配置应用平台网络地址' },
+		0x86: { name: '配置APN' },
 	}
 	const RESULT_TABLE = {
 		0: 'OK 成功', 1: 'AUTH_FAIL 鉴权失败(MAC不匹配)', 2: 'REPLAY 重放(计数器≤last_mc)',
 		3: 'PERM_DENY 权限不足', 4: 'CMD_UNSUP 命令不支持', 5: 'FW_CRC_BAD 固件完整性门控拒绝',
 		6: 'PARAM_ERR 参数非法/写失败', 7: 'FRAME_ERR 帧格式错误',
 	}
+	W.wmbusResultTable = RESULT_TABLE // 供 wmbus-transaction.js 探测计数器时给失败结果码配文案
 	const ROLE_NAMES = { 0: '公开读(PUBLIC)', 1: '操作员(OPERATOR)', 2: '管理员(ADMIN)' }
 	const VALVE_CMD_NAMES = { 0: '关阀(CLOSE)', 1: '开阀(OPEN)', 3: '除锈(RUST)' }
 	// 二级地址固定段, 与固件 Protocol/wmbus/wmbus_ids.h 一致(WMBUS_MANUFACTURER_ID/WMBUS_ID_VERSION/WMBUS_DEVICE_TYPE):
@@ -276,6 +282,34 @@
 			case 0x84:
 				if (payload.length < 1) return '(payload过短,需子命令1字节)'
 				return '子命令 = ' + (VALVE_CMD_NAMES[payload[0]] || ('未知(' + payload[0] + ')'))
+			case 0x85: {
+				if (payload.length < 1) return '(payload过短,需至少1字节类型)'
+				const type = payload[0]
+				const rest = payload.subarray(1)
+				if (type === 0x00) {
+					if (rest.length < 8) return 'IPv4 数据不足(需8字节 ip4+port4)'
+					const ip = Array.from(rest.subarray(0, 4)).join('.')
+					return '类型 = IPv4  IP = ' + ip + '  端口 = ' + u32le(rest, 4)
+				}
+				if (type === 0x01) {
+					if (rest.length < 20) return 'IPv6 数据不足(需20字节 ip16+port4)'
+					const groups = []
+					for (let i = 0; i < 16; i += 2) groups.push((rest[i] | (rest[i + 1] << 8)).toString(16))
+					return '类型 = IPv6  IP = ' + groups.join(':') + '  端口 = ' + u32le(rest, 16)
+				}
+				if (type === 0x02) {
+					if (rest.length < 5) return 'URL 数据不足(需≥5字节 port4+url≥1)'
+					let url
+					try { url = new TextDecoder().decode(rest.subarray(4)) } catch (e) { url = hexbytes(rest.subarray(4)) }
+					return '类型 = URL  端口 = ' + u32le(rest, 0) + '  URL = ' + url
+				}
+				return '未知类型 = ' + type + '  原始 = ' + hexbytes(rest)
+			}
+			case 0x86: {
+				let apn
+				try { apn = new TextDecoder().decode(payload) } catch (e) { apn = hexbytes(payload) }
+				return 'APN = ' + apn
+			}
 			default:
 				return payload.length ? ('原始载荷 = ' + hexbytes(payload)) : '(无参数)'
 		}
@@ -588,8 +622,8 @@
 		if (!cmdSel || cmdSel.dataset.wmbusInit) return
 		cmdSel.dataset.wmbusInit = '1'
 
-		const SEND_CMDS = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x80, 0x81, 0x82, 0x83, 0x84]
-		const DEFAULT_KEYID = { 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2 }
+		const SEND_CMDS = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86]
+		const DEFAULT_KEYID = { 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2 }
 		for (const c of SEND_CMDS) {
 			const opt = document.createElement('option')
 			opt.value = '0x' + c.toString(16).toUpperCase().padStart(2, '0')
@@ -612,6 +646,11 @@
 		const keyLabel = document.getElementById('wmbus-down-key-label')
 		const keyAsciiEl = document.getElementById('wmbus-down-key-ascii')
 		const keyHexEl = document.getElementById('wmbus-down-key-hex')
+		const ipGroup = document.getElementById('wmbus-down-ip-group')
+		const ipTypeSel = document.getElementById('wmbus-down-ip-type')
+		const ipAddrLabel = document.getElementById('wmbus-down-ip-addr-label')
+		const ipAddrEl = document.getElementById('wmbus-down-ip-addr')
+		const ipPortEl = document.getElementById('wmbus-down-ip-port')
 
 		meterIdEl.value = localStorage.getItem('wmbusDownMeterId') || ''
 		mcntEl.value = localStorage.getItem('wmbusDownMcnt') || '1'
@@ -656,6 +695,7 @@
 			paramVal.style.display = 'none'
 			paramSel.style.display = 'none'
 			paramGroup.style.display = ''
+			ipGroup.style.display = 'none'
 			switch (cmd) {
 				case 0x16:
 					paramLabel.textContent = 'dayTs(unix秒)'
@@ -690,9 +730,71 @@
 					paramSel.style.display = ''
 					fillEnumOptions(VALVE_CMD_NAMES, '1')
 					break
+				case 0x85:
+					paramGroup.style.display = 'none'
+					ipGroup.style.display = ''
+					onIpTypeChange()
+					break
+				case 0x86:
+					paramLabel.textContent = 'APN(1-32字节ASCII,不补零)'
+					paramVal.style.display = ''
+					paramVal.placeholder = 'APN'
+					paramVal.value = ''
+					break
 				default:
 					paramGroup.style.display = 'none'
 			}
+			computePayload()
+		}
+
+		// IPv4: 点分十进制4字节, 原始字节序(不反转)。IPv6: 8组16bit, 每组按 LE 存2字节(与固件约定一致,非常规网络字节序)。
+		function ipv4ToBytes(s) {
+			const parts = String(s || '').trim().split('.')
+			if (parts.length !== 4) throw new Error('IPv4 格式错误,需 a.b.c.d')
+			return parts.map((p) => {
+				if (!/^\d{1,3}$/.test(p)) throw new Error('IPv4 格式错误: ' + p)
+				const n = parseInt(p, 10)
+				if (n < 0 || n > 255) throw new Error('IPv4 段超出范围: ' + p)
+				return n
+			})
+		}
+		function ipv6ToBytesLE(s) {
+			const str = String(s || '').trim()
+			if (!str) throw new Error('IPv6 地址不能为空')
+			const dc = str.split('::')
+			if (dc.length > 2) throw new Error('IPv6 格式错误')
+			const parseGroups = (x) => (x ? x.split(':').filter((g) => g.length) : [])
+			const head = parseGroups(dc[0])
+			let groups
+			if (dc.length === 1) {
+				groups = head
+				if (groups.length !== 8) throw new Error('IPv6 需完整8组,或用 :: 省略连续0段')
+			} else {
+				const tail = parseGroups(dc[1])
+				const missing = 8 - head.length - tail.length
+				if (missing < 0) throw new Error('IPv6 格式错误')
+				groups = head.concat(new Array(missing).fill('0')).concat(tail)
+			}
+			const out = []
+			for (const g of groups) {
+				const v = parseInt(g, 16)
+				if (isNaN(v) || v < 0 || v > 0xffff) throw new Error('IPv6 分组非法: ' + g)
+				out.push(v & 0xff, (v >> 8) & 0xff)
+			}
+			return out
+		}
+		function asciiBytesStrict(s, min, max, label) {
+			const bytes = typeof TextEncoder !== 'undefined'
+				? Array.from(new TextEncoder().encode(s || ''))
+				: Array.from(String(s || '')).map((c) => c.charCodeAt(0) & 0xff)
+			if (bytes.length < min || bytes.length > max) throw new Error(label + '长度需 ' + min + '-' + max + ' 字节,当前' + bytes.length)
+			return bytes
+		}
+		function onIpTypeChange() {
+			const type = parseInt(ipTypeSel.value, 10)
+			if (type === 0) { ipAddrLabel.textContent = '地址(IPv4)'; ipAddrEl.placeholder = '如 192.168.1.1' }
+			else if (type === 1) { ipAddrLabel.textContent = '地址(IPv6)'; ipAddrEl.placeholder = '如 fe80::1' }
+			else { ipAddrLabel.textContent = 'URL'; ipAddrEl.placeholder = '域名或URL,1-58字节ASCII' }
 			computePayload()
 		}
 
@@ -720,29 +822,52 @@
 					case 0x84:
 						bytes = [parseInt(paramSel.value || '0', 10)]
 						break
+					case 0x85: {
+						const type = parseInt(ipTypeSel.value, 10)
+						const port = u32leBytes(parseInt(ipPortEl.value || '0', 10))
+						if (type === 0) bytes = [type, ...ipv4ToBytes(ipAddrEl.value), ...port]
+						else if (type === 1) bytes = [type, ...ipv6ToBytesLE(ipAddrEl.value), ...port]
+						else bytes = [type, ...port, ...asciiBytesStrict(ipAddrEl.value, 1, 58, 'URL')]
+						break
+					}
+					case 0x86:
+						bytes = asciiBytesStrict(paramVal.value, 1, 32, 'APN')
+						break
 					default:
 						bytes = []
 				}
-			} catch (e) { bytes = [] }
+				showErr('')
+			} catch (e) {
+				bytes = []
+				showErr(e.message)
+			}
 			payloadEl.value = bytes.map((b) => ((b & 0xff) < 16 ? '0' : '') + (b & 0xff).toString(16).toUpperCase()).join(' ')
 		}
 
 		cmdSel.addEventListener('change', onCmdChange)
 		paramVal.addEventListener('input', computePayload)
 		paramSel.addEventListener('change', computePayload)
+		ipTypeSel.addEventListener('change', onIpTypeChange)
+		ipAddrEl.addEventListener('input', computePayload)
+		ipPortEl.addEventListener('input', computePayload)
 		onCmdChange()
 
-		function buildFrame() {
-			showErr('')
+		// ADDR = 厂商码(2 LE,固定) || 表号后8位BCD(4) || 版本(1,固定) || 类型(1,固定), 与固件 wmbus_ids.h 一致
+		function computeAddrHex() {
 			const meterId = (meterIdEl.value || '').trim()
-			if (!/^\d{1,8}$/.test(meterId)) { showErr('表号后8位需为1-8位数字'); return null }
-			// ADDR = 厂商码(2 LE,固定) || 表号后8位BCD(4) || 版本(1,固定) || 类型(1,固定), 与固件 wmbus_ids.h 一致
+			if (!/^\d{1,8}$/.test(meterId)) throw new Error('表号后8位需为1-8位数字')
 			const addrBytes = new Uint8Array(8)
 			addrBytes.set(ADDR_MANUF_LE, 0)
 			addrBytes.set(bcdBytesBE(meterId, 4), 2)
 			addrBytes[6] = ADDR_VERSION
 			addrBytes[7] = ADDR_DEVICE_TYPE
-			const addr = hexbytes(addrBytes)
+			return hexbytes(addrBytes)
+		}
+
+		function buildFrame() {
+			showErr('')
+			let addr
+			try { addr = computeAddrHex() } catch (e) { showErr(e.message); return null }
 			const mcnt = parseInt(mcntEl.value, 10)
 			if (!mcnt || mcnt < 1) { showErr('计数器MCNT需为正整数,且需大于设备当前已接受值'); return null }
 			try {
@@ -754,7 +879,7 @@
 					cmd: cmdSel.value,
 					payloadHex: payloadEl.value,
 				})
-				localStorage.setItem('wmbusDownMeterId', meterId)
+				localStorage.setItem('wmbusDownMeterId', (meterIdEl.value || '').trim())
 				mcntEl.value = String(mcnt + 1)
 				localStorage.setItem('wmbusDownMcnt', String(mcnt + 1))
 				return frame
@@ -764,19 +889,52 @@
 			}
 		}
 
+		function sendFrame(frame) {
+			const preview = document.getElementById('serial-protocol-down-preview')
+			if (preview) preview.value = hexBytesSpaced(frame)
+			const sendEl = document.getElementById('serial-protocol-send')
+			if (sendEl) sendEl.click()
+		}
+
 		buildBtn.addEventListener('click', () => {
 			const frame = buildFrame()
 			if (!frame) return
 			const preview = document.getElementById('serial-protocol-down-preview')
 			if (preview) preview.value = hexBytesSpaced(frame)
 		})
-		sendBtn.addEventListener('click', () => {
-			const frame = buildFrame()
-			if (!frame) return
-			const preview = document.getElementById('serial-protocol-down-preview')
-			if (preview) preview.value = hexBytesSpaced(frame)
-			const sendEl = document.getElementById('serial-protocol-send')
-			if (sendEl) sendEl.click()
+
+		// 写类命令(0x80~0x86)现在仍要求 MCNT > 设备 last_mc, 但 0x10~0x15(读)已不再校验新鲜度(见文件头注释)。
+		// 于是"下发"写命令前可以先用 0x12(读当前下行计数器, KeyID=0 公开读, MCNT随便填1即可)探测 last_mc,
+		// 再用 last_mc+1 重新构造并签名真正要发的帧, 免去用户手动猜/管理 MCNT。
+		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1 }
+		sendBtn.addEventListener('click', async () => {
+			const cmd = parseInt(cmdSel.value, 16)
+			if (!AUTO_PROBE_CMDS[cmd]) {
+				const frame = buildFrame()
+				if (!frame) return
+				sendFrame(frame)
+				return
+			}
+			if (!window.wmbusTx) { showErr('wmbus-transaction 模块未加载,无法自动探测计数器'); return }
+			if (!window.serialApi || !window.serialApi.isOpen()) { showErr('请先打开串口'); return }
+			let addrHex
+			try { addrHex = computeAddrHex() } catch (e) { showErr(e.message); return }
+			sendBtn.disabled = true
+			const oldLabel = sendBtn.textContent
+			sendBtn.textContent = '探测计数器中...'
+			showErr('')
+			try {
+				const lastMc = await window.wmbusTx.probeCounter({ addr: addrHex })
+				mcntEl.value = String((lastMc + 1) >>> 0)
+				const frame = buildFrame()
+				if (!frame) return
+				sendFrame(frame)
+			} catch (e) {
+				showErr('自动探测计数器失败,已中止下发(未发送写命令): ' + e.message)
+			} finally {
+				sendBtn.disabled = false
+				sendBtn.textContent = oldLabel
+			}
 		})
 
 		// 与 SK 下行卡片/密钥字段互斥显示: 当前协议切到 wmbus 时显示本卡片(自带密钥框), 隐藏 SK 相关卡片、单密钥输入
