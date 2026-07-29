@@ -82,6 +82,8 @@
 	let serialloopSendTimer = null
 	//串口缓存数据
 	let serialData = []
+	//当前合并包第一个字节到达的时间;日志显示用这个而不是flush时间,避免收发交错时时间戳乱序
+	let serialDataStartTime = null
 	//文本解码
 	let textdecoder = new TextDecoder()
 	let currQuickSend = []
@@ -1546,10 +1548,12 @@
 			if (node.classList.contains('log-row')) {
 				const time = node.querySelector('.log-time')
 				const dir = node.querySelector('.log-dir')
+				const len = node.querySelector('.log-len')
 				const body = node.querySelector('.log-body')
 				let head = []
 				if (time && time.innerText) head.push(time.innerText)
 				if (dir && dir.innerText) head.push(dir.innerText)
+				if (len && len.innerText) head.push(len.innerText)
 				const content = body ? body.innerText : ''
 				lines.push((head.join(' ') + ' ' + content).trim())
 			} else {
@@ -1921,9 +1925,10 @@
 			if (toolOptions.addCRLF) {
 				data = new Uint8Array([...data, 0x0d, 0x0a])
 			}
+			const sendTime = new Date()
 			await writer.write(data)
-			addLog(data, false)
-			addParseLog([...data], false)
+			addLog(data, false, sendTime)
+			addParseLog([...data], false, sendTime)
 		} catch (error) {
 			const errorType = error.name || 'UnknownError'
 			const errorMsg = error.message || '未知错误'
@@ -2023,29 +2028,34 @@
 				api._onReceive(data)
 			}
 		}
+		//新的合并包开始:记下第一个字节到达的时间,日志显示要用这个而不是flush时间
+		if (serialData.length === 0) {
+			serialDataStartTime = new Date()
+		}
 		//不能用 push(...data)：单次读回的块可能上万字节(bufferSize 最大约 1.6M)，
 		//展开成实参会超出调用栈上限抛 RangeError，被外层当成读错误误判为断线
 		for (let i = 0; i < data.length; i++) serialData.push(data[i])
 		if (toolOptions.timeOut == 0) {
-			addLog(serialData, true)
-			addParseLog([...serialData], true)
+			addLog(serialData, true, serialDataStartTime)
+			addParseLog([...serialData], true, serialDataStartTime)
 			serialData = []
 			return
 		}
 		//持续不断的流永远等不到 timeOut 间隔，缓冲会一直涨到把页面撑爆，超上限就强制断包
 		if (serialData.length >= SERIAL_PACK_MAX_BYTES) {
 			clearTimeout(serialTimer)
-			addLog(serialData, true)
-			addParseLog([...serialData], true)
+			addLog(serialData, true, serialDataStartTime)
+			addParseLog([...serialData], true, serialDataStartTime)
 			serialData = []
 			return
 		}
 		//清除之前的时钟
 		clearTimeout(serialTimer)
+		const startTime = serialDataStartTime
 		serialTimer = setTimeout(() => {
 			//超时发出
-			addLog(serialData, true)
-			addParseLog([...serialData], true)
+			addLog(serialData, true, startTime)
+			addParseLog([...serialData], true, startTime)
 			serialData = []
 		}, toolOptions.timeOut)
 	}
@@ -2114,7 +2124,7 @@
 		}
 	}
 	//添加日志
-	function addLog(data, isReceive = true) {
+	function addLog(data, isReceive = true, atTime = null) {
 		let form = isReceive ? '←' : '→'
 		//无论当前 logType 是什么都算出 HEX,点击行解析要用
 		let dataHex = []
@@ -2168,18 +2178,19 @@
 		}
 		//行尾多余的换行会撑出一条空行
 		newmsg = newmsg.replace(/<br\/?>$/i, '')
-		let time = toolOptions.showTime ? formatDate(new Date()) : ''
+		let time = toolOptions.showTime ? formatDate(atTime || new Date()) : ''
 		let row = document.createElement('div')
 		row.className = 'log-row'
 		row.setAttribute('data-dir', isReceive ? 'rx' : 'tx')
 		row.setAttribute('data-hex', dataHex.join(' '))
 		row.innerHTML = '<span class="log-time">' + time + '</span>' +
 			'<span class="log-dir">' + form + '</span>' +
+			'<span class="log-len">' + data.length + 'B</span>' +
 			'<span class="log-body">' + newmsg + '</span>'
 		appendLogNode(row)
 	}
 	//第三方协议解析日志
-	function addParseLog(data, isReceive) {
+	function addParseLog(data, isReceive, atTime = null) {
 		if (!toolOptions.skParseEnable) {
 			return
 		}
@@ -2195,7 +2206,7 @@
 			})
 			const form = isReceive ? '←' : '→'
 			const dirCls = isReceive ? 'sk-parse-up' : 'sk-parse-down'
-			const time = toolOptions.showTime ? formatDate(new Date()) + '&nbsp;' : ''
+			const time = toolOptions.showTime ? formatDate(atTime || new Date()) + '&nbsp;' : ''
 			const prompt = r.needKey ? '<div class="sk-parse-err">⚠ 加密报文,请在右侧「第三方协议」中的「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>' : ''
 			html = '<div class="sk-parse-block ' + dirCls + '"><span class="text-muted small">' + time + form + ' 解析</span>' + prompt + skFormatFrame(r) + '</div>'
 		} catch (err) {
