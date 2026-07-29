@@ -201,6 +201,11 @@
 	}
 	const ROLE_NAMES = { 0: '公开读(PUBLIC)', 1: '操作员(OPERATOR)', 2: '管理员(ADMIN)' }
 	const VALVE_CMD_NAMES = { 0: '关阀(CLOSE)', 1: '开阀(OPEN)', 3: '除锈(RUST)' }
+	// 二级地址固定段, 与固件 Protocol/wmbus/wmbus_ids.h 一致(WMBUS_MANUFACTURER_ID/WMBUS_ID_VERSION/WMBUS_DEVICE_TYPE):
+	// 厂商码临时用"SEK"(SECK 未注册,量产前需向 FLAG 核定 3 字母码后替换), 设备类型 0x07=水表。
+	const ADDR_MANUF_LE = [0xAB, 0x4C] // WMBUS_MANUFACTURER_ID=0x4CAB, 存储为小端2字节
+	const ADDR_VERSION = 0x01
+	const ADDR_DEVICE_TYPE = 0x07
 
 	// DIF 低4位 -> 数据长度(标准 M-Bus 表, 仅列出本协议用到及常见项)
 	const DIF_LEN = { 0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 4, 6: 6, 7: 8, 9: 1, 10: 2, 11: 3, 12: 4, 14: 6 }
@@ -308,24 +313,46 @@
 		return k
 	}
 	// 三个角色各有独立密钥(公开读/操作员/管理员互不相同), 因此不能像 SK 那样用单一密钥字段覆盖全部角色。
-	// 取值优先级: 显式传入的 opt.roleKeys[role] > 页面「高级·密钥」里对应角色的 HEX 输入框 > 内置默认密钥(base^role,
-	// 与设备未经产线注入时的兜底行为一致)。
-	const ROLE_KEY_INPUT_ID = { 0: 'wmbus-key-public', 1: 'wmbus-key-operator', 2: 'wmbus-key-admin' }
-	function roleKeyFromDom(role) {
-		if (typeof document === 'undefined') return ''
-		const el = document.getElementById(ROLE_KEY_INPUT_ID[role])
-		return el ? el.value : ''
+	// 公开读(role 0)按协议固定使用内置默认密钥,不接受用户输入(下发面板不显示其密钥框)。
+	// 操作员/管理员取值优先级: 显式传入的 opt.roleKeys[role] > localStorage 中该角色的 HEX 输入 > ASCII 输入(UTF-8 取前16字节,不足补0)
+	// > 内置默认密钥(base^role, 与设备未经产线注入时的兜底行为一致)。
+	// 密钥存于 localStorage 而非直接读 DOM: 下发面板同一时刻只显示当前选中角色的密钥框(见 initDownUi),
+	// 但上行报文解析可能遇到任意角色, resolveRoleKey 需要能取到未在框中显示的角色的已保存密钥。
+	const ROLE_KEY_STORAGE_ID = { 1: 'wmbusKeyRole1', 2: 'wmbusKeyRole2' }
+	function loadRoleKeyStore(role) {
+		if (typeof localStorage === 'undefined' || !ROLE_KEY_STORAGE_ID[role]) return { ascii: '', hex: '' }
+		try {
+			const raw = localStorage.getItem(ROLE_KEY_STORAGE_ID[role])
+			return raw ? JSON.parse(raw) : { ascii: '', hex: '' }
+		} catch (e) { return { ascii: '', hex: '' } }
+	}
+	function saveRoleKeyStore(role, data) {
+		if (typeof localStorage === 'undefined' || !ROLE_KEY_STORAGE_ID[role]) return
+		try { localStorage.setItem(ROLE_KEY_STORAGE_ID[role], JSON.stringify(data)) } catch (e) { /* 忽略存储失败 */ }
+	}
+	function asciiKeyToBytes(s) {
+		if (!s) return null
+		let bytes
+		if (typeof TextEncoder !== 'undefined') bytes = new TextEncoder().encode(s)
+		else { bytes = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i) & 0xff }
+		if (!bytes.length) return null
+		const k = new Uint8Array(16)
+		k.set(bytes.subarray(0, 16))
+		return k
 	}
 	function resolveRoleKey(opt, role) {
 		if (opt && opt.roleKeys && opt.roleKeys[role]) {
 			const raw = toBytesHex(opt.roleKeys[role])
 			if (raw.length >= 16) return raw.subarray(0, 16)
 		}
-		const domHex = roleKeyFromDom(role)
-		if (domHex) {
-			const raw = toBytesHex(domHex)
+		if (role === 0) return defaultKey(0)
+		const store = loadRoleKeyStore(role)
+		if (store.hex) {
+			const raw = toBytesHex(store.hex)
 			if (raw.length >= 16) return raw.subarray(0, 16)
 		}
+		const asciiBytes = asciiKeyToBytes(store.ascii)
+		if (asciiBytes) return asciiBytes
 		return defaultKey(role)
 	}
 
@@ -571,7 +598,7 @@
 		}
 
 		const keyIdSel = document.getElementById('wmbus-down-keyid')
-		const addrEl = document.getElementById('wmbus-down-addr')
+		const meterIdEl = document.getElementById('wmbus-down-meterid')
 		const mcntEl = document.getElementById('wmbus-down-mcnt')
 		const payloadEl = document.getElementById('wmbus-down-payload')
 		const paramGroup = document.getElementById('wmbus-down-param-group')
@@ -581,9 +608,33 @@
 		const errEl = document.getElementById('wmbus-down-err')
 		const buildBtn = document.getElementById('wmbus-down-build')
 		const sendBtn = document.getElementById('wmbus-down-send')
+		const keyGroup = document.getElementById('wmbus-down-key-group')
+		const keyLabel = document.getElementById('wmbus-down-key-label')
+		const keyAsciiEl = document.getElementById('wmbus-down-key-ascii')
+		const keyHexEl = document.getElementById('wmbus-down-key-hex')
 
-		addrEl.value = localStorage.getItem('wmbusDownAddr') || ''
+		meterIdEl.value = localStorage.getItem('wmbusDownMeterId') || ''
 		mcntEl.value = localStorage.getItem('wmbusDownMcnt') || '1'
+
+		// 密钥角色0(公开读)按协议固定用内置默认密钥,不展示密钥框;1/2 展示对应角色已保存的 ASCII/HEX 密钥
+		function updateKeyUi() {
+			const role = parseInt(keyIdSel.value, 10)
+			if (role === 0) { keyGroup.style.display = 'none'; return }
+			keyGroup.style.display = ''
+			keyLabel.textContent = '密钥·' + (ROLE_NAMES[role] || role)
+			const store = loadRoleKeyStore(role)
+			keyAsciiEl.value = store.ascii || ''
+			keyHexEl.value = store.hex || ''
+		}
+		function saveKeyUi() {
+			const role = parseInt(keyIdSel.value, 10)
+			if (role === 0) return
+			saveRoleKeyStore(role, { ascii: keyAsciiEl.value, hex: keyHexEl.value })
+		}
+		keyIdSel.addEventListener('change', updateKeyUi)
+		keyAsciiEl.addEventListener('input', saveKeyUi)
+		keyHexEl.addEventListener('input', saveKeyUi)
+		updateKeyUi()
 
 		function showErr(msg) { if (errEl) errEl.textContent = msg || '' }
 
@@ -601,6 +652,7 @@
 		function onCmdChange() {
 			const cmd = parseInt(cmdSel.value, 16)
 			if (DEFAULT_KEYID[cmd] != null) keyIdSel.value = String(DEFAULT_KEYID[cmd])
+			updateKeyUi()
 			paramVal.style.display = 'none'
 			paramSel.style.display = 'none'
 			paramGroup.style.display = ''
@@ -682,12 +734,19 @@
 
 		function buildFrame() {
 			showErr('')
-			const addr = (addrEl.value || '').trim()
-			if (!/^[0-9a-fA-F]{16}$/.test(addr)) { showErr('设备地址ADDR需为8字节(16位HEX)'); return null }
+			const meterId = (meterIdEl.value || '').trim()
+			if (!/^\d{1,8}$/.test(meterId)) { showErr('表号后8位需为1-8位数字'); return null }
+			// ADDR = 厂商码(2 LE,固定) || 表号后8位BCD(4) || 版本(1,固定) || 类型(1,固定), 与固件 wmbus_ids.h 一致
+			const addrBytes = new Uint8Array(8)
+			addrBytes.set(ADDR_MANUF_LE, 0)
+			addrBytes.set(bcdBytesBE(meterId, 4), 2)
+			addrBytes[6] = ADDR_VERSION
+			addrBytes[7] = ADDR_DEVICE_TYPE
+			const addr = hexbytes(addrBytes)
 			const mcnt = parseInt(mcntEl.value, 10)
 			if (!mcnt || mcnt < 1) { showErr('计数器MCNT需为正整数,且需大于设备当前已接受值'); return null }
 			try {
-				// 密钥按 keyId 对应角色, 从「高级·密钥」下的 wmbus 角色密钥输入框读取(留空则用内置默认), 见 resolveRoleKey
+				// 密钥按 keyId 对应角色, 从上方「密钥」框读取(角色0固定内置默认, 见 resolveRoleKey)
 				const frame = W.wmbusBuildDownFrame({
 					addr,
 					keyId: parseInt(keyIdSel.value, 10),
@@ -695,7 +754,7 @@
 					cmd: cmdSel.value,
 					payloadHex: payloadEl.value,
 				})
-				localStorage.setItem('wmbusDownAddr', addr)
+				localStorage.setItem('wmbusDownMeterId', meterId)
 				mcntEl.value = String(mcnt + 1)
 				localStorage.setItem('wmbusDownMcnt', String(mcnt + 1))
 				return frame
@@ -720,30 +779,19 @@
 			if (sendEl) sendEl.click()
 		})
 
-		// 与 SK 下行卡片/密钥字段互斥显示: 当前协议切到 wmbus 时显示本卡片与角色密钥输入, 隐藏 SK 相关卡片与单密钥输入
+		// 与 SK 下行卡片/密钥字段互斥显示: 当前协议切到 wmbus 时显示本卡片(自带密钥框), 隐藏 SK 相关卡片、单密钥输入
+		// 以及右上「高级·加解密与密钥」整块(wmbus 无解密模式/加密方式可选,密钥框已整合进本卡片)
 		function applyVisibility() {
 			const sel = document.getElementById('serial-protocol-select')
 			const isWmbus = !!(sel && sel.value === 'wmbus')
-			const hideWhenWmbus = ['sk-down-card', 'sk-rw-card', 'sk-batch-card', 'sk-key-ascii-group', 'sk-key-hex-group']
+			const hideWhenWmbus = ['sk-down-card', 'sk-rw-card', 'sk-batch-card', 'serial-protocol-advanced']
 			for (const id of hideWhenWmbus) { const el = document.getElementById(id); if (el) el.style.display = isWmbus ? 'none' : '' }
 			const wm = document.getElementById('wmbus-down-card')
 			if (wm) wm.style.display = isWmbus ? '' : 'none'
-			const wmKeys = document.getElementById('wmbus-key-roles')
-			if (wmKeys) wmKeys.style.display = isWmbus ? '' : 'none'
 		}
 		const protoSel = document.getElementById('serial-protocol-select')
 		if (protoSel) protoSel.addEventListener('change', applyVisibility)
 		applyVisibility()
-
-		// 三个角色密钥持久化(仅存本地 localStorage, 便于刷新后不必重填)
-		const roleKeyEls = { 0: document.getElementById('wmbus-key-public'), 1: document.getElementById('wmbus-key-operator'), 2: document.getElementById('wmbus-key-admin') }
-		const roleKeyStorageId = { 0: 'wmbusKeyPublic', 1: 'wmbusKeyOperator', 2: 'wmbusKeyAdmin' }
-		for (const role in roleKeyEls) {
-			const el = roleKeyEls[role]
-			if (!el) continue
-			el.value = localStorage.getItem(roleKeyStorageId[role]) || ''
-			el.addEventListener('input', () => localStorage.setItem(roleKeyStorageId[role], el.value))
-		}
 	}
 
 	tryRegister()
