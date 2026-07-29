@@ -543,6 +543,24 @@
                                             <input type="text" class="form-control" id="wmbus-down-param-val" style="width:120px;" placeholder="值">
                                             <select class="form-select" id="wmbus-down-param-sel" style="display:none;"></select>
                                         </div>
+                                        <div class="d-flex flex-wrap align-items-center mb-2 gap-2" id="wmbus-down-ip-group" style="display:none;">
+                                            <div class="input-group input-group-sm" style="width: auto;">
+                                                <span class="input-group-text">类型</span>
+                                                <select class="form-select" id="wmbus-down-ip-type">
+                                                    <option value="0">IPv4</option>
+                                                    <option value="1">IPv6</option>
+                                                    <option value="2">URL</option>
+                                                </select>
+                                            </div>
+                                            <div class="input-group input-group-sm" style="width: auto;">
+                                                <span class="input-group-text" id="wmbus-down-ip-addr-label">地址(IPv4)</span>
+                                                <input type="text" class="form-control" id="wmbus-down-ip-addr" style="width:200px;" placeholder="如 192.168.1.1">
+                                            </div>
+                                            <div class="input-group input-group-sm" style="width: auto;">
+                                                <span class="input-group-text">端口</span>
+                                                <input type="number" class="form-control" id="wmbus-down-ip-port" style="width:100px;" min="0" max="4294967295">
+                                            </div>
+                                        </div>
                                         <textarea class="form-control form-control-sm" rows="2" id="wmbus-down-payload"
                                             placeholder="载荷 HEX(不含CMD),按上方命令自动生成,可手动覆盖"></textarea>
                                         <div class="small text-danger" id="wmbus-down-err"></div>
@@ -1134,6 +1152,7 @@
     <script src="js/protocol-presets.js"></script>
     <script src="js/common.js"></script>
     <script src="js/wmbus-protocol.js"></script>
+    <script src="js/wmbus-transaction.js"></script>
     <script src="js/sek-transaction.js"></script>
     <script src="js/random-rw-test.js"></script>
     <script src="js/batch-config.js"></script>
