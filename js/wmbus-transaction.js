@@ -95,18 +95,20 @@
 		return frame.fields && frame.fields['设备地址ADDR']
 	}
 
-	// 探测设备当前下行计数器(last_mc): 用 0x12(读当前下行计数器), KeyID=0(公开读, 走内置默认密钥, 无需用户输入密钥),
+	// 探测设备当前下行计数器(last_mc): 用 0x12(读当前下行计数器), 该命令要求 role>0(操作员/管理员,公开读会被拒绝且无回复),
+	// 因此必须用调用方实际选定的角色/密钥去查, 不能像其余纯读命令一样固定走公开读。
 	// MCNT 固定填1(0x10~0x15 读命令现在不校验新鲜度, 填什么值都能成功)。
 	// 应答按"结果码(1)+载荷"解析(见 wmbusParseFrame): dataBytes[0]=结果码, dataBytes[1..5)=last_mc(LE)。
 	async function probeCounter(opts) {
 		opts = opts || {}
 		const addrHex = String(opts.addr || '').toUpperCase()
 		const timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 5000
+		const keyId = (opts.keyId != null ? opts.keyId : 0) & 0xff
 		if (!addrHex) throw new Error('缺少设备地址ADDR')
-		const frame = window.wmbusBuildDownFrame({ addr: addrHex, keyId: 0, mcnt: 1, cmd: '0x12', payloadHex: '' })
+		const frame = window.wmbusBuildDownFrame({ addr: addrHex, keyId: keyId, mcnt: 1, cmd: '0x12', payloadHex: '' })
 		const match = function (frame2) {
 			if (addrOf(frame2) !== addrHex) return false
-			if (keyIdOf(frame2) !== 0) return false
+			if (keyIdOf(frame2) !== keyId) return false
 			const db = frame2.dataBytes || []
 			// db.length<5: 不是"结果码+4字节计数器"结构; db[0]===0x20: 周期上报帧, 都不是本次探测要等的应答
 			if (db.length < 5 || db[0] === 0x20) return false

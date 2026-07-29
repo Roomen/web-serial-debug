@@ -643,8 +643,9 @@
 
 		const SEND_CMDS = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87]
 		//0x87(立即上报)与 0x84(阀控)一样是写类命令里的权限例外: 只需 PUBLIC 角色即可触发,不是 ADMIN
-		//未列出的命令(0x10~0x16,纯读)按协议要求最低角色 0(公开读)即可执行
-		const MIN_ROLE = { 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0 }
+		//0x12(读当前下行计数器)是读命令里的权限例外: 需要 role>0(操作员/管理员),公开读不可用
+		//未列出的其余命令(0x10/0x11/0x13~0x16,纯读)按协议要求最低角色 0(公开读)即可执行
+		const MIN_ROLE = { 0x12: 1, 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0 }
 
 		const keyIdSel = document.getElementById('wmbus-down-keyid')
 		const meterIdEl = document.getElementById('wmbus-down-meterid')
@@ -934,9 +935,10 @@
 		})
 
 		// 写类命令(0x80~0x86)现在仍要求 MCNT > 设备 last_mc, 但 0x10~0x15(读)已不再校验新鲜度(见文件头注释)。
-		// 于是"下发"写命令前可以先用 0x12(读当前下行计数器, KeyID=0 公开读, MCNT随便填1即可)探测 last_mc,
+		// 于是"下发"写命令前可以先用 0x12(读当前下行计数器, MCNT随便填1即可)探测 last_mc,
 		// 再用 last_mc+1 重新构造并签名真正要发的帧, 免去用户手动猜/管理 MCNT。
-		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1, 0x87: 1 }
+		// 0x87(立即上报)不校验 MCNT 新鲜度(与纯读命令一样), 无需探测计数器, 可直接下发。
+		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1 }
 		sendBtn.addEventListener('click', async () => {
 			const cmd = parseInt(cmdSel.value, 16)
 			if (!AUTO_PROBE_CMDS[cmd]) {
@@ -954,7 +956,7 @@
 			sendBtn.textContent = '探测计数器中...'
 			showErr('')
 			try {
-				const lastMc = await window.wmbusTx.probeCounter({ addr: addrHex })
+				const lastMc = await window.wmbusTx.probeCounter({ addr: addrHex, keyId: parseInt(keyIdSel.value, 10) })
 				mcntEl.value = String((lastMc + 1) >>> 0)
 				const frame = buildFrame()
 				if (!frame) return
