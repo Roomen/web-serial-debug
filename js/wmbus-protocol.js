@@ -79,6 +79,10 @@
 		for (let i = 0; i < b.length; i++) s += ((b[i] >> 4) & 0xf).toString(10) + (b[i] & 0xf).toString(10)
 		return s
 	}
+	// 表号/基表号在设备存储与 LCD 显示上按字节反序(与 protocol.js 的 bcdEncode/bcdDecode 一致),
+	// 仅用于 0x80/0x82 命令的 payload 编解码,不用于 ADDR(ADDR 按 wmbus_ids.h 固件约定,保持 bcdBytesBE 不反序)。
+	function bcdBytesLE(s, fillLen) { return bcdBytesBE(s, fillLen).reverse() }
+	function bcdDecodeLE(b) { return bcdDecodeBE(Array.from(b).reverse()) }
 	function fmtUnix(ts) {
 		if (!ts) return '-----'
 		const d = new Date(ts * 1000)
@@ -280,7 +284,7 @@
 				if (payload.length < 4) return '(payload过短,需≥4字节 dayTs)'
 				return 'dayTs = ' + u32le(payload, 0) + ' (' + fmtUnix(u32le(payload, 0)) + ')'
 			case 0x80:
-				return '表号(BCD) = ' + bcdDecodeBE(payload.subarray(0, Math.min(10, payload.length)))
+				return '表号(BCD) = ' + bcdDecodeLE(payload.subarray(0, Math.min(10, payload.length)))
 			case 0x81: {
 				let v = 0n
 				const n = Math.min(payload.length, 8)
@@ -288,7 +292,7 @@
 				return '底度 = ' + v.toString() + ' (设备原始单位, 详见 samplingDegreeSet 语义)'
 			}
 			case 0x82:
-				return '基表号(BCD) = ' + bcdDecodeBE(payload.subarray(0, Math.min(10, payload.length)))
+				return '基表号(BCD) = ' + bcdDecodeLE(payload.subarray(0, Math.min(10, payload.length)))
 			case 0x83:
 				if (payload.length < 17) return '(payload过短,需1+16字节)'
 				return '角色 = ' + (ROLE_NAMES[payload[0]] || ('未知' + payload[0])) + '  密钥 = ' + hexbytes(payload.subarray(1, 17))
@@ -346,7 +350,7 @@
 			guesses.push('若为「读存储状态」应答: 已满 = ' + payload[0] + '  时间 = ' + decodeDateTimeT(payload.subarray(1, 33)) + '  保留天数 = ' + u16le(payload, 33))
 		}
 		if (len === 32 && !generic.ok) {
-			guesses.push('若为「读设备参数全集」应答: 表号(BCD) = ' + bcdDecodeBE(payload.subarray(0, 10)) + '  基表号(BCD) = ' + bcdDecodeBE(payload.subarray(10, 20)) + '  (底度8B+采样频率4B见原始HEX)')
+			guesses.push('若为「读设备参数全集」应答: 表号(BCD) = ' + bcdDecodeLE(payload.subarray(0, 10)) + '  基表号(BCD) = ' + bcdDecodeLE(payload.subarray(10, 20)) + '  (底度8B+采样频率4B见原始HEX)')
 		}
 		if (!guesses.length) guesses.push('未识别出已知结构,原始载荷 = ' + hexbytes(payload))
 		return guesses
@@ -824,7 +828,7 @@
 						break
 					case 0x80:
 					case 0x82:
-						bytes = bcdBytesBE(paramVal.value || '', 10)
+						bytes = bcdBytesLE(paramVal.value || '', 10)
 						break
 					case 0x81:
 						bytes = u64leBytes(BigInt(String(paramVal.value || '0').trim() || '0'))
