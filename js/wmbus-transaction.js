@@ -97,15 +97,20 @@
 
 	// 探测设备当前下行计数器(last_mc): 用 0x12(读当前下行计数器), 该命令要求 role>0(操作员/管理员,公开读会被拒绝且无回复),
 	// 因此必须用调用方实际选定的角色/密钥去查, 不能像其余纯读命令一样固定走公开读。
-	// MCNT 固定填1(0x10~0x15 读命令现在不校验新鲜度, 填什么值都能成功)。
+	// MCNT 不能像 0x10/0x11/0x13~0x15 那样固定填1: 0x12 需要角色鉴权, 实测设备对它仍按新鲜度校验
+	// (与文件头注释描述的"0x10~0x15一律不校验"不完全一致), 一旦 last_mc 被推进超过1, 固定填1的探测帧
+	// 会被判定为重放而静默丢弃、收不到任何应答, 导致后续写命令(如阀控0x84)永远卡在"探测计数器中"超时。
+	// 因此改为调用方传入当前已知的、单调递增的 mcnt(与普通下行命令共用同一个计数器, 见 wmbus-protocol.js
+	// 的 wmbusDownMcnt), 保证探测帧的 MCNT 不低于设备最后接受的值。
 	// 应答按"结果码(1)+载荷"解析(见 wmbusParseFrame): dataBytes[0]=结果码, dataBytes[1..5)=last_mc(LE)。
 	async function probeCounter(opts) {
 		opts = opts || {}
 		const addrHex = String(opts.addr || '').toUpperCase()
 		const timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 5000
 		const keyId = (opts.keyId != null ? opts.keyId : 0) & 0xff
+		const mcnt = (opts.mcnt >>> 0) || 1
 		if (!addrHex) throw new Error('缺少设备地址ADDR')
-		const frame = window.wmbusBuildDownFrame({ addr: addrHex, keyId: keyId, mcnt: 1, cmd: '0x12', payloadHex: '' })
+		const frame = window.wmbusBuildDownFrame({ addr: addrHex, keyId: keyId, mcnt: mcnt, cmd: '0x12', payloadHex: '' })
 		const match = function (frame2) {
 			if (addrOf(frame2) !== addrHex) return false
 			if (keyIdOf(frame2) !== keyId) return false

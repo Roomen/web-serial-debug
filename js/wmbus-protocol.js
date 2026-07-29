@@ -3,7 +3,9 @@
 // 安全层: AES-128-CBC 加密 + AES-128-CMAC(RFC4493, 截断8字节) 认证; IV = ADDR(8)||MCNT(4LE)||0,0,0||dir(1)
 // 注意: 空表(未配置表号)设备的 ADDR 后4字节现由固件用硬件UID兜底,不再固定为 00000000,
 // 且写表号(0x80)成功后 ADDR 会立即变化 — 不要把 ADDR 当作长期稳定的设备唯一标识来缓存,一律以设备实际返回的帧为准。
-// MCNT 防重放: 0x10~0x15(纯读)不校验新鲜度、任意值可用、不推进 last_mc; 0x16 及所有写类(≥0x80)命令仍要求 MCNT > last_mc。
+// MCNT 防重放: 0x10/0x11/0x13~0x15(公开读,role=0)不校验新鲜度、任意值可用、不推进 last_mc;
+// 0x12(读当前下行计数器,要求 role>0)、0x16 及所有写类(≥0x80)命令仍要求 MCNT > last_mc ——
+// 0x12 需要角色鉴权, 实测其新鲜度校验行为与写命令一致, 不能当作纯公开读那样固定填任意值探测。
 ;(function () {
 	'use strict'
 	const W = window
@@ -642,10 +644,11 @@
 		cmdSel.dataset.wmbusInit = '1'
 
 		const SEND_CMDS = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87]
-		//0x87(立即上报)与 0x84(阀控)一样是写类命令里的权限例外: 只需 PUBLIC 角色即可触发,不是 ADMIN
+		//0x87(立即上报)是写类命令里的权限例外: 只需 PUBLIC 角色即可触发,不是 ADMIN
+		//0x84(阀控)不属于该例外, 仍要求 role>=1(操作员/管理员), 公开读不可下发
 		//0x12(读当前下行计数器)是读命令里的权限例外: 需要 role>0(操作员/管理员),公开读不可用
 		//未列出的其余命令(0x10/0x11/0x13~0x16,纯读)按协议要求最低角色 0(公开读)即可执行
-		const MIN_ROLE = { 0x12: 1, 0x84: 0, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0 }
+		const MIN_ROLE = { 0x12: 1, 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0 }
 
 		const keyIdSel = document.getElementById('wmbus-down-keyid')
 		const meterIdEl = document.getElementById('wmbus-down-meterid')
@@ -935,8 +938,11 @@
 		})
 
 		// 写类命令(0x80~0x86)现在仍要求 MCNT > 设备 last_mc, 但 0x10~0x15(读)已不再校验新鲜度(见文件头注释)。
-		// 于是"下发"写命令前可以先用 0x12(读当前下行计数器, MCNT随便填1即可)探测 last_mc,
-		// 再用 last_mc+1 重新构造并签名真正要发的帧, 免去用户手动猜/管理 MCNT。
+		// 于是"下发"写命令前可以先用 0x12(读当前下行计数器)探测 last_mc, 再用 last_mc+1 重新构造并签名
+		// 真正要发的帧, 免去用户手动猜/管理 MCNT。
+		// 0x12 本身需要角色鉴权,实测设备仍按新鲜度校验探测帧的 MCNT(不能像纯公开读一样固定填1,
+		// 否则 last_mc 被推进后探测帧会被当重放静默丢弃、永远收不到应答, 见 wmbus-transaction.js 里的说明) —
+		// 因此这里把当前已跟踪的、单调递增的 mcntEl.value 传给探测请求, 保证它不落后于设备已接受的值。
 		// 0x87(立即上报)不校验 MCNT 新鲜度(与纯读命令一样), 无需探测计数器, 可直接下发。
 		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1 }
 		sendBtn.addEventListener('click', async () => {
@@ -956,7 +962,7 @@
 			sendBtn.textContent = '探测计数器中...'
 			showErr('')
 			try {
-				const lastMc = await window.wmbusTx.probeCounter({ addr: addrHex, keyId: parseInt(keyIdSel.value, 10) })
+				const lastMc = await window.wmbusTx.probeCounter({ addr: addrHex, keyId: parseInt(keyIdSel.value, 10), mcnt: parseInt(mcntEl.value, 10) || 1 })
 				mcntEl.value = String((lastMc + 1) >>> 0)
 				const frame = buildFrame()
 				if (!frame) return
