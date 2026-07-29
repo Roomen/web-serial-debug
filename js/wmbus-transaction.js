@@ -100,15 +100,19 @@
 	// MCNT 不能像 0x10/0x11/0x13~0x15 那样固定填1: 0x12 需要角色鉴权, 实测设备对它仍按新鲜度校验
 	// (与文件头注释描述的"0x10~0x15一律不校验"不完全一致), 一旦 last_mc 被推进超过1, 固定填1的探测帧
 	// 会被判定为重放而静默丢弃、收不到任何应答, 导致后续写命令(如阀控0x84)永远卡在"探测计数器中"超时。
-	// 因此改为调用方传入当前已知的、单调递增的 mcnt(与普通下行命令共用同一个计数器, 见 wmbus-protocol.js
-	// 的 wmbusDownMcnt), 保证探测帧的 MCNT 不低于设备最后接受的值。
+	// 曾改为用调用方本地跟踪的 mcnt(与普通下行命令共用同一计数器), 但本地计数器一旦与设备 last_mc
+	// 不同步(换浏览器/清缓存/某次写命令设备侧成功但本地未持久化等), 探测帧仍会因不够新被静默丢弃 ——
+	// 且此时没有任何命令能成功来重新同步, 形成死锁。0x12 的新鲜度校验只要求 MCNT > last_mc, 不要求
+	// "刚好+1", 因此探测帧改为固定使用一个足够大的 MCNT(不依赖本地计数器状态), 保证无论本地计数器
+	// 落后多少都必定能探测成功; 真正要发的写命令仍使用探测应答里的 last_mc+1, 不受此值影响。
 	// 应答按"结果码(1)+载荷"解析(见 wmbusParseFrame): dataBytes[0]=结果码, dataBytes[1..5)=last_mc(LE)。
+	const PROBE_MCNT = 0x7ffffffe
 	async function probeCounter(opts) {
 		opts = opts || {}
 		const addrHex = String(opts.addr || '').toUpperCase()
 		const timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 5000
 		const keyId = (opts.keyId != null ? opts.keyId : 0) & 0xff
-		const mcnt = (opts.mcnt >>> 0) || 1
+		const mcnt = PROBE_MCNT
 		if (!addrHex) throw new Error('缺少设备地址ADDR')
 		const frame = window.wmbusBuildDownFrame({ addr: addrHex, keyId: keyId, mcnt: mcnt, cmd: '0x12', payloadHex: '' })
 		const match = function (frame2) {
