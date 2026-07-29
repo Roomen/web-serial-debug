@@ -643,13 +643,8 @@
 
 		const SEND_CMDS = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87]
 		//0x87(立即上报)与 0x84(阀控)一样是写类命令里的权限例外: 只需 PUBLIC 角色即可触发,不是 ADMIN
-		const DEFAULT_KEYID = { 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0 }
-		for (const c of SEND_CMDS) {
-			const opt = document.createElement('option')
-			opt.value = '0x' + c.toString(16).toUpperCase().padStart(2, '0')
-			opt.textContent = opt.value + ' ' + CMD_TABLE[c].name
-			cmdSel.appendChild(opt)
-		}
+		//未列出的命令(0x10~0x16,纯读)按协议要求最低角色 0(公开读)即可执行
+		const MIN_ROLE = { 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0 }
 
 		const keyIdSel = document.getElementById('wmbus-down-keyid')
 		const meterIdEl = document.getElementById('wmbus-down-meterid')
@@ -690,10 +685,27 @@
 			if (role === 0) return
 			saveRoleKeyStore(role, { ascii: keyAsciiEl.value, hex: keyHexEl.value })
 		}
-		keyIdSel.addEventListener('change', updateKeyUi)
+		// 命令下拉框只展示当前选中角色能执行的命令(角色越高可执行的命令越多,ADMIN 可执行全部)
+		function refreshCmdOptions() {
+			const role = parseInt(keyIdSel.value, 10)
+			const prevCmd = cmdSel.value
+			cmdSel.innerHTML = ''
+			for (const c of SEND_CMDS) {
+				const minRole = MIN_ROLE[c] != null ? MIN_ROLE[c] : 0
+				if (minRole > role) continue
+				const opt = document.createElement('option')
+				opt.value = '0x' + c.toString(16).toUpperCase().padStart(2, '0')
+				opt.textContent = opt.value + ' ' + CMD_TABLE[c].name
+				cmdSel.appendChild(opt)
+			}
+			if (prevCmd && Array.from(cmdSel.options).some((o) => o.value === prevCmd)) cmdSel.value = prevCmd
+		}
+
+		keyIdSel.addEventListener('change', () => { updateKeyUi(); refreshCmdOptions(); onCmdChange() })
 		keyAsciiEl.addEventListener('input', saveKeyUi)
 		keyHexEl.addEventListener('input', saveKeyUi)
 		updateKeyUi()
+		refreshCmdOptions()
 
 		function showErr(msg) { if (errEl) errEl.textContent = msg || '' }
 
@@ -710,8 +722,6 @@
 
 		function onCmdChange() {
 			const cmd = parseInt(cmdSel.value, 16)
-			if (DEFAULT_KEYID[cmd] != null) keyIdSel.value = String(DEFAULT_KEYID[cmd])
-			updateKeyUi()
 			paramVal.style.display = 'none'
 			paramSel.style.display = 'none'
 			paramGroup.style.display = ''
