@@ -655,18 +655,13 @@
 		//未列出的其余命令(0x10/0x11/0x13~0x16,纯读)按协议要求最低角色 0(公开读)即可执行
 		const MIN_ROLE = { 0x12: 1, 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0 }
 
-		// 收发间隔: 仅「已收到应答 → 下次发送」之间的等待(存 localStorage), 不插在发送后等应答路上。
-		// 实测 0.7s 常丢、约 800ms 较稳; 默认 800。写命令每次先 0x12, 探测应答后 / 无应答重发前走这段。
-		const DEFAULT_RX_TO_TX_GAP_MS = 800
-		function rxToTxGapMs() {
-			const v = gapEl ? parseInt(gapEl.value, 10) : NaN
-			return isNaN(v) || v < 0 ? DEFAULT_RX_TO_TX_GAP_MS : v
-		}
+		// 收→发间隔(固定): 仅「已收到应答 → 下次发送」, 不插在发送后等应答路上。
+		// 实测 0.7s 常丢、约 850ms 较稳。写命令每次先 0x12, 探测应答后 / 无应答重发前走这段。
+		const RX_TO_TX_GAP_MS = 850
 
 		const keyIdSel = document.getElementById('wmbus-down-keyid')
 		const meterIdEl = document.getElementById('wmbus-down-meterid')
 		const mcntEl = document.getElementById('wmbus-down-mcnt')
-		const gapEl = document.getElementById('wmbus-down-gap')
 		const payloadEl = document.getElementById('wmbus-down-payload')
 		const paramGroup = document.getElementById('wmbus-down-param-group')
 		const paramLabel = document.getElementById('wmbus-down-param-label')
@@ -687,10 +682,6 @@
 
 		meterIdEl.value = localStorage.getItem('wmbusDownMeterId') || ''
 		mcntEl.value = localStorage.getItem('wmbusDownMcnt') || '1'
-		if (gapEl) {
-			gapEl.value = localStorage.getItem('wmbusDownGapMs') || String(DEFAULT_RX_TO_TX_GAP_MS)
-			gapEl.addEventListener('change', () => localStorage.setItem('wmbusDownGapMs', String(rxToTxGapMs())))
-		}
 
 		// 密钥角色0(公开读)按协议固定用内置默认密钥,不展示密钥框;1/2 展示对应角色已保存的 ASCII/HEX 密钥
 		function updateKeyUi() {
@@ -964,22 +955,17 @@
 		// 0x87(立即上报)不校验 MCNT 新鲜度(与纯读命令一样), 无需探测计数器, 可直接下发。
 		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1 }
 		// 收到探测应答后紧接着就发写命令, 红外半双工还没切回接收, 写命令会被吞。
-		// 「收发间隔」只卡在 收→发 之间(整帧已由 findFrame 收齐后再计时), 不再叠「分包静默 + 间隔」两段,
-		// 也不插在 发→等应答 路上: 发出后立刻 waitFor。
+		// 收→发间隔只卡在 收→发 之间(整帧已由 findFrame 收齐后再计时), 不插在 发→等应答 路上。
 		// 无应答则原样重发(MCNT 不变; 设备没收到不算重放, 已执行会回结果码2, 不重复写)。
 		const WRITE_ACK_TIMEOUT_MS = 5000
 		const WRITE_MAX_ATTEMPTS = 3
 		const PROBE_MAX_ATTEMPTS = 3
 		const sleep = (ms) => new Promise(r => setTimeout(r, ms))
-		// 仅 RX→TX: 从调用点(应答已处理完)起 sleep 配置的毫秒数
-		async function waitRxToTxGap() {
-			const ms = rxToTxGapMs()
-			if (ms > 0) await sleep(ms)
-		}
+		const waitRxToTxGap = () => sleep(RX_TO_TX_GAP_MS)
 
 		// 写命令每次都先 0x12 探测 last_mc, 再用 last_mc+1 构造下发。
 		// 不缓存免探测: 分支目标是修「探测后立刻写被吞」, 不是取消查询序列; 探测帧本身也是联调可见的下行。
-		// 红外半双工衔接不稳时, 靠「收发间隔 + 无应答原样重发」兜底, 不靠跳过探测绕开。
+		// 红外半双工衔接不稳时, 靠「固定收→发间隔 + 无应答原样重发」兜底, 不靠跳过探测绕开。
 		sendBtn.addEventListener('click', async () => {
 			const cmd = parseInt(cmdSel.value, 16)
 			if (!AUTO_PROBE_CMDS[cmd]) {
@@ -1013,7 +999,7 @@
 					}
 					for (let attempt = 1; attempt <= WRITE_MAX_ATTEMPTS; attempt++) {
 						sendBtn.textContent = attempt === 1
-							? ('等待红外就绪(' + rxToTxGapMs() + 'ms)...')
+							? ('等待红外就绪(' + RX_TO_TX_GAP_MS + 'ms)...')
 							: ('无应答,重发第' + (attempt - 1) + '次...')
 						await waitRxToTxGap()
 						// 先挂等待再发, 避免应答比 waitFor 注册更快到达
