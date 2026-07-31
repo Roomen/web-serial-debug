@@ -655,11 +655,9 @@
 		//未列出的其余命令(0x10/0x11/0x13~0x16,纯读)按协议要求最低角色 0(公开读)即可执行
 		const MIN_ROLE = { 0x12: 1, 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0 }
 
-		// 收发间隔: 设备回完一包到发下一帧之间要留多久, 由卡片上的「收发间隔」输入框配置(存 localStorage)。
-		// 取值依据(累计4次实测): 应答后 0.2s/0.5s/0.7s 发出的帧 4 次里只成功 1 次(那次也是 0.71s);
-		// 而超时后隔 ~5.5s 的重发 4 次全成 —— 衔接点附近就是不稳, 越远越稳, 所以默认给到 5s。
-		// 写命令每次仍先 0x12 探测, 探测应答后 / 无应答重发前都走这段等待。
-		const DEFAULT_RX_TO_TX_GAP_MS = 5000
+		// 收发间隔: 仅「已收到应答 → 下次发送」之间的等待(存 localStorage), 不插在发送后等应答路上。
+		// 实测 0.7s 常丢、约 800ms 较稳; 默认 800。写命令每次先 0x12, 探测应答后 / 无应答重发前走这段。
+		const DEFAULT_RX_TO_TX_GAP_MS = 800
 		function rxToTxGapMs() {
 			const v = gapEl ? parseInt(gapEl.value, 10) : NaN
 			return isNaN(v) || v < 0 ? DEFAULT_RX_TO_TX_GAP_MS : v
@@ -965,31 +963,18 @@
 		// 固定大值可保证任何情况下都能探测成功。
 		// 0x87(立即上报)不校验 MCNT 新鲜度(与纯读命令一样), 无需探测计数器, 可直接下发。
 		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1 }
-		// 收到探测应答后紧接着就发写命令, 红外接收端(半双工, 收发切换要时间)还没从"发完应答"切回接收,
-		// 写命令会被吞掉。所以要先等这一包收完 —— 匹配到帧不等于对端发完了, 得等串口静默满「分包超时」
-		// (主界面那个设置, 默认200ms), 静默之后再额外留一段间隔才发。
-		// 实测(16:24 那次, 分包超时被调到100ms): 应答首字节后仅 213ms 就下发, 写命令被吞、设备无任何回应;
-		// 同一帧原样重发则正常应答 —— 帧本身没问题, 就是对端还没切回接收。
-		// 分包超时是用户可调的, 调小了这里的等待会跟着缩水, 所以静默窗口取 max(分包超时, 200ms) 兜底,
-		// 静默之后再留一段固定间隔。
-		// 实测(16:35 那次)间隔已到 513ms 仍被吞、设备毫无回应, 而 14s 后原样重发同一帧立刻正常应答 ——
-		// 说明单靠加长间隔猜不出对端到底要缓多久, 所以改成"发完等应答, 没等到就原样重发":
-		// 帧字节完全不变(MCNT 也不变), 设备既然没收到就不算重放, 重发合法; 万一是应答丢了而设备已执行,
-		// 重发会被判重放并回结果码2, 也只是告知用户, 不会重复执行写操作。
-		const MIN_RX_IDLE_MS = 200
+		// 收到探测应答后紧接着就发写命令, 红外半双工还没切回接收, 写命令会被吞。
+		// 「收发间隔」只卡在 收→发 之间(整帧已由 findFrame 收齐后再计时), 不再叠「分包静默 + 间隔」两段,
+		// 也不插在 发→等应答 路上: 发出后立刻 waitFor。
+		// 无应答则原样重发(MCNT 不变; 设备没收到不算重放, 已执行会回结果码2, 不重复写)。
 		const WRITE_ACK_TIMEOUT_MS = 5000
 		const WRITE_MAX_ATTEMPTS = 3
 		const PROBE_MAX_ATTEMPTS = 3
-		function rxIdleMs() {
-			const el = document.getElementById('serial-timer-out')
-			const v = el ? parseInt(el.value, 10) : NaN
-			return Math.max(isNaN(v) || v < 0 ? 200 : v, MIN_RX_IDLE_MS)
-		}
 		const sleep = (ms) => new Promise(r => setTimeout(r, ms))
-		// 等对端把上一包吐完并缓过收发切换, 再发下一帧(探测后下发 / 无应答重发 / 探测重试)
-		async function waitIrReady() {
-			await window.wmbusTx.waitIdle(rxIdleMs())
-			await sleep(rxToTxGapMs())
+		// 仅 RX→TX: 从调用点(应答已处理完)起 sleep 配置的毫秒数
+		async function waitRxToTxGap() {
+			const ms = rxToTxGapMs()
+			if (ms > 0) await sleep(ms)
 		}
 
 		// 写命令每次都先 0x12 探测 last_mc, 再用 last_mc+1 构造下发。
@@ -1014,7 +999,8 @@
 			try {
 				const keyId = parseInt(keyIdSel.value, 10)
 				// 发一次写命令并等应答, 无应答就原样重发; 返回结果码, 全程无应答返回 null
-				// 写命令总是紧跟在探测应答之后, 每次 attempt(含首次)都先 waitIrReady
+				// 首次: 探测应答后先 RX→TX 间隔再发; 重试: 超时后同样隔一段再发(给红外端恢复)
+				// 发出后立刻 waitFor, 不在 发→收 路径上额外 sleep
 				async function sendWriteAndWaitAck(frame, usedMcnt) {
 					// 应答匹配: 同地址同角色、MCNT 与本次下发的一致; db[0]=0x20 是周期上报帧, 不是本次要等的应答
 					const matchAck = function (f) {
@@ -1026,11 +1012,10 @@
 						return db.length > 0 && db[0] !== 0x20
 					}
 					for (let attempt = 1; attempt <= WRITE_MAX_ATTEMPTS; attempt++) {
-						// 间隔默认较长, 按钮上带出秒数, 免得看着像卡死
 						sendBtn.textContent = attempt === 1
-							? ('等待红外就绪(' + (rxToTxGapMs() / 1000) + 's)...')
+							? ('等待红外就绪(' + rxToTxGapMs() + 'ms)...')
 							: ('无应答,重发第' + (attempt - 1) + '次...')
-						await waitIrReady()
+						await waitRxToTxGap()
 						// 先挂等待再发, 避免应答比 waitFor 注册更快到达
 						const ack = window.wmbusTx.waitFor(matchAck, WRITE_ACK_TIMEOUT_MS)
 						sendBtn.textContent = '已下发,等应答...'
@@ -1051,7 +1036,8 @@
 							return await window.wmbusTx.probeCounter({ addr: addrHex, keyId: keyId })
 						} catch (e) {
 							if (attempt >= PROBE_MAX_ATTEMPTS) throw e
-							await waitIrReady()
+							// 无应答重探: 同样只卡在「下一发」前, 不拖 发→等收
+							await waitRxToTxGap()
 						}
 					}
 				}
