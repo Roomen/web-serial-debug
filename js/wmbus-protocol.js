@@ -950,6 +950,9 @@
 		// 固定大值可保证任何情况下都能探测成功。
 		// 0x87(立即上报)不校验 MCNT 新鲜度(与纯读命令一样), 无需探测计数器, 可直接下发。
 		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1 }
+		// 收到探测应答后紧接着就发写命令, 红外接收端(半双工, 收发切换要时间)还没从"发完应答"切回接收,
+		// 写命令会被吞掉; 中间插 100ms 间隔让对端缓过来再发。
+		const PROBE_TO_SEND_GAP_MS = 100
 		sendBtn.addEventListener('click', async () => {
 			const cmd = parseInt(cmdSel.value, 16)
 			if (!AUTO_PROBE_CMDS[cmd]) {
@@ -971,6 +974,8 @@
 				mcntEl.value = String((lastMc + 1) >>> 0)
 				const frame = buildFrame()
 				if (!frame) return
+				sendBtn.textContent = '等待红外就绪...'
+				await new Promise(r => setTimeout(r, PROBE_TO_SEND_GAP_MS))
 				sendFrame(frame)
 			} catch (e) {
 				showErr('自动探测计数器失败,已中止下发(未发送写命令): ' + e.message)
