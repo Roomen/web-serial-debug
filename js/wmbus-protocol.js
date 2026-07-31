@@ -655,6 +655,10 @@
 		//未列出的其余命令(0x10/0x11/0x13~0x16,纯读)按协议要求最低角色 0(公开读)即可执行
 		const MIN_ROLE = { 0x12: 1, 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0 }
 
+		// 收→发间隔(固定): 仅「已收到应答 → 下次发送」, 不插在发送后等应答路上。
+		// 实测 0.7s 常丢、约 850ms 较稳。写命令每次先 0x12, 探测应答后 / 无应答重发前走这段。
+		const RX_TO_TX_GAP_MS = 850
+
 		const keyIdSel = document.getElementById('wmbus-down-keyid')
 		const meterIdEl = document.getElementById('wmbus-down-meterid')
 		const mcntEl = document.getElementById('wmbus-down-mcnt')
@@ -950,33 +954,61 @@
 		// 固定大值可保证任何情况下都能探测成功。
 		// 0x87(立即上报)不校验 MCNT 新鲜度(与纯读命令一样), 无需探测计数器, 可直接下发。
 		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1 }
-		// 收到探测应答后紧接着就发写命令, 红外接收端(半双工, 收发切换要时间)还没从"发完应答"切回接收,
-		// 写命令会被吞掉。所以要先等这一包收完 —— 匹配到帧不等于对端发完了, 得等串口静默满「分包超时」
-		// (主界面那个设置, 默认200ms), 静默之后再额外留一段间隔才发。
-		// 实测(16:24 那次, 分包超时被调到100ms): 应答首字节后仅 213ms 就下发, 写命令被吞、设备无任何回应;
-		// 同一帧原样重发则正常应答 —— 帧本身没问题, 就是对端还没切回接收。
-		// 分包超时是用户可调的, 调小了这里的等待会跟着缩水, 所以静默窗口取 max(分包超时, 200ms) 兜底,
-		// 静默之后再留一段固定间隔。
-		// 实测(16:35 那次)间隔已到 513ms 仍被吞、设备毫无回应, 而 14s 后原样重发同一帧立刻正常应答 ——
-		// 说明单靠加长间隔猜不出对端到底要缓多久, 所以改成"发完等应答, 没等到就原样重发":
-		// 帧字节完全不变(MCNT 也不变), 设备既然没收到就不算重放, 重发合法; 万一是应答丢了而设备已执行,
-		// 重发会被判重放并回结果码2, 也只是告知用户, 不会重复执行写操作。
-		const PROBE_TO_SEND_GAP_MS = 500
-		const MIN_RX_IDLE_MS = 200
+		// 收到探测应答后紧接着就发写命令, 红外半双工还没切回接收, 写命令会被吞。
+		// 收→发间隔只卡在 收→发 之间(整帧已由 findFrame 收齐后再计时), 不插在 发→等应答 路上。
+		// 无应答则原样重发(MCNT 不变; 设备没收到不算重放, 已执行会回结果码2, 不重复写)。
 		const WRITE_ACK_TIMEOUT_MS = 5000
 		const WRITE_MAX_ATTEMPTS = 3
-		function rxIdleMs() {
-			const el = document.getElementById('serial-timer-out')
-			const v = el ? parseInt(el.value, 10) : NaN
-			return Math.max(isNaN(v) || v < 0 ? 200 : v, MIN_RX_IDLE_MS)
+		const PROBE_MAX_ATTEMPTS = 3
+		const SEND_IDLE_LABEL = '立即下发'
+		const CANCEL_MSG = '用户取消'
+
+		// 写命令探测/重试进行中: 再次点击「立即下发」即取消(不 disabled, 可点)
+		let sendBusy = false
+		let sendJob = null
+		function makeSendJob() {
+			const job = { cancelled: false, sleepTimer: null }
+			job.cancel = function () {
+				if (job.cancelled) return
+				job.cancelled = true
+				if (job.sleepTimer != null) {
+					clearTimeout(job.sleepTimer)
+					job.sleepTimer = null
+				}
+				if (window.wmbusTx) {
+					try { window.wmbusTx.cancelAll(CANCEL_MSG) } catch (e) { /* */ }
+				}
+			}
+			job.throwIfCancelled = function () {
+				if (job.cancelled) throw new Error(CANCEL_MSG)
+			}
+			job.isCancelErr = function (e) {
+				return job.cancelled || (e && String(e.message || e) === CANCEL_MSG)
+			}
+			// 可被 cancel 打断的 sleep(收→发间隔)
+			job.sleep = function (ms) {
+				return new Promise(function (resolve, reject) {
+					if (job.cancelled) { reject(new Error(CANCEL_MSG)); return }
+					job.sleepTimer = setTimeout(function () {
+						job.sleepTimer = null
+						if (job.cancelled) reject(new Error(CANCEL_MSG))
+						else resolve()
+					}, ms)
+				})
+			}
+			job.waitRxToTxGap = function () { return job.sleep(RX_TO_TX_GAP_MS) }
+			return job
 		}
-		const sleep = (ms) => new Promise(r => setTimeout(r, ms))
-		// 等对端把上一包吐完并缓过收发切换, 再发下一帧
-		async function waitIrReady() {
-			await window.wmbusTx.waitIdle(rxIdleMs())
-			await sleep(PROBE_TO_SEND_GAP_MS)
-		}
+
+		// 写命令每次都先 0x12 探测 last_mc, 再用 last_mc+1 构造下发。
+		// 不缓存免探测: 分支目标是修「探测后立刻写被吞」, 不是取消查询序列; 探测帧本身也是联调可见的下行。
+		// 红外半双工衔接不稳时, 靠「固定收→发间隔 + 无应答原样重发」兜底, 不靠跳过探测绕开。
 		sendBtn.addEventListener('click', async () => {
+			// 进行中再次点击 = 取消当前探测/等待/重试
+			if (sendBusy) {
+				if (sendJob) sendJob.cancel()
+				return
+			}
 			const cmd = parseInt(cmdSel.value, 16)
 			if (!AUTO_PROBE_CMDS[cmd]) {
 				const frame = buildFrame()
@@ -988,45 +1020,92 @@
 			if (!window.serialApi || !window.serialApi.isOpen()) { showErr('请先打开串口'); return }
 			let addrHex
 			try { addrHex = computeAddrHex() } catch (e) { showErr(e.message); return }
-			sendBtn.disabled = true
-			const oldLabel = sendBtn.textContent
-			sendBtn.textContent = '探测计数器中...'
+
+			const job = makeSendJob()
+			sendJob = job
+			sendBusy = true
+			sendBtn.textContent = '探测计数器中...(点此取消)'
 			showErr('')
 			try {
 				const keyId = parseInt(keyIdSel.value, 10)
-				const lastMc = await window.wmbusTx.probeCounter({ addr: addrHex, keyId: keyId })
+				// 发一次写命令并等应答, 无应答就原样重发; 返回结果码, 全程无应答返回 null
+				// 首次: 探测应答后先 RX→TX 间隔再发; 重试: 超时后同样隔一段再发(给红外端恢复)
+				// 发出后立刻 waitFor, 不在 发→收 路径上额外 sleep
+				async function sendWriteAndWaitAck(frame, usedMcnt) {
+					// 应答匹配: 同地址同角色、MCNT 与本次下发的一致; db[0]=0x20 是周期上报帧, 不是本次要等的应答
+					const matchAck = function (f) {
+						const kid = f.fields && f.fields['密钥角色KeyID']
+						if ((f.fields && f.fields['设备地址ADDR']) !== addrHex) return false
+						if ((kid && typeof kid === 'object' ? kid.value : kid) !== keyId) return false
+						if ((f.fields && f.fields['消息计数器MCNT']) !== usedMcnt) return false
+						const db = f.dataBytes || []
+						return db.length > 0 && db[0] !== 0x20
+					}
+					for (let attempt = 1; attempt <= WRITE_MAX_ATTEMPTS; attempt++) {
+						job.throwIfCancelled()
+						sendBtn.textContent = (attempt === 1
+							? ('等待红外就绪(' + RX_TO_TX_GAP_MS + 'ms)')
+							: ('无应答,重发第' + (attempt - 1) + '次')) + '...(点此取消)'
+						await job.waitRxToTxGap()
+						job.throwIfCancelled()
+						// 先挂等待再发, 避免应答比 waitFor 注册更快到达
+						const ack = window.wmbusTx.waitFor(matchAck, WRITE_ACK_TIMEOUT_MS)
+						sendBtn.textContent = '已下发,等应答...(点此取消)'
+						sendFrame(frame)
+						try {
+							const res = await ack
+							job.throwIfCancelled()
+							const db = (res.frame && res.frame.dataBytes) || []
+							return db.length ? db[0] : 0
+						} catch (e) {
+							if (job.isCancelErr(e)) throw e
+							// 超时: 红外端多半没收到, 原样重发
+						}
+					}
+					return null
+				}
+				// 探测帧本身也会被红外端吞掉(实测有一次 0x12 发出去毫无回应), 同样重发
+				async function probe() {
+					for (let attempt = 1; ; attempt++) {
+						job.throwIfCancelled()
+						sendBtn.textContent = (attempt === 1 ? '探测计数器中' : ('探测无应答,重试第' + (attempt - 1) + '次')) + '...(点此取消)'
+						try {
+							return await window.wmbusTx.probeCounter({ addr: addrHex, keyId: keyId })
+						} catch (e) {
+							if (job.isCancelErr(e)) throw e
+							if (attempt >= PROBE_MAX_ATTEMPTS) throw e
+							// 无应答重探: 同样只卡在「下一发」前, 不拖 发→等收
+							await job.waitRxToTxGap()
+						}
+					}
+				}
+
+				const lastMc = await probe()
+				job.throwIfCancelled()
 				const usedMcnt = (lastMc + 1) >>> 0
 				mcntEl.value = String(usedMcnt)
 				const frame = buildFrame()
 				if (!frame) return
-				// 应答匹配: 同地址同角色、MCNT 与本次下发的一致; db[0]=0x20 是周期上报帧, 不是本次要等的应答
-				const matchAck = function (f) {
-					const kid = f.fields && f.fields['密钥角色KeyID']
-					if ((f.fields && f.fields['设备地址ADDR']) !== addrHex) return false
-					if ((kid && typeof kid === 'object' ? kid.value : kid) !== keyId) return false
-					if ((f.fields && f.fields['消息计数器MCNT']) !== usedMcnt) return false
-					const db = f.dataBytes || []
-					return db.length > 0 && db[0] !== 0x20
+				const rc = await sendWriteAndWaitAck(frame, usedMcnt)
+				job.throwIfCancelled()
+				if (rc == null) {
+					showErr('已下发' + WRITE_MAX_ATTEMPTS + '次仍无应答,请检查红外探头对位/设备是否在线')
+				} else if (rc !== 0) {
+					const table = W.wmbusResultTable || {}
+					showErr('设备应答结果码=' + rc + (table[rc] ? '(' + table[rc] + ')' : ''))
 				}
-				let acked = false
-				for (let attempt = 1; attempt <= WRITE_MAX_ATTEMPTS && !acked; attempt++) {
-					sendBtn.textContent = attempt === 1 ? '等待红外就绪...' : ('无应答,重发第' + (attempt - 1) + '次...')
-					await waitIrReady()
-					// 先挂等待再发, 避免应答比 waitFor 注册更快到达
-					const ack = window.wmbusTx.waitFor(matchAck, WRITE_ACK_TIMEOUT_MS)
-					sendBtn.textContent = '已下发,等应答...'
-					sendFrame(frame)
-					try {
-						await ack
-						acked = true
-					} catch (e) { /* 超时: 红外端多半没收到, 原样重发 */ }
-				}
-				if (!acked) showErr('已下发' + WRITE_MAX_ATTEMPTS + '次仍无应答,请检查红外探头对位/设备是否在线')
 			} catch (e) {
-				showErr('自动探测计数器失败,已中止下发(未发送写命令): ' + e.message)
+				if (job.isCancelErr(e)) {
+					showErr('已取消发送')
+				} else {
+					showErr('自动探测计数器失败,已中止下发(未发送写命令): ' + e.message)
+				}
 			} finally {
-				sendBtn.disabled = false
-				sendBtn.textContent = oldLabel
+				if (sendJob === job) {
+					sendJob = null
+					sendBusy = false
+					sendBtn.textContent = SEND_IDLE_LABEL
+				}
 			}
 		})
 
