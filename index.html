@@ -532,6 +532,11 @@
                                                 <span class="input-group-text">计数器MCNT</span>
                                                 <input type="number" class="form-control" id="wmbus-down-mcnt" style="width:100px;" min="1">
                                             </div>
+                                            <div class="input-group input-group-sm" style="width: auto;" title="设备回完一包后要隔多久才发下一帧。红外半双工，衔接太近会被吞；实测 0.7s 常丢、5s 稳。仅在需要先探测计数器时用到">
+                                                <span class="input-group-text">收发间隔</span>
+                                                <input type="number" class="form-control" id="wmbus-down-gap" style="width:100px;" min="0" step="100" placeholder="毫秒">
+                                                <span class="input-group-text">ms</span>
+                                            </div>
                                         </div>
                                         <div class="input-group input-group-sm mb-2" id="wmbus-down-key-group" style="display:none;">
                                             <span class="input-group-text" id="wmbus-down-key-label">密钥</span>

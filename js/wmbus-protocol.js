@@ -655,9 +655,20 @@
 		//未列出的其余命令(0x10/0x11/0x13~0x16,纯读)按协议要求最低角色 0(公开读)即可执行
 		const MIN_ROLE = { 0x12: 1, 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0 }
 
+		// 收发间隔: 设备回完一包到发下一帧之间要留多久, 由卡片上的「收发间隔」输入框配置(存 localStorage)。
+		// 取值依据(累计4次实测): 应答后 0.2s/0.5s/0.7s 发出的帧 4 次里只成功 1 次(那次也是 0.71s);
+		// 而超时后隔 ~5.5s 的重发 4 次全成 —— 衔接点附近就是不稳, 越远越稳, 所以默认给到 5s。
+		// 有了 last_mc 缓存后大部分下发根本不用探测, 这段等待只在首次/缓存失效时付出。
+		const DEFAULT_RX_TO_TX_GAP_MS = 5000
+		function rxToTxGapMs() {
+			const v = gapEl ? parseInt(gapEl.value, 10) : NaN
+			return isNaN(v) || v < 0 ? DEFAULT_RX_TO_TX_GAP_MS : v
+		}
+
 		const keyIdSel = document.getElementById('wmbus-down-keyid')
 		const meterIdEl = document.getElementById('wmbus-down-meterid')
 		const mcntEl = document.getElementById('wmbus-down-mcnt')
+		const gapEl = document.getElementById('wmbus-down-gap')
 		const payloadEl = document.getElementById('wmbus-down-payload')
 		const paramGroup = document.getElementById('wmbus-down-param-group')
 		const paramLabel = document.getElementById('wmbus-down-param-label')
@@ -678,6 +689,10 @@
 
 		meterIdEl.value = localStorage.getItem('wmbusDownMeterId') || ''
 		mcntEl.value = localStorage.getItem('wmbusDownMcnt') || '1'
+		if (gapEl) {
+			gapEl.value = localStorage.getItem('wmbusDownGapMs') || String(DEFAULT_RX_TO_TX_GAP_MS)
+			gapEl.addEventListener('change', () => localStorage.setItem('wmbusDownGapMs', String(rxToTxGapMs())))
+		}
 
 		// 密钥角色0(公开读)按协议固定用内置默认密钥,不展示密钥框;1/2 展示对应角色已保存的 ASCII/HEX 密钥
 		function updateKeyUi() {
@@ -961,10 +976,6 @@
 		// 说明单靠加长间隔猜不出对端到底要缓多久, 所以改成"发完等应答, 没等到就原样重发":
 		// 帧字节完全不变(MCNT 也不变), 设备既然没收到就不算重放, 重发合法; 万一是应答丢了而设备已执行,
 		// 重发会被判重放并回结果码2, 也只是告知用户, 不会重复执行写操作。
-		// 间隔取值依据(累计4次实测): 应答后 0.2s/0.5s/0.7s 发出的帧 4 次里只成功 1 次(那次也是 0.71s);
-		// 而超时后隔 ~5.5s 的重发 4 次全成 —— 衔接点附近就是不稳, 越远越稳。既然只有 ~5s 这一档是实测全成的,
-		// 就直接取 5s, 不再在中间猜。反正有了 last_mc 缓存后大部分下发根本不用探测, 这 5s 只在首次/缓存失效时付出。
-		const PROBE_TO_SEND_GAP_MS = 5000
 		const MIN_RX_IDLE_MS = 200
 		const WRITE_ACK_TIMEOUT_MS = 5000
 		const WRITE_MAX_ATTEMPTS = 3
@@ -978,7 +989,7 @@
 		// 等对端把上一包吐完并缓过收发切换, 再发下一帧
 		async function waitIrReady() {
 			await window.wmbusTx.waitIdle(rxIdleMs())
-			await sleep(PROBE_TO_SEND_GAP_MS)
+			await sleep(rxToTxGapMs())
 		}
 
 		// 实测每次丢帧都发生在"设备刚回完一包, 紧接着又收一包"这个衔接处(0.2s/0.5s/0.7s 间隔都丢过,
@@ -1030,7 +1041,7 @@
 						if (attempt > 1 || afterRx) {
 							// 间隔有5s之久, 按钮上带出秒数, 免得看着像卡死
 							sendBtn.textContent = attempt === 1
-								? ('等待红外就绪(' + Math.round(PROBE_TO_SEND_GAP_MS / 1000) + 's)...')
+								? ('等待红外就绪(' + (rxToTxGapMs() / 1000) + 's)...')
 								: ('无应答,重发第' + (attempt - 1) + '次...')
 							await waitIrReady()
 						}
