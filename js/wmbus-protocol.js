@@ -956,13 +956,25 @@
 		// 实测(16:24 那次, 分包超时被调到100ms): 应答首字节后仅 213ms 就下发, 写命令被吞、设备无任何回应;
 		// 同一帧原样重发则正常应答 —— 帧本身没问题, 就是对端还没切回接收。
 		// 分包超时是用户可调的, 调小了这里的等待会跟着缩水, 所以静默窗口取 max(分包超时, 200ms) 兜底,
-		// 静默之后再留 300ms, 合计 ≥500ms 给红外收发切换。
-		const PROBE_TO_SEND_GAP_MS = 300
+		// 静默之后再留一段固定间隔。
+		// 实测(16:35 那次)间隔已到 513ms 仍被吞、设备毫无回应, 而 14s 后原样重发同一帧立刻正常应答 ——
+		// 说明单靠加长间隔猜不出对端到底要缓多久, 所以改成"发完等应答, 没等到就原样重发":
+		// 帧字节完全不变(MCNT 也不变), 设备既然没收到就不算重放, 重发合法; 万一是应答丢了而设备已执行,
+		// 重发会被判重放并回结果码2, 也只是告知用户, 不会重复执行写操作。
+		const PROBE_TO_SEND_GAP_MS = 500
 		const MIN_RX_IDLE_MS = 200
+		const WRITE_ACK_TIMEOUT_MS = 5000
+		const WRITE_MAX_ATTEMPTS = 3
 		function rxIdleMs() {
 			const el = document.getElementById('serial-timer-out')
 			const v = el ? parseInt(el.value, 10) : NaN
 			return Math.max(isNaN(v) || v < 0 ? 200 : v, MIN_RX_IDLE_MS)
+		}
+		const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+		// 等对端把上一包吐完并缓过收发切换, 再发下一帧
+		async function waitIrReady() {
+			await window.wmbusTx.waitIdle(rxIdleMs())
+			await sleep(PROBE_TO_SEND_GAP_MS)
 		}
 		sendBtn.addEventListener('click', async () => {
 			const cmd = parseInt(cmdSel.value, 16)
@@ -981,14 +993,35 @@
 			sendBtn.textContent = '探测计数器中...'
 			showErr('')
 			try {
-				const lastMc = await window.wmbusTx.probeCounter({ addr: addrHex, keyId: parseInt(keyIdSel.value, 10) })
-				mcntEl.value = String((lastMc + 1) >>> 0)
+				const keyId = parseInt(keyIdSel.value, 10)
+				const lastMc = await window.wmbusTx.probeCounter({ addr: addrHex, keyId: keyId })
+				const usedMcnt = (lastMc + 1) >>> 0
+				mcntEl.value = String(usedMcnt)
 				const frame = buildFrame()
 				if (!frame) return
-				sendBtn.textContent = '等待红外就绪...'
-				await window.wmbusTx.waitIdle(rxIdleMs())
-				await new Promise(r => setTimeout(r, PROBE_TO_SEND_GAP_MS))
-				sendFrame(frame)
+				// 应答匹配: 同地址同角色、MCNT 与本次下发的一致; db[0]=0x20 是周期上报帧, 不是本次要等的应答
+				const matchAck = function (f) {
+					const kid = f.fields && f.fields['密钥角色KeyID']
+					if ((f.fields && f.fields['设备地址ADDR']) !== addrHex) return false
+					if ((kid && typeof kid === 'object' ? kid.value : kid) !== keyId) return false
+					if ((f.fields && f.fields['消息计数器MCNT']) !== usedMcnt) return false
+					const db = f.dataBytes || []
+					return db.length > 0 && db[0] !== 0x20
+				}
+				let acked = false
+				for (let attempt = 1; attempt <= WRITE_MAX_ATTEMPTS && !acked; attempt++) {
+					sendBtn.textContent = attempt === 1 ? '等待红外就绪...' : ('无应答,重发第' + (attempt - 1) + '次...')
+					await waitIrReady()
+					// 先挂等待再发, 避免应答比 waitFor 注册更快到达
+					const ack = window.wmbusTx.waitFor(matchAck, WRITE_ACK_TIMEOUT_MS)
+					sendBtn.textContent = '已下发,等应答...'
+					sendFrame(frame)
+					try {
+						await ack
+						acked = true
+					} catch (e) { /* 超时: 红外端多半没收到, 原样重发 */ }
+				}
+				if (!acked) showErr('已下发' + WRITE_MAX_ATTEMPTS + '次仍无应答,请检查红外探头对位/设备是否在线')
 			} catch (e) {
 				showErr('自动探测计数器失败,已中止下发(未发送写命令): ' + e.message)
 			} finally {
