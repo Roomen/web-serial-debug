@@ -965,6 +965,7 @@
 		const MIN_RX_IDLE_MS = 200
 		const WRITE_ACK_TIMEOUT_MS = 5000
 		const WRITE_MAX_ATTEMPTS = 3
+		const PROBE_MAX_ATTEMPTS = 3
 		function rxIdleMs() {
 			const el = document.getElementById('serial-timer-out')
 			const v = el ? parseInt(el.value, 10) : NaN
@@ -975,6 +976,22 @@
 		async function waitIrReady() {
 			await window.wmbusTx.waitIdle(rxIdleMs())
 			await sleep(PROBE_TO_SEND_GAP_MS)
+		}
+
+		// 实测每次丢帧都发生在"设备刚回完一包, 紧接着又收一包"这个衔接处(0.2s/0.5s/0.7s 间隔都丢过,
+		// 同样 0.7s 也成功过 —— 不是某个固定时长不够, 是这个衔接本身就不稳)。
+		// 真正能减少丢帧的办法是让一次下发只用一个来回: 写命令成功后设备的 last_mc 就等于本次用的 MCNT,
+		// 记下来, 下次直接用 last_mc+1 构造, 免掉 0x12 探测那一个来回, 也就没有"应答后紧接着再发"的衔接了。
+		// 缓存按 ADDR 存(表号改了 ADDR 就变, 天然隔离); 一旦设备回结果码2(重放)说明缓存与设备不同步,
+		// 清掉缓存退回探测再重来一次。
+		const MC_CACHE_PREFIX = 'wmbusLastMc:'
+		function cachedLastMc(addrHex) {
+			const v = parseInt(localStorage.getItem(MC_CACHE_PREFIX + addrHex), 10)
+			return isNaN(v) || v < 0 ? null : v
+		}
+		function setCachedLastMc(addrHex, mc) {
+			if (mc == null) localStorage.removeItem(MC_CACHE_PREFIX + addrHex)
+			else localStorage.setItem(MC_CACHE_PREFIX + addrHex, String(mc >>> 0))
 		}
 		sendBtn.addEventListener('click', async () => {
 			const cmd = parseInt(cmdSel.value, 16)
@@ -994,34 +1011,77 @@
 			showErr('')
 			try {
 				const keyId = parseInt(keyIdSel.value, 10)
-				const lastMc = await window.wmbusTx.probeCounter({ addr: addrHex, keyId: keyId })
-				const usedMcnt = (lastMc + 1) >>> 0
-				mcntEl.value = String(usedMcnt)
-				const frame = buildFrame()
-				if (!frame) return
-				// 应答匹配: 同地址同角色、MCNT 与本次下发的一致; db[0]=0x20 是周期上报帧, 不是本次要等的应答
-				const matchAck = function (f) {
-					const kid = f.fields && f.fields['密钥角色KeyID']
-					if ((f.fields && f.fields['设备地址ADDR']) !== addrHex) return false
-					if ((kid && typeof kid === 'object' ? kid.value : kid) !== keyId) return false
-					if ((f.fields && f.fields['消息计数器MCNT']) !== usedMcnt) return false
-					const db = f.dataBytes || []
-					return db.length > 0 && db[0] !== 0x20
+				// 发一次写命令并等应答, 无应答就原样重发; 返回结果码, 全程无应答返回 null
+				async function sendWriteAndWaitAck(frame, usedMcnt, afterRx) {
+					// 应答匹配: 同地址同角色、MCNT 与本次下发的一致; db[0]=0x20 是周期上报帧, 不是本次要等的应答
+					const matchAck = function (f) {
+						const kid = f.fields && f.fields['密钥角色KeyID']
+						if ((f.fields && f.fields['设备地址ADDR']) !== addrHex) return false
+						if ((kid && typeof kid === 'object' ? kid.value : kid) !== keyId) return false
+						if ((f.fields && f.fields['消息计数器MCNT']) !== usedMcnt) return false
+						const db = f.dataBytes || []
+						return db.length > 0 && db[0] !== 0x20
+					}
+					for (let attempt = 1; attempt <= WRITE_MAX_ATTEMPTS; attempt++) {
+						// 紧跟在设备应答之后发才需要等衔接; 直接下发(免探测)时串口本来就是空闲的, 不用白等
+						if (attempt > 1 || afterRx) {
+							sendBtn.textContent = attempt === 1 ? '等待红外就绪...' : ('无应答,重发第' + (attempt - 1) + '次...')
+							await waitIrReady()
+						}
+						// 先挂等待再发, 避免应答比 waitFor 注册更快到达
+						const ack = window.wmbusTx.waitFor(matchAck, WRITE_ACK_TIMEOUT_MS)
+						sendBtn.textContent = '已下发,等应答...'
+						sendFrame(frame)
+						try {
+							const res = await ack
+							const db = (res.frame && res.frame.dataBytes) || []
+							return db.length ? db[0] : 0
+						} catch (e) { /* 超时: 红外端多半没收到, 原样重发 */ }
+					}
+					return null
 				}
-				let acked = false
-				for (let attempt = 1; attempt <= WRITE_MAX_ATTEMPTS && !acked; attempt++) {
-					sendBtn.textContent = attempt === 1 ? '等待红外就绪...' : ('无应答,重发第' + (attempt - 1) + '次...')
-					await waitIrReady()
-					// 先挂等待再发, 避免应答比 waitFor 注册更快到达
-					const ack = window.wmbusTx.waitFor(matchAck, WRITE_ACK_TIMEOUT_MS)
-					sendBtn.textContent = '已下发,等应答...'
-					sendFrame(frame)
-					try {
-						await ack
-						acked = true
-					} catch (e) { /* 超时: 红外端多半没收到, 原样重发 */ }
+				// 一次下发: 用给定的 last_mc 构造并发送; 返回 { rc, usedMcnt }
+				async function attemptWith(lastMc, afterRx) {
+					const usedMcnt = (lastMc + 1) >>> 0
+					mcntEl.value = String(usedMcnt)
+					const frame = buildFrame()
+					if (!frame) return null
+					const rc = await sendWriteAndWaitAck(frame, usedMcnt, afterRx)
+					return { rc: rc, usedMcnt: usedMcnt }
 				}
-				if (!acked) showErr('已下发' + WRITE_MAX_ATTEMPTS + '次仍无应答,请检查红外探头对位/设备是否在线')
+				// 探测帧本身也会被红外端吞掉(实测有一次 0x12 发出去毫无回应), 同样重发
+				async function probe() {
+					for (let attempt = 1; ; attempt++) {
+						sendBtn.textContent = attempt === 1 ? '探测计数器中...' : ('探测无应答,重试第' + (attempt - 1) + '次...')
+						try {
+							return await window.wmbusTx.probeCounter({ addr: addrHex, keyId: keyId })
+						} catch (e) {
+							if (attempt >= PROBE_MAX_ATTEMPTS) throw e
+							await waitIrReady()
+						}
+					}
+				}
+
+				let known = cachedLastMc(addrHex)
+				let r = known != null ? await attemptWith(known, false) : await attemptWith(await probe(), true)
+				if (!r) return
+				// 结果码2=重放: 缓存的 last_mc 落后于设备(别处下发过/缓存被改), 探测一次拿真值重来
+				if (r.rc === 2 && known != null) {
+					setCachedLastMc(addrHex, null)
+					r = await attemptWith(await probe(), true)
+					if (!r) return
+				}
+				if (r.rc == null) {
+					showErr('已下发' + WRITE_MAX_ATTEMPTS + '次仍无应答,请检查红外探头对位/设备是否在线')
+				} else if (r.rc === 0) {
+					// 设备已接受, 它的 last_mc 就是本次用的 MCNT: 记下来, 下次免探测直接 +1 下发
+					setCachedLastMc(addrHex, r.usedMcnt)
+				} else {
+					// 非重放的失败(鉴权失败/参数非法等)设备是否推进 last_mc 不确定, 清缓存下次老实探测
+					setCachedLastMc(addrHex, null)
+					const table = W.wmbusResultTable || {}
+					showErr('设备应答结果码=' + r.rc + (table[r.rc] ? '(' + table[r.rc] + ')' : ''))
+				}
 			} catch (e) {
 				showErr('自动探测计数器失败,已中止下发(未发送写命令): ' + e.message)
 			} finally {
