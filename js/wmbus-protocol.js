@@ -962,9 +962,9 @@
 		// 帧字节完全不变(MCNT 也不变), 设备既然没收到就不算重放, 重发合法; 万一是应答丢了而设备已执行,
 		// 重发会被判重放并回结果码2, 也只是告知用户, 不会重复执行写操作。
 		// 间隔取值依据(累计4次实测): 应答后 0.2s/0.5s/0.7s 发出的帧 4 次里只成功 1 次(那次也是 0.71s);
-		// 而超时后隔 ~5.5s 的重发 4 次全成 —— 衔接点附近就是不稳, 越远越稳。所以还得探测时把间隔拉到 2s,
-		// 反正有了 last_mc 缓存后大部分下发根本不用探测, 这 2s 只在首次/缓存失效时付出。
-		const PROBE_TO_SEND_GAP_MS = 2000
+		// 而超时后隔 ~5.5s 的重发 4 次全成 —— 衔接点附近就是不稳, 越远越稳。既然只有 ~5s 这一档是实测全成的,
+		// 就直接取 5s, 不再在中间猜。反正有了 last_mc 缓存后大部分下发根本不用探测, 这 5s 只在首次/缓存失效时付出。
+		const PROBE_TO_SEND_GAP_MS = 5000
 		const MIN_RX_IDLE_MS = 200
 		const WRITE_ACK_TIMEOUT_MS = 5000
 		const WRITE_MAX_ATTEMPTS = 3
@@ -1028,7 +1028,10 @@
 					for (let attempt = 1; attempt <= WRITE_MAX_ATTEMPTS; attempt++) {
 						// 紧跟在设备应答之后发才需要等衔接; 直接下发(免探测)时串口本来就是空闲的, 不用白等
 						if (attempt > 1 || afterRx) {
-							sendBtn.textContent = attempt === 1 ? '等待红外就绪...' : ('无应答,重发第' + (attempt - 1) + '次...')
+							// 间隔有5s之久, 按钮上带出秒数, 免得看着像卡死
+							sendBtn.textContent = attempt === 1
+								? ('等待红外就绪(' + Math.round(PROBE_TO_SEND_GAP_MS / 1000) + 's)...')
+								: ('无应答,重发第' + (attempt - 1) + '次...')
 							await waitIrReady()
 						}
 						// 先挂等待再发, 避免应答比 waitFor 注册更快到达
