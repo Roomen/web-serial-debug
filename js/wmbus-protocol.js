@@ -951,8 +951,14 @@
 		// 0x87(立即上报)不校验 MCNT 新鲜度(与纯读命令一样), 无需探测计数器, 可直接下发。
 		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1 }
 		// 收到探测应答后紧接着就发写命令, 红外接收端(半双工, 收发切换要时间)还没从"发完应答"切回接收,
-		// 写命令会被吞掉; 中间插 100ms 间隔让对端缓过来再发。
+		// 写命令会被吞掉。所以要先等这一包收完 —— 匹配到帧不等于对端发完了, 得等串口静默满「分包超时」
+		// (主界面那个设置, 默认200ms), 静默之后再额外留 100ms 才发。
 		const PROBE_TO_SEND_GAP_MS = 100
+		function packTimeoutMs() {
+			const el = document.getElementById('serial-timer-out')
+			const v = el ? parseInt(el.value, 10) : NaN
+			return isNaN(v) || v < 0 ? 200 : v
+		}
 		sendBtn.addEventListener('click', async () => {
 			const cmd = parseInt(cmdSel.value, 16)
 			if (!AUTO_PROBE_CMDS[cmd]) {
@@ -975,6 +981,7 @@
 				const frame = buildFrame()
 				if (!frame) return
 				sendBtn.textContent = '等待红外就绪...'
+				await window.wmbusTx.waitIdle(packTimeoutMs())
 				await new Promise(r => setTimeout(r, PROBE_TO_SEND_GAP_MS))
 				sendFrame(frame)
 			} catch (e) {

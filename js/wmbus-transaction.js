@@ -54,11 +54,29 @@
 		}
 	}
 
+	let lastRxAt = 0
 	serialApi.onReceive(function (data) {
 		if (!data || !data.length) return
+		lastRxAt = Date.now()
 		for (let i = 0; i < data.length; i++) recvBuf.push(data[i])
 		pump()
 	})
+
+	// 等串口彻底安静: 距最后一个字节到达超过 idleMs 才认为这一包收完(与主界面「分包超时」同义)。
+	// 匹配到的帧解析出来时设备可能还在往外吐后续字节, 谁要在收包后接着发下一条命令, 得先等这段静默。
+	// maxWaitMs 兜底, 防止对端一直有数据(周期上报/噪声)时无限等下去。
+	function waitIdle(idleMs, maxWaitMs) {
+		const idle = idleMs > 0 ? idleMs : 0
+		const deadline = Date.now() + (maxWaitMs > 0 ? maxWaitMs : 3000)
+		return new Promise(function (resolve) {
+			;(function check() {
+				const now = Date.now()
+				const rest = lastRxAt + idle - now
+				if (rest <= 0 || now >= deadline) { resolve(); return }
+				setTimeout(check, Math.min(rest, deadline - now))
+			})()
+		})
+	}
 
 	function waitFor(matchFn, timeoutMs) {
 		return new Promise(function (resolve, reject) {
@@ -146,6 +164,7 @@
 	window.wmbusTx = {
 		sendAndWait: sendAndWait,
 		waitFor: waitFor,
+		waitIdle: waitIdle,
 		probeCounter: probeCounter,
 		clearBuffer: clearBuffer,
 		cancelAll: cancelAll,
