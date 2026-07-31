@@ -953,13 +953,16 @@
 		// 收到探测应答后紧接着就发写命令, 红外接收端(半双工, 收发切换要时间)还没从"发完应答"切回接收,
 		// 写命令会被吞掉。所以要先等这一包收完 —— 匹配到帧不等于对端发完了, 得等串口静默满「分包超时」
 		// (主界面那个设置, 默认200ms), 静默之后再额外留一段间隔才发。
-		// 实测(16:24 那次): 应答收完后约 213ms 就下发, 写命令被吞、设备无任何回应; 同一帧原样重发则正常应答 ——
-		// 说明帧本身没问题, 就是对端还没切回接收。静默后再留 300ms(合计≈500ms)给红外收发切换。
+		// 实测(16:24 那次, 分包超时被调到100ms): 应答首字节后仅 213ms 就下发, 写命令被吞、设备无任何回应;
+		// 同一帧原样重发则正常应答 —— 帧本身没问题, 就是对端还没切回接收。
+		// 分包超时是用户可调的, 调小了这里的等待会跟着缩水, 所以静默窗口取 max(分包超时, 200ms) 兜底,
+		// 静默之后再留 300ms, 合计 ≥500ms 给红外收发切换。
 		const PROBE_TO_SEND_GAP_MS = 300
-		function packTimeoutMs() {
+		const MIN_RX_IDLE_MS = 200
+		function rxIdleMs() {
 			const el = document.getElementById('serial-timer-out')
 			const v = el ? parseInt(el.value, 10) : NaN
-			return isNaN(v) || v < 0 ? 200 : v
+			return Math.max(isNaN(v) || v < 0 ? 200 : v, MIN_RX_IDLE_MS)
 		}
 		sendBtn.addEventListener('click', async () => {
 			const cmd = parseInt(cmdSel.value, 16)
@@ -983,7 +986,7 @@
 				const frame = buildFrame()
 				if (!frame) return
 				sendBtn.textContent = '等待红外就绪...'
-				await window.wmbusTx.waitIdle(packTimeoutMs())
+				await window.wmbusTx.waitIdle(rxIdleMs())
 				await new Promise(r => setTimeout(r, PROBE_TO_SEND_GAP_MS))
 				sendFrame(frame)
 			} catch (e) {
