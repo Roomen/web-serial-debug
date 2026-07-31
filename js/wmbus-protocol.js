@@ -952,8 +952,10 @@
 		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1 }
 		// 收到探测应答后紧接着就发写命令, 红外接收端(半双工, 收发切换要时间)还没从"发完应答"切回接收,
 		// 写命令会被吞掉。所以要先等这一包收完 —— 匹配到帧不等于对端发完了, 得等串口静默满「分包超时」
-		// (主界面那个设置, 默认200ms), 静默之后再额外留 100ms 才发。
-		const PROBE_TO_SEND_GAP_MS = 100
+		// (主界面那个设置, 默认200ms), 静默之后再额外留一段间隔才发。
+		// 实测(16:24 那次): 应答收完后约 213ms 就下发, 写命令被吞、设备无任何回应; 同一帧原样重发则正常应答 ——
+		// 说明帧本身没问题, 就是对端还没切回接收。静默后再留 300ms(合计≈500ms)给红外收发切换。
+		const PROBE_TO_SEND_GAP_MS = 300
 		function packTimeoutMs() {
 			const el = document.getElementById('serial-timer-out')
 			const v = el ? parseInt(el.value, 10) : NaN
