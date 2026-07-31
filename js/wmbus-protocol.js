@@ -960,13 +960,55 @@
 		const WRITE_ACK_TIMEOUT_MS = 5000
 		const WRITE_MAX_ATTEMPTS = 3
 		const PROBE_MAX_ATTEMPTS = 3
-		const sleep = (ms) => new Promise(r => setTimeout(r, ms))
-		const waitRxToTxGap = () => sleep(RX_TO_TX_GAP_MS)
+		const SEND_IDLE_LABEL = '立即下发'
+		const CANCEL_MSG = '用户取消'
+
+		// 写命令探测/重试进行中: 再次点击「立即下发」即取消(不 disabled, 可点)
+		let sendBusy = false
+		let sendJob = null
+		function makeSendJob() {
+			const job = { cancelled: false, sleepTimer: null }
+			job.cancel = function () {
+				if (job.cancelled) return
+				job.cancelled = true
+				if (job.sleepTimer != null) {
+					clearTimeout(job.sleepTimer)
+					job.sleepTimer = null
+				}
+				if (window.wmbusTx) {
+					try { window.wmbusTx.cancelAll(CANCEL_MSG) } catch (e) { /* */ }
+				}
+			}
+			job.throwIfCancelled = function () {
+				if (job.cancelled) throw new Error(CANCEL_MSG)
+			}
+			job.isCancelErr = function (e) {
+				return job.cancelled || (e && String(e.message || e) === CANCEL_MSG)
+			}
+			// 可被 cancel 打断的 sleep(收→发间隔)
+			job.sleep = function (ms) {
+				return new Promise(function (resolve, reject) {
+					if (job.cancelled) { reject(new Error(CANCEL_MSG)); return }
+					job.sleepTimer = setTimeout(function () {
+						job.sleepTimer = null
+						if (job.cancelled) reject(new Error(CANCEL_MSG))
+						else resolve()
+					}, ms)
+				})
+			}
+			job.waitRxToTxGap = function () { return job.sleep(RX_TO_TX_GAP_MS) }
+			return job
+		}
 
 		// 写命令每次都先 0x12 探测 last_mc, 再用 last_mc+1 构造下发。
 		// 不缓存免探测: 分支目标是修「探测后立刻写被吞」, 不是取消查询序列; 探测帧本身也是联调可见的下行。
 		// 红外半双工衔接不稳时, 靠「固定收→发间隔 + 无应答原样重发」兜底, 不靠跳过探测绕开。
 		sendBtn.addEventListener('click', async () => {
+			// 进行中再次点击 = 取消当前探测/等待/重试
+			if (sendBusy) {
+				if (sendJob) sendJob.cancel()
+				return
+			}
 			const cmd = parseInt(cmdSel.value, 16)
 			if (!AUTO_PROBE_CMDS[cmd]) {
 				const frame = buildFrame()
@@ -978,9 +1020,11 @@
 			if (!window.serialApi || !window.serialApi.isOpen()) { showErr('请先打开串口'); return }
 			let addrHex
 			try { addrHex = computeAddrHex() } catch (e) { showErr(e.message); return }
-			sendBtn.disabled = true
-			const oldLabel = sendBtn.textContent
-			sendBtn.textContent = '探测计数器中...'
+
+			const job = makeSendJob()
+			sendJob = job
+			sendBusy = true
+			sendBtn.textContent = '探测计数器中...(点此取消)'
 			showErr('')
 			try {
 				const keyId = parseInt(keyIdSel.value, 10)
@@ -998,42 +1042,52 @@
 						return db.length > 0 && db[0] !== 0x20
 					}
 					for (let attempt = 1; attempt <= WRITE_MAX_ATTEMPTS; attempt++) {
-						sendBtn.textContent = attempt === 1
-							? ('等待红外就绪(' + RX_TO_TX_GAP_MS + 'ms)...')
-							: ('无应答,重发第' + (attempt - 1) + '次...')
-						await waitRxToTxGap()
+						job.throwIfCancelled()
+						sendBtn.textContent = (attempt === 1
+							? ('等待红外就绪(' + RX_TO_TX_GAP_MS + 'ms)')
+							: ('无应答,重发第' + (attempt - 1) + '次')) + '...(点此取消)'
+						await job.waitRxToTxGap()
+						job.throwIfCancelled()
 						// 先挂等待再发, 避免应答比 waitFor 注册更快到达
 						const ack = window.wmbusTx.waitFor(matchAck, WRITE_ACK_TIMEOUT_MS)
-						sendBtn.textContent = '已下发,等应答...'
+						sendBtn.textContent = '已下发,等应答...(点此取消)'
 						sendFrame(frame)
 						try {
 							const res = await ack
+							job.throwIfCancelled()
 							const db = (res.frame && res.frame.dataBytes) || []
 							return db.length ? db[0] : 0
-						} catch (e) { /* 超时: 红外端多半没收到, 原样重发 */ }
+						} catch (e) {
+							if (job.isCancelErr(e)) throw e
+							// 超时: 红外端多半没收到, 原样重发
+						}
 					}
 					return null
 				}
 				// 探测帧本身也会被红外端吞掉(实测有一次 0x12 发出去毫无回应), 同样重发
 				async function probe() {
 					for (let attempt = 1; ; attempt++) {
-						sendBtn.textContent = attempt === 1 ? '探测计数器中...' : ('探测无应答,重试第' + (attempt - 1) + '次...')
+						job.throwIfCancelled()
+						sendBtn.textContent = (attempt === 1 ? '探测计数器中' : ('探测无应答,重试第' + (attempt - 1) + '次')) + '...(点此取消)'
 						try {
 							return await window.wmbusTx.probeCounter({ addr: addrHex, keyId: keyId })
 						} catch (e) {
+							if (job.isCancelErr(e)) throw e
 							if (attempt >= PROBE_MAX_ATTEMPTS) throw e
 							// 无应答重探: 同样只卡在「下一发」前, 不拖 发→等收
-							await waitRxToTxGap()
+							await job.waitRxToTxGap()
 						}
 					}
 				}
 
 				const lastMc = await probe()
+				job.throwIfCancelled()
 				const usedMcnt = (lastMc + 1) >>> 0
 				mcntEl.value = String(usedMcnt)
 				const frame = buildFrame()
 				if (!frame) return
 				const rc = await sendWriteAndWaitAck(frame, usedMcnt)
+				job.throwIfCancelled()
 				if (rc == null) {
 					showErr('已下发' + WRITE_MAX_ATTEMPTS + '次仍无应答,请检查红外探头对位/设备是否在线')
 				} else if (rc !== 0) {
@@ -1041,10 +1095,17 @@
 					showErr('设备应答结果码=' + rc + (table[rc] ? '(' + table[rc] + ')' : ''))
 				}
 			} catch (e) {
-				showErr('自动探测计数器失败,已中止下发(未发送写命令): ' + e.message)
+				if (job.isCancelErr(e)) {
+					showErr('已取消发送')
+				} else {
+					showErr('自动探测计数器失败,已中止下发(未发送写命令): ' + e.message)
+				}
 			} finally {
-				sendBtn.disabled = false
-				sendBtn.textContent = oldLabel
+				if (sendJob === job) {
+					sendJob = null
+					sendBusy = false
+					sendBtn.textContent = SEND_IDLE_LABEL
+				}
 			}
 		})
 
