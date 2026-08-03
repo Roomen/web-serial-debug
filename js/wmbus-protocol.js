@@ -232,6 +232,9 @@
 	}
 	W.wmbusResultTable = RESULT_TABLE // 供 wmbus-transaction.js 探测计数器时给失败结果码配文案
 	const ROLE_NAMES = { 0: '公开读(PUBLIC)', 1: '操作员(OPERATOR)', 2: '管理员(ADMIN)' }
+	// 写底度(0x81)的约定上限: 10 个 9。协议字段本身是 uint64, 但表位数放不下更大的值,
+	// 下发面板按此校验, 解析侧对超限值只做提示(可能来自别的上位机)。
+	const DEGREE_MAX = 9999999999n
 	const VALVE_CMD_NAMES = { 0: '关阀(CLOSE)', 1: '开阀(OPEN)', 3: '除锈(RUST)' }
 	// 二级地址固定段, 与固件 Protocol/wmbus/wmbus_ids.h 一致(WMBUS_MANUFACTURER_ID/WMBUS_ID_VERSION/WMBUS_DEVICE_TYPE):
 	// 厂商码临时用"SEK"(SECK 未注册,量产前需向 FLAG 核定 3 字母码后替换), 设备类型 0x07=水表。
@@ -328,6 +331,7 @@
 				// 而 0x10 抄表的 VIF 0x13 只有4字节 —— 刚写完立刻抄表就会看到低32位截断值。
 				return '底度 = ' + v.toString() + ' (设备原始单位, 详见 samplingDegreeSet 语义)'
 					+ (v > 0xFFFFFFFFn ? ' ⚠ 超过4字节上限4294967295, 刚写完抄表(VIF 0x13)会显示为 ' + (v & 0xFFFFFFFFn).toString() + ' L; 可用0x15核对写入是否成功' : '')
+					+ (v > DEGREE_MAX ? ' ⚠ 超过约定上限 ' + DEGREE_MAX.toString() + '(本工具不允许下发这么大的底度)' : '')
 			}
 			case 0x82:
 				return '基表号(BCD) = ' + bcdDecodeLE(payload.subarray(0, Math.min(10, payload.length)))
@@ -792,9 +796,9 @@
 					paramVal.value = ''
 					break
 				case 0x81:
-					paramLabel.textContent = '底度(非负整数)'
+					paramLabel.textContent = '底度(0~' + DEGREE_MAX.toString() + ')'
 					paramVal.style.display = ''
-					paramVal.placeholder = '0 ~ 18446744073709551615'
+					paramVal.placeholder = '0 ~ ' + DEGREE_MAX.toString()
 					paramVal.value = '0'
 					break
 				case 0x82:
@@ -903,7 +907,9 @@
 						const raw = String(paramVal.value == null ? '' : paramVal.value).trim()
 						if (!/^\d+$/.test(raw)) throw new Error('底度需为非负整数(不接受负数/小数/空值)')
 						const deg = BigInt(raw)
-						if (deg > 0xFFFFFFFFFFFFFFFFn) throw new Error('底度超出64位上限 18446744073709551615')
+						// 上限取 10 个 9(约定值, 比 uint64 与 LCD 8位整数位都严): 表位数放不下更大的数,
+						// 且 0x10 抄表的 VIF 0x13 只有 4 字节, 越界值回读时看不出来
+						if (deg > DEGREE_MAX) throw new Error('底度最大 ' + DEGREE_MAX.toString() + ',当前 ' + raw)
 						bytes = u64leBytes(deg)
 						break
 					}
