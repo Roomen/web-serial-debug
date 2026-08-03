@@ -250,7 +250,7 @@
 		// EN13757-3 里 VIF 0x5A 标称 10⁻¹℃, 但本 profile 固件(wmbus.c 组 0x10 应答处)直接把整数℃
 		// 的 waterTempGet() 填进 0x5A, 没有乘 10 —— 固件已送检不再改, 这里按设备实际语义当整数℃解。
 		// 若后续固件改用 0x5B(标准 1℃) 上报, 下面 0x5B 一条同样能解出正确值。
-		0x5A: { name: '水温', dec: (b) => signed16(b, 0) + ' ℃ (设备按整数℃填入VIF0x5A,非标称10⁻¹℃)' },
+		0x5A: { name: '水温', dec: (b) => signed16(b, 0) + ' ℃' },
 		0x5B: { name: '水温', dec: (b) => signed16(b, 0) + ' ℃' },
 		0x6D: { name: '日期时间', dec: (b) => fmtDeviceTime4(b) },
 		0x71: { name: '平均时长(采样间隔)', dec: (b) => u16le(b, 0) + ' 分钟' },
