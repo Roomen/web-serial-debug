@@ -26,6 +26,7 @@
 		for (let i = 0; i < a.length; i++) a[i] = parseInt(str.substr(i * 2, 2), 16)
 		return a
 	}
+	function hexByte(b) { return '0x' + ((b & 0xff) < 16 ? '0' : '') + (b & 0xff).toString(16).toUpperCase() }
 	function hexbytes(b) {
 		let s = ''
 		for (let i = 0; i < b.length; i++) s += (b[i] < 16 ? '0' : '') + b[i].toString(16).toUpperCase()
@@ -51,6 +52,7 @@
 	}
 	function u32le(b, o) { o = o || 0; return ((b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0) }
 	function u16le(b, o) { o = o || 0; return (b[o] | (b[o + 1] << 8)) & 0xffff }
+	function u64le(b, o) { o = o || 0; let v = 0n; for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(b[o + i] || 0); return v }
 	function signed16(b, o) { o = o || 0; const v = u16le(b, o); return v > 0x7fff ? v - 0x10000 : v }
 	function signed32le(b, o) { o = o || 0; return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) }
 	function signed48le(b) {
@@ -85,12 +87,20 @@
 	// 仅用于 0x80/0x82 命令的 payload 编解码,不用于 ADDR(ADDR 按 wmbus_ids.h 固件约定,保持 bcdBytesBE 不反序)。
 	function bcdBytesLE(s, fillLen) { return bcdBytesBE(s, fillLen).reverse() }
 	function bcdDecodeLE(b) { return bcdDecodeBE(Array.from(b).reverse()) }
+	// 设备时间戳一律按 UTC 字段解读, 不套浏览器时区。
+	// 固件 bsp_common_func.c 用 mktime 把 RTC 的本地墙钟直接转 epoch、反向用 gmtime(嵌入式 newlib 无时区),
+	// 即这个 4 字节字段装的是「本地时间冒充 UTC」。按浏览器本地时区渲染会再叠加一次时区偏移
+	// (实测东八区显示比设备屏上快 8 小时), 用 UTC 渲染出来的才等于设备自己的钟。
 	function fmtUnix(ts) {
 		if (!ts) return '-----'
 		const d = new Date(ts * 1000)
 		if (isNaN(d.getTime())) return String(ts)
 		const p = (n) => String(n).padStart(2, '0')
-		return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds())
+		return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate()) + ' ' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds())
+	}
+	// 与设备口径一致的「当前时间」: 本地墙钟当作 UTC 取 epoch, 供下发时间戳类参数(如 0x16 dayTs)使用
+	function deviceEpochNow() {
+		return Math.floor((Date.now() - new Date().getTimezoneOffset() * 60000) / 1000)
 	}
 	function decodeTypeF(b) {
 		// EN13757-3 Type-F 日期时间(4字节)
@@ -103,6 +113,14 @@
 		const year = 2000 + ((yearHigh4 << 3) | yearLow3)
 		const p = (n) => String(n).padStart(2, '0')
 		return year + '-' + p(month) + '-' + p(day) + ' ' + p(hour) + ':' + p(minute)
+	}
+	// 本 profile 固件在 VIF 0x6D(4字节)里填的是 unix 秒, 不是 EN13757-3 标称的 Type-F 位域
+	// (实测同一台设备相隔 42 s 的两帧只差 42, 按 Type-F 解会得到 2051 年这类伪值)。
+	// 因此统一按 unix 秒显示, Type-F 结果仅作为备注保留, 方便对接标准表时人工比对。
+	function fmtDeviceTime4(b) {
+		if (!b || b.length < 4) return '(数据不足)'
+		const ts = u32le(b, 0)
+		return fmtUnix(ts) + ' (设备本地钟, unix秒=' + ts + ', 按标准TypeF解则为 ' + decodeTypeF(b) + ')'
 	}
 	function decodeDateTimeT(b) {
 		// 设备时间结构体: 8 x uint32 LE (year,month,day,hour,minute,second,weekday,zone)
@@ -226,14 +244,24 @@
 	const VIF_TABLE = {
 		0x11: { name: '净累计体积(10⁻⁵m³)', dec: (b) => (Number(signed48le(b)) * 1e-5).toFixed(5) + ' m³' },
 		// 只含正向累计, 不减反向; 表屏主界面显示的是示值(正-反), 有反向流量时会比这里小, 属正常
-		0x13: { name: '累计正向体积(10⁻³m³)', dec: (b) => (u32le(b, 0) * 1e-3).toFixed(3) + ' m³ (仅正向,屏显为正-反示值)' },
+		0x13: {
+			name: '累计正向体积(10⁻³m³)',
+			// 固件 wmbus.c 组 0x10 应答处把 uint64 的 f->forward 强转 uint32 填进这个4字节字段,
+			// 累计量超过 4294967.295 m³ 后高位直接丢失 —— 帧格式如此, 工具侧无解, 只能提示,
+			// 免得把截断值误判成解析错误(0x15 里的底度是另一个量, 救不了这里)。
+			dec: (b) => {
+				const raw = u32le(b, 0)
+				return (raw * 1e-3).toFixed(3) + ' m³ (= ' + raw + ' L, 仅正向,屏显为正-反示值)'
+					+ (raw > 4000000000 ? ' ⚠ 接近4字节满量程(4294967.295 m³), 超出部分固件已丢弃高位' : '')
+			},
+		},
 		0x3B: { name: '瞬时流量', dec: (b) => u32le(b, 0) + ' L/h' },
 		// EN13757-3 里 VIF 0x5A 标称 10⁻¹℃, 但本 profile 固件(wmbus.c 组 0x10 应答处)直接把整数℃
 		// 的 waterTempGet() 填进 0x5A, 没有乘 10 —— 固件已送检不再改, 这里按设备实际语义当整数℃解。
 		// 若后续固件改用 0x5B(标准 1℃) 上报, 下面 0x5B 一条同样能解出正确值。
 		0x5A: { name: '水温', dec: (b) => signed16(b, 0) + ' ℃ (设备按整数℃填入VIF0x5A,非标称10⁻¹℃)' },
 		0x5B: { name: '水温', dec: (b) => signed16(b, 0) + ' ℃' },
-		0x6D: { name: '日期时间', dec: (b) => 'TypeF=' + decodeTypeF(b) + ' / 若为unix秒=' + fmtUnix(u32le(b, 0)) },
+		0x6D: { name: '日期时间', dec: (b) => fmtDeviceTime4(b) },
 		0x71: { name: '平均时长(采样间隔)', dec: (b) => u16le(b, 0) + ' 分钟' },
 	}
 
@@ -257,7 +285,7 @@
 		let o = 0
 		if (plain[o] !== 0x04 || plain[o + 1] !== 0x6D) return { ok: false, lines: ['基准时间 DIF/VIF 不匹配,原始=' + hexbytes(plain)] }
 		o += 2
-		const baseTime = decodeTypeF(plain.subarray(o, o + 4)); o += 4
+		const baseTime = fmtDeviceTime4(plain.subarray(o, o + 4)); o += 4
 		if (plain[o] !== 0x02 || plain[o + 1] !== 0x71) return { ok: false, lines: ['采样间隔 DIF/VIF 不匹配'] }
 		o += 2
 		const interval = u16le(plain, o); o += 2
@@ -296,7 +324,10 @@
 				let v = 0n
 				const n = Math.min(payload.length, 8)
 				for (let i = n - 1; i >= 0; i--) v = (v << 8n) | BigInt(payload[i])
+				// 固件写底度时把当前计量值一并置为该值(wmbus.c s_degreeFlow.forward = degree),
+				// 而 0x10 抄表的 VIF 0x13 只有4字节 —— 刚写完立刻抄表就会看到低32位截断值。
 				return '底度 = ' + v.toString() + ' (设备原始单位, 详见 samplingDegreeSet 语义)'
+					+ (v > 0xFFFFFFFFn ? ' ⚠ 超过4字节上限4294967295, 刚写完抄表(VIF 0x13)会显示为 ' + (v & 0xFFFFFFFFn).toString() + ' L; 可用0x15核对写入是否成功' : '')
 			}
 			case 0x82:
 				return '基表号(BCD) = ' + bcdDecodeLE(payload.subarray(0, Math.min(10, payload.length)))
@@ -357,7 +388,14 @@
 			guesses.push('若为「读存储状态」应答: 已满 = ' + payload[0] + '  时间 = ' + decodeDateTimeT(payload.subarray(1, 33)) + '  保留天数 = ' + u16le(payload, 33))
 		}
 		if (len === 32 && !generic.ok) {
-			guesses.push('若为「读设备参数全集」应答: 表号(BCD) = ' + bcdDecodeLE(payload.subarray(0, 10)) + '  基表号(BCD) = ' + bcdDecodeLE(payload.subarray(10, 20)) + '  (底度8B+采样频率4B见原始HEX)')
+			// 固件 wmbus.c WMBUS_CMD_READ_PARAMS: meterId(10) || baseMeterId(10) || samplingDegree(8 LE) || samplingMeterFreq(4 LE)
+			// 这里的底度是完整 64 位, 与 0x10 抄表里被 DIF04 截成低32位的累计正向体积不同, 写大底度后要用本命令核对。
+			const degree = u64le(payload, 20)
+			guesses.push('若为「读设备参数全集」应答: 表号(BCD) = ' + bcdDecodeLE(payload.subarray(0, 10))
+				+ '  基表号(BCD) = ' + bcdDecodeLE(payload.subarray(10, 20))
+				+ '\n  底度 = ' + degree.toString() + ' L (' + (Number(degree) * 1e-3).toFixed(3) + ' m³, 安装时写入的起始值, 完整64位)'
+				+ '\n  (底度≠抄表值: 写底度时当前计量值被置为该值, 之后随水流累加; 0x10 抄的是累加后的当前值)'
+				+ '\n  采样频率 = ' + u32le(payload, 28))
 		}
 		if (!guesses.length) guesses.push('未识别出已知结构,原始载荷 = ' + hexbytes(payload))
 		return guesses
@@ -477,11 +515,12 @@
 				const cmd = plain[0]
 				const payload = plain.subarray(1)
 				const cmdDef = CMD_TABLE[cmd]
-				result.fields['命令CMD'] = { value: cmd, name: cmdDef ? cmdDef.name : '未知命令' }
+				// 命令码按十六进制展示: 十进制的 16 与协议里真实存在的 0x16(平台确认周期上报)撞脸, 看日志极易误读
+				result.fields['命令CMD'] = { value: hexByte(cmd), name: cmdDef ? cmdDef.name : '未知命令' }
 				result.decoded = decodeDownPayload(cmd, payload)
 			} else if (plain[0] === 0x20) {
 				const rm = decodeReportMeter(plain.subarray(1))
-				result.fields['命令CMD'] = { value: 0x20, name: '周期数据主动上报' }
+				result.fields['命令CMD'] = { value: hexByte(0x20), name: '周期数据主动上报' }
 				result.decoded = rm.ok
 					? ('基准时间=' + rm.baseTime + '  采样间隔=' + rm.interval + '分钟  条数(声明)=' + rm.num + '  more=' + rm.more + '\n' + rm.records.join('\n')
 						+ (rm.flowRate != null ? ('\n瞬时流量 = ' + rm.flowRate + ' L/h  采样时间 = ' + fmtUnix(rm.sampleTs)) : '')
@@ -739,11 +778,13 @@
 			paramSel.style.display = 'none'
 			paramGroup.style.display = ''
 			ipGroup.style.display = 'none'
+			paramVal.placeholder = '值' // 各分支按需覆盖, 切换命令时先还原成通用占位符
 			switch (cmd) {
 				case 0x16:
 					paramLabel.textContent = 'dayTs(unix秒)'
 					paramVal.style.display = ''
-					paramVal.value = String(Math.floor(Date.now() / 1000))
+					// 设备的时间戳是「本地墙钟当 UTC」, 下发 dayTs 要用同一口径, 否则与设备自己的钟差一个时区
+					paramVal.value = String(deviceEpochNow())
 					break
 				case 0x80:
 					paramLabel.textContent = '表号(纯数字BCD,10B)'
@@ -751,8 +792,9 @@
 					paramVal.value = ''
 					break
 				case 0x81:
-					paramLabel.textContent = '底度(整数)'
+					paramLabel.textContent = '底度(非负整数)'
 					paramVal.style.display = ''
+					paramVal.placeholder = '0 ~ 18446744073709551615'
 					paramVal.value = '0'
 					break
 				case 0x82:
@@ -841,6 +883,8 @@
 			computePayload()
 		}
 
+		// 最近一次参数编码是否失败(null=正常), 供 buildFrame 拦截非法参数的下发
+		let payloadErr = null
 		function computePayload() {
 			const cmd = parseInt(cmdSel.value, 16)
 			let bytes = []
@@ -853,9 +897,16 @@
 					case 0x82:
 						bytes = bcdBytesLE(paramVal.value || '', 10)
 						break
-					case 0x81:
-						bytes = u64leBytes(BigInt(String(paramVal.value || '0').trim() || '0'))
+					case 0x81: {
+						// 底度是无符号 64 位(固件 samplingDegreeSet(uint64_t)), 负数/小数/空值一律拒绝 ——
+						// 之前负数会被 u64leBytes 静默钳成 0, 等于把底度清零, 属于危险的静默行为
+						const raw = String(paramVal.value == null ? '' : paramVal.value).trim()
+						if (!/^\d+$/.test(raw)) throw new Error('底度需为非负整数(不接受负数/小数/空值)')
+						const deg = BigInt(raw)
+						if (deg > 0xFFFFFFFFFFFFFFFFn) throw new Error('底度超出64位上限 18446744073709551615')
+						bytes = u64leBytes(deg)
 						break
+					}
 					case 0x83: {
 						const role = parseInt(paramSel.value || '0', 10)
 						const keyBytes = toBytesHex((paramVal.value || '').padEnd(32, '0').slice(0, 32))
@@ -879,9 +930,13 @@
 					default:
 						bytes = []
 				}
+				payloadErr = null
 				showErr('')
 			} catch (e) {
 				bytes = []
+				// 记下参数错误, 由 buildFrame 拦住下发: 否则载荷被清空后照样能发出去 ——
+				// 例如写底度(0x81)的空载荷会让固件按 valLen=0 解出 degree=0, 等于静默把底度清零
+				payloadErr = e.message
 				showErr(e.message)
 			}
 			payloadEl.value = bytes.map((b) => ((b & 0xff) < 16 ? '0' : '') + (b & 0xff).toString(16).toUpperCase()).join(' ')
@@ -909,6 +964,7 @@
 
 		function buildFrame() {
 			showErr('')
+			if (payloadErr) { showErr(payloadErr); return null }
 			let addr
 			try { addr = computeAddrHex() } catch (e) { showErr(e.message); return null }
 			const mcnt = parseInt(mcntEl.value, 10)
