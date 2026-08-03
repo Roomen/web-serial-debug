@@ -932,7 +932,8 @@
 			return hexbytes(addrBytes)
 		}
 
-		function buildFrame() {
+		// cmdHex/payloadHex 不传则取下拉框与载荷框的当前值(普通下发); 传了则用于自动补发的附加命令(如 0x10 之后的 0x15)
+		function buildFrame(cmdHex, payloadHex) {
 			showErr('')
 			let addr
 			try { addr = computeAddrHex() } catch (e) { showErr(e.message); return null }
@@ -944,8 +945,8 @@
 					addr,
 					keyId: parseInt(keyIdSel.value, 10),
 					mcnt,
-					cmd: cmdSel.value,
-					payloadHex: payloadEl.value,
+					cmd: cmdHex != null ? cmdHex : cmdSel.value,
+					payloadHex: payloadHex != null ? payloadHex : payloadEl.value,
 				})
 				localStorage.setItem('wmbusDownMeterId', (meterIdEl.value || '').trim())
 				mcntEl.value = String(mcnt + 1)
@@ -979,6 +980,12 @@
 		// 固定大值可保证任何情况下都能探测成功。
 		// 0x87(立即上报)不校验 MCNT 新鲜度(与纯读命令一样), 无需探测计数器, 可直接下发。
 		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1 }
+		// 读计量数据(0x10)之后自动补一条读设备参数全集(0x15):
+		// 固件 wmbus.c 里 0x10 的累计正向体积走 DIF04(4字节), 写的是 (uint32_t)f->forward —— 底度超过
+		// 4294967295 L(4294967.295 m³)时回读值是低32位截断值; 而 0x15 的 samplingDegree 是完整 8 字节 LE。
+		// 两条都是纯读(role 0 即可, 不校验 MCNT 新鲜度), 所以抄表时顺手补一条, 拿到未截断的底度对照。
+		const AUTO_FOLLOW_CMDS = { 0x10: '0x15' }
+		const READ_ACK_TIMEOUT_MS = 5000
 		// 收到探测应答后紧接着就发写命令, 红外半双工还没切回接收, 写命令会被吞。
 		// 收→发间隔只卡在 收→发 之间(整帧已由 findFrame 收齐后再计时), 不插在 发→等应答 路上。
 		// 无应答则原样重发(MCNT 不变; 设备没收到不算重放, 已执行会回结果码2, 不重复写)。
@@ -1025,6 +1032,98 @@
 			return job
 		}
 
+		// 发一帧并等应答, 无应答就原样重发(设备没收到不算重放; 已执行的写会回结果码2, 不会重复写)。
+		// 每次发之前都先隔 RX→TX 间隔(红外半双工要时间切回发送), 发出后立刻 waitFor, 不在 发→等收 路上再 sleep。
+		// 返回结果码; 用尽重试仍无应答返回 null。写命令与读命令(0x10/0x15 自动补读)共用。
+		async function sendAndWaitAck(job, addrHex, keyId, frame, usedMcnt, opts) {
+			opts = opts || {}
+			const maxAttempts = opts.maxAttempts || WRITE_MAX_ATTEMPTS
+			const label = opts.label || ''
+			// 应答匹配: 同地址同角色、MCNT 与本次下发的一致; db[0]=0x20 是周期上报帧, 不是本次要等的应答
+			const matchAck = function (f) {
+				const kid = f.fields && f.fields['密钥角色KeyID']
+				if ((f.fields && f.fields['设备地址ADDR']) !== addrHex) return false
+				if ((kid && typeof kid === 'object' ? kid.value : kid) !== keyId) return false
+				if ((f.fields && f.fields['消息计数器MCNT']) !== usedMcnt) return false
+				const db = f.dataBytes || []
+				return db.length > 0 && db[0] !== 0x20
+			}
+			for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+				job.throwIfCancelled()
+				// skipFirstGap: 序列里第一条命令由用户点击触发, 前面没有收包, 不必等红外切回发送
+				const noGap = attempt === 1 && opts.skipFirstGap
+				sendBtn.textContent = label + (attempt === 1
+					? (noGap ? '下发中' : ('等待红外就绪(' + RX_TO_TX_GAP_MS + 'ms)'))
+					: ('无应答,重发第' + (attempt - 1) + '次')) + '...(点此取消)'
+				if (!noGap) await job.waitRxToTxGap()
+				job.throwIfCancelled()
+				// 先挂等待再发, 避免应答比 waitFor 注册更快到达
+				const ack = window.wmbusTx.waitFor(matchAck, opts.timeoutMs || WRITE_ACK_TIMEOUT_MS)
+				sendBtn.textContent = label + '已下发,等应答...(点此取消)'
+				sendFrame(frame)
+				try {
+					const res = await ack
+					job.throwIfCancelled()
+					const db = (res.frame && res.frame.dataBytes) || []
+					return db.length ? db[0] : 0
+				} catch (e) {
+					if (job.isCancelErr(e)) throw e
+					// 超时: 红外端多半没收到, 原样重发
+				}
+			}
+			return null
+		}
+
+		// 纯读命令的「主命令 + 自动补读」序列(目前只有 0x10 → 0x15)。
+		// 两条都不校验 MCNT 新鲜度, 本地计数器随便递增即可; 补读必须等主命令应答收完再发, 否则红外半双工会吞掉。
+		async function runReadWithFollow(cmd, followCmdHex) {
+			let addrHex
+			try { addrHex = computeAddrHex() } catch (e) { showErr(e.message); return }
+			const keyId = parseInt(keyIdSel.value, 10)
+			const followName = (CMD_TABLE[parseInt(followCmdHex, 16)] || {}).name || followCmdHex
+			const job = makeSendJob()
+			sendJob = job
+			sendBusy = true
+			showErr('')
+			try {
+				const mcnt1 = parseInt(mcntEl.value, 10)
+				const frame1 = buildFrame()
+				if (!frame1) return
+				const rc1 = await sendAndWaitAck(job, addrHex, keyId, frame1, mcnt1,
+					{ label: (CMD_TABLE[cmd] || {}).name + '·', timeoutMs: READ_ACK_TIMEOUT_MS, skipFirstGap: true })
+				job.throwIfCancelled()
+				if (rc1 == null) {
+					showErr('已下发' + WRITE_MAX_ATTEMPTS + '次仍无应答,已跳过' + followCmdHex + '补读,请检查红外探头对位/设备是否在线')
+					return
+				}
+				if (rc1 !== 0) {
+					const table = W.wmbusResultTable || {}
+					showErr('设备应答结果码=' + rc1 + (table[rc1] ? '(' + table[rc1] + ')' : '') + ',已跳过' + followCmdHex + '补读')
+					return
+				}
+				const mcnt2 = parseInt(mcntEl.value, 10)
+				const frame2 = buildFrame(followCmdHex, '')
+				if (!frame2) return
+				const rc2 = await sendAndWaitAck(job, addrHex, keyId, frame2, mcnt2,
+					{ label: followName + '·', timeoutMs: READ_ACK_TIMEOUT_MS })
+				job.throwIfCancelled()
+				if (rc2 == null) showErr(followCmdHex + '(' + followName + ')无应答,上一条抄表已成功;底度以本命令应答为准,可单独重发')
+				else if (rc2 !== 0) {
+					const table = W.wmbusResultTable || {}
+					showErr(followCmdHex + ' 应答结果码=' + rc2 + (table[rc2] ? '(' + table[rc2] + ')' : ''))
+				}
+			} catch (e) {
+				if (job.isCancelErr(e)) showErr('已取消发送')
+				else showErr('下发失败: ' + e.message)
+			} finally {
+				if (sendJob === job) {
+					sendJob = null
+					sendBusy = false
+					sendBtn.textContent = SEND_IDLE_LABEL
+				}
+			}
+		}
+
 		// 写命令每次都先 0x12 探测 last_mc, 再用 last_mc+1 构造下发。
 		// 不缓存免探测: 分支目标是修「探测后立刻写被吞」, 不是取消查询序列; 探测帧本身也是联调可见的下行。
 		// 红外半双工衔接不稳时, 靠「固定收→发间隔 + 无应答原样重发」兜底, 不靠跳过探测绕开。
@@ -1035,10 +1134,18 @@
 				return
 			}
 			const cmd = parseInt(cmdSel.value, 16)
+			const followCmd = AUTO_FOLLOW_CMDS[cmd]
 			if (!AUTO_PROBE_CMDS[cmd]) {
-				const frame = buildFrame()
-				if (!frame) return
-				sendFrame(frame)
+				// 纯读命令: 无需探测计数器, 直接发。0x10 额外自动补一条 0x15 拿完整底度(见 AUTO_FOLLOW_CMDS)
+				// —— 补读要等前一条应答收完再发, 因此需要事务层; 事务层/串口不可用时退化成单条下发。
+				const canFollow = followCmd && window.wmbusTx && window.serialApi && window.serialApi.isOpen()
+				if (!canFollow) {
+					const frame = buildFrame()
+					if (!frame) return
+					sendFrame(frame)
+					return
+				}
+				await runReadWithFollow(cmd, followCmd)
 				return
 			}
 			if (!window.wmbusTx) { showErr('wmbus-transaction 模块未加载,无法自动探测计数器'); return }
@@ -1053,42 +1160,6 @@
 			showErr('')
 			try {
 				const keyId = parseInt(keyIdSel.value, 10)
-				// 发一次写命令并等应答, 无应答就原样重发; 返回结果码, 全程无应答返回 null
-				// 首次: 探测应答后先 RX→TX 间隔再发; 重试: 超时后同样隔一段再发(给红外端恢复)
-				// 发出后立刻 waitFor, 不在 发→收 路径上额外 sleep
-				async function sendWriteAndWaitAck(frame, usedMcnt) {
-					// 应答匹配: 同地址同角色、MCNT 与本次下发的一致; db[0]=0x20 是周期上报帧, 不是本次要等的应答
-					const matchAck = function (f) {
-						const kid = f.fields && f.fields['密钥角色KeyID']
-						if ((f.fields && f.fields['设备地址ADDR']) !== addrHex) return false
-						if ((kid && typeof kid === 'object' ? kid.value : kid) !== keyId) return false
-						if ((f.fields && f.fields['消息计数器MCNT']) !== usedMcnt) return false
-						const db = f.dataBytes || []
-						return db.length > 0 && db[0] !== 0x20
-					}
-					for (let attempt = 1; attempt <= WRITE_MAX_ATTEMPTS; attempt++) {
-						job.throwIfCancelled()
-						sendBtn.textContent = (attempt === 1
-							? ('等待红外就绪(' + RX_TO_TX_GAP_MS + 'ms)')
-							: ('无应答,重发第' + (attempt - 1) + '次')) + '...(点此取消)'
-						await job.waitRxToTxGap()
-						job.throwIfCancelled()
-						// 先挂等待再发, 避免应答比 waitFor 注册更快到达
-						const ack = window.wmbusTx.waitFor(matchAck, WRITE_ACK_TIMEOUT_MS)
-						sendBtn.textContent = '已下发,等应答...(点此取消)'
-						sendFrame(frame)
-						try {
-							const res = await ack
-							job.throwIfCancelled()
-							const db = (res.frame && res.frame.dataBytes) || []
-							return db.length ? db[0] : 0
-						} catch (e) {
-							if (job.isCancelErr(e)) throw e
-							// 超时: 红外端多半没收到, 原样重发
-						}
-					}
-					return null
-				}
 				// 探测帧本身也会被红外端吞掉(实测有一次 0x12 发出去毫无回应), 同样重发
 				async function probe() {
 					for (let attempt = 1; ; attempt++) {
@@ -1111,7 +1182,7 @@
 				mcntEl.value = String(usedMcnt)
 				const frame = buildFrame()
 				if (!frame) return
-				const rc = await sendWriteAndWaitAck(frame, usedMcnt)
+				const rc = await sendAndWaitAck(job, addrHex, keyId, frame, usedMcnt)
 				job.throwIfCancelled()
 				if (rc == null) {
 					showErr('已下发' + WRITE_MAX_ATTEMPTS + '次仍无应答,请检查红外探头对位/设备是否在线')
