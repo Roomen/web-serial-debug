@@ -51,6 +51,7 @@
 	}
 	function u32le(b, o) { o = o || 0; return ((b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0) }
 	function u16le(b, o) { o = o || 0; return (b[o] | (b[o + 1] << 8)) & 0xffff }
+	function u64le(b, o) { o = o || 0; let v = 0n; for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(b[o + i] || 0); return v }
 	function signed16(b, o) { o = o || 0; const v = u16le(b, o); return v > 0x7fff ? v - 0x10000 : v }
 	function signed32le(b, o) { o = o || 0; return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) }
 	function signed48le(b) {
@@ -374,7 +375,14 @@
 			guesses.push('若为「读存储状态」应答: 已满 = ' + payload[0] + '  时间 = ' + decodeDateTimeT(payload.subarray(1, 33)) + '  保留天数 = ' + u16le(payload, 33))
 		}
 		if (len === 32 && !generic.ok) {
-			guesses.push('若为「读设备参数全集」应答: 表号(BCD) = ' + bcdDecodeLE(payload.subarray(0, 10)) + '  基表号(BCD) = ' + bcdDecodeLE(payload.subarray(10, 20)) + '  (底度8B+采样频率4B见原始HEX)')
+			// 固件 wmbus.c WMBUS_CMD_READ_PARAMS: meterId(10) || baseMeterId(10) || samplingDegree(8 LE) || samplingMeterFreq(4 LE)
+			// 这里的底度是完整 64 位, 与 0x10 抄表里被 DIF04 截成低32位的累计正向体积不同, 写大底度后要用本命令核对。
+			const degree = u64le(payload, 20)
+			guesses.push('若为「读设备参数全集」应答: 表号(BCD) = ' + bcdDecodeLE(payload.subarray(0, 10))
+				+ '  基表号(BCD) = ' + bcdDecodeLE(payload.subarray(10, 20))
+				+ '\n  底度 = ' + degree.toString() + ' L (完整64位, ' + (Number(degree) * 1e-3).toFixed(3) + ' m³)'
+				+ (degree > 0xFFFFFFFFn ? '  ⚠ 超过4字节, 0x10抄表回读会截断为 ' + (degree & 0xFFFFFFFFn).toString() + ' L' : '')
+				+ '\n  采样频率 = ' + u32le(payload, 28))
 		}
 		if (!guesses.length) guesses.push('未识别出已知结构,原始载荷 = ' + hexbytes(payload))
 		return guesses
