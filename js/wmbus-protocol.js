@@ -102,25 +102,12 @@
 	function deviceEpochNow() {
 		return Math.floor((Date.now() - new Date().getTimezoneOffset() * 60000) / 1000)
 	}
-	function decodeTypeF(b) {
-		// EN13757-3 Type-F 日期时间(4字节)
-		const minute = b[0] & 0x3f
-		const hour = b[1] & 0x1f
-		const day = b[2] & 0x1f
-		const yearLow3 = (b[2] >> 5) & 0x07
-		const month = b[3] & 0x0f
-		const yearHigh4 = (b[3] >> 4) & 0x0f
-		const year = 2000 + ((yearHigh4 << 3) | yearLow3)
-		const p = (n) => String(n).padStart(2, '0')
-		return year + '-' + p(month) + '-' + p(day) + ' ' + p(hour) + ':' + p(minute)
-	}
 	// 本 profile 固件在 VIF 0x6D(4字节)里填的是 unix 秒, 不是 EN13757-3 标称的 Type-F 位域
-	// (实测同一台设备相隔 42 s 的两帧只差 42, 按 Type-F 解会得到 2051 年这类伪值)。
-	// 因此统一按 unix 秒显示, Type-F 结果仅作为备注保留, 方便对接标准表时人工比对。
+	// (实测同一台设备相隔 42 s 的两帧只差 42, 按 Type-F 解会得到 2051 年这类伪值), 因此统一按 unix 秒显示。
 	function fmtDeviceTime4(b) {
 		if (!b || b.length < 4) return '(数据不足)'
 		const ts = u32le(b, 0)
-		return fmtUnix(ts) + ' (设备本地钟, unix秒=' + ts + ', 按标准TypeF解则为 ' + decodeTypeF(b) + ')'
+		return fmtUnix(ts) + ' (设备本地钟, unix秒=' + ts + ')'
 	}
 	function decodeDateTimeT(b) {
 		// 设备时间结构体: 8 x uint32 LE (year,month,day,hour,minute,second,weekday,zone)
