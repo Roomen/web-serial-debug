@@ -237,11 +237,13 @@
 		// 只含正向累计, 不减反向; 表屏主界面显示的是示值(正-反), 有反向流量时会比这里小, 属正常
 		0x13: {
 			name: '累计正向体积(10⁻³m³)',
-			// 4字节字段满量程 4294967.295 m³, 写底度超过 4294967295 L 时设备只回低32位, 这里提示一下避免误判成解析错误
+			// 固件 wmbus.c 组 0x10 应答处把 uint64 的 f->forward 强转 uint32 填进这个4字节字段,
+			// 累计量超过 4294967.295 m³ 后高位直接丢失(读设备参数全集 0x15 里的底度是另一个量, 救不了这里),
+			// 接近满量程时提示一下, 免得把截断值误判成解析错误。
 			dec: (b) => {
 				const raw = u32le(b, 0)
 				return (raw * 1e-3).toFixed(3) + ' m³ (= ' + raw + ' L, 仅正向,屏显为正-反示值)'
-					+ (raw > 4000000000 ? ' ⚠ 接近4字节满量程(4294967.295 m³), 若底度写入值更大则此处为低32位截断值' : '')
+					+ (raw > 4000000000 ? ' ⚠ 接近4字节满量程(4294967.295 m³), 超出部分固件已丢弃高位' : '')
 			},
 		},
 		0x3B: { name: '瞬时流量', dec: (b) => u32le(b, 0) + ' L/h' },
@@ -314,7 +316,9 @@
 				const n = Math.min(payload.length, 8)
 				for (let i = n - 1; i >= 0; i--) v = (v << 8n) | BigInt(payload[i])
 				return '底度 = ' + v.toString() + ' (设备原始单位, 详见 samplingDegreeSet 语义)'
-					+ (v > 0xFFFFFFFFn ? ' ⚠ 超过4字节上限4294967295, 读计量数据(VIF 0x13)只回低32位, 回读值会显示为 ' + (v & 0xFFFFFFFFn).toString() + ' L' : '')
+					// 固件写底度时把当前计量值一并置为该值(wmbus.c s_degreeFlow.forward = degree),
+				// 而 0x10 抄表的 VIF 0x13 只有4字节 —— 刚写完立刻抄表就会看到低32位截断值。
+				+ (v > 0xFFFFFFFFn ? ' ⚠ 超过4字节上限4294967295, 刚写完抄表(VIF 0x13)会显示为 ' + (v & 0xFFFFFFFFn).toString() + ' L; 用0x15核对写入是否成功' : '')
 			}
 			case 0x82:
 				return '基表号(BCD) = ' + bcdDecodeLE(payload.subarray(0, Math.min(10, payload.length)))
@@ -380,8 +384,8 @@
 			const degree = u64le(payload, 20)
 			guesses.push('若为「读设备参数全集」应答: 表号(BCD) = ' + bcdDecodeLE(payload.subarray(0, 10))
 				+ '  基表号(BCD) = ' + bcdDecodeLE(payload.subarray(10, 20))
-				+ '\n  底度 = ' + degree.toString() + ' L (完整64位, ' + (Number(degree) * 1e-3).toFixed(3) + ' m³)'
-				+ (degree > 0xFFFFFFFFn ? '  ⚠ 超过4字节, 0x10抄表回读会截断为 ' + (degree & 0xFFFFFFFFn).toString() + ' L' : '')
+				+ '\n  底度 = ' + degree.toString() + ' L (' + (Number(degree) * 1e-3).toFixed(3) + ' m³, 安装时写入的起始值, 完整64位)'
+				+ '\n  (底度≠抄表值: 写底度时当前计量值被置为该值, 之后随水流累加; 0x10 抄的是累加后的当前值)'
 				+ '\n  采样频率 = ' + u32le(payload, 28))
 		}
 		if (!guesses.length) guesses.push('未识别出已知结构,原始载荷 = ' + hexbytes(payload))
@@ -980,10 +984,10 @@
 		// 固定大值可保证任何情况下都能探测成功。
 		// 0x87(立即上报)不校验 MCNT 新鲜度(与纯读命令一样), 无需探测计数器, 可直接下发。
 		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1 }
-		// 读计量数据(0x10)之后自动补一条读设备参数全集(0x15):
-		// 固件 wmbus.c 里 0x10 的累计正向体积走 DIF04(4字节), 写的是 (uint32_t)f->forward —— 底度超过
-		// 4294967295 L(4294967.295 m³)时回读值是低32位截断值; 而 0x15 的 samplingDegree 是完整 8 字节 LE。
-		// 两条都是纯读(role 0 即可, 不校验 MCNT 新鲜度), 所以抄表时顺手补一条, 拿到未截断的底度对照。
+		// 读计量数据(0x10)之后自动补一条读设备参数全集(0x15): 两者是不同的量, 一次点击都拿到手方便对账 ——
+		// 0x10 的 VIF 0x13 是当前累计正向体积(随水流变化, 固件强转 uint32 填入, 超 4294967.295 m³ 丢高位),
+		// 0x15 的 samplingDegree 是安装时写入的起始底度(完整8字节, 只有再写一次才变)。
+		// 注意 0x15 救不了 0x10 的截断, 它不是同一个值。两条都是纯读(role 0, 不校验 MCNT 新鲜度)。
 		const AUTO_FOLLOW_CMDS = { 0x10: '0x15' }
 		const READ_ACK_TIMEOUT_MS = 5000
 		// 收到探测应答后紧接着就发写命令, 红外半双工还没切回接收, 写命令会被吞。
