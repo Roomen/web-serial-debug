@@ -232,7 +232,10 @@
 	// DIF 低4位 -> 数据长度(标准 M-Bus 表, 仅列出本协议用到及常见项)
 	const DIF_LEN = { 0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 4, 6: 6, 7: 8, 9: 1, 10: 2, 11: 3, 12: 4, 14: 6 }
 	const VIF_TABLE = {
-		0x11: { name: '净累计体积(10⁻⁵m³)', dec: (b) => (Number(signed48le(b)) * 1e-5).toFixed(5) + ' m³' },
+		// VIF 0x11 标称 10⁻⁵m³, 但固件填的是与 LCD/传感器同一分辨率的原始值(L = 10⁻³m³):
+		// app_monitor showValue(indication*10, point=4) → m³ = raw/1000, 0x10 抄表(VIF 0x13)亦同。
+		// 信设备实际分辨率, 不信 VIF 标称(与 wmbus-platform 平台侧口径一致)。
+		0x11: { name: '净累计体积(设备单位L)', dec: (b) => (Number(signed48le(b)) * 1e-3).toFixed(3) + ' m³ (= ' + signed48le(b).toString() + ' L)' },
 		// 只含正向累计, 不减反向; 表屏主界面显示的是示值(正-反), 有反向流量时会比这里小, 属正常
 		0x13: {
 			name: '累计正向体积(10⁻³m³)',
@@ -286,14 +289,23 @@
 		for (let i = 0; i < num; i++) {
 			if (o + 8 > plain.length) { records.push('(数据不足,缺第' + (i + 1) + '条起)'); break }
 			if (plain[o] !== 0x06 || plain[o + 1] !== 0x11) { records.push('#' + (i + 1) + ' DIF/VIF不匹配 raw=' + hexbytes(plain.subarray(o, o + 8))); o += 8; continue }
-			const m3 = Number(signed48le(plain.subarray(o + 2, o + 8))) * 1e-5
-			records.push('#' + (i + 1) + ' 净累计(正-反) = ' + m3.toFixed(5) + ' m³')
+			const liters = signed48le(plain.subarray(o + 2, o + 8))
+			records.push('#' + (i + 1) + ' 净累计(正-反) = ' + (Number(liters) * 1e-3).toFixed(3) + ' m³ (= ' + liters.toString() + ' L)')
 			o += 8
 		}
-		//固件新增的实时尾块(12字节): DIF04 VIF3B 瞬时流量(有符号) + DIF04 VIF6D 采样时刻unix秒,老固件报文没有这一段
-		let flowRate = null, sampleTs = null, tailNote = null
+		// 实时尾块: 260803 起为 14 字节(DIF06 VIF11 实时净累计 + DIF04 VIF6D 采样时刻unix秒);
+		// 更早固件为 12 字节(DIF04 VIF3B 瞬时流量 + 采样时刻); 更早的老固件没有这一段。
+		// 实时累计补的是最后一个历史采样点之后到打包时刻的水量(历史只到整采样点)。
+		let flowRate = null, nowVolume = null, sampleTs = null, tailNote = null
 		if (o + 12 <= plain.length) {
-			if (plain[o] === 0x04 && plain[o + 1] === 0x3B && plain[o + 6] === 0x04 && plain[o + 7] === 0x6D) {
+			if (plain[o] === 0x06 && plain[o + 1] === 0x11 && plain[o + 8] === 0x04 && plain[o + 9] === 0x6D
+				&& o + 14 <= plain.length) {
+				// 新固件(≥260803): 实时净累计(48位, 与历史记录同编码同口径) + 采样时刻
+				nowVolume = signed48le(plain.subarray(o + 2, o + 8))
+				sampleTs = u32le(plain, o + 10)
+				o += 14
+			} else if (plain[o] === 0x04 && plain[o + 1] === 0x3B && plain[o + 6] === 0x04 && plain[o + 7] === 0x6D) {
+				// 老固件: 尾块是瞬时流量, 不带实时累计
 				flowRate = signed32le(plain, o + 2)
 				sampleTs = u32le(plain, o + 8)
 				o += 12
@@ -301,7 +313,7 @@
 				tailNote = '实时尾块 DIF/VIF 不匹配,原始=' + hexbytes(plain.subarray(o, o + 12))
 			}
 		}
-		return { ok: true, baseTime, interval, num, more, records, flowRate, sampleTs, tailNote }
+		return { ok: true, baseTime, interval, num, more, records, flowRate, nowVolume, sampleTs, tailNote }
 	}
 
 	function decodeDownPayload(cmd, payload) {
@@ -515,7 +527,8 @@
 				result.fields['命令CMD'] = { value: hexByte(0x20), name: '周期数据主动上报' }
 				result.decoded = rm.ok
 					? ('基准时间=' + rm.baseTime + '  采样间隔=' + rm.interval + '分钟  条数(声明)=' + rm.num + '  more=' + rm.more + '\n' + rm.records.join('\n')
-						+ (rm.flowRate != null ? ('\n瞬时流量 = ' + rm.flowRate + ' L/h  采样时间 = ' + fmtUnix(rm.sampleTs)) : '')
+						+ (rm.nowVolume != null ? ('\n实时净累计 = ' + (Number(rm.nowVolume) * 1e-3).toFixed(3) + ' m³ (= ' + rm.nowVolume.toString() + ' L)  采样时间 = ' + fmtUnix(rm.sampleTs)) : '')
+					+ (rm.flowRate != null ? ('\n瞬时流量 = ' + rm.flowRate + ' L/h  采样时间 = ' + fmtUnix(rm.sampleTs) + ' (旧固件尾块)') : '')
 						+ (rm.tailNote ? ('\n' + rm.tailNote) : ''))
 					: ('结构解析失败: ' + rm.lines.join('; '))
 			} else {
