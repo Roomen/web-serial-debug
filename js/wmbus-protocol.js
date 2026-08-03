@@ -249,16 +249,17 @@
 		// 只含正向累计, 不减反向; 表屏主界面显示的是示值(正-反), 有反向流量时会比这里小, 属正常
 		0x13: {
 			name: '累计正向体积(10⁻³m³)',
-			// 固件 wmbus.c 组 0x10 应答处把 uint64 的 f->forward 强转 uint32 填进这个4字节字段,
-			// 累计量超过 4294967.295 m³ 后高位直接丢失 —— 帧格式如此, 工具侧无解, 只能提示,
-			// 免得把截断值误判成解析错误(0x15 里的底度是另一个量, 救不了这里)。
+			// 固件 260803 起 0x10 应答此字段为 DIF06(48位), 与 0x20 上报的净累计同宽;
+			// 更早的固件是 DIF04(32位), 把 uint64 的 f->forward 强转 uint32, 累计量超过
+			// 4294967.295 m³ 后高位丢失。按数据域实际长度解析, 两种固件都读得对。
 			dec: (b) => {
-				const raw = u32le(b, 0)
-				return (raw * 1e-3).toFixed(3) + ' m³ (= ' + raw + ' L, 仅正向,屏显为正-反示值)'
-					+ (raw > 4000000000 ? ' ⚠ 接近4字节满量程(4294967.295 m³), 超出部分固件已丢弃高位' : '')
+				const raw = b.length >= 6 ? signed48le(b) : BigInt(u32le(b, 0))
+				return (Number(raw) * 1e-3).toFixed(3) + ' m³ (= ' + raw.toString() + ' L, 仅正向,屏显为正-反示值)'
+					+ (b.length < 6 ? ' ⚠ 旧固件(<260803)4字节字段, 超过 4294967.295 m³ 的部分设备侧已丢弃高位' : '')
 			},
 		},
-		0x3B: { name: '瞬时流量', dec: (b) => u32le(b, 0) + ' L/h' },
+		// 有符号: 反向流量为负值(固件按 int32 饱和填入, 不回绕)
+		0x3B: { name: '瞬时流量', dec: (b) => signed32le(b, 0) + ' L/h' },
 		// EN13757-3 里 VIF 0x5A 标称 10⁻¹℃, 但本 profile 固件(wmbus.c 组 0x10 应答处)直接把整数℃
 		// 的 waterTempGet() 填进 0x5A, 没有乘 10 —— 固件已送检不再改, 这里按设备实际语义当整数℃解。
 		// 若后续固件改用 0x5B(标准 1℃) 上报, 下面 0x5B 一条同样能解出正确值。
@@ -327,10 +328,10 @@
 				let v = 0n
 				const n = Math.min(payload.length, 8)
 				for (let i = n - 1; i >= 0; i--) v = (v << 8n) | BigInt(payload[i])
-				// 固件写底度时把当前计量值一并置为该值(wmbus.c s_degreeFlow.forward = degree),
-				// 而 0x10 抄表的 VIF 0x13 只有4字节 —— 刚写完立刻抄表就会看到低32位截断值。
+				// 固件写底度时把当前计量值一并置为该值(wmbus.c s_degreeFlow.forward = degree)。
+				// 260803 起抄表(VIF 0x13)是48位, 大底度能原样读回; 更早固件只有32位, 回读是低32位截断值。
 				return '底度 = ' + v.toString() + ' (设备原始单位, 详见 samplingDegreeSet 语义)'
-					+ (v > 0xFFFFFFFFn ? ' ⚠ 超过4字节上限4294967295, 刚写完抄表(VIF 0x13)会显示为 ' + (v & 0xFFFFFFFFn).toString() + ' L; 可用0x15核对写入是否成功' : '')
+					+ (v > 0xFFFFFFFFn ? ' ⚠ 超过4字节上限4294967295, 旧固件(<260803)抄表会显示为 ' + (v & 0xFFFFFFFFn).toString() + ' L; 可用0x15核对写入是否成功' : '')
 					+ (v > DEGREE_MAX ? ' ⚠ 超过约定上限 ' + DEGREE_MAX.toString() + '(本工具不允许下发这么大的底度)' : '')
 			}
 			case 0x82:
@@ -393,7 +394,7 @@
 		}
 		if (len === 32 && !generic.ok) {
 			// 固件 wmbus.c WMBUS_CMD_READ_PARAMS: meterId(10) || baseMeterId(10) || samplingDegree(8 LE) || samplingMeterFreq(4 LE)
-			// 这里的底度是完整 64 位, 与 0x10 抄表里被 DIF04 截成低32位的累计正向体积不同, 写大底度后要用本命令核对。
+			// 这里的底度是完整 64 位; 0x10 抄表的累计正向体积是另一个量(48位, 旧固件 32 位), 写大底度后可用本命令核对。
 			const degree = u64le(payload, 20)
 			guesses.push('若为「读设备参数全集」应答: 表号(BCD) = ' + bcdDecodeLE(payload.subarray(0, 10))
 				+ '  基表号(BCD) = ' + bcdDecodeLE(payload.subarray(10, 20))
@@ -907,8 +908,8 @@
 						const raw = String(paramVal.value == null ? '' : paramVal.value).trim()
 						if (!/^\d+$/.test(raw)) throw new Error('底度需为非负整数(不接受负数/小数/空值)')
 						const deg = BigInt(raw)
-						// 上限取 10 个 9(约定值, 比 uint64 与 LCD 8位整数位都严): 表位数放不下更大的数,
-						// 且 0x10 抄表的 VIF 0x13 只有 4 字节, 越界值回读时看不出来
+						// 上限取 10 个 9(约定值, 比 uint64 与 LCD 8位整数位都严): 表位数放不下更大的数
+						// (10个9 < 2^47, 260803 起 0x10 抄表的 48 位字段可原样回读)
 						if (deg > DEGREE_MAX) throw new Error('底度最大 ' + DEGREE_MAX.toString() + ',当前 ' + raw)
 						bytes = u64leBytes(deg)
 						break
