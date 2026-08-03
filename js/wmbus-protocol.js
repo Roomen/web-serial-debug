@@ -26,6 +26,7 @@
 		for (let i = 0; i < a.length; i++) a[i] = parseInt(str.substr(i * 2, 2), 16)
 		return a
 	}
+	function hexByte(b) { return '0x' + ((b & 0xff) < 16 ? '0' : '') + (b & 0xff).toString(16).toUpperCase() }
 	function hexbytes(b) {
 		let s = ''
 		for (let i = 0; i < b.length; i++) s += (b[i] < 16 ? '0' : '') + b[i].toString(16).toUpperCase()
@@ -86,12 +87,20 @@
 	// 仅用于 0x80/0x82 命令的 payload 编解码,不用于 ADDR(ADDR 按 wmbus_ids.h 固件约定,保持 bcdBytesBE 不反序)。
 	function bcdBytesLE(s, fillLen) { return bcdBytesBE(s, fillLen).reverse() }
 	function bcdDecodeLE(b) { return bcdDecodeBE(Array.from(b).reverse()) }
+	// 设备时间戳一律按 UTC 字段解读, 不套浏览器时区。
+	// 固件 bsp_common_func.c 用 mktime 把 RTC 的本地墙钟直接转 epoch、反向用 gmtime(嵌入式 newlib 无时区),
+	// 即这个 4 字节字段装的是「本地时间冒充 UTC」。按浏览器本地时区渲染会再叠加一次时区偏移
+	// (实测东八区显示比设备屏上快 8 小时), 用 UTC 渲染出来的才等于设备自己的钟。
 	function fmtUnix(ts) {
 		if (!ts) return '-----'
 		const d = new Date(ts * 1000)
 		if (isNaN(d.getTime())) return String(ts)
 		const p = (n) => String(n).padStart(2, '0')
-		return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds())
+		return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate()) + ' ' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds())
+	}
+	// 与设备口径一致的「当前时间」: 本地墙钟当作 UTC 取 epoch, 供下发时间戳类参数(如 0x16 dayTs)使用
+	function deviceEpochNow() {
+		return Math.floor((Date.now() - new Date().getTimezoneOffset() * 60000) / 1000)
 	}
 	function decodeTypeF(b) {
 		// EN13757-3 Type-F 日期时间(4字节)
@@ -111,7 +120,7 @@
 	function fmtDeviceTime4(b) {
 		if (!b || b.length < 4) return '(数据不足)'
 		const ts = u32le(b, 0)
-		return fmtUnix(ts) + ' (unix秒=' + ts + ', 按标准TypeF解则为 ' + decodeTypeF(b) + ')'
+		return fmtUnix(ts) + ' (设备本地钟, unix秒=' + ts + ', 按标准TypeF解则为 ' + decodeTypeF(b) + ')'
 	}
 	function decodeDateTimeT(b) {
 		// 设备时间结构体: 8 x uint32 LE (year,month,day,hour,minute,second,weekday,zone)
@@ -506,11 +515,12 @@
 				const cmd = plain[0]
 				const payload = plain.subarray(1)
 				const cmdDef = CMD_TABLE[cmd]
-				result.fields['命令CMD'] = { value: cmd, name: cmdDef ? cmdDef.name : '未知命令' }
+				// 命令码按十六进制展示: 十进制的 16 与协议里真实存在的 0x16(平台确认周期上报)撞脸, 看日志极易误读
+				result.fields['命令CMD'] = { value: hexByte(cmd), name: cmdDef ? cmdDef.name : '未知命令' }
 				result.decoded = decodeDownPayload(cmd, payload)
 			} else if (plain[0] === 0x20) {
 				const rm = decodeReportMeter(plain.subarray(1))
-				result.fields['命令CMD'] = { value: 0x20, name: '周期数据主动上报' }
+				result.fields['命令CMD'] = { value: hexByte(0x20), name: '周期数据主动上报' }
 				result.decoded = rm.ok
 					? ('基准时间=' + rm.baseTime + '  采样间隔=' + rm.interval + '分钟  条数(声明)=' + rm.num + '  more=' + rm.more + '\n' + rm.records.join('\n')
 						+ (rm.flowRate != null ? ('\n瞬时流量 = ' + rm.flowRate + ' L/h  采样时间 = ' + fmtUnix(rm.sampleTs)) : '')
@@ -768,11 +778,13 @@
 			paramSel.style.display = 'none'
 			paramGroup.style.display = ''
 			ipGroup.style.display = 'none'
+			paramVal.placeholder = '值' // 各分支按需覆盖, 切换命令时先还原成通用占位符
 			switch (cmd) {
 				case 0x16:
 					paramLabel.textContent = 'dayTs(unix秒)'
 					paramVal.style.display = ''
-					paramVal.value = String(Math.floor(Date.now() / 1000))
+					// 设备的时间戳是「本地墙钟当 UTC」, 下发 dayTs 要用同一口径, 否则与设备自己的钟差一个时区
+					paramVal.value = String(deviceEpochNow())
 					break
 				case 0x80:
 					paramLabel.textContent = '表号(纯数字BCD,10B)'
@@ -780,8 +792,9 @@
 					paramVal.value = ''
 					break
 				case 0x81:
-					paramLabel.textContent = '底度(整数)'
+					paramLabel.textContent = '底度(非负整数)'
 					paramVal.style.display = ''
+					paramVal.placeholder = '0 ~ 18446744073709551615'
 					paramVal.value = '0'
 					break
 				case 0x82:
@@ -870,6 +883,8 @@
 			computePayload()
 		}
 
+		// 最近一次参数编码是否失败(null=正常), 供 buildFrame 拦截非法参数的下发
+		let payloadErr = null
 		function computePayload() {
 			const cmd = parseInt(cmdSel.value, 16)
 			let bytes = []
@@ -882,9 +897,16 @@
 					case 0x82:
 						bytes = bcdBytesLE(paramVal.value || '', 10)
 						break
-					case 0x81:
-						bytes = u64leBytes(BigInt(String(paramVal.value || '0').trim() || '0'))
+					case 0x81: {
+						// 底度是无符号 64 位(固件 samplingDegreeSet(uint64_t)), 负数/小数/空值一律拒绝 ——
+						// 之前负数会被 u64leBytes 静默钳成 0, 等于把底度清零, 属于危险的静默行为
+						const raw = String(paramVal.value == null ? '' : paramVal.value).trim()
+						if (!/^\d+$/.test(raw)) throw new Error('底度需为非负整数(不接受负数/小数/空值)')
+						const deg = BigInt(raw)
+						if (deg > 0xFFFFFFFFFFFFFFFFn) throw new Error('底度超出64位上限 18446744073709551615')
+						bytes = u64leBytes(deg)
 						break
+					}
 					case 0x83: {
 						const role = parseInt(paramSel.value || '0', 10)
 						const keyBytes = toBytesHex((paramVal.value || '').padEnd(32, '0').slice(0, 32))
@@ -908,9 +930,13 @@
 					default:
 						bytes = []
 				}
+				payloadErr = null
 				showErr('')
 			} catch (e) {
 				bytes = []
+				// 记下参数错误, 由 buildFrame 拦住下发: 否则载荷被清空后照样能发出去 ——
+				// 例如写底度(0x81)的空载荷会让固件按 valLen=0 解出 degree=0, 等于静默把底度清零
+				payloadErr = e.message
 				showErr(e.message)
 			}
 			payloadEl.value = bytes.map((b) => ((b & 0xff) < 16 ? '0' : '') + (b & 0xff).toString(16).toUpperCase()).join(' ')
@@ -938,6 +964,7 @@
 
 		function buildFrame() {
 			showErr('')
+			if (payloadErr) { showErr(payloadErr); return null }
 			let addr
 			try { addr = computeAddrHex() } catch (e) { showErr(e.message); return null }
 			const mcnt = parseInt(mcntEl.value, 10)
