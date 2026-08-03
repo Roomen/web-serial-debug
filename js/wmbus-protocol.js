@@ -104,6 +104,14 @@
 		const p = (n) => String(n).padStart(2, '0')
 		return year + '-' + p(month) + '-' + p(day) + ' ' + p(hour) + ':' + p(minute)
 	}
+	// 本 profile 固件在 VIF 0x6D(4字节)里填的是 unix 秒, 不是 EN13757-3 标称的 Type-F 位域
+	// (实测同一台设备相隔 42 s 的两帧只差 42, 按 Type-F 解会得到 2051 年这类伪值)。
+	// 因此统一按 unix 秒显示, Type-F 结果仅作为备注保留, 方便对接标准表时人工比对。
+	function fmtDeviceTime4(b) {
+		if (!b || b.length < 4) return '(数据不足)'
+		const ts = u32le(b, 0)
+		return fmtUnix(ts) + ' (unix秒=' + ts + ', 按标准TypeF解则为 ' + decodeTypeF(b) + ')'
+	}
 	function decodeDateTimeT(b) {
 		// 设备时间结构体: 8 x uint32 LE (year,month,day,hour,minute,second,weekday,zone)
 		if (!b || b.length < 32) return '(数据不足)'
@@ -226,14 +234,22 @@
 	const VIF_TABLE = {
 		0x11: { name: '净累计体积(10⁻⁵m³)', dec: (b) => (Number(signed48le(b)) * 1e-5).toFixed(5) + ' m³' },
 		// 只含正向累计, 不减反向; 表屏主界面显示的是示值(正-反), 有反向流量时会比这里小, 属正常
-		0x13: { name: '累计正向体积(10⁻³m³)', dec: (b) => (u32le(b, 0) * 1e-3).toFixed(3) + ' m³ (仅正向,屏显为正-反示值)' },
+		0x13: {
+			name: '累计正向体积(10⁻³m³)',
+			// 4字节字段满量程 4294967.295 m³, 写底度超过 4294967295 L 时设备只回低32位, 这里提示一下避免误判成解析错误
+			dec: (b) => {
+				const raw = u32le(b, 0)
+				return (raw * 1e-3).toFixed(3) + ' m³ (= ' + raw + ' L, 仅正向,屏显为正-反示值)'
+					+ (raw > 4000000000 ? ' ⚠ 接近4字节满量程(4294967.295 m³), 若底度写入值更大则此处为低32位截断值' : '')
+			},
+		},
 		0x3B: { name: '瞬时流量', dec: (b) => u32le(b, 0) + ' L/h' },
 		// EN13757-3 里 VIF 0x5A 标称 10⁻¹℃, 但本 profile 固件(wmbus.c 组 0x10 应答处)直接把整数℃
 		// 的 waterTempGet() 填进 0x5A, 没有乘 10 —— 固件已送检不再改, 这里按设备实际语义当整数℃解。
 		// 若后续固件改用 0x5B(标准 1℃) 上报, 下面 0x5B 一条同样能解出正确值。
 		0x5A: { name: '水温', dec: (b) => signed16(b, 0) + ' ℃ (设备按整数℃填入VIF0x5A,非标称10⁻¹℃)' },
 		0x5B: { name: '水温', dec: (b) => signed16(b, 0) + ' ℃' },
-		0x6D: { name: '日期时间', dec: (b) => 'TypeF=' + decodeTypeF(b) + ' / 若为unix秒=' + fmtUnix(u32le(b, 0)) },
+		0x6D: { name: '日期时间', dec: (b) => fmtDeviceTime4(b) },
 		0x71: { name: '平均时长(采样间隔)', dec: (b) => u16le(b, 0) + ' 分钟' },
 	}
 
@@ -257,7 +273,7 @@
 		let o = 0
 		if (plain[o] !== 0x04 || plain[o + 1] !== 0x6D) return { ok: false, lines: ['基准时间 DIF/VIF 不匹配,原始=' + hexbytes(plain)] }
 		o += 2
-		const baseTime = decodeTypeF(plain.subarray(o, o + 4)); o += 4
+		const baseTime = fmtDeviceTime4(plain.subarray(o, o + 4)); o += 4
 		if (plain[o] !== 0x02 || plain[o + 1] !== 0x71) return { ok: false, lines: ['采样间隔 DIF/VIF 不匹配'] }
 		o += 2
 		const interval = u16le(plain, o); o += 2
@@ -297,6 +313,7 @@
 				const n = Math.min(payload.length, 8)
 				for (let i = n - 1; i >= 0; i--) v = (v << 8n) | BigInt(payload[i])
 				return '底度 = ' + v.toString() + ' (设备原始单位, 详见 samplingDegreeSet 语义)'
+					+ (v > 0xFFFFFFFFn ? ' ⚠ 超过4字节上限4294967295, 读计量数据(VIF 0x13)只回低32位, 回读值会显示为 ' + (v & 0xFFFFFFFFn).toString() + ' L' : '')
 			}
 			case 0x82:
 				return '基表号(BCD) = ' + bcdDecodeLE(payload.subarray(0, Math.min(10, payload.length)))
