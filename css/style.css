@@ -1213,6 +1213,146 @@ body {
   font-size: 0.78rem;
 }
 
+/* 工装协议紧凑解析 */
+.gz-parse {
+  font-family: var(--font-sans, inherit);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.gz-parse-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.gz-dir {
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-right: 2px;
+}
+
+.gz-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  background: var(--bg-code);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gz-pill.ok {
+  color: var(--success);
+  background: var(--success-light, color-mix(in srgb, var(--success) 12%, transparent));
+  border-color: color-mix(in srgb, var(--success) 35%, transparent);
+}
+
+.gz-pill.bad {
+  color: var(--danger);
+  background: var(--danger-light);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.gz-pill.accent {
+  color: var(--accent);
+  background: var(--accent-light, color-mix(in srgb, var(--accent) 12%, transparent));
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.gz-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+  gap: 3px 6px;
+  margin: 2px 0 4px;
+}
+
+.gz-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 2px 6px;
+  background: var(--bg-code);
+  border-radius: 4px;
+  border: 1px solid var(--border-light);
+  min-width: 0;
+}
+
+.gz-metric.is-warn {
+  border-color: color-mix(in srgb, var(--warning, #c90) 50%, transparent);
+  background: color-mix(in srgb, var(--warning, #c90) 10%, var(--bg-code));
+}
+
+.gz-metric .gz-k {
+  font-size: 0.58rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.gz-metric .gz-v {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-primary);
+  word-break: break-all;
+  line-height: 1.25;
+}
+
+.gz-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 2px;
+}
+
+.gz-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  border: 1px solid var(--border-light);
+  background: var(--bg-code);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.gz-flag.ok {
+  color: var(--success);
+  background: var(--success-light, color-mix(in srgb, var(--success) 12%, transparent));
+  border-color: color-mix(in srgb, var(--success) 30%, transparent);
+}
+
+.gz-flag.bad {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+  font-weight: 700;
+}
+
+.gz-flag.na {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.gz-note {
+  margin-top: 3px;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
 /* ========== Hover Tips ========== */
 .sk-hex-byte {
   cursor: help;
@@ -2048,14 +2188,19 @@ hr {
   width: 2.6em;
   color: var(--text-muted);
   text-align: right;
+  /* 选中协议 HEX 时不连带地址栏 */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .sk-hex-bytes {
   display: grid;
+  /* 列数由 inline style 按 16 的倍数动态设置 */
   grid-template-columns: repeat(16, 1.55em);
   gap: 0 2px;
   justify-items: center;
   flex: 0 0 auto;
+  user-select: text;
 }
 
 .sk-hex-col,
@@ -2063,6 +2208,13 @@ hr {
   display: inline-block;
   min-width: 1.55em;
   text-align: center;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.sk-hex-dump-head {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .sk-hex-dump .sk-hex-byte {
@@ -2070,6 +2222,8 @@ hr {
   min-width: 1.55em;
   text-align: center;
   padding: 0 1px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* Dragging state */

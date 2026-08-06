@@ -8,7 +8,9 @@
 	const DEFAULT_COLLAPSED = {
 		'sk-down-card': false,
 		'sk-rw-card': true,
-		'sk-batch-card': true
+		'sk-batch-card': true,
+		'gz-down-card': false,
+		'gz-auto-card': false,
 	}
 
 	function loadCollapseMap() {

@@ -500,6 +500,115 @@
                                         <textarea class="form-control form-control-sm mt-1 sk-hex-copyable" rows="3" id="serial-protocol-down-preview"
                                             readonly placeholder="待发送的完整 HEX（空格分隔，点击可复制）" title="点击复制生成的 HEX"></textarea>
                                     </div>
+                                    <div class="protocol-down-card mb-2" id="gz-down-card" style="display:none;">
+                                        <h6 class="pane-section-title"><i class="bi bi-arrow-down-circle"></i> 工装下行下发</h6>
+                                        <p class="sk-rw-hint mb-2">红外空口产测帧 · A5 + Len + 设备类型 + 命令 + 信息 + XOR · 按工位选择设备后下发</p>
+                                        <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
+                                            <div class="input-group input-group-sm" style="width: auto;">
+                                                <span class="input-group-text">工位</span>
+                                                <select class="form-select" id="gz-down-station">
+                                                    <option value="1" selected>工位1</option>
+                                                    <option value="2">工位2</option>
+                                                </select>
+                                            </div>
+                                            <div class="input-group input-group-sm" style="width: auto; min-width: 16rem; flex: 1 1 16rem;">
+                                                <span class="input-group-text">设备类型</span>
+                                                <select class="form-select" id="gz-down-dev"></select>
+                                            </div>
+                                            <div class="input-group input-group-sm" style="width: auto; min-width: 12rem;">
+                                                <span class="input-group-text">命令</span>
+                                                <select class="form-select" id="gz-down-cmd"></select>
+                                            </div>
+                                        </div>
+                                        <div class="d-flex flex-wrap align-items-center mb-2 gap-2" id="gz-down-uid-group" style="display:none;">
+                                            <div class="input-group input-group-sm" style="width: auto;" id="gz-down-uid-op-wrap">
+                                                <span class="input-group-text">唯一码操作</span>
+                                                <select class="form-select" id="gz-down-uid-op">
+                                                    <option value="0">0 不操作</option>
+                                                    <option value="1" selected>1 强制写入</option>
+                                                    <option value="2">2 自动写入</option>
+                                                </select>
+                                            </div>
+                                            <div class="input-group input-group-sm" style="width: auto; min-width: 14rem; flex: 1 1 14rem;">
+                                                <span class="input-group-text">唯一码</span>
+                                                <input type="text" class="form-control" id="gz-down-uid" placeholder="7 字节 HEX，如 01 02 03 04 05 06 07">
+                                            </div>
+                                        </div>
+                                        <div class="d-flex flex-wrap align-items-center mb-2 gap-2" id="gz-down-ad-group" style="display:none;">
+                                            <div class="input-group input-group-sm" style="width: auto;">
+                                                <span class="input-group-text">校准电压 mV</span>
+                                                <input type="number" class="form-control" id="gz-down-ad-mv" value="400" min="0" max="65535" style="width:7rem;">
+                                            </div>
+                                        </div>
+                                        <textarea class="form-control form-control-sm" rows="2" id="gz-down-info"
+                                            placeholder="信息域 HEX（部分命令由上方参数自动生成）"></textarea>
+                                        <div class="small text-danger" id="gz-down-err"></div>
+                                        <div class="d-flex flex-wrap align-items-center gap-2 mt-1">
+                                            <button class="btn btn-sm btn-outline-secondary" id="gz-down-build">生成HEX</button>
+                                            <button class="btn btn-sm btn-primary flex-grow-1" id="gz-down-send">立即下发</button>
+                                        </div>
+                                        <textarea class="form-control form-control-sm mt-1 sk-hex-copyable" rows="2" id="gz-down-preview"
+                                            readonly placeholder="待发送的完整 HEX（空格分隔，点击可复制）" title="点击复制生成的 HEX"></textarea>
+                                    </div>
+                                    <div class="protocol-down-card mb-2 sk-rw-card" id="gz-auto-card" style="display:none;">
+                                        <h6 class="pane-section-title">
+                                            <i class="bi bi-play-circle"></i> 一键工位测试
+                                            <span class="sk-rw-proto-badge">工装</span>
+                                        </h6>
+                                        <p class="sk-rw-hint mb-2">按所选工位/设备顺序：查询 → 休眠（末步必休眠）· 失败即停 · 整轮通过后唯一码自动 +1</p>
+                                        <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
+                                            <div class="input-group input-group-sm" style="width: auto;">
+                                                <span class="input-group-text">工位</span>
+                                                <select class="form-select" id="gz-auto-station">
+                                                    <option value="1" selected>工位1</option>
+                                                    <option value="2">工位2</option>
+                                                </select>
+                                            </div>
+                                            <div class="input-group input-group-sm" style="width: auto; min-width: 16rem; flex: 1 1 16rem;">
+                                                <span class="input-group-text">设备类型</span>
+                                                <select class="form-select" id="gz-auto-dev"></select>
+                                            </div>
+                                        </div>
+                                        <div class="sk-rw-controls d-flex flex-wrap gap-2 mb-2">
+                                            <div class="input-group input-group-sm" style="width:auto;">
+                                                <span class="input-group-text">超时ms</span>
+                                                <input type="number" class="form-control" id="gz-auto-timeout" value="3000" min="500" max="60000" style="width:5.5rem;">
+                                            </div>
+                                            <div class="input-group input-group-sm" style="width:auto;">
+                                                <span class="input-group-text">间隔ms</span>
+                                                <input type="number" class="form-control" id="gz-auto-gap" value="200" min="0" max="10000" style="width:5rem;">
+                                            </div>
+                                        </div>
+                                        <div class="d-flex flex-wrap align-items-center gap-3 mb-2">
+                                            <div class="form-check form-switch mb-0" title="在查询前先下发设置唯一码(0x0A)">
+                                                <input class="form-check-input" type="checkbox" id="gz-auto-set-uid">
+                                                <label class="form-check-label" for="gz-auto-set-uid">先写唯一码</label>
+                                            </div>
+                                        </div>
+                                        <div class="d-flex flex-wrap align-items-center mb-2 gap-2" id="gz-auto-uid-group" style="display:none;">
+                                            <div class="input-group input-group-sm" style="width: auto; display:none;" id="gz-auto-uid-op-wrap">
+                                                <span class="input-group-text">查询写码</span>
+                                                <select class="form-select" id="gz-auto-uid-op">
+                                                    <option value="1" selected>1 强制写入</option>
+                                                    <option value="2">2 自动写入</option>
+                                                </select>
+                                            </div>
+                                            <div class="input-group input-group-sm" style="width: auto; min-width: 14rem; flex: 1 1 14rem;">
+                                                <span class="input-group-text">唯一码</span>
+                                                <input type="text" class="form-control" id="gz-auto-uid" placeholder="7 字节 HEX，如 01 02 03 04 05 06 07">
+                                            </div>
+                                        </div>
+                                        <div class="d-flex gap-2 mb-2">
+                                            <button class="btn btn-sm btn-primary flex-grow-1" id="gz-auto-start">开始测试</button>
+                                            <button class="btn btn-sm btn-outline-danger" id="gz-auto-stop" disabled>停止</button>
+                                        </div>
+                                        <div class="sk-rw-progress mb-1">
+                                            <div class="sk-rw-progress-bar" id="gz-auto-progress-bar">0/0</div>
+                                        </div>
+                                        <div class="sk-rw-status" id="gz-auto-status">就绪</div>
+                                        <div class="sk-rw-summary" id="gz-auto-summary"></div>
+                                        <div class="sk-rw-log" id="gz-auto-log"></div>
+                                    </div>
                                     <div class="protocol-down-card mb-2" id="wmbus-down-card" style="display:none;">
                                         <h6 class="pane-section-title"><i class="bi bi-arrow-down-circle"></i> W-MBUS 下行下发</h6>
                                         <p class="sk-rw-hint mb-2">EN13757-3/-7 私有 profile · 全程 AES-128-CBC 加密 + AES-128-CMAC 鉴权,无明文选项</p>
@@ -1153,6 +1262,8 @@
     <script src="js/common.js"></script>
     <script src="js/wmbus-protocol.js"></script>
     <script src="js/wmbus-transaction.js"></script>
+    <script src="js/gz-protocol.js"></script>
+    <script src="js/gz-transaction.js"></script>
     <script src="js/sek-transaction.js"></script>
     <script src="js/random-rw-test.js"></script>
     <script src="js/batch-config.js"></script>
