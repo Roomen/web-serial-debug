@@ -1158,13 +1158,14 @@
 			}
 		})
 
-		// 与 SK 下行卡片/密钥字段互斥显示: 当前协议切到 wmbus 时显示本卡片(自带密钥框), 隐藏 SK 相关卡片、单密钥输入
-		// 以及右上「高级·加解密与密钥」整块(wmbus 无解密模式/加密方式可选,密钥框已整合进本卡片)
+		// 与 SK/工装卡片互斥: 仅当前协议为 wmbus 时显示本卡片; SEK 卡片仅 sek 显示
 		function applyVisibility() {
 			const sel = document.getElementById('serial-protocol-select')
-			const isWmbus = !!(sel && sel.value === 'wmbus')
-			const hideWhenWmbus = ['sk-down-card', 'sk-rw-card', 'sk-batch-card', 'serial-protocol-advanced']
-			for (const id of hideWhenWmbus) { const el = document.getElementById(id); if (el) el.style.display = isWmbus ? 'none' : '' }
+			const v = sel ? sel.value : 'sek'
+			const isWmbus = v === 'wmbus'
+			const isSek = v === 'sek'
+			const sekOnly = ['sk-down-card', 'sk-rw-card', 'sk-batch-card', 'serial-protocol-advanced']
+			for (const id of sekOnly) { const el = document.getElementById(id); if (el) el.style.display = isSek ? '' : 'none' }
 			const wm = document.getElementById('wmbus-down-card')
 			if (wm) wm.style.display = isWmbus ? '' : 'none'
 		}
