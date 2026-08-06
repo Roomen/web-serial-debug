@@ -648,12 +648,13 @@
 		const pad = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0)
 		const avail = Math.max(0, view.clientWidth - pad)
 		const fs = parseFloat(style.fontSize) || 11.5
-		// 左偏移列 + gap + N 个字节格
+		// 左偏移列 + gap + N 个字节格; 列数取 16 的整数倍, 随宽度变化 16/32/48/64…
 		const offW = 2.6 * fs + 8
 		const cellW = 1.55 * fs + 2
 		const n = Math.floor((avail - offW) / cellW)
-		if (n >= 32) return 32
-		return 16
+		const cols = Math.max(16, Math.floor(n / 16) * 16)
+		// 上限避免极宽屏一行过长难读
+		return Math.min(cols, 64)
 	}
 	function renderProtocolHexDump(bytes, bm) {
 		const view = document.getElementById('serial-protocol-hexview')
@@ -763,7 +764,7 @@
 			if (!applyProtocolHexInput(text, { requireValid: true })) {
 				const hex = normalizeHexRaw(text)
 				if (!hexRawToBytes(hex)) addLogErr('剪贴板不是合法 HEX')
-				else addLogErr('剪贴板中未找到有效协议帧（需 A9 9A … CRC … 16）')
+				else addLogErr('剪贴板中未找到有效协议帧（请确认当前协议与帧格式匹配）')
 			}
 		}
 		protocolHexView.addEventListener('paste', (e) => {
@@ -804,11 +805,44 @@
 		protocolHexView.addEventListener('keydown', (e) => {
 			if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
 				e.preventDefault()
+				// 只选字节格, 不选左侧地址列/表头
+				const byteSpans = protocolHexView.querySelectorAll('.sk-hex-byte')
+				if (!byteSpans.length) return
 				const sel = window.getSelection()
-				const range = document.createRange()
-				range.selectNodeContents(protocolHexView)
 				sel.removeAllRanges()
-				sel.addRange(range)
+				// 多 range 兼容性差: 选中整块 .sk-hex-bytes 容器串, 偏移列已 user-select:none
+				const rows = protocolHexView.querySelectorAll('.sk-hex-dump-row .sk-hex-bytes')
+				if (rows.length === 1) {
+					const range = document.createRange()
+					range.selectNodeContents(rows[0])
+					sel.addRange(range)
+				} else if (rows.length > 1) {
+					const range = document.createRange()
+					range.setStart(rows[0], 0)
+					range.setEndAfter(rows[rows.length - 1].lastChild || rows[rows.length - 1])
+					sel.addRange(range)
+				}
+			}
+		})
+		// 复制时去掉可能夹带的地址/空白, 仅输出 HEX 字节
+		protocolHexView.addEventListener('copy', (e) => {
+			const sel = window.getSelection()
+			if (!sel || sel.isCollapsed) return
+			const text = sel.toString()
+			// 已是纯 HEX(含空格/换行)时清洗: 去掉像 0000/0010 的偏移伪影
+			const cleaned = text
+				.replace(/(^|\s)[0-9A-Fa-f]{4}(?=\s|$)/g, ' ')
+				.replace(/[^0-9A-Fa-f\s]/g, ' ')
+				.replace(/\s+/g, ' ')
+				.trim()
+			if (!cleaned) return
+			// 仅当清洗改变内容或含偏移样模式时改写剪贴板
+			if (cleaned !== text.replace(/\s+/g, ' ').trim() || /(?:^|\s)[0-9A-Fa-f]{4}(?:\s|$)/.test(text)) {
+				e.preventDefault()
+				const hexOnly = cleaned.replace(/\s+/g, ' ')
+				try {
+					e.clipboardData.setData('text/plain', hexOnly)
+				} catch (err) { /* */ }
 			}
 		})
 		if (typeof ResizeObserver !== 'undefined') {

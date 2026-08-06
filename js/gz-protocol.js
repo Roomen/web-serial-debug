@@ -230,7 +230,9 @@
 		if (devDef) {
 			result.fields['工位'] = '工位' + devDef.station
 		}
-		result.decoded = decodeInfo(devType, cmd, info)
+		const infoView = decodeInfo(devType, cmd, info)
+		result.infoView = infoView
+		result.decoded = viewText(infoView)
 		result.ok = result.xorOk
 		return result
 	}
@@ -266,431 +268,536 @@
 		return null
 	}
 
-	// ===== 信息域解码 =====
-	function decodeBitsNamed(byte, defs) {
-		// defs: [{bit, name, inv?}]  inv=true 时 0=正常
-		const lines = []
-		for (let i = 0; i < defs.length; i++) {
-			const d = defs[i]
-			const on = bitOn(byte, d.bit)
-			const ok = d.inv ? !on : on
-			if (d.raw) {
-				lines.push(d.name + '=' + (on ? (d.onText || '1') : (d.offText || '0')))
-			} else {
-				lines.push(flagLine(d.name, ok, d.okText, d.badText))
-			}
-		}
-		return lines
+	// ===== 信息域解码（结构化, 供紧凑 UI）=====
+	function emptyView(text) {
+		return { metrics: [], flags: [], note: '', text: text || '' }
 	}
 
-	function decodeBeFlags(bytes, bitDefs) {
-		// bitDefs: [{bit, name}] — bit0 = 末字节 LSB（与文档多字节大端字段的 bit 编号一致）
-		const n = bytes.length
-		let word = 0
-		for (let i = 0; i < n; i++) word = (word << 8) | (bytes[i] & 0xff)
-		const lines = []
+	function viewText(view) {
+		if (!view) return ''
+		if (view.text) return view.text
+		const parts = []
+		for (let i = 0; i < (view.metrics || []).length; i++) {
+			const m = view.metrics[i]
+			parts.push(m.label + '=' + m.value)
+		}
+		const flags = view.flags || []
+		const bad = flags.filter(function (f) { return f.ok === false })
+		const good = flags.filter(function (f) { return f.ok === true })
+		if (flags.length) {
+			parts.push(bad.length ? ('异常' + bad.length + '/' + (bad.length + good.length)) : ('检测全过' + good.length))
+		}
+		if (view.note) parts.push(view.note)
+		return parts.join(' · ')
+	}
+
+	// FlowLogic factory.c: serU16/serU32 = memcpy 本机序 → Cortex-M 小端线上序
+	// 文档写「大端」与固件实现不一致, 以固件为准
+	function u16le(info, o) {
+		if (o + 1 >= info.length) return 0
+		return (info[o] & 0xff) | ((info[o + 1] & 0xff) << 8)
+	}
+	function u32leBytes(bytes) {
+		let w = 0
+		for (let i = 0; i < bytes.length && i < 4; i++) w |= (bytes[i] & 0xff) << (8 * i)
+		return w >>> 0
+	}
+	// 0.01V: batteryVolaGet()/10 以 u16 LE 下发
+	function volt01(info, o) {
+		if (o + 1 >= info.length) return null
+		return u16le(info, o) / 100
+	}
+	function u16field(info, o) {
+		return u16le(info, o)
+	}
+
+	// bit0 = uint32 LSB = 线上首字节 bit0（factory.h TestWorkStation1T 位域顺序）
+	function flagsFromLe(bytes, bitDefs) {
+		const word = u32leBytes(bytes)
+		const flags = []
 		for (let i = 0; i < bitDefs.length; i++) {
 			const d = bitDefs[i]
 			const on = ((word >>> d.bit) & 1) === 1
-			const ok = d.inv ? !on : on
-			if (d.raw) lines.push(d.name + '=' + (on ? '1' : '0'))
-			else lines.push(flagLine(d.name, ok, d.okText, d.badText))
+			if (d.raw) {
+				flags.push({ name: d.name, ok: null, label: on ? (d.onText || '1') : (d.offText || '0') })
+			} else {
+				flags.push({ name: d.name, ok: d.inv ? !on : on })
+			}
 		}
-		return lines
+		return flags
+	}
+
+	function flagsFromByte(byte, defs) {
+		const flags = []
+		for (let i = 0; i < defs.length; i++) {
+			const d = defs[i]
+			const on = bitOn(byte, d.bit)
+			if (d.raw) {
+				flags.push({ name: d.name, ok: null, label: on ? (d.onText || '1') : (d.offText || '0') })
+			} else {
+				flags.push({ name: d.name, ok: d.inv ? !on : on })
+			}
+		}
+		return flags
+	}
+
+	function metric(label, value, warn) {
+		return { label: label, value: value == null ? '' : String(value), warn: !!warn }
 	}
 
 	function decodeInfo(devType, cmd, info) {
-		const lines = []
-		const pushHex = function (label) {
-			if (info.length) lines.push(label + ': ' + hexbytes(info))
-			else lines.push(label + ': (空)')
-		}
-
-		// 下行参数
+		// 下行
 		if (cmd === 0x08) {
+			const v = emptyView()
 			if (info.length >= 1) {
 				const op = info[0] & 0xff
-				lines.push('唯一码操作: ' + op + ' (' + (UID_OP[op] || '未知') + ')')
+				v.metrics.push(metric('写码操作', op + ' ' + (UID_OP[op] || '')))
 			}
-			if (info.length >= 8) lines.push('唯一码: ' + hexbytes(info.slice(1, 8)))
-			else if (info.length > 1) lines.push('唯一码(不完整): ' + hexbytes(info.slice(1)))
-			return lines.join('\n')
+			if (info.length >= 8) v.metrics.push(metric('唯一码', hexbytes(info.slice(1, 8))))
+			else if (info.length > 1) v.metrics.push(metric('唯一码', hexbytes(info.slice(1)), true))
+			v.text = viewText(v)
+			return v
 		}
 		if (cmd === 0x0A) {
-			lines.push('写入唯一码: ' + hexbytes(info.slice(0, 7)))
-			return lines.join('\n')
+			const v = emptyView()
+			v.metrics.push(metric('写入唯一码', hexbytes(info.slice(0, 7))))
+			v.text = viewText(v)
+			return v
 		}
 		if (cmd === 0x05 || cmd === 0x06 || cmd === 0x07) {
+			const v = emptyView()
 			if (info.length >= 1) {
 				const ch = info[0] & 0xff
-				const chName = ch === 0 ? '低电压0.4V' : ch === 1 ? '高电压4V' : ch === 0xAA ? '2.0V' : ('0x' + hexByte(ch))
-				lines.push('通道: ' + chName)
+				const chName = ch === 0 ? '0.4V' : ch === 1 ? '4V' : ch === 0xAA ? '2.0V' : ('0x' + hexByte(ch))
+				v.metrics.push(metric('通道', chName))
 			}
-			if (info.length >= 3) lines.push('电压: ' + u16be(info, 1) + ' mV')
-			return lines.join('\n') || '(无信息域)'
+			if (info.length >= 3) v.metrics.push(metric('电压', u16be(info, 1) + ' mV'))
+			v.text = viewText(v) || '(无信息域)'
+			return v
 		}
 
-		// 上行应答
+		// 上行简答
 		if (cmd === 0x8A) {
+			const v = emptyView()
 			if (info.length >= 1) {
 				const r = info[0] & 0xff
-				lines.push(r === 0 ? '设置成功 ✓' : ('设置失败/结果=' + r + ' ✗'))
-			} else pushHex('应答')
-			return lines.join('\n')
+				v.flags.push({ name: '设置唯一码', ok: r === 0 })
+				v.metrics.push(metric('结果', r === 0 ? '成功' : ('失败 ' + r), r !== 0))
+			}
+			v.text = viewText(v)
+			return v
 		}
 		if (cmd === 0x8C) {
-			lines.push('MAC: ' + hexbytes(info.slice(0, 6)))
-			const allFf = info.slice(0, 6).every(function (x) { return (x & 0xff) === 0xff })
-			if (allFf) lines.push('(全 FF 视为无效)')
-			return lines.join('\n')
+			const v = emptyView()
+			const mac = info.slice(0, 6)
+			const allFf = mac.length >= 6 && mac.every(function (x) { return (x & 0xff) === 0xff })
+			v.metrics.push(metric('MAC', hexbytes(mac), allFf))
+			if (allFf) v.note = '全 FF 无效'
+			v.text = viewText(v)
+			return v
 		}
 		if (cmd === 0x8D) {
+			const v = emptyView()
 			if (info.length >= 11) {
-				lines.push('唯一码: ' + hexbytes(info.slice(0, 7)))
-				lines.push('图片长度: ' + u16be(info, 7))
-				lines.push('总包数: ' + (info[9] & 0xff) + ' 当前包: ' + (info[10] & 0xff))
-				if (info.length > 11) lines.push('图片数据: ' + (info.length - 11) + ' 字节')
-			} else pushHex('图片应答')
-			return lines.join('\n')
+				v.metrics.push(metric('唯一码', hexbytes(info.slice(0, 7))))
+				v.metrics.push(metric('图片长度', String(u16be(info, 7))))
+				v.metrics.push(metric('分包', (info[10] & 0xff) + '/' + (info[9] & 0xff)))
+				if (info.length > 11) v.metrics.push(metric('数据', (info.length - 11) + 'B'))
+			} else {
+				v.note = hexbytes(info)
+			}
+			v.text = viewText(v)
+			return v
 		}
 		if (cmd === 0x85 || cmd === 0x86 || cmd === 0x87) {
-			if (info.length) lines.push('通道号: 0x' + hexByte(info[0]))
-			return lines.join('\n') || '(空)'
+			const v = emptyView()
+			if (info.length) v.metrics.push(metric('通道', '0x' + hexByte(info[0])))
+			v.text = viewText(v) || '(空)'
+			return v
 		}
 		if (cmd === 0x81 || cmd === 0x01 || cmd === 0x83 || cmd === 0x03) {
-			return info.length ? hexbytes(info) : '(无信息域)'
+			return emptyView(info.length ? hexbytes(info) : '(无信息域)')
 		}
 
-		// 数据包 / 流量包按设备类型
-		if (cmd === 0x88) return decodeUidDataPacket(devType, info).join('\n')
-		if (cmd === 0x89) return decodeUidFlowPacket(devType, info).join('\n')
-		if (cmd === 0x82) return decodeLegacyDataPacket(devType, info).join('\n')
-		if (cmd === 0x84) return decodeLegacyFlowPacket(devType, info).join('\n')
+		if (cmd === 0x88) return decodeUidDataPacket(devType, info)
+		if (cmd === 0x89) return decodeUidFlowPacket(devType, info)
+		if (cmd === 0x82) return decodeLegacyDataPacket(devType, info)
+		if (cmd === 0x84) return decodeLegacyFlowPacket(devType, info)
 
 		if (info.length) {
-			lines.push('原始: ' + hexbytes(info))
+			const v = emptyView()
+			v.metrics.push(metric('原始', hexbytes(info)))
 			const asc = asciiPrintable(info)
-			if (/[A-Za-z0-9]/.test(asc)) lines.push('ASCII: ' + asc)
-		} else {
-			lines.push('(无信息域)')
+			if (/[A-Za-z0-9]/.test(asc)) v.metrics.push(metric('ASCII', asc))
+			v.text = viewText(v)
+			return v
 		}
-		return lines.join('\n')
+		return emptyView('(无信息域)')
 	}
 
+	// 工位1 唯一码数据包: 优先按长度识别布局(不唯 devType, 避免型号回短包解不出)
 	function decodeUidDataPacket(devType, info) {
-		const lines = []
-		if (devType === 0x30) {
-			// 55 字节
-			if (info.length < 43) {
-				lines.push('(长度' + info.length + ', 期望≥43/55)')
-				if (info.length) lines.push(hexbytes(info))
-				return lines
-			}
-			lines.push('唯一码: ' + hexbytes(info.slice(0, 7)))
-			lines.push('CCID: ' + asciiPrintable(info.slice(7, 27)).replace(/\.+$/, ''))
-			lines.push('IMEI: ' + asciiPrintable(info.slice(27, 42)).replace(/\.+$/, ''))
-			lines.push('CSQ: ' + (info[42] & 0xff))
-			if (info.length >= 45) lines.push('供电电压: ' + (u16be(info, 43) / 100).toFixed(2) + ' V')
-			if (info.length >= 46) {
-				const b45 = info[45] & 0xff
-				lines.push('蓝牙使能: ' + (bitOn(b45, 3) ? '有效' : '无效'))
-				lines.push('CCID使能: ' + (bitOn(b45, 2) ? '有效' : '无效'))
-				lines.push('IMEI使能: ' + (bitOn(b45, 1) ? '有效' : '无效'))
-				lines.push('磁开关状态: ' + (bitOn(b45, 0) ? '有磁' : '无磁'))
-			}
-			if (info.length >= 47) {
-				const irMap = { 0: 10, 1: 50, 2: 100, 3: 150, 4: 200, 5: 256, 6: 512, 7: 1024 }
-				const ir = info[46] & 0xff
-				lines.push('红外有效通讯长度: ' + (ir === 0xff ? '非检测' : (irMap[ir] != null ? irMap[ir] + ' BYTE' : ('code=' + ir))))
-			}
-			if (info.length >= 48) lines.push('RS485供电电压: ' + ((info[47] & 0xff) / 10).toFixed(1) + ' V')
-			if (info.length >= 55) {
-				const flags = info.slice(51, 55)
-				lines.push('--- 检测结果 ---')
-				lines.push.apply(lines, decodeBeFlags(flags, [
-					{ bit: 23, name: '超声计量总线' },
-					{ bit: 22, name: 'RS485供电电压' },
-					{ bit: 21, name: '蓝牙模组通讯' },
-					{ bit: 20, name: '脉冲计量线S4' },
-					{ bit: 19, name: '脉冲计量线S3' },
-					{ bit: 18, name: '脉冲计量线S2' },
-					{ bit: 17, name: '脉冲计量线S1' },
-					{ bit: 16, name: 'AD采样' },
-					{ bit: 15, name: 'MBUS模块' },
-					{ bit: 14, name: 'MBUS供电电压' },
-					{ bit: 13, name: 'RTC晶振' },
-					{ bit: 12, name: 'MBUS串口通信' },
-					{ bit: 11, name: 'RS485' },
-					{ bit: 10, name: '模板识别' },
-					{ bit: 9, name: '摄像头' },
-					{ bit: 8, name: 'DSP程序' },
-					{ bit: 7, name: '触摸开关' },
-					{ bit: 6, name: '电池电压' },
-					{ bit: 5, name: '磁开关' },
-					{ bit: 4, name: 'Flash' },
-					{ bit: 3, name: 'I2C' },
-					{ bit: 2, name: '阀控' },
-					{ bit: 1, name: 'SIM卡' },
-					{ bit: 0, name: '蜂窝模组通讯' },
-				]))
-			}
-			return lines
-		}
-		if (devType === 0x34) {
-			if (info.length < 16) {
-				lines.push('(长度' + info.length + ', 期望28)')
-				if (info.length) lines.push(hexbytes(info))
-				return lines
-			}
-			lines.push('唯一码: ' + hexbytes(info.slice(0, 7)))
-			lines.push('供电电压: ' + (u16be(info, 7) / 100).toFixed(2) + ' V')
-			if (info.length >= 16) lines.push('MAC: ' + hexbytes(info.slice(10, 16)))
-			if (info.length >= 18) lines.push('蓝牙频偏: ' + u16be(info, 16))
-			if (info.length >= 19) lines.push('匹配电容: ' + (info[18] & 0xff))
-			if (info.length >= 28) {
-				lines.push('--- 检测结果 ---')
-				lines.push.apply(lines, decodeBeFlags(info.slice(24, 28), [
-					{ bit: 4, name: '电池电压' },
-					{ bit: 3, name: '蓝牙模组通讯' },
-					{ bit: 2, name: '磁开关' },
-					{ bit: 1, name: 'Flash' },
-					{ bit: 0, name: '阀控' },
-				]))
-			}
-			return lines
-		}
-		// 通用 fallback
-		if (info.length >= 7) lines.push('唯一码: ' + hexbytes(info.slice(0, 7)))
-		if (info.length > 7) lines.push('数据: ' + hexbytes(info.slice(7)))
-		else if (!info.length) lines.push('(空)')
-		return lines
+		const n = info.length
+		// 0x30 系 55B
+		if (n >= 50 || (devType === 0x30 && n >= 43)) return decodeData30(info)
+		// 0x34 蓝牙 28B
+		if (n >= 24 || devType === 0x34) return decodeData34(info)
+		const v = emptyView()
+		if (n >= 7) v.metrics.push(metric('唯一码', hexbytes(info.slice(0, 7))))
+		if (n > 7) v.metrics.push(metric('数据', hexbytes(info.slice(7))))
+		if (!n) v.text = '(空)'
+		else { v.note = '长度' + n + ' 未匹配已知布局'; v.text = viewText(v) }
+		return v
 	}
 
+	function decodeData30(info) {
+		const v = emptyView()
+		if (info.length < 43) {
+			v.note = '长度' + info.length + ' 不足(工位1数据≥43)'
+			v.metrics.push(metric('原始', hexbytes(info)))
+			v.text = viewText(v)
+			return v
+		}
+		v.metrics.push(metric('唯一码', hexbytes(info.slice(0, 7))))
+		v.metrics.push(metric('CCID', asciiPrintable(info.slice(7, 27)).replace(/\.+$/, '')))
+		v.metrics.push(metric('IMEI', asciiPrintable(info.slice(27, 42)).replace(/\.+$/, '')))
+		const csq = info[42] & 0xff
+		v.metrics.push(metric('CSQ', String(csq), csq === 0 || csq === 0xff))
+		if (info.length >= 45) {
+			const vv = volt01(info, 43)
+			v.metrics.push(metric('供电', vv != null ? vv.toFixed(2) + ' V' : '-', vv != null && (vv < 2 || vv > 5)))
+		}
+		if (info.length >= 46) {
+			const b45 = info[45] & 0xff
+			// 使能/状态位不是检测项, 用中性标签展示
+			v.flags.push({ name: '蓝牙使能', ok: null, label: bitOn(b45, 3) ? '蓝牙·有效' : '蓝牙·无效' })
+			v.flags.push({ name: 'CCID使能', ok: null, label: bitOn(b45, 2) ? 'CCID·有效' : 'CCID·无效' })
+			v.flags.push({ name: 'IMEI使能', ok: null, label: bitOn(b45, 1) ? 'IMEI·有效' : 'IMEI·无效' })
+			v.flags.push({ name: '磁吸', ok: null, label: bitOn(b45, 0) ? '有磁' : '无磁' })
+		}
+		if (info.length >= 47) {
+			const irMap = { 0: '10B', 1: '50B', 2: '100B', 3: '150B', 4: '200B', 5: '256B', 6: '512B', 7: '1024B' }
+			const ir = info[46] & 0xff
+			v.metrics.push(metric('红外通讯', ir === 0xff ? '非检测' : (irMap[ir] || ('#' + ir))))
+		}
+		if (info.length >= 48) {
+			const rsv = (info[47] & 0xff) / 10
+			if ((info[47] & 0xff) !== 0xff) v.metrics.push(metric('RS485供电', rsv.toFixed(1) + ' V'))
+		}
+		if (info.length >= 55) {
+			v.flags = v.flags.concat(flagsFromLe(info.slice(51, 55), [
+				{ bit: 23, name: '超声总线' }, { bit: 22, name: 'RS485供电检' },
+				{ bit: 21, name: '蓝牙模组' }, { bit: 20, name: '脉冲S4' },
+				{ bit: 19, name: '脉冲S3' }, { bit: 18, name: '脉冲S2' },
+				{ bit: 17, name: '脉冲S1' }, { bit: 16, name: 'AD采样' },
+				{ bit: 15, name: 'MBUS模块' }, { bit: 14, name: 'MBUS供电' },
+				{ bit: 13, name: 'RTC晶振' }, { bit: 12, name: 'MBUS串口' },
+				{ bit: 11, name: 'RS485' }, { bit: 10, name: '模板识别' },
+				{ bit: 9, name: '摄像头' }, { bit: 8, name: 'DSP' },
+				{ bit: 7, name: '触摸开关' }, { bit: 6, name: '电池电压' },
+				{ bit: 5, name: '磁开关' }, { bit: 4, name: 'Flash' },
+				{ bit: 3, name: 'I2C' }, { bit: 2, name: '阀控' },
+				{ bit: 1, name: 'SIM卡' }, { bit: 0, name: '蜂窝模组' },
+			]))
+		}
+		v.text = viewText(v)
+		return v
+	}
+
+	function decodeData34(info) {
+		const v = emptyView()
+		if (info.length < 16) {
+			v.note = '长度' + info.length + ' 不足'
+			v.metrics.push(metric('原始', hexbytes(info)))
+			v.text = viewText(v)
+			return v
+		}
+		v.metrics.push(metric('唯一码', hexbytes(info.slice(0, 7))))
+		const vv = volt01(info, 7)
+		v.metrics.push(metric('供电', vv != null ? vv.toFixed(2) + ' V' : '-'))
+		if (info.length >= 16) v.metrics.push(metric('MAC', hexbytes(info.slice(10, 16))))
+		if (info.length >= 18) v.metrics.push(metric('频偏', String(u16be(info, 16))))
+		if (info.length >= 19) v.metrics.push(metric('匹配电容', String(info[18] & 0xff)))
+		if (info.length >= 28) {
+			v.flags = flagsFromLe(info.slice(24, 28), [
+				{ bit: 4, name: '电池电压' }, { bit: 3, name: '蓝牙模组' },
+				{ bit: 2, name: '磁开关' }, { bit: 1, name: 'Flash' }, { bit: 0, name: '阀控' },
+			])
+		}
+		v.text = viewText(v)
+		return v
+	}
+
+	// 工位2 流量包: 按长度自适应(0x32 实测可回 25B 短包, 与 0x31 同布局)
 	function decodeUidFlowPacket(devType, info) {
-		const lines = []
-		if (devType === 0x31) {
-			if (info.length < 15) {
-				lines.push('(长度' + info.length + ', 期望25)')
-				if (info.length) lines.push(hexbytes(info))
-				return lines
-			}
-			lines.push('唯一码: ' + hexbytes(info.slice(0, 7)))
-			lines.push('正向流量: ' + u16be(info, 7))
-			lines.push('反向流量: ' + u16be(info, 9))
-			lines.push('无磁信号1: ' + (info[11] & 0xff) + '  信号2: ' + (info[12] & 0xff))
-			lines.push('供电电压: ' + (u16be(info, 13) / 100).toFixed(2) + ' V')
-			if (info.length >= 25) {
-				lines.push('--- 检测结果 ---')
-				lines.push.apply(lines, decodeBeFlags(info.slice(21, 25), [
-					{ bit: 5, name: '模板识别' },
-					{ bit: 4, name: '摄像头' },
-					{ bit: 3, name: 'DSP程序' },
-					{ bit: 2, name: '触摸开关' },
-					{ bit: 1, name: '阀控' },
-					{ bit: 0, name: '磁开关' },
-				]))
-			}
-			return lines
+		const n = info.length
+		if (n >= 70 || (devType === 0x33 && n >= 60)) return decodeFlow33(info)
+		if (n >= 40 || (devType === 0x32 && n >= 40)) return decodeFlow32(info)
+		if (n >= 15) return decodeFlow31(info) // 含 0x31 标准 25B, 以及 0x32 短包
+		const v = emptyView()
+		if (n >= 7) v.metrics.push(metric('唯一码', hexbytes(info.slice(0, 7))))
+		if (n > 7) v.metrics.push(metric('数据', hexbytes(info.slice(7))))
+		v.note = '长度' + n + ' 未匹配流量布局'
+		v.text = viewText(v)
+		return v
+	}
+
+	function decodeFlow31(info) {
+		const v = emptyView()
+		v.metrics.push(metric('唯一码', hexbytes(info.slice(0, 7))))
+		if (info.length >= 11) {
+			v.metrics.push(metric('正向流量', String(u16field(info, 7))))
+			v.metrics.push(metric('反向流量', String(u16field(info, 9))))
 		}
-		if (devType === 0x32) {
-			if (info.length < 36) {
-				lines.push('(长度' + info.length + ', 期望46)')
-				if (info.length) lines.push(hexbytes(info))
-				return lines
-			}
-			lines.push('唯一码: ' + hexbytes(info.slice(0, 7)))
-			lines.push('CCID: ' + asciiPrintable(info.slice(7, 27)).replace(/\.+$/, ''))
-			lines.push('CSQ: ' + (info[27] & 0xff))
-			lines.push('正向流量: ' + u16be(info, 28) + '  反向: ' + u16be(info, 30))
-			lines.push('无磁信号1: ' + (info[32] & 0xff) + '  信号2: ' + (info[33] & 0xff))
-			lines.push('供电电压: ' + (u16be(info, 34) / 100).toFixed(2) + ' V')
-			if (info.length >= 37) {
-				const b36 = info[36] & 0xff
-				lines.push('CCID使能: ' + (bitOn(b36, 2) ? '有效' : '无效'))
-				lines.push('IMEI使能: ' + (bitOn(b36, 1) ? '有效' : '无效'))
-				lines.push('磁开关状态: ' + (bitOn(b36, 0) ? '有磁' : '无磁'))
-			}
-			if (info.length >= 38) lines.push('RS485供电电压: ' + ((info[37] & 0xff) / 10).toFixed(1) + ' V')
-			if (info.length >= 46) {
-				lines.push('--- 检测结果 ---')
-				lines.push.apply(lines, decodeBeFlags(info.slice(42, 46), [
-					{ bit: 17, name: 'RS485供电电压' },
-					{ bit: 16, name: '脉冲计量线S4' },
-					{ bit: 15, name: '脉冲计量线S3' },
-					{ bit: 14, name: '脉冲计量线S2' },
-					{ bit: 13, name: '脉冲计量线S1' },
-					{ bit: 12, name: 'AD采样' },
-					{ bit: 11, name: 'RS485' },
-					{ bit: 10, name: 'MBUS通道2' },
-					{ bit: 9, name: 'MBUS通道1' },
-					{ bit: 8, name: '气体压力传感器', okText: '合格', badText: '不合格' },
-					{ bit: 7, name: 'SAS传感器', okText: '合格', badText: '不合格' },
-					{ bit: 6, name: 'SIM卡' },
-					{ bit: 5, name: '模板识别' },
-					{ bit: 4, name: '摄像头' },
-					{ bit: 3, name: 'DSP程序' },
-					{ bit: 2, name: '触摸开关' },
-					{ bit: 1, name: '阀控' },
-					{ bit: 0, name: '磁开关' },
-				]))
-			}
-			return lines
+		if (info.length >= 13) {
+			v.metrics.push(metric('无磁1', String(info[11] & 0xff)))
+			v.metrics.push(metric('无磁2', String(info[12] & 0xff)))
 		}
-		if (devType === 0x33) {
-			if (info.length < 43) {
-				lines.push('(长度' + info.length + ', 期望72)')
-				if (info.length) lines.push(hexbytes(info))
-				return lines
-			}
-			lines.push('唯一码: ' + hexbytes(info.slice(0, 7)))
-			lines.push('CCID: ' + asciiPrintable(info.slice(7, 27)).replace(/\.+$/, ''))
-			lines.push('IMEI: ' + asciiPrintable(info.slice(27, 42)).replace(/\.+$/, ''))
-			lines.push('CSQ: ' + (info[42] & 0xff))
-			if (info.length >= 51) {
-				const pulses = []
-				for (let i = 0; i < 8; i++) pulses.push(info[43 + i] & 0xff)
-				lines.push('脉冲1-8: ' + pulses.join(', '))
-			}
-			if (info.length >= 57) {
-				lines.push('AD1: ' + (u16be(info, 51) / 1000).toFixed(3) + '  AD2: ' + (u16be(info, 53) / 1000).toFixed(3))
-				lines.push('供电电压: ' + (u16be(info, 55) / 100).toFixed(2) + ' V')
-			}
-			if (info.length >= 72) {
-				lines.push('--- 检测结果 ---')
-				lines.push.apply(lines, decodeBeFlags(info.slice(68, 72), [
-					{ bit: 6, name: 'RS485' },
-					{ bit: 5, name: 'AD2采样' },
-					{ bit: 4, name: 'AD1采样' },
-					{ bit: 3, name: '电池电压', okText: '合格', badText: '不合格' },
-					{ bit: 2, name: 'SIM卡', okText: '合格', badText: '不合格' },
-					{ bit: 1, name: '磁开关' },
-					{ bit: 0, name: '蜂窝模组通讯' },
-				]))
-			}
-			return lines
+		if (info.length >= 15) {
+			const vv = volt01(info, 13)
+			v.metrics.push(metric('供电', vv != null ? vv.toFixed(2) + ' V' : '-'))
 		}
-		if (info.length >= 7) lines.push('唯一码: ' + hexbytes(info.slice(0, 7)))
-		if (info.length > 7) lines.push('数据: ' + hexbytes(info.slice(7)))
-		return lines
+		if (info.length >= 25) {
+			v.flags = flagsFromLe(info.slice(21, 25), [
+				{ bit: 5, name: '模板识别' }, { bit: 4, name: '摄像头' },
+				{ bit: 3, name: 'DSP' }, { bit: 2, name: '触摸开关' },
+				{ bit: 1, name: '阀控' }, { bit: 0, name: '磁开关' },
+			])
+		}
+		if (info.length < 25) v.note = '短包 ' + info.length + 'B'
+		v.text = viewText(v)
+		return v
+	}
+
+	function decodeFlow32(info) {
+		const v = emptyView()
+		v.metrics.push(metric('唯一码', hexbytes(info.slice(0, 7))))
+		v.metrics.push(metric('CCID', asciiPrintable(info.slice(7, 27)).replace(/\.+$/, '')))
+		if (info.length >= 28) {
+			const csq = info[27] & 0xff
+			v.metrics.push(metric('CSQ', String(csq), csq === 0 || csq === 0xff))
+		}
+		if (info.length >= 32) {
+			v.metrics.push(metric('正向流量', String(u16field(info, 28))))
+			v.metrics.push(metric('反向流量', String(u16field(info, 30))))
+		}
+		if (info.length >= 34) {
+			v.metrics.push(metric('无磁1', String(info[32] & 0xff)))
+			v.metrics.push(metric('无磁2', String(info[33] & 0xff)))
+		}
+		if (info.length >= 36) {
+			const vv = volt01(info, 34)
+			v.metrics.push(metric('供电', vv != null ? vv.toFixed(2) + ' V' : '-'))
+		}
+		if (info.length >= 37) {
+			const b36 = info[36] & 0xff
+			v.flags.push({ name: 'CCID使能', ok: null, label: bitOn(b36, 2) ? 'CCID·有效' : 'CCID·无效' })
+			v.flags.push({ name: 'IMEI使能', ok: null, label: bitOn(b36, 1) ? 'IMEI·有效' : 'IMEI·无效' })
+			v.flags.push({ name: '磁吸', ok: null, label: bitOn(b36, 0) ? '有磁' : '无磁' })
+		}
+		if (info.length >= 38 && (info[37] & 0xff) !== 0xff) {
+			v.metrics.push(metric('RS485供电', ((info[37] & 0xff) / 10).toFixed(1) + ' V'))
+		}
+		if (info.length >= 46) {
+			v.flags = v.flags.concat(flagsFromLe(info.slice(42, 46), [
+				{ bit: 17, name: 'RS485供电检' }, { bit: 16, name: '脉冲S4' },
+				{ bit: 15, name: '脉冲S3' }, { bit: 14, name: '脉冲S2' },
+				{ bit: 13, name: '脉冲S1' }, { bit: 12, name: 'AD采样' },
+				{ bit: 11, name: 'RS485' }, { bit: 10, name: 'MBUS-CH2' },
+				{ bit: 9, name: 'MBUS-CH1' }, { bit: 8, name: '气压传感' },
+				{ bit: 7, name: 'SAS传感' }, { bit: 6, name: 'SIM卡' },
+				{ bit: 5, name: '模板识别' }, { bit: 4, name: '摄像头' },
+				{ bit: 3, name: 'DSP' }, { bit: 2, name: '触摸开关' },
+				{ bit: 1, name: '阀控' }, { bit: 0, name: '磁开关' },
+			]))
+		}
+		v.text = viewText(v)
+		return v
+	}
+
+	function decodeFlow33(info) {
+		const v = emptyView()
+		v.metrics.push(metric('唯一码', hexbytes(info.slice(0, 7))))
+		if (info.length >= 27) v.metrics.push(metric('CCID', asciiPrintable(info.slice(7, 27)).replace(/\.+$/, '')))
+		if (info.length >= 42) v.metrics.push(metric('IMEI', asciiPrintable(info.slice(27, 42)).replace(/\.+$/, '')))
+		if (info.length >= 43) v.metrics.push(metric('CSQ', String(info[42] & 0xff)))
+		if (info.length >= 51) {
+			const pulses = []
+			for (let i = 0; i < 8; i++) pulses.push(info[43 + i] & 0xff)
+			v.metrics.push(metric('脉冲1-8', pulses.join(',')))
+		}
+		if (info.length >= 57) {
+			v.metrics.push(metric('AD1', (u16be(info, 51) / 1000).toFixed(3)))
+			v.metrics.push(metric('AD2', (u16be(info, 53) / 1000).toFixed(3)))
+			const vv = volt01(info, 55)
+			v.metrics.push(metric('供电', vv != null ? vv.toFixed(2) + ' V' : '-'))
+		}
+		if (info.length >= 72) {
+			v.flags = flagsFromLe(info.slice(68, 72), [
+				{ bit: 6, name: 'RS485' }, { bit: 5, name: 'AD2' }, { bit: 4, name: 'AD1' },
+				{ bit: 3, name: '电池电压' }, { bit: 2, name: 'SIM卡' },
+				{ bit: 1, name: '磁开关' }, { bit: 0, name: '蜂窝模组' },
+			])
+		}
+		v.text = viewText(v)
+		return v
 	}
 
 	function decodeLegacyDataPacket(devType, info) {
-		const lines = []
-		// 常见 37 字节: CCID20 + IMEI15 + CSQ + flags
+		const v = emptyView()
 		if (info.length >= 37 && (devType === 0x01 || devType === 0x02 || devType === 0x06 ||
-			devType === 0x0B || devType === 0x0C)) {
-			lines.push('CCID: ' + asciiPrintable(info.slice(0, 20)).replace(/\.+$/, ''))
-			lines.push('IMEI: ' + asciiPrintable(info.slice(20, 35)).replace(/\.+$/, ''))
-			lines.push('信号强度: ' + (info[35] & 0xff))
+			devType === 0x0B || devType === 0x0C || info.length === 37)) {
+			v.metrics.push(metric('CCID', asciiPrintable(info.slice(0, 20)).replace(/\.+$/, '')))
+			v.metrics.push(metric('IMEI', asciiPrintable(info.slice(20, 35)).replace(/\.+$/, '')))
+			v.metrics.push(metric('信号', String(info[35] & 0xff)))
 			const f = info[36] & 0xff
-			if (devType === 0x01) {
-				lines.push.apply(lines, decodeBitsNamed(f, [
+			if (devType === 0x0B) {
+				v.flags = flagsFromByte(f, [
+					{ bit: 7, name: 'Flash' }, { bit: 6, name: '阀控' }, { bit: 5, name: '磁开关' },
+					{ bit: 4, name: '电池电压' }, { bit: 3, name: 'I2C' }, { bit: 2, name: '生命周期' },
+					{ bit: 1, name: 'SIM卡' }, { bit: 0, name: '蜂窝模组' },
+				])
+			} else if (devType === 0x0C) {
+				v.flags = flagsFromByte(f, [
+					{ bit: 7, name: '触摸' }, { bit: 6, name: '阀控' }, { bit: 5, name: '磁开关' },
+					{ bit: 4, name: '电池电压' }, { bit: 3, name: 'I2C' },
+					{ bit: 1, name: 'SIM卡' }, { bit: 0, name: '蜂窝模组' },
+				])
+			} else {
+				v.flags = flagsFromByte(f, [
 					{ bit: 5, name: '磁开关' }, { bit: 3, name: 'I2C' },
 					{ bit: 1, name: 'SIM卡' }, { bit: 0, name: '蜂窝模组' },
-				]))
-			} else if (devType === 0x0B) {
-				lines.push.apply(lines, decodeBitsNamed(f, [
-					{ bit: 7, name: 'Flash' }, { bit: 6, name: '阀控' },
-					{ bit: 5, name: '磁开关' }, { bit: 4, name: '电池电压' },
-					{ bit: 3, name: 'I2C' }, { bit: 2, name: '上报生命周期' },
-					{ bit: 1, name: 'SIM卡' }, { bit: 0, name: '蜂窝模组' },
-				]))
-			} else if (devType === 0x0C) {
-				lines.push.apply(lines, decodeBitsNamed(f, [
-					{ bit: 7, name: '触摸开关' }, { bit: 6, name: '阀控' },
-					{ bit: 5, name: '磁开关' }, { bit: 4, name: '电池电压' },
-					{ bit: 3, name: 'I2C' }, { bit: 1, name: 'SIM卡' },
-					{ bit: 0, name: '蜂窝模组' },
-				]))
-			} else {
-				lines.push('状态字节: 0x' + hexByte(f))
+				])
 			}
-			return lines
+			v.text = viewText(v)
+			return v
 		}
-		if (devType === 0x20 && info.length >= 15) {
-			lines.push('UUID: ' + hexbytes(info.slice(0, 12)))
-			lines.push('电池电压: ' + ((info[12] & 0xff) / 10).toFixed(1) + ' V')
-			// 13-14 flags in 2 bytes — take low bits of last
-			const fl = info[14] & 0xff
-			lines.push.apply(lines, decodeBitsNamed(fl, [
-				{ bit: 3, name: 'EEPROM' }, { bit: 2, name: '电池电压检测' },
+		if ((devType === 0x20 || info.length >= 15) && info.length >= 15 && info.length < 37) {
+			v.metrics.push(metric('UUID', hexbytes(info.slice(0, 12))))
+			v.metrics.push(metric('电池', ((info[12] & 0xff) / 10).toFixed(1) + ' V'))
+			v.flags = flagsFromByte(info[14] & 0xff, [
+				{ bit: 3, name: 'EEPROM' }, { bit: 2, name: '电池检' },
 				{ bit: 1, name: 'SPI Flash' }, { bit: 0, name: '磁开关' },
-			]))
-			return lines
+			])
+			v.text = viewText(v)
+			return v
 		}
-		if (info.length) lines.push(hexbytes(info))
-		else lines.push('(空)')
-		return lines
+		v.note = info.length ? hexbytes(info) : '(空)'
+		v.text = v.note
+		return v
 	}
 
 	function decodeLegacyFlowPacket(devType, info) {
-		const lines = []
-		if (info.length >= 19 && (devType === 0x03 || devType === 0x05 || devType === 0x0D ||
-			devType === 0x07 || devType === 0x08)) {
-			lines.push('IMEI: ' + asciiPrintable(info.slice(0, 15)).replace(/\.+$/, ''))
-			lines.push('正向流量: ' + u16be(info, 15) + '  反向: ' + u16be(info, 17))
+		const v = emptyView()
+		if (info.length >= 19) {
+			v.metrics.push(metric('IMEI', asciiPrintable(info.slice(0, 15)).replace(/\.+$/, '')))
+			v.metrics.push(metric('正向流量', String(u16be(info, 15))))
+			v.metrics.push(metric('反向流量', String(u16be(info, 17))))
 			if (info.length >= 22) {
-				lines.push('无磁信号1: ' + (info[19] & 0xff) + '  信号2: ' + (info[20] & 0xff))
+				v.metrics.push(metric('无磁1', String(info[19] & 0xff)))
+				v.metrics.push(metric('无磁2', String(info[20] & 0xff)))
 				const f = info[21] & 0xff
-				lines.push(flagLine('磁开关', bitOn(f, 5)))
+				v.flags.push({ name: '磁开关', ok: bitOn(f, 5) })
 				if (devType === 0x0D) {
-					lines.push(flagLine('触摸开关', bitOn(f, 7)))
-					lines.push(flagLine('阀控', bitOn(f, 6)))
+					v.flags.push({ name: '触摸', ok: bitOn(f, 7) })
+					v.flags.push({ name: '阀控', ok: bitOn(f, 6) })
 				}
 			} else if (info.length >= 20) {
-				lines.push(flagLine('磁开关', bitOn(info[19], 5)))
+				v.flags.push({ name: '磁开关', ok: bitOn(info[19], 5) })
 			}
-			return lines
+			v.text = viewText(v)
+			return v
 		}
 		if (devType === 0x0F && info.length >= 13) {
-			lines.push('MAC: ' + hexbytes(info.slice(0, 6)))
-			lines.push('正向流量: ' + u16be(info, 6) + '  反向: ' + u16be(info, 8))
-			lines.push('无磁信号1: ' + (info[10] & 0xff) + '  信号2: ' + (info[11] & 0xff))
-			lines.push(flagLine('磁开关', bitOn(info[12], 5)))
-			return lines
+			v.metrics.push(metric('MAC', hexbytes(info.slice(0, 6))))
+			v.metrics.push(metric('正向流量', String(u16be(info, 6))))
+			v.metrics.push(metric('反向流量', String(u16be(info, 8))))
+			v.flags.push({ name: '磁开关', ok: bitOn(info[12], 5) })
+			v.text = viewText(v)
+			return v
 		}
-		if (info.length) lines.push(hexbytes(info))
-		else lines.push('(空)')
-		return lines
+		v.note = info.length ? hexbytes(info) : '(空)'
+		v.text = v.note
+		return v
 	}
 
 	function formatFrame(r) {
 		const dirArrow = r.dir === 'up' ? '↑' : r.dir === 'down' ? '↓' : '?'
-		const status = r.xorOk ? '✓' : '✗'
-		let h = '<div class="sk-parse">'
-		h += '<div class="sk-parse-bar">' + dirArrow + ' ' + status + ' 工装</div>'
+		const view = r.infoView || null
+		const flags = (view && view.flags) || []
+		const metrics = (view && view.metrics) || []
+		const testFlags = flags.filter(function (f) { return f.ok === true || f.ok === false })
+		const failN = testFlags.filter(function (f) { return f.ok === false }).length
+		const passN = testFlags.length - failN
+
+		let h = '<div class="sk-parse gz-parse">'
+		h += '<div class="gz-parse-head">'
+		h += '<span class="gz-dir">' + dirArrow + '</span>'
+		h += r.xorOk
+			? '<span class="gz-pill ok" title="XOR校验通过">XOR</span>'
+			: '<span class="gz-pill bad" title="XOR校验失败">XOR</span>'
 		const f = r.fields || {}
-		const cells = []
-		for (const k in f) {
-			const v = f[k]
-			let val
-			if (v == null) val = ''
-			else if (typeof v === 'object' && v.name !== undefined) val = escHtml(String(v.value)) + ' (' + escHtml(v.name) + ')'
-			else val = escHtml(String(v))
-			cells.push({ name: k, value: val })
+		const dev = f['设备类型']
+		const cmd = f['命令字']
+		if (dev) {
+			const dv = typeof dev === 'object' ? dev.value : dev
+			const dn = typeof dev === 'object' ? dev.name : ''
+			h += '<span class="gz-pill" title="' + escHtml(dn || '') + '">' + escHtml(String(dv)) + '</span>'
 		}
-		if (cells.length) {
-			const COLS = 3
-			h += '<table class="sk-parse-grid"><tbody>'
-			for (let i = 0; i < cells.length; i += COLS) {
-				h += '<tr>'
-				for (let j = 0; j < COLS; j++) {
-					const c = cells[i + j]
-					h += '<td class="sk-parse-hdr">' + (c ? escHtml(c.name) : '') + '</td>'
-				}
-				h += '</tr><tr>'
-				for (let j = 0; j < COLS; j++) {
-					const c = cells[i + j]
-					h += '<td>' + (c ? c.value : '') + '</td>'
-				}
-				h += '</tr>'
+		if (cmd) {
+			const cv = typeof cmd === 'object' ? cmd.value : cmd
+			const cn = typeof cmd === 'object' ? cmd.name : ''
+			h += '<span class="gz-pill accent" title="' + escHtml(String(cv)) + '">' + escHtml(cn || String(cv)) + '</span>'
+		}
+		if (f['工位']) h += '<span class="gz-pill">' + escHtml(String(f['工位'])) + '</span>'
+		if (testFlags.length) {
+			if (failN) h += '<span class="gz-pill bad">' + failN + '/' + testFlags.length + ' 异常</span>'
+			else h += '<span class="gz-pill ok">检测全过 ' + passN + '</span>'
+		}
+		h += '</div>'
+
+		if (metrics.length) {
+			h += '<div class="gz-metrics">'
+			for (let i = 0; i < metrics.length; i++) {
+				const m = metrics[i]
+				h += '<div class="gz-metric' + (m.warn ? ' is-warn' : '') + '">'
+				h += '<span class="gz-k">' + escHtml(m.label) + '</span>'
+				h += '<span class="gz-v">' + escHtml(m.value) + '</span>'
+				h += '</div>'
 			}
-			h += '</tbody></table>'
+			h += '</div>'
 		}
-		if (r.decoded) {
-			h += '<div class="sk-parse-tlvs"><details class="sk-parse-tag" open><summary>信息域解析</summary>' +
-				'<div class="sk-parse-items"><pre style="white-space:pre-wrap;margin:0;">' + escHtml(r.decoded) + '</pre></div></details></div>'
+
+		if (flags.length) {
+			// 异常项前置, 一眼可见
+			const ordered = flags.slice().sort(function (a, b) {
+				const sa = a.ok === false ? 0 : a.ok === true ? 2 : 1
+				const sb = b.ok === false ? 0 : b.ok === true ? 2 : 1
+				return sa - sb
+			})
+			h += '<div class="gz-flags">'
+			for (let i = 0; i < ordered.length; i++) {
+				const fl = ordered[i]
+				let cls = 'na'
+				let icon = '·'
+				if (fl.ok === true) { cls = 'ok'; icon = '✓' }
+				else if (fl.ok === false) { cls = 'bad'; icon = '✗' }
+				const label = fl.label != null ? fl.label : fl.name
+				h += '<span class="gz-flag ' + cls + '" title="' + escHtml(fl.name) + '">' +
+					icon + ' ' + escHtml(label) + '</span>'
+			}
+			h += '</div>'
 		}
+
+		if (view && view.note) {
+			h += '<div class="gz-note">' + escHtml(view.note) + '</div>'
+		}
+
+		// 无结构化内容时回退短文本
+		if (!metrics.length && !flags.length && r.decoded) {
+			h += '<div class="gz-note">' + escHtml(r.decoded) + '</div>'
+		}
+
 		if (r.errors && r.errors.length) {
 			h += '<div class="sk-parse-errors">'
 			for (let i = 0; i < r.errors.length; i++) h += '<div>' + escHtml(r.errors[i]) + '</div>'
@@ -703,15 +810,86 @@
 	function byteMap(r) {
 		const raw = (r.raw instanceof Uint8Array) ? r.raw : Uint8Array.from(r.raw || [])
 		const n = raw.length
-		const map = new Array(n).fill('')
+		// 与 SEK/wmbus 一致: 每格 { tip, grp }, 供 HEX 悬停 data-tip/data-grp
+		const map = new Array(n)
+		for (let i = 0; i < n; i++) map[i] = ''
 		if (n < 5) return map
-		map[0] = '帧头 A5'
-		map[1] = '长度'
-		if (n > 2) map[2] = '设备类型'
-		if (n > 3) map[3] = '命令字'
+		const set = function (off, len, tip, grp) {
+			for (let k = 0; k < len; k++) {
+				if (off + k < n) map[off + k] = { tip: tip, grp: grp }
+			}
+		}
+		const hx = function (b) { return '0x' + hexByte(b) }
 		const total = r.frameLen || n
-		for (let i = 4; i < total - 1 && i < n; i++) map[i] = '信息域'
-		if (total - 1 < n) map[total - 1] = 'XOR校验'
+		const dev = r.devType != null ? r.devType : (n > 2 ? raw[2] : 0)
+		const cmd = r.cmd != null ? r.cmd : (n > 3 ? raw[3] : 0)
+		const cmdDef = CMD_TABLE[cmd]
+		const devDef = DEV_TYPES[dev]
+		set(0, 1, '帧头 = A5', 'hdr')
+		set(1, 1, '长度 = ' + (raw[1] & 0xff) + ' (Dev+Cmd+Info+XOR)', 'len')
+		set(2, 1, '设备类型 = ' + hx(dev) + (devDef ? ' (' + devDef.name + ')' : ''), 'dev')
+		set(3, 1, '命令字 = ' + hx(cmd) + (cmdDef ? ' (' + cmdDef.name + ')' : ''), 'cmd')
+		const infoEnd = total - 1
+		const infoLen = Math.max(0, infoEnd - 4)
+		if (infoLen > 0) {
+			// 按命令细分信息域悬停
+			if ((cmd === 0x88 || cmd === 0x89) && infoLen >= 7) {
+				set(4, 7, '唯一码 = ' + hexbytes(raw.subarray(4, 11)), 'uid')
+				let o = 11
+				if (cmd === 0x88 && infoLen >= 55) {
+					// 工位1 数据包 55B (factory.c TEST_CMD_GET_INFO)
+					set(o, 20, 'CCID', 'ccid'); o += 20
+					set(o, 15, 'IMEI', 'imei'); o += 15
+					set(o, 1, 'CSQ = ' + (raw[o] & 0xff), 'csq'); o += 1
+					if (o + 1 < infoEnd) {
+						const vv = volt01(Array.from(raw.subarray(4, infoEnd)), o - 4)
+						set(o, 2, '供电电压 = ' + (vv != null ? vv.toFixed(2) + ' V' : '?') + ' (u16 LE)', 'volt')
+						o += 2
+					}
+					if (o < infoEnd) { set(o, 1, '使能状态字节', 'en'); o += 1 }
+					if (o < infoEnd) { set(o, 1, '红外有效通讯长度', 'ir'); o += 1 }
+					if (o < infoEnd) { set(o, 1, 'RS485供电电压', 'rs485v'); o += 1 }
+					if (o + 2 < infoEnd) { set(o, 3, '预留', 'rsv'); o += 3 }
+					if (o + 3 < infoEnd) {
+						const fb = Array.from(raw.subarray(o, o + 4))
+						const fl = flagsFromLe(fb, [
+							{ bit: 0, name: '蜂窝模组' }, { bit: 1, name: 'SIM卡' }, { bit: 2, name: '阀控' },
+							{ bit: 3, name: 'I2C' }, { bit: 4, name: 'Flash' }, { bit: 5, name: '磁开关' },
+							{ bit: 6, name: '电池电压' }, { bit: 7, name: '触摸开关' }, { bit: 8, name: 'DSP' },
+							{ bit: 9, name: '摄像头' }, { bit: 10, name: '模板识别' }, { bit: 11, name: 'RS485' },
+							{ bit: 12, name: 'MBUS串口' }, { bit: 13, name: 'RTC晶振' }, { bit: 14, name: 'MBUS供电' },
+							{ bit: 15, name: 'MBUS模块' }, { bit: 16, name: 'AD采样' }, { bit: 17, name: '脉冲S1' },
+							{ bit: 18, name: '脉冲S2' }, { bit: 19, name: '脉冲S3' }, { bit: 20, name: '脉冲S4' },
+							{ bit: 21, name: '蓝牙模组' }, { bit: 22, name: 'RS485供电检' }, { bit: 23, name: '超声总线' },
+						])
+						const bad = fl.filter(function (x) { return x.ok === false }).map(function (x) { return x.name })
+						const tip = '检测状态 u32 LE=0x' + u32leBytes(fb).toString(16).toUpperCase().padStart(8, '0') +
+							(bad.length ? (' 异常: ' + bad.join(',')) : ' 全过')
+						set(o, 4, tip, 'flags')
+					}
+				} else if (cmd === 0x89 && infoLen >= 25) {
+					set(o, 2, '正向流量 = ' + u16le(Array.from(raw.subarray(4)), 7) + ' (u16 LE)', 'fwd')
+					set(o + 2, 2, '反向流量 = ' + u16le(Array.from(raw.subarray(4)), 9) + ' (u16 LE)', 'rev')
+					set(o + 4, 1, '无磁信号1', 's1')
+					set(o + 5, 1, '无磁信号2', 's2')
+					const vv = volt01(Array.from(raw.subarray(4)), 13)
+					set(o + 6, 2, '供电 = ' + (vv != null ? vv.toFixed(2) + ' V' : '?') + ' (u16 LE)', 'volt')
+					if (infoLen >= 25) set(o + 14, 4, '检测状态 u32 LE', 'flags')
+				} else {
+					set(4, infoLen, '信息域 ' + infoLen + 'B', 'info')
+				}
+			} else if (cmd === 0x08 && infoLen >= 1) {
+				set(4, 1, '唯一码操作 = ' + (raw[4] & 0xff) + ' (' + (UID_OP[raw[4] & 0xff] || '?') + ')', 'uidop')
+				if (infoLen >= 8) set(5, 7, '唯一码 = ' + hexbytes(raw.subarray(5, 12)), 'uid')
+			} else if (cmd === 0x0A && infoLen >= 1) {
+				set(4, Math.min(7, infoLen), '写入唯一码', 'uid')
+			} else {
+				set(4, infoLen, '信息域 ' + infoLen + 'B', 'info')
+			}
+		}
+		if (total - 1 < n && total >= 5) {
+			set(total - 1, 1, 'XOR校验 = ' + hx(raw[total - 1]) + (r.xorOk ? ' ✓' : ' ✗'), 'xor')
+		}
 		return map
 	}
 
