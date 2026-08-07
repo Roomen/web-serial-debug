@@ -306,28 +306,19 @@
 		updateStorageHint()
 	}
 
-	/** 单行提示：时长估算 + 占用（合并原 hint/usage，避免第二行） */
+	/** 存储详情放在 title（悬停），不占工具条宽度 */
 	function updateStorageHint() {
 		const el = E('blu-storage-hint')
-		if (!el) return
+		const wrap = E('blu-storage-set')
 		const hz = targetRateHz > 0 ? targetRateHz : 100000
 		const ramSec = estimateDurationSec(RING_CAP_MAX, hz)
 		const hotBytes = hotCount * BYTES_PER_SAMPLE
 		const diskBytes = Store ? Store.getDiskUsed() : 0
-		const ramPct = RING_CAP_MAX > 0 ? Math.min(100, hotCount / RING_CAP_MAX * 100) : 0
-		const diskPct = diskBudgetBytes > 0 ? Math.min(100, diskBytes / diskBudgetBytes * 100) : 0
-		// 短文案单行：约可录时长 · 热/盘占用
-		let text = '≈' + fmtDuration(ramSec) + '@' + fmtHz(hz)
-		if (hotCount > 0 || diskBytes > 0 || coldCount > 0) {
-			text += ' · 热' + Math.round(ramPct) + '%'
-			if (diskBudgetBytes > 0) text += ' 盘' + Math.round(diskPct) + '%'
-		}
-		el.textContent = text
 		const diskSamplesEst = diskBudgetBytes > 0
 			? Math.floor(diskBudgetBytes / (BYTES_PER_SAMPLE * 0.35))
 			: 0
 		const diskSec = estimateDurationSec(diskSamplesEst, hz)
-		el.title = 'RAM ' + fmtGb(storageCfg.ramGB) + ' 约 ' + fmtDuration(ramSec) +
+		const tip = 'RAM ' + fmtGb(storageCfg.ramGB) + ' 约 ' + fmtDuration(ramSec) +
 			' @' + fmtHz(hz) +
 			(diskBudgetBytes > 0
 				? (' · 磁盘 ' + fmtGb(storageCfg.diskGB) + ' 压后约 +' + fmtDuration(diskSec))
@@ -335,6 +326,11 @@
 			' · 热 ' + fmtBytes(hotBytes) + '/' + fmtGb(storageCfg.ramGB) +
 			(diskBudgetBytes > 0 ? (' · 盘 ' + fmtBytes(diskBytes) + '/' + fmtGb(storageCfg.diskGB)) : '') +
 			(coldCount > 0 ? (' · 冷 ' + coldCount + ' 点') : '')
+		if (wrap) wrap.title = tip
+		if (el) {
+			el.textContent = ''
+			el.title = tip
+		}
 	}
 
 	function updateStorageUsage() {
@@ -848,15 +844,98 @@
 		else if (level === 'warn') console.warn('[blu]', msg)
 	}
 
+	/** 连接状态合并进「打开/关闭」按钮（不再单独显示未连接/已连接） */
 	function setStatus(text, connected) {
-		const root = E('blu-status')
-		if (!root) return
-		const ind = root.querySelector('.serial-status-indicator')
-		const txt = root.querySelector('.serial-status-text')
-		if (txt) txt.textContent = text
-		if (ind) {
-			ind.classList.toggle('connected', !!connected)
-			ind.classList.toggle('disconnected', !connected)
+		const toggle = E('blu-open')
+		if (!toggle) return
+		const on = !!connected
+		toggle.classList.toggle('is-open', on)
+		toggle.classList.toggle('btn-primary', !on)
+		toggle.classList.toggle('btn-outline-danger', on)
+		toggle.innerHTML = on
+			? '<i class="bi bi-plug-fill"></i> 关闭'
+			: '<i class="bi bi-plug"></i> 打开'
+		toggle.title = on ? (text || '已连接 · 点击关闭') : (text || '未连接 · 点击打开')
+	}
+
+	function setDeviceMenuOpen(open) {
+		const menu = E('blu-device-menu')
+		const pop = E('blu-device-pop')
+		const btn = E('blu-device-btn')
+		if (!pop || !btn) return
+		const on = !!open
+		pop.hidden = !on
+		btn.classList.toggle('is-open', on)
+		btn.setAttribute('aria-expanded', on ? 'true' : 'false')
+		if (menu) menu.classList.toggle('is-open', on)
+	}
+
+	function shortDeviceLabel(port, index) {
+		if (!port) return '未选设备'
+		let info = {}
+		try { info = port.getInfo ? port.getInfo() : {} } catch (e) {}
+		const sn = getPortSn(port)
+		const vp = formatVidPid(info, true)
+		if (sn) return sn
+		if (vp) return 'BLU · <span class="blu-vp">' + vp + '</span>'
+		return bluKnownPorts.length > 1 ? ('设备 #' + (index + 1)) : 'BLU'
+	}
+
+	function renderDeviceList() {
+		const list = E('blu-device-list')
+		const label = E('blu-device-label')
+		if (label) {
+			const idx = bluPort ? bluKnownPorts.indexOf(bluPort) : -1
+			const html = shortDeviceLabel(bluPort, idx >= 0 ? idx : 0)
+			// 允许短 VID/PID 用 span
+			if (html.indexOf('<') >= 0) label.innerHTML = html
+			else label.textContent = html
+			label.title = bluPort ? bluPortLabel(bluPort, idx >= 0 ? idx : 0) : '点击选择或添加设备'
+		}
+		if (!list) return
+		list.innerHTML = ''
+		if (!bluKnownPorts.length) {
+			const empty = document.createElement('div')
+			empty.className = 'blu-device-empty'
+			empty.textContent = '未检测到设备，请添加'
+			list.appendChild(empty)
+			return
+		}
+		for (let i = 0; i < bluKnownPorts.length; i++) {
+			const p = bluKnownPorts[i]
+			const item = document.createElement('button')
+			item.type = 'button'
+			item.className = 'blu-device-item' + (p === bluPort ? ' is-active' : '')
+			item.setAttribute('role', 'option')
+			item.dataset.index = String(i)
+			let info = {}
+			try { info = p.getInfo ? p.getInfo() : {} } catch (e) {}
+			const sn = getPortSn(p)
+			const vp = formatVidPid(info, true)
+			const name = document.createElement('span')
+			name.className = 'blu-device-item-name'
+			name.textContent = sn || ('BLU' + (bluKnownPorts.length > 1 ? ' #' + (i + 1) : ''))
+			const meta = document.createElement('span')
+			meta.className = 'blu-device-item-meta'
+			meta.textContent = vp || '已授权串口'
+			item.appendChild(name)
+			item.appendChild(meta)
+			item.addEventListener('click', function () {
+				const ii = parseInt(item.dataset.index, 10)
+				if (!isFinite(ii) || ii < 0 || ii >= bluKnownPorts.length) return
+				const next = bluKnownPorts[ii]
+				if (bluOpen && next !== bluPort) {
+					bluLog('请先关闭当前设备再切换', 'warn')
+					return
+				}
+				bluPort = next
+				const sel = E('blu-port-select')
+				if (sel) sel.value = String(ii)
+				bluLog('已选中 ' + bluPortLabel(next, ii))
+				renderDeviceList()
+				setDeviceMenuOpen(false)
+			})
+			list.appendChild(item)
 		}
 	}
 
@@ -968,10 +1047,22 @@
 
 	function markPowered(on) {
 		bluPowered = !!on
-		const onBtn = E('blu-poweron')
-		const offBtn = E('blu-poweroff')
-		if (onBtn) onBtn.classList.toggle('active', bluPowered)
-		if (offBtn) offBtn.disabled = !bluPowered
+		const btn = E('blu-dut-power')
+		if (!btn) return
+		btn.classList.toggle('is-on', bluPowered)
+		btn.innerHTML = bluPowered
+			? '<i class="bi bi-lightning-charge-fill"></i> 下电'
+			: '<i class="bi bi-lightning-charge"></i> 上电'
+		btn.title = bluPowered ? 'DUT 已上电 · 点击下电' : 'DUT 已下电 · 点击上电'
+	}
+
+	async function toggleDutPower() {
+		if (!bluOpen) {
+			bluLog('请先打开设备再上下电', 'warn')
+			return
+		}
+		if (bluPowered) await doPowerOff()
+		else await doPowerOn()
 	}
 
 	async function applyVoltageMv(mv) {
@@ -1160,10 +1251,10 @@
 		if (!el) return
 		if (bluSampling) {
 			el.className = 'btn btn-sm btn-danger'
-			el.innerHTML = '<i class="bi bi-stop-fill"></i> 停止采样'
+			el.innerHTML = '<i class="bi bi-stop-fill"></i> 停止'
 		} else {
 			el.className = 'btn btn-sm btn-success'
-			el.innerHTML = '<i class="bi bi-play-fill"></i> 开始采样'
+			el.innerHTML = '<i class="bi bi-play-fill"></i> 采样'
 		}
 	}
 
@@ -1245,9 +1336,7 @@
 				}
 			} catch (e) {}
 			bluOpen = true
-			setStatus('BLU 100k', true)
-			const toggle = E('blu-open')
-			if (toggle) toggle.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭'
+			setStatus('已连接', true)
 			bluLog('设备已打开（USB CDC）', 'success')
 			modifiersOk = false
 			bluReadLoop()
@@ -1260,8 +1349,6 @@
 			bluOpen = false
 			setStatus('打开失败', false)
 			bluLog('打开失败：' + (e.message || e), 'error')
-			const toggle = E('blu-open')
-			if (toggle) toggle.innerHTML = '<i class="bi bi-play-circle"></i> 打开'
 		} finally {
 			bluOpening = false
 		}
@@ -1290,8 +1377,6 @@
 			try { await bluPort.close() } catch (e) {}
 		}
 		setStatus(opts.manual === false ? '已断开' : '已关闭', false)
-		const toggle = E('blu-open')
-		if (toggle) toggle.innerHTML = '<i class="bi bi-play-circle"></i> 打开'
 		releaseWakeLock()
 		markPowered(false)
 		if (opts.manual !== false) bluLog('设备已关闭')
@@ -1322,8 +1407,6 @@
 		if (bluOpen) {
 			bluOpen = false
 			setStatus('读取中断', false)
-			const toggle = E('blu-open')
-			if (toggle) toggle.innerHTML = '<i class="bi bi-play-circle"></i> 打开'
 			releaseWakeLock()
 			if (!bluManualClose) bluLog('读取中断，可重开', 'warn')
 		}
@@ -2485,15 +2568,16 @@
 		}
 	}
 
-	function formatVidPid(info) {
+	/** short=true 时用 15A2:300A（工具条/列表小字）；完整日志仍可用 0x 前缀 */
+	function formatVidPid(info, short) {
 		const vid = info && info.usbVendorId != null
-			? ('0x' + info.usbVendorId.toString(16).toUpperCase().padStart(4, '0'))
+			? info.usbVendorId.toString(16).toUpperCase().padStart(4, '0')
 			: null
 		const pid = info && info.usbProductId != null
-			? ('0x' + info.usbProductId.toString(16).toUpperCase().padStart(4, '0'))
+			? info.usbProductId.toString(16).toUpperCase().padStart(4, '0')
 			: null
-		if (vid && pid) return 'VID ' + vid + ' · PID ' + pid
-		if (vid) return 'VID ' + vid
+		if (vid && pid) return short ? (vid + ':' + pid) : ('VID 0x' + vid + ' · PID 0x' + pid)
+		if (vid) return short ? vid : ('VID 0x' + vid)
 		return ''
 	}
 
@@ -2501,44 +2585,57 @@
 		let info = {}
 		try { info = port && port.getInfo ? port.getInfo() : {} } catch (e) {}
 		const sn = getPortSn(port)
-		const vp = formatVidPid(info)
-		// 优先 SN；否则 BLU + 规范 VID/PID（带 0x，避免 "15A2:300A" 难读）
-		if (sn && vp) return sn + '（' + vp + '）'
+		const vp = formatVidPid(info, false)
+		const vpShort = formatVidPid(info, true)
+		// 优先 SN；否则 BLU + 规范 VID/PID
+		if (sn && vpShort) return sn + '（' + vpShort + '）'
 		if (sn) return sn
 		if (isBluUsbInfo(info) || vp) {
 			const n = bluKnownPorts.length > 1 ? (' #' + (index + 1)) : ''
-			return 'BLU' + n + (vp ? ' · ' + vp : '')
+			return 'BLU' + n + (vpShort ? ' · ' + vpShort : '')
 		}
 		return bluKnownPorts.length > 1 ? ('设备 #' + (index + 1)) : '串口设备'
 	}
 
 	function syncPortSelectUI() {
 		const sel = E('blu-port-select')
-		if (!sel) return
 		const prev = bluPort
-		sel.innerHTML = ''
-		if (!bluKnownPorts.length) {
-			const opt = document.createElement('option')
-			opt.value = ''
-			opt.textContent = '未检测到设备'
-			sel.appendChild(opt)
-			if (!bluOpen) bluPort = null
-			return
+		if (sel) {
+			sel.innerHTML = ''
+			if (!bluKnownPorts.length) {
+				const opt = document.createElement('option')
+				opt.value = ''
+				opt.textContent = '未检测到设备'
+				sel.appendChild(opt)
+				if (!bluOpen) bluPort = null
+				renderDeviceList()
+				return
+			}
+			for (let i = 0; i < bluKnownPorts.length; i++) {
+				const opt = document.createElement('option')
+				opt.value = String(i)
+				opt.textContent = bluPortLabel(bluKnownPorts[i], i)
+				sel.appendChild(opt)
+			}
+			// 保持当前已打开/已选端口；否则默认第一项（填入，不自动打开）
+			let idx = 0
+			if (prev) {
+				const found = bluKnownPorts.indexOf(prev)
+				if (found >= 0) idx = found
+			}
+			sel.value = String(idx)
+			bluPort = bluKnownPorts[idx]
+		} else if (bluKnownPorts.length) {
+			let idx = 0
+			if (prev) {
+				const found = bluKnownPorts.indexOf(prev)
+				if (found >= 0) idx = found
+			}
+			bluPort = bluKnownPorts[idx]
+		} else if (!bluOpen) {
+			bluPort = null
 		}
-		for (let i = 0; i < bluKnownPorts.length; i++) {
-			const opt = document.createElement('option')
-			opt.value = String(i)
-			opt.textContent = bluPortLabel(bluKnownPorts[i], i)
-			sel.appendChild(opt)
-		}
-		// 保持当前已打开/已选端口；否则默认第一项（填入，不自动打开）
-		let idx = 0
-		if (prev) {
-			const found = bluKnownPorts.indexOf(prev)
-			if (found >= 0) idx = found
-		}
-		sel.value = String(idx)
-		bluPort = bluKnownPorts[idx]
+		renderDeviceList()
 	}
 
 	/** 打开/刷新页面：自动检测已授权 BLU 并填入下拉框（不自动打开） */
@@ -2585,36 +2682,62 @@
 	}
 
 	function bind() {
+		const elDeviceBtn = E('blu-device-btn')
+		if (elDeviceBtn) {
+			elDeviceBtn.addEventListener('click', function (e) {
+				e.stopPropagation()
+				const pop = E('blu-device-pop')
+				const open = pop && pop.hidden
+				if (open) {
+					refreshBluPorts({ log: false }).then(function () {
+						renderDeviceList()
+						setDeviceMenuOpen(true)
+					})
+				} else {
+					setDeviceMenuOpen(false)
+				}
+			})
+		}
+		document.addEventListener('click', function (e) {
+			const menu = E('blu-device-menu')
+			if (!menu || menu.contains(e.target)) return
+			setDeviceMenuOpen(false)
+		})
+		document.addEventListener('keydown', function (e) {
+			if (e.key === 'Escape') setDeviceMenuOpen(false)
+		})
+
 		const elPortSel = E('blu-port-select')
 		if (elPortSel) {
 			elPortSel.addEventListener('change', function () {
 				const i = parseInt(this.value, 10)
 				if (!isFinite(i) || i < 0 || i >= bluKnownPorts.length) {
 					if (!bluOpen) bluPort = null
+					renderDeviceList()
 					return
 				}
 				const next = bluKnownPorts[i]
 				if (bluOpen && next !== bluPort) {
 					bluLog('请先关闭当前设备再切换', 'warn')
-					// 还原选中
 					const cur = bluKnownPorts.indexOf(bluPort)
 					this.value = cur >= 0 ? String(cur) : ''
 					return
 				}
 				bluPort = next
 				bluLog('已选中 ' + bluPortLabel(next, i))
+				renderDeviceList()
 			})
 		}
 
 		const elSelect = E('blu-select-port')
 		if (elSelect) {
-			elSelect.addEventListener('click', async function () {
+			elSelect.addEventListener('click', async function (e) {
+				e.stopPropagation()
 				try {
 					const port = await navigator.serial.requestPort({
 						filters: PROTO.USB_FILTERS,
 					})
 					if (bluOpen) await bluClosePort({ manual: true })
-					// 授权后重新扫描并选中新口
 					await refreshBluPorts({ log: false })
 					const idx = bluKnownPorts.indexOf(port)
 					if (idx < 0) {
@@ -2628,9 +2751,11 @@
 						const sel = E('blu-port-select')
 						if (sel) sel.value = String(idx)
 					}
+					renderDeviceList()
+					setDeviceMenuOpen(false)
 					bluLog('已添加并填入 BLU 设备（USB 15A2:300A）')
-				} catch (e) {
-					if (e && e.name !== 'NotFoundError') bluLog('添加设备：' + (e.message || e), 'error')
+				} catch (err) {
+					if (err && err.name !== 'NotFoundError') bluLog('添加设备：' + (err.message || err), 'error')
 				}
 			})
 		}
@@ -2639,10 +2764,10 @@
 		if (elOpen) {
 			elOpen.addEventListener('click', async function () {
 				if (bluOpening) return
-				// 打开前再扫一次，保证列表最新
 				if (!bluPort) await refreshBluPorts({ log: false })
 				if (!bluPort) {
-					bluLog('未检测到设备，请先点「添加」授权 BLU', 'error')
+					bluLog('未检测到设备，请点「BLU」→ 添加设备', 'error')
+					setDeviceMenuOpen(true)
 					return
 				}
 				if (bluOpen) {
@@ -2682,22 +2807,12 @@
 			})
 		}
 
-		const elPowerOn = E('blu-poweron')
-		if (elPowerOn) elPowerOn.addEventListener('click', function () { doPowerOn() })
-
-		const elPowerOff = E('blu-poweroff')
-		if (elPowerOff) elPowerOff.addEventListener('click', function () { doPowerOff() })
-
-		const elApplyVolt = E('blu-apply-volt')
-		if (elApplyVolt) elApplyVolt.addEventListener('click', function () {
-			const el = E('blu-voltage-set')
-			if (el) el.dataset.userTouched = '1'
-			applyVoltageMv(readSetVoltageMv())
-		})
+		const elDutPower = E('blu-dut-power')
+		if (elDutPower) elDutPower.addEventListener('click', function () { toggleDutPower() })
 
 		const elVolt = E('blu-voltage-set')
 		if (elVolt) {
-			// 失焦 / 回车：按 mV 写入（设备未开则只记本地）
+			// 失焦 / 回车写入，去掉单独「设压」按钮
 			elVolt.addEventListener('change', function () {
 				elVolt.dataset.userTouched = '1'
 				applyVoltageMv(readSetVoltageMv())
@@ -2711,6 +2826,10 @@
 				}
 			})
 		}
+
+		// 初始连接按钮态
+		setStatus('未连接', false)
+		markPowered(false)
 
 		const elRate = E('blu-sample-rate')
 		if (elRate) {

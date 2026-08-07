@@ -832,81 +832,68 @@
                     -->
                     <div class="blu-connect-bar">
                         <div class="blu-tb-group blu-tb-connect">
-                            <span class="blu-toolbar-title">
-                                <i class="bi bi-speedometer2 blu-banner-icon"></i>
-                                <span class="blu-banner-title">BLU 100k</span>
-                            </span>
-                            <select id="blu-port-select" class="blu-port-select" title="已授权 BLU，优先显示 USB 序列号 SN">
-                                <option value="">检测中…</option>
-                            </select>
-                            <button class="btn btn-sm btn-outline-secondary" id="blu-select-port" title="浏览器授权新 BLU 设备">
-                                <i class="bi bi-usb-plug"></i> 添加
-                            </button>
-                            <button class="btn btn-sm btn-primary" id="blu-open">
-                                <i class="bi bi-play-circle"></i> 打开
-                            </button>
-                            <div id="blu-status">
-                                <div class="serial-status-indicator disconnected">
-                                    <span class="serial-status-dot"></span>
-                                    <span class="serial-status-text">未连接</span>
+                            <!-- 点击 BLU 弹出设备列表 / 添加；隐藏原生 select 仅作兼容同步 -->
+                            <div class="blu-device-menu" id="blu-device-menu">
+                                <button type="button" class="blu-device-trigger" id="blu-device-btn" title="选择设备或添加新 BLU" aria-haspopup="listbox" aria-expanded="false">
+                                    <i class="bi bi-speedometer2 blu-banner-icon"></i>
+                                    <span class="blu-banner-title">BLU</span>
+                                    <span class="blu-device-label" id="blu-device-label">未选设备</span>
+                                    <i class="bi bi-chevron-down blu-device-caret"></i>
+                                </button>
+                                <div class="blu-device-pop" id="blu-device-pop" hidden role="listbox">
+                                    <div class="blu-device-pop-list" id="blu-device-list"></div>
+                                    <button type="button" class="blu-device-add" id="blu-select-port">
+                                        <i class="bi bi-plus-lg"></i> 添加设备
+                                    </button>
                                 </div>
                             </div>
+                            <select id="blu-port-select" class="blu-port-select-hidden" tabindex="-1" aria-hidden="true">
+                                <option value="">检测中…</option>
+                            </select>
+                            <button class="btn btn-sm btn-primary" id="blu-open" title="打开 / 关闭串口">
+                                <i class="bi bi-plug"></i> 打开
+                            </button>
                         </div>
 
                         <span class="blu-toolbar-sep" aria-hidden="true"></span>
 
                         <div class="blu-tb-group blu-tb-setup" id="blu-setup-group" title="采样前先配置供电与参数">
                             <div class="blu-voltage-set" id="blu-voltage-wrap">
-                                <span class="blu-voltage-set-label">电压</span>
-                                <input type="number" id="blu-voltage-set" class="blu-voltage-input" value="3000" step="1" min="500" max="5000" title="源电压 500–5000 mV（与上位机 REGULATOR 一致）· 失焦/回车写入">
+                                <input type="number" id="blu-voltage-set" class="blu-voltage-input" value="3000" step="1" min="500" max="5000" title="源电压 500–5000 mV · 回车/失焦写入">
                                 <span class="blu-voltage-unit">mV</span>
-                                <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-apply-volt" title="写入设定电压到设备（mV）">
-                                    <i class="bi bi-check-lg"></i> 设压
-                                </button>
                             </div>
-                            <button type="button" class="btn btn-sm btn-outline-success" id="blu-poweron" title="DUT 上电">
-                                <i class="bi bi-lightning"></i> 上电
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-dut-power" title="DUT 上电 / 下电">
+                                <i class="bi bi-lightning-charge"></i> 上电
                             </button>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-poweroff" title="DUT 下电">
-                                <i class="bi bi-power"></i> 下电
-                            </button>
-                            <div class="blu-sample-rate-set">
-                                <span class="blu-sample-rate-label">采样率</span>
-                                <select id="blu-sample-rate" class="blu-sample-rate-select" title="主机抽稀目标；设备流约 100k，以实测为准">
-                                    <option value="100k" selected>100K</option>
-                                    <option value="10k">10K</option>
-                                    <option value="1k">1K</option>
-                                    <option value="100">100Hz</option>
-                                    <option value="10">10Hz</option>
-                                    <option value="1">1Hz</option>
-                                </select>
-                            </div>
-                            <div class="blu-sample-rate-set">
-                                <span class="blu-sample-rate-label">模式</span>
-                                <select id="blu-record-mode" class="blu-sample-rate-select" title="波形：RAM 预算内全精度，超出压缩落盘；长期统计：只记 min/max/累计耗电">
-                                    <option value="wave" selected>波形</option>
-                                    <option value="long">长期统计</option>
-                                </select>
-                            </div>
-                            <div class="blu-storage-set" title="波形存储预算（GB，刷新后仍保留）">
-                                <span class="blu-sample-rate-label">RAM</span>
-                                <select id="blu-ram-gb" class="blu-storage-select" title="热数据 RAM 预算">
+                            <select id="blu-sample-rate" class="blu-sample-rate-select" title="主机抽稀目标">
+                                <option value="100k" selected>100K</option>
+                                <option value="10k">10K</option>
+                                <option value="1k">1K</option>
+                                <option value="100">100Hz</option>
+                                <option value="10">10Hz</option>
+                                <option value="1">1Hz</option>
+                            </select>
+                            <select id="blu-record-mode" class="blu-mode-select" title="波形：RAM+冷归档 · 长期统计：只记累计">
+                                <option value="wave" selected>波形</option>
+                                <option value="long">长期</option>
+                            </select>
+                            <div class="blu-storage-set" id="blu-storage-set" title="波形存储预算（GB）">
+                                <select id="blu-ram-gb" class="blu-storage-select" title="RAM 预算">
                                     <option value="0.5">0.5G</option>
                                     <option value="1">1G</option>
                                     <option value="2" selected>2G</option>
                                     <option value="4">4G</option>
                                     <option value="8">8G</option>
                                 </select>
-                                <span class="blu-sample-rate-label">盘</span>
-                                <select id="blu-disk-gb" class="blu-storage-select" title="冷数据磁盘预算；0=RAM 满即停">
-                                    <option value="0">0</option>
-                                    <option value="1">1G</option>
-                                    <option value="2">2G</option>
-                                    <option value="4" selected>4G</option>
-                                    <option value="8">8G</option>
-                                    <option value="16">16G</option>
+                                <select id="blu-disk-gb" class="blu-storage-select" title="磁盘预算；0=RAM 满即停">
+                                    <option value="0">盘0</option>
+                                    <option value="1">盘1G</option>
+                                    <option value="2">盘2G</option>
+                                    <option value="4" selected>盘4G</option>
+                                    <option value="8">盘8G</option>
+                                    <option value="16">盘16G</option>
                                 </select>
-                                <span id="blu-storage-hint" class="blu-storage-hint">--</span>
+                                <span id="blu-storage-hint" class="blu-storage-hint" hidden></span>
                             </div>
                         </div>
 
@@ -914,19 +901,19 @@
 
                         <div class="blu-tb-group blu-tb-action">
                             <button class="btn btn-sm btn-success" id="blu-start" title="开始 / 停止采样">
-                                <i class="bi bi-play-fill"></i> 开始采样
+                                <i class="bi bi-play-fill"></i> 采样
                             </button>
                         </div>
 
                         <div class="blu-connect-bar-right blu-tb-group blu-tb-tools">
-                            <button class="btn btn-sm btn-outline-secondary" id="blu-clear" title="清空波形与统计">
-                                <i class="bi bi-eraser"></i> 清空
+                            <button class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-clear" title="清空波形与统计">
+                                <i class="bi bi-eraser"></i>
                             </button>
-                            <button class="btn btn-sm btn-outline-secondary" id="blu-export" title="导出 CSV">
-                                <i class="bi bi-download"></i> 导出
+                            <button class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-export" title="导出 CSV">
+                                <i class="bi bi-download"></i>
                             </button>
-                            <button class="btn btn-sm btn-outline-secondary" id="blu-clear-log" title="清空运行日志">
-                                <i class="bi bi-trash"></i> 日志
+                            <button class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-clear-log" title="清空运行日志">
+                                <i class="bi bi-journal-text"></i>
                             </button>
                         </div>
                     </div>
