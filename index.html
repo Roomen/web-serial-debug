@@ -96,7 +96,7 @@
                     <i class="bi bi-box-seam"></i>
                     <span class="rail-label">固件打包</span>
                 </button>
-                <button class="rail-item" data-view="view-emk" title="功耗分析">
+                <button class="rail-item" data-view="view-blu" title="功耗分析">
                     <i class="bi bi-speedometer2"></i>
                     <span class="rail-label">功耗分析</span>
                 </button>
@@ -823,246 +823,294 @@
                 </div>
             </div>
 
-            <!--功耗分析视图（独立 Web Serial，EMK850+）-->
-            <div id="view-emk" class="app-view">
-                <div class="emk-wrapper">
-                    <!--工具条：标题 + 连接-->
-                    <div class="emk-connect-bar">
-                        <span class="emk-toolbar-title">
-                            <i class="bi bi-speedometer2 emk-banner-icon"></i>
-                            <span class="emk-banner-title">EMK850+ 功耗分析仪</span>
-                        </span>
-                        <span class="emk-toolbar-sep"></span>
-                        <button class="btn btn-sm btn-outline-secondary" id="emk-select-port">
-                            <i class="bi bi-usb-plug"></i> 选择设备
-                        </button>
-                        <button class="btn btn-sm btn-primary" id="emk-open">
-                            <i class="bi bi-play-circle"></i> 打开设备
-                        </button>
-                        <div id="emk-status">
-                            <div class="serial-status-indicator disconnected">
-                                <span class="serial-status-dot"></span>
-                                <span class="serial-status-text">未连接</span>
+            <!--功耗分析视图（独立 Web Serial，BLU 100k）-->
+            <div id="view-blu" class="app-view">
+                <div class="blu-wrapper">
+                    <!--
+                      工具条按使用流：连接 → 供电/参数 → 采样动作 → 数据工具
+                      采样率、模式、电压等配置放在「开始采样」前（先设后采）
+                    -->
+                    <div class="blu-connect-bar">
+                        <div class="blu-tb-group blu-tb-connect">
+                            <span class="blu-toolbar-title">
+                                <i class="bi bi-speedometer2 blu-banner-icon"></i>
+                                <span class="blu-banner-title">BLU 100k</span>
+                            </span>
+                            <select id="blu-port-select" class="blu-port-select" title="已授权 BLU，优先显示 USB 序列号 SN">
+                                <option value="">检测中…</option>
+                            </select>
+                            <button class="btn btn-sm btn-outline-secondary" id="blu-select-port" title="浏览器授权新 BLU 设备">
+                                <i class="bi bi-usb-plug"></i> 添加
+                            </button>
+                            <button class="btn btn-sm btn-primary" id="blu-open">
+                                <i class="bi bi-play-circle"></i> 打开
+                            </button>
+                            <div id="blu-status">
+                                <div class="serial-status-indicator disconnected">
+                                    <span class="serial-status-dot"></span>
+                                    <span class="serial-status-text">未连接</span>
+                                </div>
                             </div>
                         </div>
-                        <button class="btn btn-sm btn-success" id="emk-start">
-                            <i class="bi bi-play-fill"></i> 开始采样
-                        </button>
-                        <div class="emk-voltage-set" style="display:none">
-                            <span class="emk-voltage-set-label">设定电压</span>
-                            <input type="number" id="emk-voltage-set" class="emk-voltage-input" value="3.7" step="0.1" min="0" max="13" title="AM 机 0x61 设压：0.1V 步进，上限 13.0V">
-                            <span class="emk-voltage-unit">V</span>
-                            <button class="btn btn-sm btn-outline-secondary emk-icon-btn" id="emk-apply-volt" title="设电压"><i class="bi bi-check-lg"></i></button>
-                        </div>
-                        <div class="emk-voltage-set" title="自动保护限值（0x72）。设备限值为 0 时一开始采样就会自我保护下电" style="display:none">
-                            <span class="emk-voltage-set-label">保护</span>
-                            <input type="number" id="emk-protect-current" class="emk-voltage-input" value="6000" step="100" min="0" title="过流保护（出厂 6000 mA）">
-                            <span class="emk-voltage-unit">mA</span>
-                            <input type="number" id="emk-protect-volt" class="emk-voltage-input" value="13" step="0.1" min="0" title="过压保护（出厂 13 V）">
-                            <span class="emk-voltage-unit">V</span>
-                            <button class="btn btn-sm btn-outline-secondary emk-icon-btn" id="emk-apply-protect" title="写入设备保护限值（持久化，会同时限制设备旋钮的可调范围）"><i class="bi bi-shield-check"></i></button>
-                        </div>
-                        <button class="btn btn-sm btn-outline-success" id="emk-poweron" style="display:none">
-                            <i class="bi bi-lightning"></i> 上电
-                        </button>
-                        <button class="btn btn-sm btn-outline-secondary" id="emk-poweroff" style="display:none">
-                            <i class="bi bi-power"></i> 下电
-                        </button>
-                        <div class="emk-sample-rate-set">
-                            <span class="emk-sample-rate-label">采样率</span>
-                            <select id="emk-sample-rate" class="emk-sample-rate-select" title="设备流 + 本地抽稀。100K 需设备已激活高速档">
-                                 <option value="100k">100K (10µs)</option>
-                                 <option value="10k">10K (100µs)</option>
-                                 <option value="1k" selected>1K (1ms)</option>
-                                 <option value="100">100Hz (10ms)</option>
-                                 <option value="10">10Hz (100ms)</option>
-                                 <option value="1">1Hz (1s)</option>
-                             </select>
-                        </div>
-                        <div class="emk-connect-bar-right">
-                            <button class="btn btn-sm btn-outline-secondary" id="emk-clear">
-                                <i class="bi bi-eraser"></i> 清空数据
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" id="emk-export">
-                                <i class="bi bi-download"></i> 导出CSV
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" id="emk-clear-log">
-                                <i class="bi bi-trash"></i> 清空日志
-                            </button>
-                        </div>
-                    </div>
 
-                    <!--实时数字面板（平滑 5Hz）-->
-                    <div class="emk-metrics">
-                        <div class="emk-metric emk-metric-primary">
-                            <span class="emk-metric-label">电流</span>
-                            <span class="emk-metric-value" id="emk-current">--</span>
-                        </div>
-                        <div class="emk-metric emk-metric-primary">
-                            <span class="emk-metric-label">电压</span>
-                            <span class="emk-metric-value" id="emk-voltage">--</span>
-                        </div>
-                        <div class="emk-metric">
-                            <span class="emk-metric-label">功率</span>
-                            <span class="emk-metric-value" id="emk-power">--</span>
-                        </div>
-                        <div class="emk-metric">
-                            <span class="emk-metric-label">设备设定</span>
-                            <span class="emk-metric-value emk-metric-sm" id="emk-deviceset">--</span>
-                        </div>
-                        <div class="emk-metric">
-                            <span class="emk-metric-label">采样率</span>
-                            <span class="emk-metric-value emk-metric-sm" id="emk-rate">0</span>
-                            <span class="emk-metric-sub" id="emk-rate-raw"></span>
-                        </div>
-                        <div class="emk-metric">
-                            <span class="emk-metric-label">点数 / 时长</span>
-                            <span class="emk-metric-value emk-metric-sm"><span id="emk-count">0</span> · <span id="emk-duration">--</span></span>
-                        </div>
-                    </div>
+                        <span class="blu-toolbar-sep" aria-hidden="true"></span>
 
-                    <!--波形区 + 统计 -->
-                    <div class="emk-wave-wrap">
-                    <div class="emk-waveform-area">
-                        <div class="emk-waveform-controls">
-                            <div class="emk-zoom-group">
-                                <span class="emk-zoom-label">X</span>
-                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn emk-icon-btn" id="emk-zoom-x-in" title="X 轴放大">+</button>
-                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn emk-icon-btn" id="emk-zoom-x-out" title="X 轴缩小">&minus;</button>
-                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn emk-icon-btn" id="emk-zoom-x-reset" title="X 轴复位"><i class="bi bi-arrow-repeat"></i></button>
-                            </div>
-                            <div class="emk-zoom-group">
-                                <span class="emk-zoom-label">Y</span>
-                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn emk-icon-btn" id="emk-zoom-y-in" title="Y 轴放大">+</button>
-                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn emk-icon-btn" id="emk-zoom-y-out" title="Y 轴缩小">&minus;</button>
-                                <button class="btn btn-sm btn-outline-secondary emk-zoom-btn emk-icon-btn" id="emk-zoom-y-reset" title="Y 轴复位"><i class="bi bi-arrow-repeat"></i></button>
-                            </div>
-                            <div class="emk-zoom-group">
-                                <button class="btn btn-sm btn-outline-secondary" id="emk-pause-scroll" title="暂停波形滚动（数据仍在采集）">
-                                    <i class="bi bi-pause-fill"></i> 暂停滚动
-                                </button>
-                                <button class="btn btn-sm btn-outline-secondary emk-icon-btn" id="emk-fullscreen" title="放大波形区（Esc 退出）">
-                                    <i class="bi bi-arrows-fullscreen"></i>
+                        <div class="blu-tb-group blu-tb-setup" id="blu-setup-group" title="采样前先配置供电与参数">
+                            <div class="blu-voltage-set" id="blu-voltage-wrap">
+                                <span class="blu-voltage-set-label">电压</span>
+                                <input type="number" id="blu-voltage-set" class="blu-voltage-input" value="3000" step="1" min="500" max="5000" title="源电压 500–5000 mV（与上位机 REGULATOR 一致）· 失焦/回车写入">
+                                <span class="blu-voltage-unit">mV</span>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-apply-volt" title="写入设定电压到设备（mV）">
+                                    <i class="bi bi-check-lg"></i> 设压
                                 </button>
                             </div>
-                            <div class="emk-cursor-group">
-                                <select id="emk-cursor-mode" class="emk-cursor-mode-select" title="游标定位方式">
-                                    <option value="window" selected>固定视口</option>
-                                    <option value="data">绑定数据</option>
+                            <button type="button" class="btn btn-sm btn-outline-success" id="blu-poweron" title="DUT 上电">
+                                <i class="bi bi-lightning"></i> 上电
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-poweroff" title="DUT 下电">
+                                <i class="bi bi-power"></i> 下电
+                            </button>
+                            <div class="blu-sample-rate-set">
+                                <span class="blu-sample-rate-label">采样率</span>
+                                <select id="blu-sample-rate" class="blu-sample-rate-select" title="主机抽稀目标；设备流约 100k，以实测为准">
+                                    <option value="100k" selected>100K</option>
+                                    <option value="10k">10K</option>
+                                    <option value="1k">1K</option>
+                                    <option value="100">100Hz</option>
+                                    <option value="10">10Hz</option>
+                                    <option value="1">1Hz</option>
                                 </select>
-                                <button class="btn btn-sm btn-outline-secondary" id="emk-cursor-clear" title="清除游标"><i class="bi bi-cursor"></i> 清除</button>
-                                <span id="emk-cursor-info" class="emk-cursor-info"></span>
+                            </div>
+                            <div class="blu-sample-rate-set">
+                                <span class="blu-sample-rate-label">模式</span>
+                                <select id="blu-record-mode" class="blu-sample-rate-select" title="波形：RAM 环缓；长期统计：只记 min/max/累计耗电">
+                                    <option value="wave" selected>波形</option>
+                                    <option value="long">长期统计</option>
+                                </select>
                             </div>
                         </div>
-                        <canvas id="emk-canvas" class="emk-canvas"></canvas>
+
+                        <span class="blu-toolbar-sep" aria-hidden="true"></span>
+
+                        <div class="blu-tb-group blu-tb-action">
+                            <button class="btn btn-sm btn-success" id="blu-start" title="开始 / 停止采样">
+                                <i class="bi bi-play-fill"></i> 开始采样
+                            </button>
+                        </div>
+
+                        <div class="blu-connect-bar-right blu-tb-group blu-tb-tools">
+                            <button class="btn btn-sm btn-outline-secondary" id="blu-clear" title="清空波形与统计">
+                                <i class="bi bi-eraser"></i> 清空
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" id="blu-export" title="导出 CSV">
+                                <i class="bi bi-download"></i> 导出
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" id="blu-clear-log" title="清空运行日志">
+                                <i class="bi bi-trash"></i> 日志
+                            </button>
+                        </div>
                     </div>
 
-                    <!--统计卡片：总体=全部缓冲 · 窗口=当前视口 · 游标=A–B-->
-                    <div class="emk-stats-cards">
-                        <div class="emk-stat-card emk-stat-card-overall" title="环形缓冲内全部采样">
-                            <div class="emk-stat-card-head">
-                                <span class="emk-stat-card-title"><i class="bi bi-database"></i> 总体</span>
-                                <span class="emk-stat-card-dur" id="emk-stat-overall-dur">--</span>
-                                <span class="emk-stat-card-energy" id="emk-stat-overall-energy">--</span>
-                            </div>
-                            <div class="emk-stat-card-grid">
-                                <div class="emk-stat-cell emk-stat-cell-wide">
-                                    <span class="emk-stat-k">平均 I</span>
-                                    <span class="emk-stat-v" id="emk-stat-overall-avg">--</span>
-                                </div>
-                                <div class="emk-stat-cell emk-stat-cell-wide">
-                                    <span class="emk-stat-k">平均 P</span>
-                                    <span class="emk-stat-v" id="emk-stat-overall-pwr">--</span>
-                                </div>
-                                <div class="emk-stat-cell">
-                                    <span class="emk-stat-k">最大 I</span>
-                                    <span class="emk-stat-v emk-stat-v-max" id="emk-stat-overall-max">--</span>
-                                </div>
-                                <div class="emk-stat-cell">
-                                    <span class="emk-stat-k">最小 I</span>
-                                    <span class="emk-stat-v emk-stat-v-min" id="emk-stat-overall-min">--</span>
-                                </div>
-                            </div>
+                    <div class="blu-metrics">
+                        <div class="blu-metric blu-metric-primary">
+                            <span class="blu-metric-label">电流</span>
+                            <span class="blu-metric-value" id="blu-current">--</span>
                         </div>
-                        <div class="emk-stat-card emk-stat-card-window" title="波形当前可见区间">
-                            <div class="emk-stat-card-head">
-                                <span class="emk-stat-card-title"><i class="bi bi-bounding-box"></i> 窗口</span>
-                                <span class="emk-stat-card-dur" id="emk-stat-window-dur">--</span>
-                                <span class="emk-stat-card-energy" id="emk-stat-window-energy">--</span>
-                            </div>
-                            <div class="emk-stat-card-grid">
-                                <div class="emk-stat-cell emk-stat-cell-wide">
-                                    <span class="emk-stat-k">平均 I</span>
-                                    <span class="emk-stat-v" id="emk-stat-window-avg">--</span>
-                                </div>
-                                <div class="emk-stat-cell emk-stat-cell-wide">
-                                    <span class="emk-stat-k">平均 P</span>
-                                    <span class="emk-stat-v" id="emk-stat-window-pwr">--</span>
-                                </div>
-                                <div class="emk-stat-cell">
-                                    <span class="emk-stat-k">最大 I</span>
-                                    <span class="emk-stat-v emk-stat-v-max" id="emk-stat-window-max">--</span>
-                                </div>
-                                <div class="emk-stat-cell">
-                                    <span class="emk-stat-k">最小 I</span>
-                                    <span class="emk-stat-v emk-stat-v-min" id="emk-stat-window-min">--</span>
-                                </div>
-                            </div>
+                        <div class="blu-metric blu-metric-primary">
+                            <span class="blu-metric-label">设定电压</span>
+                            <span class="blu-metric-value" id="blu-voltage" title="源电压 mV">--</span>
                         </div>
-                        <div class="emk-stat-card emk-stat-card-cursor" title="游标 A 与 B 之间">
-                            <div class="emk-stat-card-head">
-                                <span class="emk-stat-card-title"><i class="bi bi-rulers"></i> 游标 A–B</span>
-                                <span class="emk-stat-card-dur" id="emk-stat-cursor-dur">--</span>
-                                <span class="emk-stat-card-energy" id="emk-stat-cursor-energy">--</span>
-                            </div>
-                            <div class="emk-stat-card-grid">
-                                <div class="emk-stat-cell emk-stat-cell-wide">
-                                    <span class="emk-stat-k">平均 I</span>
-                                    <span class="emk-stat-v" id="emk-stat-cursor-avg">--</span>
-                                </div>
-                                <div class="emk-stat-cell emk-stat-cell-wide">
-                                    <span class="emk-stat-k">平均 P</span>
-                                    <span class="emk-stat-v" id="emk-stat-cursor-pwr">--</span>
-                                </div>
-                                <div class="emk-stat-cell">
-                                    <span class="emk-stat-k">最大 I</span>
-                                    <span class="emk-stat-v emk-stat-v-max" id="emk-stat-cursor-max">--</span>
-                                </div>
-                                <div class="emk-stat-cell">
-                                    <span class="emk-stat-k">最小 I</span>
-                                    <span class="emk-stat-v emk-stat-v-min" id="emk-stat-cursor-min">--</span>
-                                </div>
-                            </div>
+                        <div class="blu-metric">
+                            <span class="blu-metric-label">功率</span>
+                            <span class="blu-metric-value" id="blu-power">--</span>
                         </div>
-                    </div>
-                    </div>
-                    <div class="emk-pwr-note-foot">P = 回读电压 × 电流 · 大数字 5Hz 平滑 · 统计随波形实时更新</div>
-
-                    <!--配置选项-->
-                    <div class="emk-config">
-                        <div class="form-check form-check-inline">
-                            <input class="form-check-input" type="checkbox" id="emk-toggle-converted" checked>
-                            <label class="form-check-label" for="emk-toggle-converted">换算值</label>
+                        <div class="blu-metric">
+                            <span class="blu-metric-label">设备保存 VDD</span>
+                            <span class="blu-metric-value blu-metric-sm" id="blu-deviceset" title="get_modifiers 解析的 VDD">--</span>
                         </div>
-                        <div class="form-check form-check-inline">
-                            <input class="form-check-input" type="checkbox" id="emk-toggle-unsigned" checked>
-                            <label class="form-check-label" for="emk-toggle-unsigned">无符号样本</label>
+                        <div class="blu-metric">
+                            <span class="blu-metric-label">采样率</span>
+                            <span class="blu-metric-value blu-metric-sm" id="blu-rate">0</span>
+                            <span class="blu-metric-sub" id="blu-rate-raw"></span>
                         </div>
-                        <button class="btn btn-sm btn-outline-secondary" id="emk-read-config">
-                            <i class="bi bi-arrow-down-circle"></i> 读取校准配置
-                        </button>
-                        <button class="btn btn-sm btn-outline-secondary" id="emk-reset-config">
-                            <i class="bi bi-arrow-repeat"></i> 重置配置
-                        </button>
+                        <div class="blu-metric">
+                            <span class="blu-metric-label">点数 / 时长</span>
+                            <span class="blu-metric-value blu-metric-sm"><span id="blu-count">0</span> · <span id="blu-duration">--</span></span>
+                        </div>
                     </div>
 
-                    <!--日志-->
-                    <div class="emk-log-card" id="emk-log-card">
-                        <div class="emk-log-title" id="emk-log-toggle" title="悬停展开 · 点击固定/收起">
+                    <div class="blu-wave-wrap">
+                        <div class="blu-waveform-area">
+                            <div class="blu-waveform-controls">
+                                <div class="blu-zoom-group">
+                                    <span class="blu-zoom-label">X</span>
+                                    <button class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-icon-btn" id="blu-zoom-x-in" title="X 轴放大">+</button>
+                                    <button class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-icon-btn" id="blu-zoom-x-out" title="X 轴缩小">&minus;</button>
+                                    <button class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-icon-btn" id="blu-zoom-x-reset" title="X 轴复位 / Live"><i class="bi bi-arrow-repeat"></i></button>
+                                </div>
+                                <div class="blu-zoom-group">
+                                    <span class="blu-zoom-label">Y</span>
+                                    <button class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-icon-btn" id="blu-zoom-y-in" title="Y 轴放大">+</button>
+                                    <button class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-icon-btn" id="blu-zoom-y-out" title="Y 轴缩小">&minus;</button>
+                                    <button class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-icon-btn" id="blu-zoom-y-reset" title="Y 轴复位"><i class="bi bi-arrow-repeat"></i></button>
+                                </div>
+                                <div class="form-check form-check-inline m-0">
+                                    <input class="form-check-input" type="checkbox" id="blu-y-log">
+                                    <label class="form-check-label" for="blu-y-log" title="对数 Y 轴（nA–A 跨度）">Log Y</label>
+                                </div>
+                                <div class="blu-zoom-group">
+                                    <button class="btn btn-sm btn-outline-secondary" id="blu-pause-scroll" title="暂停波形滚动（数据仍在采集）">
+                                        <i class="bi bi-pause-fill"></i> 暂停滚动
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-fullscreen" title="放大波形区（Esc 退出）">
+                                        <i class="bi bi-arrows-fullscreen"></i>
+                                    </button>
+                                </div>
+                                <div class="blu-cursor-group">
+                                    <span class="blu-cursor-hint" title="Shift+拖动新建选择 · 拖边界微调">Shift+拖选 · 拖边界微调</span>
+                                    <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-clear" title="清除选择">清除</button>
+                                    <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-all" title="选择全部数据">全选</button>
+                                    <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-zoom" title="缩放到选择区间">缩放到选择</button>
+                                    <span id="blu-cursor-info" class="blu-cursor-info"></span>
+                                </div>
+                            </div>
+                            <canvas id="blu-canvas" class="blu-canvas"></canvas>
+                            <canvas id="blu-minimap" class="blu-minimap" title="总览（点击跳转）"></canvas>
+                        </div>
+
+                        <!-- 统计：总体 / 窗口 / 选择（字段中文） -->
+                        <div class="blu-stats-cards">
+                            <div class="blu-stat-card blu-stat-card-overall" title="全部缓冲 / 长期累计">
+                                <div class="blu-stat-card-head">
+                                    <span class="blu-stat-card-title"><i class="bi bi-database"></i> 总体</span>
+                                    <span class="blu-stat-card-n" id="blu-stat-overall-n"></span>
+                                </div>
+                                <div class="blu-stat-card-grid blu-stat-card-grid-6">
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-overall-avg">--</span>
+                                        <span class="blu-stat-k">平均电流</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v blu-stat-v-max" id="blu-stat-overall-max">--</span>
+                                        <span class="blu-stat-k">最大电流</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v blu-stat-v-min" id="blu-stat-overall-min">--</span>
+                                        <span class="blu-stat-k">最小电流</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-overall-dur">--</span>
+                                        <span class="blu-stat-k">时长</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-overall-charge">--</span>
+                                        <span class="blu-stat-k">电荷</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-overall-energy">--</span>
+                                        <span class="blu-stat-k">能量</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-overall-pwr">--</span>
+                                        <span class="blu-stat-k">平均功率</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-overall-charge-mah">--</span>
+                                        <span class="blu-stat-k">容量</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="blu-stat-card blu-stat-card-window" title="波形当前可见窗口">
+                                <div class="blu-stat-card-head">
+                                    <span class="blu-stat-card-title"><i class="bi bi-bounding-box"></i> 窗口</span>
+                                </div>
+                                <div class="blu-stat-card-grid blu-stat-card-grid-6">
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-window-avg">--</span>
+                                        <span class="blu-stat-k">平均电流</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v blu-stat-v-max" id="blu-stat-window-max">--</span>
+                                        <span class="blu-stat-k">最大电流</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v blu-stat-v-min" id="blu-stat-window-min">--</span>
+                                        <span class="blu-stat-k">最小电流</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-window-dur">--</span>
+                                        <span class="blu-stat-k">时长</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-window-charge">--</span>
+                                        <span class="blu-stat-k">电荷</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-window-energy">--</span>
+                                        <span class="blu-stat-k">能量</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-window-pwr">--</span>
+                                        <span class="blu-stat-k">平均功率</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-window-charge-mah">--</span>
+                                        <span class="blu-stat-k">容量</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="blu-stat-card blu-stat-card-cursor" title="Shift+拖动选择区间">
+                                <div class="blu-stat-card-head">
+                                    <span class="blu-stat-card-title"><i class="bi bi-rulers"></i> 选择</span>
+                                </div>
+                                <div id="blu-stat-cursor-empty" class="blu-stat-empty">
+                                    按住 <kbd>Shift</kbd> + 左键拖动选择区间
+                                </div>
+                                <div id="blu-stat-cursor-grid" class="blu-stat-card-grid blu-stat-card-grid-6" style="display:none">
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-cursor-avg">--</span>
+                                        <span class="blu-stat-k">平均电流</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v blu-stat-v-max" id="blu-stat-cursor-max">--</span>
+                                        <span class="blu-stat-k">最大电流</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v blu-stat-v-min" id="blu-stat-cursor-min">--</span>
+                                        <span class="blu-stat-k">最小电流</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-cursor-dur">--</span>
+                                        <span class="blu-stat-k">时长</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-cursor-charge">--</span>
+                                        <span class="blu-stat-k">电荷</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-cursor-energy">--</span>
+                                        <span class="blu-stat-k">能量</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-cursor-pwr">--</span>
+                                        <span class="blu-stat-k">平均功率</span>
+                                    </div>
+                                    <div class="blu-stat-cell">
+                                        <span class="blu-stat-v" id="blu-stat-cursor-charge-mah">--</span>
+                                        <span class="blu-stat-k">容量</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="blu-pwr-note-foot">功率 / 电荷 / 能量按设定电压计算 · 选择区间：Shift+左键拖动 · 修正参数来自 get_modifiers · 速率以实测为准</div>
+
+                    <div class="blu-log-card" id="blu-log-card">
+                        <div class="blu-log-title" id="blu-log-toggle" title="悬停展开 · 点击固定/收起">
                             <span><i class="bi bi-terminal"></i> 运行日志</span>
-                            <span class="emk-log-hint"><span id="emk-log-last" class="emk-log-last"></span><i class="bi bi-chevron-up emk-log-chevron"></i></span>
+                            <span class="blu-log-hint"><span id="blu-log-last" class="blu-log-last"></span><i class="bi bi-chevron-up blu-log-chevron"></i></span>
                         </div>
-                        <pre id="emk-log" class="emk-log-body"></pre>
+                        <pre id="blu-log" class="blu-log-body"></pre>
                     </div>
                 </div>
             </div>
@@ -1239,12 +1287,8 @@
                 current = id
             }
             function switchTo(id) {
-                if (id === 'view-emk') {
-                    if (!confirm('⚠ 功耗分析功能可能会造成分析仪掉固件、掉激活码等问题（开发测试中已验证），请在充分了解风险后谨慎使用。\n\n确定要打开吗？')) {
-                        if (current) activate(current)
-                        return
-                    }
-                }
+                // 旧书签 view-emk → view-blu
+                if (id === 'view-emk') id = 'view-blu'
                 activate(id)
             }
             items.forEach(function (it) {
@@ -1274,8 +1318,8 @@
     <script src="js/hdiffi-data.js"></script>
     <script src="https://cdn.bootcdn.net/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="js/firmware-packager.js"></script>
-    <script src="js/emk-protocol.js"></script>
-    <script src="js/emk-power.js"></script>
+    <script src="js/blu-protocol.js"></script>
+    <script src="js/blu-power.js"></script>
 
 </body>
 
