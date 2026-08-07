@@ -58,12 +58,31 @@
 	// 修正参数 = API get_modifiers()（设备内 R/O 等），连接时自动读取；无 EMK 式人工校准
 	let modifiers = PROTO.defaultModifiers()
 	let modifiersOk = false
-	// 源电压按 mV 配置（API REGULATOR_SET / 上位机一致），500–5000
-	let setVoltageMv = 3000
+	// 源电压 mV（API REGULATOR_SET）。未打开设备时不显示；打开后从 get_modifiers(VDD) 回填
+	let setVoltageMv = null // null = 尚未从设备读到 / 用户未设定
 	let wakeLockSentinel = null
 
 	function setVoltageV() {
-		return setVoltageMv / 1000
+		return (setVoltageMv != null && isFinite(setVoltageMv) ? setVoltageMv : 0) / 1000
+	}
+
+	function syncVoltageInput() {
+		const el = E('blu-voltage-set')
+		if (!el) return
+		if (setVoltageMv != null && isFinite(setVoltageMv)) {
+			el.value = String(setVoltageMv)
+		} else {
+			el.value = ''
+		}
+	}
+
+	function clearVoltageUi() {
+		setVoltageMv = null
+		const el = E('blu-voltage-set')
+		if (el) {
+			el.value = ''
+			delete el.dataset.userTouched
+		}
 	}
 
 	const converter = new PROTO.Converter(modifiers)
@@ -997,12 +1016,14 @@
 		return hz.toFixed(hz < 10 ? 2 : 0)
 	}
 
-	/** 读 UI 源电压（mV 整数，对齐上位机） */
+	/** 读 UI 源电压（mV 整数，对齐上位机）；无效则返回 null */
 	function readSetVoltageMv() {
 		const el = E('blu-voltage-set')
 		if (!el) return setVoltageMv
-		let mv = parseInt(el.value, 10)
-		if (!isFinite(mv)) mv = setVoltageMv
+		const raw = String(el.value == null ? '' : el.value).trim()
+		if (!raw) return setVoltageMv
+		let mv = parseInt(raw, 10)
+		if (!isFinite(mv)) return setVoltageMv
 		mv = Math.round(mv)
 		mv = Math.max(PROTO.VDD_LOW_MV, Math.min(PROTO.VDD_HIGH_MV, mv))
 		setVoltageMv = mv
@@ -1070,10 +1091,13 @@
 	}
 
 	async function applyVoltageMv(mv) {
+		if (mv == null || !isFinite(mv)) {
+			bluLog('请先设定源电压 mV', 'error')
+			return false
+		}
 		const clamped = Math.max(PROTO.VDD_LOW_MV, Math.min(PROTO.VDD_HIGH_MV, Math.round(mv)))
 		setVoltageMv = clamped
-		const el = E('blu-voltage-set')
-		if (el) el.value = String(clamped)
+		syncVoltageInput()
 		if (!bluOpen) {
 			bluLog('电压已设为 ' + clamped + ' mV（打开设备后写入）')
 			scheduleUIUpdate()
@@ -1086,7 +1110,12 @@
 	}
 
 	async function doPowerOn() {
-		await applyVoltageMv(readSetVoltageMv())
+		const mv = readSetVoltageMv()
+		if (mv == null || !isFinite(mv) || mv < PROTO.VDD_LOW_MV) {
+			bluLog('请先设定源电压 mV（打开设备后会从设备读取）', 'error')
+			return
+		}
+		await applyVoltageMv(mv)
 		await bluWrite(PROTO.cmdDutPower(true), 'DUT 上电')
 		markPowered(true)
 		bluLog('DUT 已上电', 'success')
@@ -1125,13 +1154,18 @@
 				(modifiers.deviceSn ? ' · SN ' + modifiers.deviceSn : '') +
 				(saved ? ' · VDD ' + saved + ' mV' : '') +
 				(modifiers.Calibrated != null ? ' · Calibrated=' + modifiers.Calibrated : ''), 'success')
-			// 与 example 一致：若 UI 未改过且设备有保存 VDD，则回填
+			// 打开/识别后以设备 VDD 为准回填；用户本会话已手改则不覆盖
+			const el = E('blu-voltage-set')
 			if (saved >= PROTO.VDD_LOW_MV && saved <= PROTO.VDD_HIGH_MV) {
-				const el = E('blu-voltage-set')
-				if (el && !el.dataset.userTouched) {
+				if (!el || !el.dataset.userTouched) {
 					setVoltageMv = Math.round(saved)
-					el.value = String(setVoltageMv)
+					syncVoltageInput()
 				}
+			} else if (!el || !el.dataset.userTouched) {
+				// 设备未报 VDD：保持空白，不写内部默认
+				setVoltageMv = null
+				syncVoltageInput()
+				bluLog('设备未返回 VDD，请手动设定源电压', 'warn')
 			}
 			return true
 		}
@@ -1343,14 +1377,16 @@
 			setStatus('已连接', true)
 			bluLog('设备已打开（USB CDC）', 'success')
 			modifiersOk = false
+			// 打开前不显示电压；识别后由 get_modifiers 回填设备 VDD
+			clearVoltageUi()
 			bluReadLoop()
 			await new Promise(function (r) { setTimeout(r, 80) })
 			// 对照 example_auto：get_modifiers →（用户设压/上电）→ start
 			await fetchAndApplyModifiers()
-			// 电压 / 上电 始终可见，打开后可直接配置
 			scheduleUIUpdate()
 		} catch (e) {
 			bluOpen = false
+			clearVoltageUi()
 			setStatus('打开失败', false)
 			bluLog('打开失败：' + (e.message || e), 'error')
 		} finally {
@@ -1388,10 +1424,13 @@
 		}
 		setStatus(opts.manual === false ? '已断开' : '已关闭', false)
 		releaseWakeLock()
+		// 关闭后清空电压显示，下次打开再从设备读取
+		clearVoltageUi()
 		// 手动点「关闭」：不碰 DUT 上下电 UI（设备侧供电状态仍由用户控制）
 		// 意外断开：连接已失，复位上电按钮避免误显示
 		if (opts.manual === false) markPowered(false)
 		if (opts.manual !== false) bluLog('设备已关闭')
+		scheduleUIUpdate()
 	}
 
 	async function bluReadLoop() {
@@ -1810,11 +1849,15 @@
 			lastDigitTs = now
 			if (elI) elI.textContent = dispInit ? fmtCurrent(dispCurrentUA) : '--'
 			if (elP) elP.textContent = dispInit ? fmtPower(dispCurrentUA * setVoltageV()) : '--'
-			if (elV) elV.textContent = setVoltageMv + ' mV'
+			if (elV) {
+				elV.textContent = (setVoltageMv != null && isFinite(setVoltageMv))
+					? (setVoltageMv + ' mV')
+					: '--'
+			}
 			if (elSet) {
 				elSet.textContent = modifiers.savedVddMv
 					? (modifiers.savedVddMv + ' mV')
-					: (modifiersOk ? '--' : '默认表')
+					: (modifiersOk ? '--' : (bluOpen ? '默认表' : '--'))
 			}
 			if (elRate) elRate.textContent = fmtHz(sampleRateEst || (samplePeriodSec > 0 ? 1 / samplePeriodSec : 0))
 			if (elRateRaw) {
@@ -2219,7 +2262,7 @@
 			const rows = [
 				['t', fmtTimeAxis(indexToTime(hli))],
 				['I', fmtCurrent(hi)],
-				['U', setVoltageMv + ' mV'],
+				['U', (setVoltageMv != null && isFinite(setVoltageMv)) ? (setVoltageMv + ' mV') : '--'],
 				['P', fmtPower(hi * setVoltageV())],
 			]
 			ctx.font = '11px monospace'
@@ -2446,7 +2489,8 @@
 				if (step > 1 && (li % step) !== 0) continue
 				const t = indexToTime(li)
 				const i = buf ? buf[off] : ringIAt(li)
-				lines.push(t.toFixed(9) + ',' + i + ',' + setVoltageMv)
+				lines.push(t.toFixed(9) + ',' + i + ',' +
+					((setVoltageMv != null && isFinite(setVoltageMv)) ? setVoltageMv : ''))
 			}
 			base += ch.n
 		}
@@ -2842,16 +2886,28 @@
 
 		const elVolt = E('blu-voltage-set')
 		if (elVolt) {
+			// 打开前不显示电压，连接后由设备 VDD 回填
+			clearVoltageUi()
 			// 失焦 / 回车写入，去掉单独「设压」按钮
 			elVolt.addEventListener('change', function () {
 				elVolt.dataset.userTouched = '1'
-				applyVoltageMv(readSetVoltageMv())
+				const mv = readSetVoltageMv()
+				if (mv == null) {
+					bluLog('请输入源电压 mV', 'warn')
+					return
+				}
+				applyVoltageMv(mv)
 			})
 			elVolt.addEventListener('keydown', function (e) {
 				if (e.key === 'Enter') {
 					e.preventDefault()
 					elVolt.dataset.userTouched = '1'
-					applyVoltageMv(readSetVoltageMv())
+					const mv = readSetVoltageMv()
+					if (mv == null) {
+						bluLog('请输入源电压 mV', 'warn')
+						return
+					}
+					applyVoltageMv(mv)
 					elVolt.blur()
 				}
 			})
