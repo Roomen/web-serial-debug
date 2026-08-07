@@ -293,8 +293,8 @@
 		list.push({
 			group: '视图',
 			title: '切换到功耗分析',
-			alias: 'gonghao fenxi power emk emk850 emk850+ view',
-			run: function () { clickSel('.rail-item[data-view="view-emk"]') }
+			alias: 'gonghao fenxi power blu blu100k ppk view',
+			run: function () { clickSel('.rail-item[data-view="view-blu"]') }
 		})
 		const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
 		list.push({
