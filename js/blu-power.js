@@ -55,12 +55,16 @@
 	let bluSampling = false
 	let bluPowered = false
 	let bluReader = null
+	// 对照 Python BLU2_MP：STOP 后 / START 前丢弃串口残留样点，避免半帧与旧数据进波形
+	let dropSampleStream = false
 	// 修正参数 = API get_modifiers()（设备内 R/O 等），连接时自动读取；无 EMK 式人工校准
 	let modifiers = PROTO.defaultModifiers()
 	let modifiersOk = false
 	// 源电压 mV（API REGULATOR_SET）。未打开设备时不显示；打开后从 get_modifiers(VDD) 回填
 	let setVoltageMv = null // null = 尚未从设备读到 / 用户未设定
 	let wakeLockSentinel = null
+	// 排空等待：设备 STOP 后 USB 上仍可能有尾包（API 用 while get_data 抽空）
+	const RX_DRAIN_MS = 50
 
 	function setVoltageV() {
 		return (setVoltageMv != null && isFinite(setVoltageMv) ? setVoltageMv : 0) / 1000
@@ -1217,6 +1221,17 @@
 		scheduleUIUpdate()
 	}
 
+	/** 对照 API：在丢弃窗口内让读循环吃掉残留字节，并清 parser 半帧 */
+	async function drainSampleRx(ms) {
+		dropSampleStream = true
+		parser.reset()
+		const wait = Math.max(0, ms == null ? RX_DRAIN_MS : ms)
+		if (wait > 0) {
+			await new Promise(function (r) { setTimeout(r, wait) })
+		}
+		parser.reset()
+	}
+
 	async function startSampling() {
 		if (!bluOpen || bluSampling) return
 		// API：start_measuring 要求已 set_source_voltage（current_vdd，单位 mV）
@@ -1225,7 +1240,14 @@
 			bluLog('请先设定源电压 mV（API 要求 current_vdd）', 'error')
 			return
 		}
+		// 对照 BLU2_MP.start_measuring：先 STOP → 排空残留 → 再 START
+		dropSampleStream = true
+		try { await bluWrite(PROTO.cmdAverageStop(), 'AVERAGE_STOP') } catch (e) {}
+		await drainSampleRx(RX_DRAIN_MS)
+
 		applyRatePreset()
+		// clearAllData 会清 deviceStreamHz，基速先记下再清会话
+		const baseHz = deviceStreamHz > 1000 ? deviceStreamHz : PROTO.NOMINAL_BASE_HZ
 		clearAllData(false)
 		storageStop = false
 		if (recordMode === 'wave' && Store) {
@@ -1241,8 +1263,6 @@
 		}
 		parser.reset()
 		converter.resetFilter()
-		// 立刻用当前已知基速；未知时用标称 100k，避免 RateAdjuster 分母不对拖输出
-		const baseHz = deviceStreamHz > 1000 ? deviceStreamHz : PROTO.NOMINAL_BASE_HZ
 		rateAdj = new PROTO.RateAdjuster(targetRateHz, baseHz)
 		// 预热：按目标输出率 × 秒数，并封顶，避免 100k×2s 丢 20 万点才出波形
 		warmupLeft = Math.max(0, Math.min(WARMUP_MAX_SAMPLES, Math.round(targetRateHz * WARMUP_SEC)))
@@ -1257,6 +1277,8 @@
 		startStallWatch()
 		// 先发 START，再异步要 WakeLock，避免多等一拍
 		const startOk = await bluWrite(PROTO.cmdAverageStart(), 'AVERAGE_START')
+		// START 已下发后再接收样点（此前 drop 挡住 STOP 尾包与竞态）
+		dropSampleStream = false
 		requestWakeLock() // 不 await，不挡采样
 		const warmMs = targetRateHz > 0 ? Math.round(warmupLeft / targetRateHz * 1000) : 0
 		const ramSec = estimateDurationSec(RING_CAP_MAX, targetRateHz)
@@ -1274,10 +1296,13 @@
 
 	async function stopSampling() {
 		if (!bluSampling) return
+		// 先停入库，再 STOP；对照 API stop_measuring：发 STOP 后 get_data 丢弃残留
 		bluSampling = false
+		dropSampleStream = true
 		stopStallWatch()
 		updateSampleBtn()
 		try { await bluWrite(PROTO.cmdAverageStop(), 'AVERAGE_STOP') } catch (e) {}
+		parser.reset()
 		releaseWakeLock()
 		bluLog(storageStop ? '已停止采样（存储限制）' : '已停止采样')
 		updateStorageUsage()
@@ -1404,11 +1429,13 @@
 			} catch (e) {
 				// 停采失败仍继续关口，避免卡在「采样中」
 				bluSampling = false
+				dropSampleStream = true
 				stopStallWatch()
 				updateSampleBtn()
 				try {
 					if (bluOpen) await bluWrite(PROTO.cmdAverageStop(), 'AVERAGE_STOP')
 				} catch (e2) {}
+				try { parser.reset() } catch (e3) {}
 				releaseWakeLock()
 			}
 		}
@@ -1503,6 +1530,12 @@
 			return
 		}
 
+		// 非采样或排空窗口：读循环仍消费串口字节，但不解析/入库/刷新瞬时值
+		// 对照 API stop_measuring 后 get_data 丢弃、start 前 while get_data 抽空
+		if (!bluSampling || dropSampleStream) {
+			return
+		}
+
 		const samples = parser.push(u8)
 		if (!samples.length) return
 		noteSampleFrame()
@@ -1561,8 +1594,6 @@
 			} else {
 				dispCurrentUA = dispCurrentUA * 0.92 + iUA * 0.08
 			}
-
-			if (!bluSampling) continue
 
 			const outs = rateAdj.push(iUA, tMs)
 			for (let k = 0; k < outs.length; k++) {
