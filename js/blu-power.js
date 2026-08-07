@@ -12,11 +12,15 @@
 	const DEFAULT_VIEW_POINTS = 2000
 	// 顶部大数字刷新：过快会看不清，约 2 次/秒足够
 	const DIGIT_UI_HZ = 2
-	const X_ZOOM_MIN = 0.005
+	// X 缩小下限按时长算：旧 X_ZOOM_MIN=0.005 → 约 4s@100k；现默认可缩到约 2 分钟窗口
+	const MAX_VIEW_DURATION_SEC = 120
+	const X_ZOOM_MIN_HARD = 1e-6
 	const X_ZOOM_MAX = 2000
 	const MIN_VIEW_POINTS = 4
 	const Y_ZOOM_MIN = 0.1
 	const Y_ZOOM_MAX = 100
+	// 左侧 Y 轴命中宽度（相对 plot margin.left，略放宽便于滚轮）
+	const Y_AXIS_HIT_PAD_PX = 6
 	const DRAG_THRESHOLD_PX = 4
 	const PERIOD_LOCK_SEC = 10
 	const LOG_FLOOR_UA = 0.2 // PPK log 友好下限 0.2 µA
@@ -1608,8 +1612,19 @@
 		return li * samplePeriodSec
 	}
 
+	/** 当前采样周期下，X 轴允许的最小 xZoom（视口最宽 ≈ MAX_VIEW_DURATION_SEC） */
+	function xZoomMin() {
+		const period = samplePeriodSec > 0 ? samplePeriodSec : (1 / Math.max(1, targetRateHz))
+		const maxPts = Math.max(DEFAULT_VIEW_POINTS, Math.ceil(MAX_VIEW_DURATION_SEC / period))
+		return Math.max(X_ZOOM_MIN_HARD, DEFAULT_VIEW_POINTS / maxPts)
+	}
+
+	function clampXZoom(z) {
+		return Math.max(xZoomMin(), Math.min(X_ZOOM_MAX, z))
+	}
+
 	function currentViewPts() {
-		const n = Math.max(2, ringCount)
+		const n = Math.max(2, dataCount())
 		let viewPts = Math.max(MIN_VIEW_POINTS, Math.round(DEFAULT_VIEW_POINTS / view.xZoom))
 		return Math.min(n, viewPts)
 	}
@@ -2372,7 +2387,7 @@
 		const n = sel.b - sel.a + 1
 		if (n < MIN_VIEW_POINTS) return
 		// 使视口约等于选择宽度
-		view.xZoom = Math.max(X_ZOOM_MIN, Math.min(X_ZOOM_MAX, DEFAULT_VIEW_POINTS / n))
+		view.xZoom = clampXZoom(DEFAULT_VIEW_POINTS / n)
 		liveMode = false
 		setScrollPaused(true)
 		// 视口中心对齐选择中心
@@ -2442,7 +2457,7 @@
 
 	function zoomX(factor) {
 		// 缩放不退出 Live / 不暂停滚动，仅改变视口宽度
-		view.xZoom = Math.max(X_ZOOM_MIN, Math.min(X_ZOOM_MAX, view.xZoom * factor))
+		view.xZoom = clampXZoom(view.xZoom * factor)
 		scheduleUIUpdate()
 	}
 
@@ -2450,17 +2465,24 @@
 		const layout = plotLayout
 		if (!layout) { zoomX(factor); return }
 		const liBefore = layout.fromX(px)
-		view.xZoom = Math.max(X_ZOOM_MIN, Math.min(X_ZOOM_MAX, view.xZoom * factor))
+		view.xZoom = clampXZoom(view.xZoom * factor)
 		// Live 时只改倍率、继续贴最新端；已暂停时尽量让指针下数据点保持在原位置
-		if (scrollPaused && liBefore != null && ringCount > 1) {
+		const n = dataCount()
+		if (scrollPaused && liBefore != null && n > 1) {
 			const viewPts = Math.max(MIN_VIEW_POINTS, Math.round(DEFAULT_VIEW_POINTS / view.xZoom))
-			const half = Math.floor(Math.min(ringCount, viewPts) / 2)
-			let end = Math.min(ringCount - 1, liBefore + half)
-			const start = Math.max(0, end - Math.min(ringCount, viewPts) + 1)
-			if (start === 0) end = Math.min(ringCount - 1, start + Math.min(ringCount, viewPts) - 1)
-			view.xOffset = Math.max(0, ringCount - 1 - end)
+			const half = Math.floor(Math.min(n, viewPts) / 2)
+			let end = Math.min(n - 1, liBefore + half)
+			const start = Math.max(0, end - Math.min(n, viewPts) + 1)
+			if (start === 0) end = Math.min(n - 1, start + Math.min(n, viewPts) - 1)
+			view.xOffset = Math.max(0, n - 1 - end)
 		}
 		scheduleUIUpdate()
+	}
+
+	function isOverYAxis(canvasX) {
+		const layout = plotLayout
+		const marginLeft = layout && layout.margin ? layout.margin.left : 62
+		return canvasX <= marginLeft + Y_AXIS_HIT_PAD_PX
 	}
 
 	function zoomY(factor) {
@@ -2955,10 +2977,23 @@
 				e.preventDefault()
 				const factor = e.deltaY > 0 ? (1 / 1.15) : 1.15
 				const rect = canvas.getBoundingClientRect()
-				// Shift+滚轮：Y 缩放；普通滚轮：X 缩放（与选择的 Shift+拖动不冲突）
-				if (e.shiftKey) zoomY(factor)
-				else zoomXAt(factor, e.clientX - rect.left)
+				const cx = e.clientX - rect.left
+				// 指针在左侧 Y 轴刻度区，或按住 Shift：缩放 Y；否则缩放 X
+				if (e.shiftKey || isOverYAxis(cx)) zoomY(factor)
+				else zoomXAt(factor, cx)
 			}, { passive: false })
+
+			canvas.addEventListener('pointermove', function (e) {
+				// 仅在无拖拽时提示 Y 轴可滚轮缩放
+				if (drag || selectDrag || cursorEdgeDrag || minimapDrag) return
+				const rect = canvas.getBoundingClientRect()
+				const cx = e.clientX - rect.left
+				if (isOverYAxis(cx)) {
+					canvas.style.cursor = 'ns-resize'
+				} else if (canvas.style.cursor === 'ns-resize') {
+					canvas.style.cursor = ''
+				}
+			})
 
 			canvas.addEventListener('pointerdown', function (e) {
 				if (e.button !== 0) return
