@@ -1361,14 +1361,20 @@
 	async function bluClosePort(opts) {
 		opts = opts || {}
 		if (opts.manual !== false) bluManualClose = true
+		// 采样中关闭：先 AVERAGE_STOP 停采，再关串口；不改上下电、不改电压
 		if (bluSampling) {
-			bluSampling = false
-			stopStallWatch()
-			updateSampleBtn()
-			if (bluOpen && opts.manual !== false) {
-				try { await bluWrite(PROTO.cmdAverageStop()) } catch (e) {}
+			try {
+				await stopSampling()
+			} catch (e) {
+				// 停采失败仍继续关口，避免卡在「采样中」
+				bluSampling = false
+				stopStallWatch()
+				updateSampleBtn()
+				try {
+					if (bluOpen) await bluWrite(PROTO.cmdAverageStop(), 'AVERAGE_STOP')
+				} catch (e2) {}
+				releaseWakeLock()
 			}
-			releaseWakeLock()
 		}
 		bluOpen = false
 		const r = bluReader
@@ -1382,7 +1388,9 @@
 		}
 		setStatus(opts.manual === false ? '已断开' : '已关闭', false)
 		releaseWakeLock()
-		markPowered(false)
+		// 手动点「关闭」：不碰 DUT 上下电 UI（设备侧供电状态仍由用户控制）
+		// 意外断开：连接已失，复位上电按钮避免误显示
+		if (opts.manual === false) markPowered(false)
 		if (opts.manual !== false) bluLog('设备已关闭')
 	}
 
