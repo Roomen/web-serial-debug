@@ -3781,7 +3781,10 @@ hr {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
   padding: 5px 10px;
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
@@ -3870,6 +3873,40 @@ hr {
 .blu-sample-rate-select {
   min-width: 88px;
   width: auto;
+}
+
+/* 存储预算：与采样率同高、单行不换行（窄屏整条工具栏横向滚动） */
+.blu-storage-set {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: var(--blu-control-h);
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+
+.blu-storage-select {
+  min-width: 3.4rem;
+  width: auto;
+  height: var(--blu-control-h) !important;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  padding: 0 2px;
+}
+
+.blu-storage-hint {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: var(--blu-control-h);
+}
+
+.blu-tb-setup {
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 .blu-port-select {

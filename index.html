@@ -883,10 +883,30 @@
                             </div>
                             <div class="blu-sample-rate-set">
                                 <span class="blu-sample-rate-label">模式</span>
-                                <select id="blu-record-mode" class="blu-sample-rate-select" title="波形：RAM 环缓；长期统计：只记 min/max/累计耗电">
+                                <select id="blu-record-mode" class="blu-sample-rate-select" title="波形：RAM 预算内全精度，超出压缩落盘；长期统计：只记 min/max/累计耗电">
                                     <option value="wave" selected>波形</option>
                                     <option value="long">长期统计</option>
                                 </select>
+                            </div>
+                            <div class="blu-storage-set" title="波形存储预算（GB，刷新后仍保留）">
+                                <span class="blu-sample-rate-label">RAM</span>
+                                <select id="blu-ram-gb" class="blu-storage-select" title="热数据 RAM 预算">
+                                    <option value="0.5">0.5G</option>
+                                    <option value="1">1G</option>
+                                    <option value="2" selected>2G</option>
+                                    <option value="4">4G</option>
+                                    <option value="8">8G</option>
+                                </select>
+                                <span class="blu-sample-rate-label">盘</span>
+                                <select id="blu-disk-gb" class="blu-storage-select" title="冷数据磁盘预算；0=RAM 满即停">
+                                    <option value="0">0</option>
+                                    <option value="1">1G</option>
+                                    <option value="2">2G</option>
+                                    <option value="4" selected>4G</option>
+                                    <option value="8">8G</option>
+                                    <option value="16">16G</option>
+                                </select>
+                                <span id="blu-storage-hint" class="blu-storage-hint">--</span>
                             </div>
                         </div>
 
@@ -980,7 +1000,7 @@
 
                         <!-- 统计：总体 / 窗口 / 选择（字段中文） -->
                         <div class="blu-stats-cards">
-                            <div class="blu-stat-card blu-stat-card-overall" title="全部缓冲 / 长期累计">
+                            <div class="blu-stat-card blu-stat-card-overall" title="全部保留数据（RAM 热数据 + 磁盘冷数据）/ 长期累计">
                                 <div class="blu-stat-card-head">
                                     <span class="blu-stat-card-title"><i class="bi bi-database"></i> 总体</span>
                                     <span class="blu-stat-card-n" id="blu-stat-overall-n"></span>
@@ -1319,6 +1339,7 @@
     <script src="https://cdn.bootcdn.net/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="js/firmware-packager.js"></script>
     <script src="js/blu-protocol.js"></script>
+    <script src="js/blu-storage.js"></script>
     <script src="js/blu-power.js"></script>
 
 </body>

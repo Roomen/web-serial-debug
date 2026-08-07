@@ -111,123 +111,110 @@
 		tLast: 0,
 	}
 
-	// <<< RINGBUF：仅电流 Float32；电压用设定值算功率 >>>
+	// <<< 波形存储：RAM 预算内热数据；超额分块压缩落盘（不丢细节）>>>
 	const CHUNK_BITS = 16
 	const CHUNK_SIZE = 1 << CHUNK_BITS
-	const CHUNK_MASK = CHUNK_SIZE - 1
-	const CAP_TIERS = [2097152, 8388608, 33554432]
-	const CAP_HARD_MAX = 67108864
-	const CAP_STORE_KEY = 'blu-ring-capacity'
+	const BYTES_PER_SAMPLE = 4 // Float32 电流
+	const STORAGE_CFG_KEY = 'blu-storage-config'
+	const LEGACY_CAP_KEY = 'blu-ring-capacity'
+	const DEFAULT_RAM_GB = 2
+	const DEFAULT_DISK_GB = 4
+	const RAM_GB_MIN = 0.25
+	const RAM_GB_MAX = 8
+	const DISK_GB_MIN = 0
+	const DISK_GB_MAX = 64
+	const HYDRATE_CACHE_MAX = 24 // 热回读缓存块数（约 24×256KB）
+	const Store = typeof window !== 'undefined' ? window.BluWaveStore : null
 
-	function pickCapacity() {
-		let cap = CAP_TIERS[1]
-		let dm = 0
-		try {
-			if (typeof navigator !== 'undefined' && navigator && isFinite(navigator.deviceMemory)) {
-				dm = navigator.deviceMemory
-			}
-		} catch (e) {}
-		if (dm > 0 && dm <= 2) cap = CAP_TIERS[0]
-		try {
-			if (typeof localStorage !== 'undefined' && localStorage) {
-				const raw = parseInt(localStorage.getItem(CAP_STORE_KEY), 10)
-				if (isFinite(raw) && raw > 0) cap = Math.min(CAP_HARD_MAX, raw)
-			}
-		} catch (e) {}
-		cap = Math.floor(cap / CHUNK_SIZE) * CHUNK_SIZE
-		return Math.max(CHUNK_SIZE * 2, Math.min(CAP_HARD_MAX, cap))
+	function clampNum(v, lo, hi, fallback) {
+		v = parseFloat(v)
+		if (!isFinite(v)) v = fallback
+		return Math.max(lo, Math.min(hi, v))
 	}
 
-	const RING_CAP_MAX = pickCapacity()
-	const MAX_CHUNKS = RING_CAP_MAX / CHUNK_SIZE
-	const chunkI = []
-	const statSumI = new Float64Array(MAX_CHUNKS)
-	const statSumP = new Float64Array(MAX_CHUNKS)
-	const statMin = new Float64Array(MAX_CHUNKS)
-	const statMax = new Float64Array(MAX_CHUNKS)
-	const statN = new Float64Array(MAX_CHUNKS)
-	let ringCap = 0
-	let ringHead = 0
-	let ringCount = 0
-	let sampleCount = 0
+	function roundGb(v) {
+		// 显示/存储用 2 位小数，避免 0.30000000004
+		return Math.round(v * 100) / 100
+	}
+
+	function loadStorageConfig() {
+		let ramGB = DEFAULT_RAM_GB
+		let diskGB = DEFAULT_DISK_GB
+		try {
+			const raw = localStorage.getItem(STORAGE_CFG_KEY)
+			if (raw) {
+				const o = JSON.parse(raw)
+				if (o && typeof o === 'object') {
+					if (o.ramGB != null) ramGB = o.ramGB
+					else if (o.ramMB != null) ramGB = parseFloat(o.ramMB) / 1024
+					if (o.diskGB != null) diskGB = o.diskGB
+					else if (o.diskMB != null) diskGB = parseFloat(o.diskMB) / 1024
+				}
+			} else {
+				// 兼容旧环缓点数配置 → 粗算 RAM GB
+				const legacy = parseInt(localStorage.getItem(LEGACY_CAP_KEY), 10)
+				if (isFinite(legacy) && legacy > 0) {
+					ramGB = Math.max(RAM_GB_MIN, legacy * BYTES_PER_SAMPLE / (1024 * 1024 * 1024))
+				}
+			}
+		} catch (e) { /* 默认 */ }
+		return {
+			ramGB: roundGb(clampNum(ramGB, RAM_GB_MIN, RAM_GB_MAX, DEFAULT_RAM_GB)),
+			diskGB: roundGb(clampNum(diskGB, DISK_GB_MIN, DISK_GB_MAX, DEFAULT_DISK_GB)),
+		}
+	}
+
+	function saveStorageConfig(cfg) {
+		try {
+			localStorage.setItem(STORAGE_CFG_KEY, JSON.stringify({
+				ramGB: cfg.ramGB,
+				diskGB: cfg.diskGB,
+			}))
+		} catch (e) { /* 忽略 */ }
+	}
+
+	function samplesFromRamGB(ramGB) {
+		const bytes = Math.max(0, ramGB) * 1024 * 1024 * 1024
+		let n = Math.floor(bytes / BYTES_PER_SAMPLE)
+		n = Math.floor(n / CHUNK_SIZE) * CHUNK_SIZE
+		return Math.max(CHUNK_SIZE * 2, n)
+	}
+
+	function bytesFromDiskGB(diskGB) {
+		return Math.max(0, diskGB) * 1024 * 1024 * 1024
+	}
+
+	function fmtGb(n) {
+		if (!isFinite(n)) return '--'
+		if (n === 0) return '0'
+		if (n < 1) return n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '') + 'G'
+		if (Number.isInteger(n)) return n + 'G'
+		return n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '') + 'G'
+	}
+
+	let storageCfg = loadStorageConfig()
+	let RING_CAP_MAX = samplesFromRamGB(storageCfg.ramGB)
+	let diskBudgetBytes = bytesFromDiskGB(storageCfg.diskGB)
+
+	// 顺序分块：hot 有 buf；cold/pending 落盘后可释放 buf
+	// { id, buf, n, sumI, sumP, minI, maxI, state, diskBytes }
+	const waveChunks = []
+	let totalCount = 0 // 全部保留样点（冷+热）
+	let hotCount = 0
+	let coldCount = 0
+	let sampleCount = 0 // 与 totalCount 同步（波形模式）
+	let ringCount = 0 // 兼容旧变量名：= totalCount（可回看总点数）
 	let growBlocked = false
-	let ringEvictNoted = false
+	let storageStop = false
+	let ramArchiveNoted = false
+	let chunkIdSeq = 0
+	const archiveQueue = []
+	let archiveRunning = false
+	const hydrateCache = new Map() // id -> Float32Array
+	const hydratePending = new Set()
 
-	function statResetSlot(slot) {
-		statSumI[slot] = 0
-		statSumP[slot] = 0
-		statMin[slot] = Infinity
-		statMax[slot] = -Infinity
-		statN[slot] = 0
-	}
-
-	function allocChunk(slot) {
-		try {
-			chunkI[slot] = new Float32Array(CHUNK_SIZE)
-			statResetSlot(slot)
-			return true
-		} catch (e) {
-			growBlocked = true
-			bluLog('内存不足，环缓停止扩容：' + (e.message || e), 'warn')
-			return false
-		}
-	}
-
-	function ringPush(curUA) {
-		// 扩容到 RING_CAP_MAX，之后环形覆盖
-		while (ringHead >= ringCap && ringCap < RING_CAP_MAX && !growBlocked) {
-			if (!allocChunk(chunkI.length)) break
-			ringCap = chunkI.length * CHUNK_SIZE
-		}
-		if (ringCap === 0) {
-			if (!allocChunk(0)) return false
-			ringCap = CHUNK_SIZE
-		}
-		const phys = ringHead % ringCap
-		const slot = phys >> CHUNK_BITS
-		const off = phys & CHUNK_MASK
-		if (!chunkI[slot]) {
-			if (!allocChunk(slot)) return false
-			ringCap = Math.max(ringCap, chunkI.length * CHUNK_SIZE)
-		}
-		if (off === 0 && ringCount >= ringCap) {
-			statResetSlot(slot)
-			if (!ringEvictNoted) {
-				ringEvictNoted = true
-				bluLog('环缓已满，开始覆盖最旧数据（可降采样率或切长期统计）', 'warn')
-			}
-		}
-		chunkI[slot][off] = curUA
-		const vset = setVoltageV()
-		statSumI[slot] += curUA
-		statSumP[slot] += curUA * vset
-		if (curUA < statMin[slot]) statMin[slot] = curUA
-		if (curUA > statMax[slot]) statMax[slot] = curUA
-		statN[slot]++
-		ringHead++
-		if (ringCount < ringCap) ringCount++
-		else ringCount = ringCap
-		sampleCount++
-		return true
-	}
-
-	function logicalToPhys(li) {
-		if (li < 0 || li >= ringCount) return -1
-		return (ringHead - ringCount + li + ringCap * 4) % ringCap
-	}
-
-	function ringIAt(li) {
-		const p = logicalToPhys(li)
-		if (p < 0) return 0
-		return chunkI[p >> CHUNK_BITS][p & CHUNK_MASK]
-	}
-
-	function ringReset() {
-		ringHead = 0
-		ringCount = 0
-		sampleCount = 0
-		ringEvictNoted = false
-		for (let s = 0; s < chunkI.length; s++) statResetSlot(s)
+	function dataCount() {
+		return totalCount
 	}
 
 	function emptyStats() {
@@ -265,52 +252,453 @@
 		return (uWh * 1e3).toFixed(2) + ' nWh'
 	}
 
-	function scanAbs(a0, a1, acc) {
-		const vset = setVoltageV()
-		for (let a = a0; a < a1; a++) {
-			const p = a % ringCap
-			const v = chunkI[p >> CHUNK_BITS][p & CHUNK_MASK]
-			acc.sumI += v
-			acc.sumP += v * vset
-			if (v < acc.minI) acc.minI = v
-			if (v > acc.maxI) acc.maxI = v
-			acc.n++
+	function fmtBytes(n) {
+		if (!isFinite(n) || n < 0) n = 0
+		if (n < 1024) return n + ' B'
+		if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+		if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB'
+		return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
+	}
+
+	function estimateDurationSec(samples, hz) {
+		if (!hz || hz <= 0 || !samples) return 0
+		return samples / hz
+	}
+
+	function ensureSelectHasValue(sel, value, label) {
+		if (!sel) return
+		const s = String(value)
+		for (let i = 0; i < sel.options.length; i++) {
+			if (sel.options[i].value === s) {
+				sel.value = s
+				return
+			}
+		}
+		// 自定义值（迁移/手改 localStorage）补一条选项
+		const opt = document.createElement('option')
+		opt.value = s
+		opt.textContent = label || (s + 'G')
+		sel.appendChild(opt)
+		sel.value = s
+	}
+
+	function applyStorageConfig(cfg, opts) {
+		opts = opts || {}
+		storageCfg = {
+			ramGB: roundGb(clampNum(cfg.ramGB, RAM_GB_MIN, RAM_GB_MAX, DEFAULT_RAM_GB)),
+			diskGB: roundGb(clampNum(cfg.diskGB, DISK_GB_MIN, DISK_GB_MAX, DEFAULT_DISK_GB)),
+		}
+		RING_CAP_MAX = samplesFromRamGB(storageCfg.ramGB)
+		diskBudgetBytes = bytesFromDiskGB(storageCfg.diskGB)
+		if (opts.persist !== false) saveStorageConfig(storageCfg)
+		syncStorageUi()
+	}
+
+	function syncStorageUi() {
+		const elRam = E('blu-ram-gb')
+		const elDisk = E('blu-disk-gb')
+		if (elRam && document.activeElement !== elRam) {
+			ensureSelectHasValue(elRam, storageCfg.ramGB, fmtGb(storageCfg.ramGB))
+		}
+		if (elDisk && document.activeElement !== elDisk) {
+			ensureSelectHasValue(elDisk, storageCfg.diskGB, storageCfg.diskGB === 0 ? '0' : fmtGb(storageCfg.diskGB))
+		}
+		updateStorageHint()
+	}
+
+	/** 单行提示：时长估算 + 占用（合并原 hint/usage，避免第二行） */
+	function updateStorageHint() {
+		const el = E('blu-storage-hint')
+		if (!el) return
+		const hz = targetRateHz > 0 ? targetRateHz : 100000
+		const ramSec = estimateDurationSec(RING_CAP_MAX, hz)
+		const hotBytes = hotCount * BYTES_PER_SAMPLE
+		const diskBytes = Store ? Store.getDiskUsed() : 0
+		const ramPct = RING_CAP_MAX > 0 ? Math.min(100, hotCount / RING_CAP_MAX * 100) : 0
+		const diskPct = diskBudgetBytes > 0 ? Math.min(100, diskBytes / diskBudgetBytes * 100) : 0
+		// 短文案单行：约可录时长 · 热/盘占用
+		let text = '≈' + fmtDuration(ramSec) + '@' + fmtHz(hz)
+		if (hotCount > 0 || diskBytes > 0 || coldCount > 0) {
+			text += ' · 热' + Math.round(ramPct) + '%'
+			if (diskBudgetBytes > 0) text += ' 盘' + Math.round(diskPct) + '%'
+		}
+		el.textContent = text
+		const diskSamplesEst = diskBudgetBytes > 0
+			? Math.floor(diskBudgetBytes / (BYTES_PER_SAMPLE * 0.35))
+			: 0
+		const diskSec = estimateDurationSec(diskSamplesEst, hz)
+		el.title = 'RAM ' + fmtGb(storageCfg.ramGB) + ' 约 ' + fmtDuration(ramSec) +
+			' @' + fmtHz(hz) +
+			(diskBudgetBytes > 0
+				? (' · 磁盘 ' + fmtGb(storageCfg.diskGB) + ' 压后约 +' + fmtDuration(diskSec))
+				: ' · 磁盘 0（RAM 满即停）') +
+			' · 热 ' + fmtBytes(hotBytes) + '/' + fmtGb(storageCfg.ramGB) +
+			(diskBudgetBytes > 0 ? (' · 盘 ' + fmtBytes(diskBytes) + '/' + fmtGb(storageCfg.diskGB)) : '') +
+			(coldCount > 0 ? (' · 冷 ' + coldCount + ' 点') : '')
+	}
+
+	function updateStorageUsage() {
+		// 占用合并进 hint 单行显示
+		updateStorageHint()
+	}
+
+	function allocHotBuf() {
+		try {
+			return new Float32Array(CHUNK_SIZE)
+		} catch (e) {
+			growBlocked = true
+			bluLog('内存不足，无法分配波形块：' + (e.message || e), 'warn')
+			return null
 		}
 	}
 
-	function addSlotStat(slot, acc) {
-		if (statN[slot] <= 0) return
-		acc.sumI += statSumI[slot]
-		acc.sumP += statSumP[slot]
-		if (statMin[slot] < acc.minI) acc.minI = statMin[slot]
-		if (statMax[slot] > acc.maxI) acc.maxI = statMax[slot]
-		acc.n += statN[slot]
+	function newHotChunk() {
+		const buf = allocHotBuf()
+		if (!buf) return null
+		chunkIdSeq++
+		return {
+			id: 'c' + chunkIdSeq,
+			buf: buf,
+			n: 0,
+			sumI: 0,
+			sumP: 0,
+			minI: Infinity,
+			maxI: -Infinity,
+			state: 'hot',
+			diskBytes: 0,
+		}
+	}
+
+	function getChunkBuf(ch) {
+		if (!ch) return null
+		if (ch.buf) return ch.buf
+		if (hydrateCache.has(ch.id)) return hydrateCache.get(ch.id)
+		return null
+	}
+
+	function touchHydrateCache(id, buf) {
+		if (hydrateCache.has(id)) hydrateCache.delete(id)
+		hydrateCache.set(id, buf)
+		while (hydrateCache.size > HYDRATE_CACHE_MAX) {
+			const first = hydrateCache.keys().next().value
+			hydrateCache.delete(first)
+		}
+	}
+
+	function requestHydrate(ch) {
+		if (!ch || ch.state === 'hot' || !ch.diskBytes) return
+		if (getChunkBuf(ch) || hydratePending.has(ch.id)) return
+		if (!Store) return
+		hydratePending.add(ch.id)
+		Store.readChunk(ch.id, ch.n).then(function (buf) {
+			touchHydrateCache(ch.id, buf)
+			hydratePending.delete(ch.id)
+			// 包络缓存可能是 min/max 近似，回读后失效以便重绘细节
+			clearBucketCache()
+			scheduleUIUpdate()
+		}).catch(function (e) {
+			hydratePending.delete(ch.id)
+			bluLog('冷数据回读失败 ' + ch.id + '：' + (e && e.message ? e.message : e), 'warn')
+		})
+	}
+
+	function findChunkAt(li) {
+		if (li < 0 || li >= totalCount) return null
+		let off = li
+		for (let i = 0; i < waveChunks.length; i++) {
+			const ch = waveChunks[i]
+			if (off < ch.n) return { ch: ch, off: off, index: i }
+			off -= ch.n
+		}
+		return null
+	}
+
+	/** 全局逻辑下标 → 电流 µA（冷块未回读时用 min/max 中点占位并触发回读） */
+	function ringIAt(li) {
+		const loc = findChunkAt(li)
+		if (!loc) return 0
+		const buf = getChunkBuf(loc.ch)
+		if (buf) return buf[loc.off]
+		requestHydrate(loc.ch)
+		const ch = loc.ch
+		if (isFinite(ch.minI) && isFinite(ch.maxI)) return (ch.minI + ch.maxI) * 0.5
+		return 0
+	}
+
+	function diskUsedBytes() {
+		return Store ? Store.getDiskUsed() : 0
+	}
+
+	/** 将最老的完整热块压缩归档；失败返回 false（磁盘满/无后端/内存） */
+	function enqueueOldestHotArchive() {
+		let idx = -1
+		for (let i = 0; i < waveChunks.length; i++) {
+			const ch = waveChunks[i]
+			if (ch.state === 'hot' && ch.buf && ch.n > 0) {
+				// 优先归档已写满的块；仅当热数据已顶满预算时才归档未满尾块
+				if (ch.n >= CHUNK_SIZE || hotCount >= RING_CAP_MAX) {
+					idx = i
+					break
+				}
+			}
+		}
+		if (idx < 0) return false
+		const ch = waveChunks[idx]
+		if (ch.state !== 'hot' || !ch.buf) return false
+
+		// 磁盘预算：用未压缩体积作上限预检（压缩后会更小，写入后再按实际计）
+		const rawBytes = ch.n * BYTES_PER_SAMPLE
+		if (diskBudgetBytes <= 0) {
+			// 不允许落盘：RAM 满即停
+			return false
+		}
+		if (!Store) {
+			return false
+		}
+		if (diskUsedBytes() + rawBytes > diskBudgetBytes) {
+			return false
+		}
+
+		const samples = ch.buf.subarray(0, ch.n)
+		// 拷贝后再释放热引用，避免异步压缩期间被改写
+		let copy
+		try {
+			copy = new Float32Array(samples)
+		} catch (e) {
+			growBlocked = true
+			bluLog('归档拷贝失败（内存不足）', 'warn')
+			return false
+		}
+		ch.state = 'pending'
+		ch.buf = null
+		hotCount -= ch.n
+		coldCount += ch.n
+		archiveQueue.push({ ch: ch, samples: copy })
+		if (!ramArchiveNoted) {
+			ramArchiveNoted = true
+			bluLog('RAM 预算已满，开始压缩归档到磁盘（不丢细节）', 'warn')
+		}
+		pumpArchiveQueue()
+		return true
+	}
+
+	function pumpArchiveQueue() {
+		if (archiveRunning) return
+		if (!archiveQueue.length) return
+		archiveRunning = true
+		const job = archiveQueue.shift()
+		const ch = job.ch
+		const samples = job.samples
+		const run = async function () {
+			try {
+				if (!Store) throw new Error('BluWaveStore 未加载')
+				await Store.init()
+				if (!Store.getBackend()) throw new Error('浏览器不支持 OPFS/IndexedDB 落盘')
+				// 再次检查磁盘（队列等待期间可能已占满）
+				const rawBytes = samples.length * BYTES_PER_SAMPLE
+				if (diskUsedBytes() + Math.ceil(rawBytes * 0.15) > diskBudgetBytes) {
+					// 预留一点最小写入空间；若几乎满则停止
+					throw new Error('DISK_FULL')
+				}
+				const res = await Store.writeChunk(ch.id, samples)
+				ch.diskBytes = res.byteSize
+				ch.state = 'cold'
+				if (diskUsedBytes() > diskBudgetBytes) {
+					// 已写入但超预算：删掉磁盘副本，避免不可达垃圾 + RAM 双份
+					try {
+						await Store.removeChunk(ch.id, ch.diskBytes)
+					} catch (eRm) { /* 忽略 */ }
+					ch.diskBytes = 0
+					throw new Error('DISK_FULL')
+				}
+				updateStorageUsage()
+			} catch (e) {
+				const msg = e && e.message ? e.message : String(e)
+				// 写失败：尽量把数据救回 RAM，避免丢细节
+				if (!ch.buf) {
+					try {
+						ch.buf = samples
+						ch.state = 'hot'
+						hotCount += ch.n
+						coldCount = Math.max(0, coldCount - ch.n)
+					} catch (e2) {
+						ch.state = 'lost'
+						bluLog('归档失败且无法回灌 RAM，部分数据可能丢失', 'error')
+					}
+				}
+				if (msg === 'DISK_FULL' || (diskBudgetBytes > 0 && diskUsedBytes() >= diskBudgetBytes)) {
+					triggerStorageStop('磁盘预算已满（' + fmtGb(storageCfg.diskGB) + '），已停止采样')
+				} else {
+					bluLog('波形归档失败：' + msg, 'error')
+					triggerStorageStop('波形归档失败，已停止采样以防丢数据')
+				}
+			} finally {
+				archiveRunning = false
+				if (archiveQueue.length) pumpArchiveQueue()
+				updateStorageUsage()
+				scheduleUIUpdate()
+			}
+		}
+		run()
+	}
+
+	function triggerStorageStop(reason) {
+		if (storageStop) return
+		storageStop = true
+		bluLog(reason, 'error')
+		if (bluSampling) {
+			// 异步停止，避免在 ingest 栈内重入
+			setTimeout(function () {
+				stopSampling()
+			}, 0)
+		}
+	}
+
+	/** 保证热区有空间再写入；失败则停录 */
+	function ensureHotRoom(needSamples) {
+		needSamples = needSamples || 1
+		while (hotCount + needSamples > RING_CAP_MAX && !growBlocked) {
+			if (!enqueueOldestHotArchive()) {
+				if (diskBudgetBytes <= 0) {
+					triggerStorageStop('RAM 已满且磁盘预算为 0，已停止采样（不覆盖旧数据）')
+				} else {
+					triggerStorageStop('RAM 已满且磁盘无法继续归档（预算满或不可用），已停止采样')
+				}
+				return false
+			}
+		}
+		if (growBlocked && hotCount + needSamples > RING_CAP_MAX) {
+			triggerStorageStop('内存不足且无法继续归档，已停止采样')
+			return false
+		}
+		return true
+	}
+
+	function ringPush(curUA) {
+		if (storageStop) return false
+		if (!ensureHotRoom(1)) return false
+
+		let ch = waveChunks.length ? waveChunks[waveChunks.length - 1] : null
+		if (!ch || ch.state !== 'hot' || !ch.buf || ch.n >= CHUNK_SIZE) {
+			ch = newHotChunk()
+			if (!ch) {
+				// 尝试腾出一块再分配
+				if (enqueueOldestHotArchive()) ch = newHotChunk()
+				if (!ch) {
+					triggerStorageStop('无法分配新波形块，已停止采样')
+					return false
+				}
+			}
+			waveChunks.push(ch)
+		}
+
+		const off = ch.n
+		ch.buf[off] = curUA
+		ch.n++
+		const vset = setVoltageV()
+		ch.sumI += curUA
+		ch.sumP += curUA * vset
+		if (curUA < ch.minI) ch.minI = curUA
+		if (curUA > ch.maxI) ch.maxI = curUA
+
+		totalCount++
+		hotCount++
+		sampleCount = totalCount
+		ringCount = totalCount
+		return true
+	}
+
+	function ringReset() {
+		// 清空会话时丢弃未落盘队列（调用方本意是丢数据）；记日志避免 silent drop
+		if (archiveQueue.length > 0) {
+			const nPend = archiveQueue.length
+			let pts = 0
+			for (let i = 0; i < archiveQueue.length; i++) {
+				const j = archiveQueue[i]
+				if (j && j.ch) pts += j.ch.n || 0
+			}
+			bluLog('清空数据：丢弃 ' + nPend + ' 个未落盘归档块（约 ' + pts + ' 点）', 'warn')
+			archiveQueue.length = 0
+		}
+		waveChunks.length = 0
+		totalCount = 0
+		hotCount = 0
+		coldCount = 0
+		sampleCount = 0
+		ringCount = 0
+		growBlocked = false
+		storageStop = false
+		ramArchiveNoted = false
+		chunkIdSeq = 0
+		hydrateCache.clear()
+		hydratePending.clear()
+		if (Store) {
+			Store.clearSession().catch(function () { /* 忽略 */ })
+		}
+		updateStorageUsage()
+	}
+
+	function addChunkStatRange(ch, lo, hi, acc) {
+		// [lo, hi) 块内半开区间
+		if (hi <= lo) return
+		const len = hi - lo
+		if (lo === 0 && hi === ch.n && ch.n > 0) {
+			acc.sumI += ch.sumI
+			acc.sumP += ch.sumP
+			if (ch.minI < acc.minI) acc.minI = ch.minI
+			if (ch.maxI > acc.maxI) acc.maxI = ch.maxI
+			acc.n += ch.n
+			return
+		}
+		const buf = getChunkBuf(ch)
+		const vset = setVoltageV()
+		if (buf) {
+			for (let i = lo; i < hi; i++) {
+				const v = buf[i]
+				acc.sumI += v
+				acc.sumP += v * vset
+				if (v < acc.minI) acc.minI = v
+				if (v > acc.maxI) acc.maxI = v
+				acc.n++
+			}
+			return
+		}
+		// 冷块未回读：用块级统计按比例近似（选区边界可能略偏，完整块仍精确）
+		requestHydrate(ch)
+		if (ch.n > 0 && len === ch.n) {
+			acc.sumI += ch.sumI
+			acc.sumP += ch.sumP
+			if (ch.minI < acc.minI) acc.minI = ch.minI
+			if (ch.maxI > acc.maxI) acc.maxI = ch.maxI
+			acc.n += ch.n
+		} else if (ch.n > 0) {
+			const ratio = len / ch.n
+			acc.sumI += ch.sumI * ratio
+			acc.sumP += ch.sumP * ratio
+			if (ch.minI < acc.minI) acc.minI = ch.minI
+			if (ch.maxI > acc.maxI) acc.maxI = ch.maxI
+			acc.n += len
+		}
 	}
 
 	function calcStats(start, end) {
-		if (ringCount < 1 || end <= start) return emptyStats()
+		const nTotal = dataCount()
+		if (nTotal < 1 || end <= start) return emptyStats()
 		start = Math.max(0, start)
-		end = Math.min(ringCount, end)
+		end = Math.min(nTotal, end)
 		const n = end - start
 		if (n <= 0) return emptyStats()
-		const base = (ringHead - ringCount + ringCap * 4) % ringCap
-		const a0 = base + start
-		const a1 = base + end
 		const acc = { n: 0, sumI: 0, sumP: 0, minI: Infinity, maxI: -Infinity }
-		let a = a0
-		while (a < a1) {
-			const p = a % ringCap
-			const slot = p >> CHUNK_BITS
-			const off = p & CHUNK_MASK
-			const slotEnd = (slot + 1) * CHUNK_SIZE
-			const runEnd = Math.min(a1, a + (slotEnd - p))
-			if (off === 0 && runEnd - a === CHUNK_SIZE && statN[slot] === CHUNK_SIZE) {
-				addSlotStat(slot, acc)
-				a = runEnd
-			} else {
-				scanAbs(a, runEnd, acc)
-				a = runEnd
-			}
+		let base = 0
+		for (let i = 0; i < waveChunks.length; i++) {
+			const ch = waveChunks[i]
+			const ch0 = base
+			const ch1 = base + ch.n
+			const lo = Math.max(start, ch0)
+			const hi = Math.min(end, ch1)
+			if (hi > lo) addChunkStatRange(ch, lo - ch0, hi - ch0, acc)
+			base = ch1
+			if (base >= end) break
 		}
 		const dur = n > 1 ? (n - 1) * samplePeriodSec : 0
 		const avgI = acc.n ? acc.sumI / acc.n : 0
@@ -323,6 +711,51 @@
 			maxI: isFinite(acc.maxI) ? acc.maxI : 0,
 			dur: dur,
 		})
+	}
+
+	function bucketMinMaxGlobal(lo, hi) {
+		// 全局逻辑下标闭区间 [lo, hi]
+		let mn = Infinity
+		let mx = -Infinity
+		let first = 0
+		let last = 0
+		let got = false
+		let base = 0
+		for (let i = 0; i < waveChunks.length; i++) {
+			const ch = waveChunks[i]
+			const ch0 = base
+			const ch1 = base + ch.n
+			const a = Math.max(lo, ch0)
+			const b = Math.min(hi, ch1 - 1)
+			if (b >= a) {
+				if (a === ch0 && b === ch1 - 1 && ch.n > 0) {
+					if (!got) { first = ch.minI; got = true }
+					last = ch.maxI
+					if (ch.minI < mn) mn = ch.minI
+					if (ch.maxI > mx) mx = ch.maxI
+				} else {
+					const buf = getChunkBuf(ch)
+					if (buf) {
+						for (let p = a; p <= b; p++) {
+							const v = buf[p - ch0]
+							if (!got) { first = v; got = true }
+							last = v
+							if (v < mn) mn = v
+							if (v > mx) mx = v
+						}
+					} else {
+						requestHydrate(ch)
+						if (!got) { first = ch.minI; got = true }
+						last = ch.maxI
+						if (ch.minI < mn) mn = ch.minI
+						if (ch.maxI > mx) mx = ch.maxI
+					}
+				}
+			}
+			base = ch1
+			if (base > hi) break
+		}
+		return { min: mn, max: mx, first: first, last: last, loAbs: lo, hiAbs: hi }
 	}
 
 	// 绘制用 min/max 分桶（PPK dataAccumulator：每像素 min/max 包络）
@@ -341,23 +774,6 @@
 		return p
 	}
 
-	function bucketMinMaxAbs(aLo, aHi) {
-		let mn = Infinity
-		let mx = -Infinity
-		let first = 0
-		let last = 0
-		let got = false
-		for (let a = aLo; a <= aHi; a++) {
-			const p = ((a % ringCap) + ringCap) % ringCap
-			const v = chunkI[p >> CHUNK_BITS][p & CHUNK_MASK]
-			if (!got) { first = v; got = true }
-			last = v
-			if (v < mn) mn = v
-			if (v > mx) mx = v
-		}
-		return { min: mn, max: mx, first: first, last: last, loAbs: aLo, hiAbs: aHi }
-	}
-
 	function getBucketEntry(bucketIdx, bucketSize, base, lastAbs) {
 		if (bucketCache.size !== bucketSize || bucketCache.base !== base || !bucketCache.map) {
 			bucketCache.size = bucketSize
@@ -370,7 +786,7 @@
 		if (hi < base || lo > lastAbs) return null
 		const aLo = Math.max(lo, base)
 		const aHi = hi
-		const entry = bucketMinMaxAbs(aLo, aHi)
+		const entry = bucketMinMaxGlobal(aLo, aHi)
 		bucketCache.map.set(bucketIdx, entry)
 		return entry
 	}
@@ -521,10 +937,13 @@
 		const p = getRatePreset()
 		targetRateHz = p.hz
 		rateAdj.setTargetRateHz(targetRateHz)
-		// 默认 100k；仅在波形模式下提示长录占用
+		// 默认 100k；波形模式提示 RAM/磁盘预算
 		if (p.hz >= 50000 && recordMode === 'wave') {
-			bluLog('100k 入库量大，长录请改较低采样率或「长期统计」', 'warn')
+			const sec = estimateDurationSec(RING_CAP_MAX, p.hz)
+			bluLog('100k 波形：RAM 约可存 ' + fmtDuration(sec) +
+				'，超出后压缩落盘（磁盘 ' + fmtGb(storageCfg.diskGB) + '）', 'warn')
 		}
+		updateStorageHint()
 		return p
 	}
 
@@ -679,6 +1098,18 @@
 		}
 		applyRatePreset()
 		clearAllData(false)
+		storageStop = false
+		if (recordMode === 'wave' && Store) {
+			try {
+				await Store.init()
+				const be = Store.getBackend()
+				if (!be && storageCfg.diskGB > 0) {
+					bluLog('当前浏览器无法落盘（需 OPFS 或 IndexedDB），磁盘预算将无法使用', 'warn')
+				}
+			} catch (e) {
+				bluLog('初始化波形磁盘存储失败：' + (e && e.message ? e.message : e), 'warn')
+			}
+		}
 		parser.reset()
 		converter.resetFilter()
 		// 立刻用当前已知基速；未知时用标称 100k，避免 RateAdjuster 分母不对拖输出
@@ -699,11 +1130,16 @@
 		const startOk = await bluWrite(PROTO.cmdAverageStart(), 'AVERAGE_START')
 		requestWakeLock() // 不 await，不挡采样
 		const warmMs = targetRateHz > 0 ? Math.round(warmupLeft / targetRateHz * 1000) : 0
+		const ramSec = estimateDurationSec(RING_CAP_MAX, targetRateHz)
 		bluLog((startOk ? 'AVERAGE_START' : 'AVERAGE_START 可能失败') +
 			' · 目标 ' + getRatePreset().label +
 			' · ' + (recordMode === 'long' ? '长期统计' : '波形') +
 			' · Live 滚动' +
 			' · 预热约 ' + warmMs + ' ms（' + warmupLeft + ' 点）' +
+			(recordMode === 'wave'
+				? (' · RAM ' + fmtGb(storageCfg.ramGB) + '≈' + fmtDuration(ramSec) +
+					' · 磁盘 ' + fmtGb(storageCfg.diskGB))
+				: '') +
 			(modifiersOk ? '' : ' · 默认修正参数'))
 	}
 
@@ -714,7 +1150,8 @@
 		updateSampleBtn()
 		try { await bluWrite(PROTO.cmdAverageStop(), 'AVERAGE_STOP') } catch (e) {}
 		releaseWakeLock()
-		bluLog('已停止采样')
+		bluLog(storageStop ? '已停止采样（存储限制）' : '已停止采样')
+		updateStorageUsage()
 		scheduleUIUpdate()
 	}
 
@@ -1005,15 +1442,10 @@
 			}
 		}
 
-		// 暂停滚动：新样本入库后钉住历史视口
+		// 暂停滚动：新样本入库后钉住历史视口（顺序存储，旧下标不左移）
 		if (bluSampling && stored > 0 && scrollPaused) {
-			const maxOff = Math.max(0, ringCount - 1)
-			// 环缓已满时最旧点被覆盖，逻辑下标整体左移
-			const ringFull = ringCap > 0 && ringCount >= ringCap
+			const maxOff = Math.max(0, dataCount() - 1)
 			if (drag && drag.liAnchor != null) {
-				if (ringFull) {
-					drag.liAnchor = Math.max(0, drag.liAnchor - stored)
-				}
 				// 跟手：用当前指针位置重算视口，使抓取点仍在指针下
 				if (typeof drag.lastX === 'number') {
 					panViewSoLiAtPixel(drag.liAnchor, drag.lastX)
@@ -1077,7 +1509,10 @@
 		}
 
 		// 波形模式
-		ringPush(iUA)
+		if (!ringPush(iUA)) {
+			// RAM/磁盘触顶：已触发停采，本点不入库
+			return
+		}
 		minimap.addData(iUA, tSec)
 		overallStatDirty = true
 		// 长期旁路累计（总体能量仍可用块统计；此处仅 minimap）
@@ -1285,11 +1720,12 @@
 				if (elCount) elCount.textContent = String(longStats.n)
 				if (elDur) elDur.textContent = fmtDuration(Math.max(0, longStats.tLast - longStats.t0))
 			} else {
-				if (elCount) elCount.textContent = String(ringCount)
-				if (elDur) elDur.textContent = fmtDuration(ringCount > 1 ? (ringCount - 1) * samplePeriodSec : 0)
+				if (elCount) elCount.textContent = String(dataCount())
+				if (elDur) elDur.textContent = fmtDuration(dataCount() > 1 ? (dataCount() - 1) * samplePeriodSec : 0)
 			}
 			updateStats()
 			updateCursorInfo()
+			updateStorageUsage()
 		}
 	}
 
@@ -1371,8 +1807,9 @@
 		}
 
 		const vr = getViewRange()
-		const ringBase = sampleCount - ringCount
-		const ringLastAbs = sampleCount - 1
+		// 顺序存储：全局逻辑下标即绝对下标（0 .. totalCount-1）
+		const ringBase = 0
+		const ringLastAbs = Math.max(0, dataCount() - 1)
 		const bucketSize = computeBucketSize(vr.count, pw)
 		let yMin = Infinity
 		let yMax = -Infinity
@@ -1863,7 +2300,7 @@
 		scheduleUIUpdate()
 	}
 
-	function exportCSV() {
+	async function exportCSV() {
 		if (recordMode === 'long') {
 			const avg = longStats.n ? longStats.sumI / longStats.n : 0
 			const lines = [
@@ -1877,20 +2314,38 @@
 			downloadText(lines.join('\n'), 'blu100k_longstats_')
 			return
 		}
-		if (ringCount < 1) {
+		const nAll = dataCount()
+		if (nAll < 1) {
 			bluLog('无数据可导出', 'warn')
 			return
 		}
 		const maxExport = 2000000
-		const step = ringCount > maxExport ? Math.ceil(ringCount / maxExport) : 1
+		const step = nAll > maxExport ? Math.ceil(nAll / maxExport) : 1
 		const lines = ['timestamp_s,current_uA,voltage_mV']
-		for (let li = 0; li < ringCount; li += step) {
-			const t = indexToTime(li)
-			const i = ringIAt(li)
-			lines.push(t.toFixed(9) + ',' + i + ',' + setVoltageMv)
+		// 按块导出，冷数据先解压，保证不丢细节（抽稀仅在超 maxExport 时）
+		let base = 0
+		for (let ci = 0; ci < waveChunks.length; ci++) {
+			const ch = waveChunks[ci]
+			let buf = getChunkBuf(ch)
+			if (!buf && ch.state !== 'hot' && Store && ch.diskBytes) {
+				try {
+					buf = await Store.readChunk(ch.id, ch.n)
+					touchHydrateCache(ch.id, buf)
+				} catch (e) {
+					bluLog('导出时回读冷块失败 ' + ch.id + '：' + (e && e.message ? e.message : e), 'warn')
+				}
+			}
+			for (let off = 0; off < ch.n; off++) {
+				const li = base + off
+				if (step > 1 && (li % step) !== 0) continue
+				const t = indexToTime(li)
+				const i = buf ? buf[off] : ringIAt(li)
+				lines.push(t.toFixed(9) + ',' + i + ',' + setVoltageMv)
+			}
+			base += ch.n
 		}
 		downloadText(lines.join('\n'), 'blu100k_')
-		bluLog('已导出 ' + Math.ceil(ringCount / step) + ' 点 CSV' + (step > 1 ? '（抽稀 1/' + step + '）' : ''))
+		bluLog('已导出 ' + Math.ceil(nAll / step) + ' 点 CSV' + (step > 1 ? '（抽稀 1/' + step + '）' : ''))
 	}
 
 	function downloadText(text, prefix) {
@@ -2277,6 +2732,44 @@
 			elMode.addEventListener('change', function () {
 				setRecordMode(this.value)
 			})
+		}
+
+		function commitStorageInputs() {
+			const elRam = E('blu-ram-gb')
+			const elDisk = E('blu-disk-gb')
+			const next = {
+				ramGB: elRam ? elRam.value : storageCfg.ramGB,
+				diskGB: elDisk ? elDisk.value : storageCfg.diskGB,
+			}
+			if (bluSampling) {
+				// 采样中只允许调磁盘上限（立即生效）；RAM 下次开始采样生效
+				const diskOnly = {
+					ramGB: storageCfg.ramGB,
+					diskGB: next.diskGB,
+				}
+				applyStorageConfig(diskOnly)
+				if (elRam) ensureSelectHasValue(elRam, storageCfg.ramGB, fmtGb(storageCfg.ramGB))
+				bluLog('磁盘预算已更新为 ' + fmtGb(storageCfg.diskGB) + '（RAM 请停止采样后再改）')
+				return
+			}
+			applyStorageConfig(next)
+			bluLog('存储预算：RAM ' + fmtGb(storageCfg.ramGB) + '（约 ' +
+				fmtDuration(estimateDurationSec(RING_CAP_MAX, targetRateHz)) +
+				'@' + fmtHz(targetRateHz) + '）· 磁盘 ' + fmtGb(storageCfg.diskGB))
+		}
+		const elRam = E('blu-ram-gb')
+		const elDisk = E('blu-disk-gb')
+		if (elRam) elRam.addEventListener('change', commitStorageInputs)
+		if (elDisk) elDisk.addEventListener('change', commitStorageInputs)
+		syncStorageUi()
+		if (Store) {
+			Store.init().then(function (be) {
+				if (be) {
+					bluLog('波形冷存储就绪（' + be +
+						(Store.isCompressionSupported() ? '+deflate' : '') +
+						'，多标签心跳保护 / 过期会话回收）')
+				}
+			}).catch(function () { /* 忽略 */ })
 		}
 
 		const elYLog = E('blu-y-log')
