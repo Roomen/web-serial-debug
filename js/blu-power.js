@@ -387,6 +387,9 @@
 			sumP: 0,
 			minI: Infinity,
 			maxI: -Infinity,
+			// 包络连线用：整块回退时 first/last 必须是端点样值，不能用 min/max
+			firstI: 0,
+			lastI: 0,
 			state: 'hot',
 			diskBytes: 0,
 		}
@@ -599,6 +602,8 @@
 
 	function ringPush(curUA) {
 		if (storageStop) return false
+		// 非有限值会污染 min/max/包络并导致 canvas 路径断裂（在占预算前丢弃）
+		if (!isFinite(curUA)) return true
 		if (!ensureHotRoom(1)) return false
 
 		let ch = waveChunks.length ? waveChunks[waveChunks.length - 1] : null
@@ -621,6 +626,8 @@
 		const vset = setVoltageV()
 		ch.sumI += curUA
 		ch.sumP += curUA * vset
+		if (off === 0) ch.firstI = curUA
+		ch.lastI = curUA
 		if (curUA < ch.minI) ch.minI = curUA
 		if (curUA > ch.maxI) ch.maxI = curUA
 
@@ -752,8 +759,11 @@
 			const b = Math.min(hi, ch1 - 1)
 			if (b >= a) {
 				if (a === ch0 && b === ch1 - 1 && ch.n > 0) {
-					if (!got) { first = ch.minI; got = true }
-					last = ch.maxI
+					// 整块：用端点样值作 first/last（min/max 作端点会在列间画出假尖峰）
+					const f = isFinite(ch.firstI) ? ch.firstI : ch.minI
+					const l = isFinite(ch.lastI) ? ch.lastI : ch.maxI
+					if (!got) { first = f; got = true }
+					last = l
 					if (ch.minI < mn) mn = ch.minI
 					if (ch.maxI > mx) mx = ch.maxI
 				} else {
@@ -761,15 +771,20 @@
 					if (buf) {
 						for (let p = a; p <= b; p++) {
 							const v = buf[p - ch0]
+							if (!isFinite(v)) continue
 							if (!got) { first = v; got = true }
 							last = v
 							if (v < mn) mn = v
 							if (v > mx) mx = v
 						}
 					} else {
+						// 冷块未回读：包络用块级 min/max；部分区间端点用中点，避免整块 first/last 造成假跳变
 						requestHydrate(ch)
-						if (!got) { first = ch.minI; got = true }
-						last = ch.maxI
+						const mid = (isFinite(ch.minI) && isFinite(ch.maxI))
+							? (ch.minI + ch.maxI) * 0.5
+							: 0
+						if (!got) { first = mid; got = true }
+						last = mid
 						if (ch.minI < mn) mn = ch.minI
 						if (ch.maxI > mx) mx = ch.maxI
 					}
@@ -778,10 +793,14 @@
 			base = ch1
 			if (base > hi) break
 		}
+		if (!got || !isFinite(mn) || !isFinite(mx)) {
+			return { min: 0, max: 0, first: 0, last: 0, loAbs: lo, hiAbs: hi }
+		}
 		return { min: mn, max: mx, first: first, last: last, loAbs: lo, hiAbs: hi }
 	}
 
 	// 绘制用 min/max 分桶（PPK dataAccumulator：每像素 min/max 包络）
+	// 仅缓存「完整」桶；尾部未写满的桶每次重算，避免 Live 时右缘偶发错包络
 	const bucketCache = { size: 0, base: 0, map: null }
 	function clearBucketCache() {
 		bucketCache.size = 0
@@ -803,14 +822,16 @@
 			bucketCache.base = base
 			bucketCache.map = new Map()
 		}
-		if (bucketCache.map.has(bucketIdx)) return bucketCache.map.get(bucketIdx)
 		const lo = bucketIdx * bucketSize
 		const hi = Math.min(lastAbs, lo + bucketSize - 1)
 		if (hi < base || lo > lastAbs) return null
+		const complete = (hi - lo + 1) >= bucketSize
+		if (complete && bucketCache.map.has(bucketIdx)) return bucketCache.map.get(bucketIdx)
 		const aLo = Math.max(lo, base)
 		const aHi = hi
 		const entry = bucketMinMaxGlobal(aLo, aHi)
-		bucketCache.map.set(bucketIdx, entry)
+		// 未写满的尾桶不入缓存，否则 Live 增长时右缘会用旧 min/max 闪一下假波形
+		if (complete) bucketCache.map.set(bucketIdx, entry)
 		return entry
 	}
 
@@ -833,6 +854,11 @@
 	let scrollPaused = false
 	let waveFullscreen = false
 	const CURSOR_HIT_PX = 8 // 游标线可点选/拖动的半宽
+	// 示波器式游标吸附：free | rise | fall | either（测频用边沿间隔，不需要 FFT）
+	let cursorSnapMode = 'free'
+	const EDGE_SEARCH_MAX = 80000 // 单次边沿搜索上限，防卡 UI（全选大缓冲时抽稀）
+	// 选择测量缓存：供画布浮标用，避免每帧重扫边沿
+	let cursorMeasureCache = null
 	let yAutoTargetMin = null
 	let yAutoTargetMax = null
 	let yAutoDispMin = null
@@ -1208,6 +1234,7 @@
 		view.xOffset = 0
 		view.cursorA = null
 		view.cursorB = null
+		cursorMeasureCache = null
 		dispInit = false
 		firstStoredTs = 0
 		sessionT0Ms = 0
@@ -1586,6 +1613,7 @@
 			if (lastPointTMs > 0 && tMs <= lastPointTMs) tMs = lastPointTMs + 0.001
 			lastPointTMs = tMs
 			const iUA = samples[i].iUA
+			if (!isFinite(iUA)) continue
 			latestCurrentUA = iUA
 			// 显示用慢 EMA，避免大数字狂跳
 			if (!dispInit) {
@@ -1652,6 +1680,8 @@
 	}
 
 	function ingestStored(tMs, iUA) {
+		// 丢弃 NaN/Inf，防止 Y 轴与路径偶发崩坏
+		if (!isFinite(iUA) || !isFinite(tMs)) return
 		if (!firstStoredTs) {
 			firstStoredTs = tMs
 			sessionT0Ms = tMs
@@ -1779,6 +1809,193 @@
 		if (a == null || b == null) return null
 		if (a > b) { const t = a; a = b; b = t }
 		return { a: a, b: b }
+	}
+
+	/** 区间 min/max（有限点）；失败返回 null */
+	function rangeMinMax(lo, hi) {
+		lo = Math.max(0, Math.min(ringCount - 1, lo | 0))
+		hi = Math.max(0, Math.min(ringCount - 1, hi | 0))
+		if (hi < lo) return null
+		// 优先块级统计
+		const st = calcStats(lo, hi + 1)
+		if (st && st.n && isFinite(st.minI) && isFinite(st.maxI)) {
+			return { min: st.minI, max: st.maxI }
+		}
+		return null
+	}
+
+	function edgeThreshold(lo, hi) {
+		const mm = rangeMinMax(lo, hi)
+		if (!mm) return 0
+		return (mm.min + mm.max) * 0.5
+	}
+
+	function edgeHysteresis(lo, hi) {
+		const mm = rangeMinMax(lo, hi)
+		if (!mm) return 0
+		const span = Math.abs(mm.max - mm.min)
+		return Math.max(span * 0.02, Math.abs(mm.min + mm.max) * 0.005, 1e-9)
+	}
+
+	/**
+	 * 在 [searchLo, searchHi] 内找离 want 最近的边沿下标。
+	 * kind: 'rise' | 'fall' | 'either'
+	 * 带滞回，降低噪声假触发；测频/吸附都不走 FFT。
+	 */
+	function findNearestEdge(want, kind, searchLo, searchHi) {
+		if (ringCount < 3) return clampLogical(want)
+		want = clampLogical(want)
+		if (want == null) return null
+		searchLo = Math.max(1, searchLo == null ? 0 : searchLo | 0)
+		searchHi = Math.min(ringCount - 1, searchHi == null ? ringCount - 1 : searchHi | 0)
+		if (searchHi - searchLo < 2) return want
+
+		const thr = edgeThreshold(searchLo, searchHi)
+		const hyst = edgeHysteresis(searchLo, searchHi)
+		const thrHi = thr + hyst
+		const thrLo = thr - hyst
+
+		let best = null
+		let bestDist = Infinity
+		let state = 0 // -1 below, 1 above, 0 unknown
+		const v0 = ringIAt(searchLo)
+		if (isFinite(v0)) {
+			if (v0 >= thrHi) state = 1
+			else if (v0 <= thrLo) state = -1
+		}
+		const maxScan = Math.min(EDGE_SEARCH_MAX, searchHi - searchLo + 1)
+		const step = Math.max(1, Math.ceil((searchHi - searchLo + 1) / maxScan))
+		for (let i = searchLo + step; i <= searchHi; i += step) {
+			const v = ringIAt(i)
+			if (!isFinite(v)) continue
+			let edge = null
+			if (state <= 0 && v >= thrHi) {
+				edge = 'rise'
+				state = 1
+			} else if (state >= 0 && v <= thrLo) {
+				edge = 'fall'
+				state = -1
+			} else if (state === 0) {
+				if (v >= thrHi) state = 1
+				else if (v <= thrLo) state = -1
+			}
+			if (!edge) continue
+			if (kind === 'rise' && edge !== 'rise') continue
+			if (kind === 'fall' && edge !== 'fall') continue
+			const d = Math.abs(i - want)
+			if (d < bestDist) {
+				bestDist = d
+				best = i
+			}
+		}
+		return best != null ? best : want
+	}
+
+	function snapLogicalToEdge(li) {
+		li = clampLogical(li)
+		if (li == null || cursorSnapMode === 'free') return li
+		const kind = cursorSnapMode === 'rise' ? 'rise'
+			: cursorSnapMode === 'fall' ? 'fall' : 'either'
+		// 优先在当前视口内找沿，找不到再扩大到全数据
+		const vr = getViewRange()
+		let found = findNearestEdge(li, kind, vr.start, vr.end)
+		if (found === li && ringCount > vr.count) {
+			found = findNearestEdge(li, kind, 0, ringCount - 1)
+		}
+		return found
+	}
+
+	/**
+	 * 选择区间内按上升沿估计周期/频率（时域边沿，非频谱 FFT）。
+	 * 返回 { nRise, nFall, periodSec, freqHz, duty, deltaI, thr }
+	 */
+	function measureSelectionTiming(a, b) {
+		const out = {
+			nRise: 0, nFall: 0,
+			periodSec: null, freqHz: null, duty: null,
+			deltaI: null, thr: null, nPeriod: 0,
+		}
+		if (a == null || b == null || b <= a || ringCount < 3) return out
+		const ia = ringIAt(a)
+		const ib = ringIAt(b)
+		if (isFinite(ia) && isFinite(ib)) out.deltaI = ib - ia
+
+		const thr = edgeThreshold(a, b)
+		const hyst = edgeHysteresis(a, b)
+		out.thr = thr
+		const thrHi = thr + hyst
+		const thrLo = thr - hyst
+		const rises = []
+		const falls = []
+		let state = 0
+		const v0 = ringIAt(a)
+		if (isFinite(v0)) {
+			if (v0 >= thrHi) state = 1
+			else if (v0 <= thrLo) state = -1
+		}
+		const span = b - a
+		const step = span > EDGE_SEARCH_MAX ? Math.ceil(span / EDGE_SEARCH_MAX) : 1
+		for (let i = a + step; i <= b; i += step) {
+			const v = ringIAt(i)
+			if (!isFinite(v)) continue
+			if (state <= 0 && v >= thrHi) {
+				rises.push(i)
+				state = 1
+			} else if (state >= 0 && v <= thrLo) {
+				falls.push(i)
+				state = -1
+			} else if (state === 0) {
+				if (v >= thrHi) state = 1
+				else if (v <= thrLo) state = -1
+			}
+		}
+		out.nRise = rises.length
+		out.nFall = falls.length
+		if (rises.length >= 2 && samplePeriodSec > 0) {
+			let sumP = 0
+			let nP = 0
+			for (let k = 1; k < rises.length; k++) {
+				const dp = rises[k] - rises[k - 1]
+				if (dp > 0) {
+					sumP += dp
+					nP++
+				}
+			}
+			if (nP > 0) {
+				const periodPts = sumP / nP
+				out.periodSec = periodPts * samplePeriodSec
+				out.freqHz = out.periodSec > 0 ? (1 / out.periodSec) : null
+				out.nPeriod = nP
+				// 占空比：相邻上升沿内高电平时间
+				if (falls.length && rises.length >= 2) {
+					let sumDuty = 0
+					let nD = 0
+					for (let k = 0; k < rises.length - 1; k++) {
+						const r0 = rises[k]
+						const r1 = rises[k + 1]
+						let f = null
+						for (let j = 0; j < falls.length; j++) {
+							if (falls[j] > r0 && falls[j] < r1) { f = falls[j]; break }
+						}
+						if (f != null && r1 > r0) {
+							sumDuty += (f - r0) / (r1 - r0)
+							nD++
+						}
+					}
+					if (nD > 0) out.duty = sumDuty / nD
+				}
+			}
+		}
+		return out
+	}
+
+	function fmtFreq(hz) {
+		if (hz == null || !isFinite(hz) || hz <= 0) return '--'
+		if (hz >= 1e6) return (hz / 1e6).toFixed(3) + ' MHz'
+		if (hz >= 1e3) return (hz / 1e3).toFixed(3) + ' kHz'
+		if (hz >= 1) return hz.toFixed(3) + ' Hz'
+		if (hz >= 1e-3) return (hz * 1e3).toFixed(3) + ' mHz'
+		return hz.toExponential(2) + ' Hz'
 	}
 
 	function fillStatRow(prefix, st, opts) {
@@ -1997,6 +2214,7 @@
 		if (bucketSize <= 1) {
 			for (let li = vr.start; li <= vr.end; li++) {
 				const v = ringIAt(li)
+				if (!isFinite(v)) continue
 				if (v < yMin) yMin = v
 				if (v > yMax) yMax = v
 			}
@@ -2083,8 +2301,9 @@
 			mapYMax += view.yPanOffset
 		}
 
-		// 线性自动轴：把 0 µA 纳入可见范围，便于画零线基准
-		if (!yAxisLog && view.yMode !== 'manual') {
+		// 线性自动轴：把 0 µA 纳入可见范围，便于画零线基准。
+		// 用户已 Y 缩放/平移时不再强行贴 0，否则会抵消 zoomYAt 的指针锚点
+		if (!yAxisLog && view.yMode !== 'manual' && view.yZoom === 1 && !view.yPanOffset) {
 			if (mapYMin > 0) mapYMin = 0
 			if (mapYMax < 0) mapYMax = 0
 			if (mapYMax === mapYMin) {
@@ -2186,8 +2405,15 @@
 		const drawnPts = []
 		if (bucketSize <= 1) {
 			for (let li = vr.start; li <= vr.end; li++) {
+				const v = ringIAt(li)
+				if (!isFinite(v)) {
+					// 断点：避免 NaN 路径把整段 stroke 弄没
+					started = false
+					continue
+				}
 				const x = toX(li)
-				const y = toY(ringIAt(li))
+				const y = toY(v)
+				if (!isFinite(x) || !isFinite(y)) { started = false; continue }
 				if (!started) { ctx.moveTo(x, y); started = true }
 				else ctx.lineTo(x, y)
 				drawnPts.push(x, y)
@@ -2195,20 +2421,28 @@
 		} else {
 			for (let k = 0; k < cols.length; k++) {
 				const e = cols[k].entry
+				if (!e || !isFinite(e.min) || !isFinite(e.max)) {
+					started = false
+					continue
+				}
 				const x = toX(cols[k].x)
-				const yFirst = toY(e.first)
+				const yFirst = toY(isFinite(e.first) ? e.first : e.min)
 				const yMinPx = toY(e.min)
 				const yMaxPx = toY(e.max)
-				const yLast = toY(e.last)
+				const yLast = toY(isFinite(e.last) ? e.last : e.max)
+				if (!isFinite(x) || !isFinite(yFirst) || !isFinite(yLast)) {
+					started = false
+					continue
+				}
 				if (!started) { ctx.moveTo(x, yFirst); started = true }
 				else ctx.lineTo(x, yFirst)
 				// Nordic：同一 x 上画 min 再 max，形成包络
 				if (Math.abs(e.min - e.first) <= Math.abs(e.max - e.first)) {
-					ctx.lineTo(x, yMinPx)
-					ctx.lineTo(x, yMaxPx)
+					if (isFinite(yMinPx)) ctx.lineTo(x, yMinPx)
+					if (isFinite(yMaxPx)) ctx.lineTo(x, yMaxPx)
 				} else {
-					ctx.lineTo(x, yMaxPx)
-					ctx.lineTo(x, yMinPx)
+					if (isFinite(yMaxPx)) ctx.lineTo(x, yMaxPx)
+					if (isFinite(yMinPx)) ctx.lineTo(x, yMinPx)
 				}
 				ctx.lineTo(x, yLast)
 			}
@@ -2258,10 +2492,61 @@
 			ctx.fillStyle = 'rgba(148, 163, 184, ' + (fillAlpha != null ? fillAlpha : 0.18) + ')'
 			ctx.fillRect(Math.min(x0, x1), margin.top, Math.abs(x1 - x0), ph)
 		}
+		/** 画布浮标：多行 label/value，锚在 (ax, ay) 附近 */
+		function drawFloatBox(rows, ax, ay, opts) {
+			opts = opts || {}
+			if (!rows || !rows.length) return
+			ctx.font = '11px monospace'
+			let labelW = 0
+			let valW = 0
+			for (let r = 0; r < rows.length; r++) {
+				const lw = ctx.measureText(rows[r][0]).width
+				const vw = ctx.measureText(rows[r][1]).width
+				if (lw > labelW) labelW = lw
+				if (vw > valW) valW = vw
+			}
+			const padX = 8
+			const gap = 8
+			const boxW = Math.ceil(padX * 2 + labelW + gap + valW)
+			const rowH = 14
+			const boxH = rows.length * rowH + 8
+			let bx = ax + (opts.offsetX != null ? opts.offsetX : 12)
+			if (bx + boxW > margin.left + pw) bx = ax - 12 - boxW
+			if (bx < margin.left) bx = margin.left
+			let by = ay - (opts.centerY ? boxH / 2 : 0)
+			if (opts.offsetY != null) by = ay + opts.offsetY
+			by = Math.min(Math.max(margin.top, by), margin.top + ph - boxH)
+			ctx.globalAlpha = 0.94
+			ctx.fillStyle = bg
+			ctx.fillRect(bx, by, boxW, boxH)
+			ctx.globalAlpha = 1
+			ctx.strokeStyle = opts.border || grid
+			ctx.lineWidth = 1
+			ctx.strokeRect(bx, by, boxW, boxH)
+			ctx.textAlign = 'left'
+			const valX = bx + padX + labelW + gap
+			for (let r = 0; r < rows.length; r++) {
+				const ty = by + 4 + rowH * r + 11
+				ctx.fillStyle = muted
+				ctx.fillText(rows[r][0], bx + padX, ty)
+				ctx.fillStyle = opts.valueColor || fg
+				ctx.fillText(rows[r][1], valX, ty)
+			}
+		}
+
 		if (selectDrag && selectDrag.li0 != null && selectDrag.li1 != null) {
 			drawSelectionFill(selectDrag.li0, selectDrag.li1, 0.22)
 			drawEdgeLine(toX(selectDrag.li0), true, 'A', cursorCol)
 			drawEdgeLine(toX(selectDrag.li1), true, 'B', '#ec4899')
+			// 拖选预览：只显示瞬时 Δt / ΔI（边沿扫描留给松手后缓存）
+			const m = buildSelectionMeasure(selectDrag.li0, selectDrag.li1, { light: true })
+			if (m && m.rows.length) {
+				const xa = toX(Math.min(selectDrag.li0, selectDrag.li1))
+				const xb = toX(Math.max(selectDrag.li0, selectDrag.li1))
+				drawFloatBox(m.rows, (xa + xb) / 2, margin.top + 8, {
+					offsetX: 0, offsetY: 0, border: cursorCol,
+				})
+			}
 		} else if (view.cursorA != null && view.cursorB != null) {
 			const ca = clampLogical(view.cursorA)
 			const cb = clampLogical(view.cursorB)
@@ -2270,6 +2555,18 @@
 			const actB = cursorEdgeDrag && cursorEdgeDrag.edge === 'b'
 			drawEdgeLine(toX(ca), actA, 'A', cursorCol)
 			drawEdgeLine(toX(cb), actB, 'B', '#ec4899')
+			// 选择测量浮标（Δt / 频率 / ΔI / 占空…）；拖边界时只算轻量 Δt/ΔI
+			const m = cursorEdgeDrag
+				? buildSelectionMeasure(ca, cb, { light: true })
+				: ensureCursorMeasureCache(ca, cb)
+			if (m && m.rows.length) {
+				const xa = toX(Math.min(ca, cb))
+				const xb = toX(Math.max(ca, cb))
+				const midX = (xa + xb) / 2
+				drawFloatBox(m.rows, midX, margin.top + 8, {
+					offsetX: 0, offsetY: 0, border: cursorCol,
+				})
+			}
 		}
 
 		if (hover && !(drag && drag.moved)) {
@@ -2290,39 +2587,14 @@
 			ctx.beginPath()
 			ctx.arc(px, py, 3, 0, Math.PI * 2)
 			ctx.fill()
+			// 悬停点浮标：仅当前点信息（选择测量见上方选择浮标，避免重复长串）
 			const rows = [
 				['t', fmtTimeAxis(indexToTime(hli))],
 				['I', fmtCurrent(hi)],
 				['U', (setVoltageMv != null && isFinite(setVoltageMv)) ? (setVoltageMv + ' mV') : '--'],
 				['P', fmtPower(hi * setVoltageV())],
 			]
-			ctx.font = '11px monospace'
-			let boxW = 0
-			for (let r = 0; r < rows.length; r++) {
-				const wpx = ctx.measureText(rows[r][0] + ' ' + rows[r][1]).width
-				if (wpx > boxW) boxW = wpx
-			}
-			boxW += 16
-			const rowH = 14
-			const boxH = rows.length * rowH + 8
-			let bx = px + 12
-			if (bx + boxW > margin.left + pw) bx = px - 12 - boxW
-			if (bx < margin.left) bx = margin.left
-			let by = Math.min(Math.max(margin.top, hover.y - boxH / 2), margin.top + ph - boxH)
-			ctx.globalAlpha = 0.94
-			ctx.fillStyle = bg
-			ctx.fillRect(bx, by, boxW, boxH)
-			ctx.globalAlpha = 1
-			ctx.strokeStyle = grid
-			ctx.strokeRect(bx, by, boxW, boxH)
-			ctx.textAlign = 'left'
-			for (let r = 0; r < rows.length; r++) {
-				const ty = by + 4 + rowH * r + 11
-				ctx.fillStyle = muted
-				ctx.fillText(rows[r][0], bx + 8, ty)
-				ctx.fillStyle = fg
-				ctx.fillText(rows[r][1], bx + 8 + 14, ty)
-			}
+			drawFloatBox(rows, px, hover.y, { offsetX: 12, centerY: true })
 		}
 
 		ctx.fillStyle = muted
@@ -2423,16 +2695,71 @@
 		})
 	}
 
+	/**
+	 * 构建选择区间测量行（画布浮标用）。
+	 * light=true 时跳过边沿扫描，仅 Δt/ΔI（拖选预览）。
+	 */
+	function buildSelectionMeasure(a, b, opts) {
+		opts = opts || {}
+		a = clampLogical(a)
+		b = clampLogical(b)
+		if (a == null || b == null || a === b) return null
+		if (a > b) { const t = a; a = b; b = t }
+		const dt = (b - a) * samplePeriodSec
+		const ia = ringIAt(a)
+		const ib = ringIAt(b)
+		const rows = [
+			['A', fmtTimeAxis(indexToTime(a))],
+			['B', fmtTimeAxis(indexToTime(b))],
+			['Δt', fmtDuration(dt)],
+		]
+		if (!opts.light) {
+			const timing = measureSelectionTiming(a, b)
+			// 优先边沿频率；不足两沿时退回 1/Δt
+			if (timing.freqHz != null) {
+				rows.push(['f', fmtFreq(timing.freqHz) + (timing.nPeriod ? ' n=' + timing.nPeriod : '')])
+			} else if (dt > 0) {
+				rows.push(['1/Δt', fmtFreq(1 / dt)])
+			}
+			if (timing.duty != null) {
+				rows.push(['占空', (timing.duty * 100).toFixed(1) + '%'])
+			}
+		} else if (dt > 0) {
+			rows.push(['1/Δt', fmtFreq(1 / dt)])
+		}
+		if (isFinite(ia) && isFinite(ib)) {
+			rows.push(['ΔI', fmtCurrent(ib - ia)])
+		}
+		return { a: a, b: b, dt: dt, rows: rows }
+	}
+
+	function ensureCursorMeasureCache(a, b) {
+		a = clampLogical(a)
+		b = clampLogical(b)
+		if (a == null || b == null) {
+			cursorMeasureCache = null
+			return null
+		}
+		if (a > b) { const t = a; a = b; b = t }
+		const key = a + '|' + b + '|' + ringCount + '|' + samplePeriodSec
+		if (cursorMeasureCache && cursorMeasureCache.key === key) return cursorMeasureCache
+		const m = buildSelectionMeasure(a, b, { light: false })
+		if (!m) {
+			cursorMeasureCache = null
+			return null
+		}
+		cursorMeasureCache = { key: key, a: m.a, b: m.b, dt: m.dt, rows: m.rows }
+		return cursorMeasureCache
+	}
+
 	function updateCursorInfo() {
-		const el = E('blu-cursor-info')
-		if (!el) return
+		// 测量改画在画布浮标；此处只刷新缓存，工具栏不再堆长串
 		const sel = getSelectionRange()
 		if (!sel) {
-			el.textContent = ''
+			cursorMeasureCache = null
 			return
 		}
-		el.textContent = fmtTimeAxis(indexToTime(sel.a)) + ' – ' + fmtTimeAxis(indexToTime(sel.b)) +
-			' (' + fmtDuration((sel.b - sel.a) * samplePeriodSec) + ')'
+		ensureCursorMeasureCache(sel.a, sel.b)
 	}
 
 	function clearSelection() {
@@ -2444,13 +2771,70 @@
 		scheduleUIUpdate()
 	}
 
-	function setCursorEdge(edge, li) {
+	function setCursorEdge(edge, li, opts) {
+		opts = opts || {}
 		li = clampLogical(li)
 		if (li == null) return
+		// 拖动中不吸附（跟手），松手/显式 snap 时再贴边沿
+		if (opts.snap && cursorSnapMode !== 'free') {
+			li = snapLogicalToEdge(li)
+		}
 		if (edge === 'a') view.cursorA = li
 		else view.cursorB = li
 		// 允许交叉后交换语义：始终保持 A/B 可独立拖
 		updateCursorInfo()
+	}
+
+	/** 将 A 或 B 吸附到最近边沿（工具栏按钮） */
+	function snapCursorEdgeNow(edge) {
+		const li = edge === 'a' ? view.cursorA : view.cursorB
+		if (li == null) {
+			// 无选择时：在视口中心放一条游标再吸附
+			const vr = getViewRange()
+			if (vr.count < 2) return
+			const mid = Math.round((vr.start + vr.end) / 2)
+			if (edge === 'a') {
+				view.cursorA = snapLogicalToEdge(mid)
+				if (view.cursorB == null) view.cursorB = view.cursorA
+			} else {
+				view.cursorB = snapLogicalToEdge(mid)
+				if (view.cursorA == null) view.cursorA = view.cursorB
+			}
+		} else {
+			setCursorEdge(edge, li, { snap: true })
+		}
+		setScrollPaused(true)
+		updateCursorInfo()
+		scheduleUIUpdate()
+	}
+
+	/** A→最近上升/设定沿，B→同类型下一沿，便于测一个周期 */
+	function snapCursorsToPeriod() {
+		if (ringCount < 4) return
+		const kind = cursorSnapMode === 'fall' ? 'fall'
+			: (cursorSnapMode === 'either' ? 'either' : 'rise')
+		const vr = getViewRange()
+		const start = vr.count > 1 ? vr.start : 0
+		const end = vr.count > 1 ? vr.end : ringCount - 1
+		const a0 = view.cursorA != null ? clampLogical(view.cursorA) : Math.round((start + end) / 2)
+		const a = findNearestEdge(a0, kind === 'either' ? 'rise' : kind, start, end)
+		// 从 A 右侧找下一沿
+		const b = findNearestEdge(
+			Math.min(end, a + 2),
+			kind === 'either' ? 'rise' : kind,
+			a + 1,
+			Math.min(ringCount - 1, end + Math.floor((end - start) * 2))
+		)
+		view.cursorA = a
+		view.cursorB = (b != null && b > a) ? b : Math.min(ringCount - 1, a + Math.max(2, Math.floor((end - start) / 4)))
+		// 若视口内找不到第二沿，扩大搜索
+		if (view.cursorB <= view.cursorA) {
+			const b2 = findNearestEdge(a + 2, kind === 'either' ? 'rise' : kind, a + 1, ringCount - 1)
+			if (b2 != null && b2 > a) view.cursorB = b2
+		}
+		setScrollPaused(true)
+		updateCursorInfo()
+		scheduleUIUpdate()
 	}
 
 	function selectAllData() {
@@ -2539,26 +2923,50 @@
 	}
 
 	function zoomX(factor) {
-		// 缩放不退出 Live / 不暂停滚动，仅改变视口宽度
-		view.xZoom = clampXZoom(view.xZoom * factor)
-		scheduleUIUpdate()
+		// Live：只改倍率继续贴最新端；暂停：以视口中心为锚
+		if (!scrollPaused || !plotLayout || plotLayout.pw < 1 || ringCount < 2) {
+			view.xZoom = clampXZoom(view.xZoom * factor)
+			scheduleUIUpdate()
+			return
+		}
+		const midPx = plotLayout.margin.left + plotLayout.pw * 0.5
+		zoomXAt(factor, midPx)
 	}
 
+	/**
+	 * X 轴缩放。
+	 * - Live / 继续滚动：只改倍率，不暂停、不跟鼠标（视口右端始终最新）
+	 * - 已暂停：以画布像素 px 下的数据点为锚（跟手缩放）
+	 */
 	function zoomXAt(factor, px) {
-		const layout = plotLayout
-		if (!layout) { zoomX(factor); return }
-		const liBefore = layout.fromX(px)
+		const prev = view.xZoom
 		view.xZoom = clampXZoom(view.xZoom * factor)
-		// Live 时只改倍率、继续贴最新端；已暂停时尽量让指针下数据点保持在原位置
-		const n = dataCount()
-		if (scrollPaused && liBefore != null && n > 1) {
-			const viewPts = Math.max(MIN_VIEW_POINTS, Math.round(DEFAULT_VIEW_POINTS / view.xZoom))
-			const half = Math.floor(Math.min(n, viewPts) / 2)
-			let end = Math.min(n - 1, liBefore + half)
-			const start = Math.max(0, end - Math.min(n, viewPts) + 1)
-			if (start === 0) end = Math.min(n - 1, start + Math.min(n, viewPts) - 1)
-			view.xOffset = Math.max(0, n - 1 - end)
+		if (view.xZoom === prev) {
+			scheduleUIUpdate()
+			return
 		}
+		// 滚动模式下无需锚点：getViewRange 会贴最新端
+		if (!scrollPaused) {
+			scheduleUIUpdate()
+			return
+		}
+		const layout = plotLayout
+		const n = dataCount()
+		if (!layout || layout.pw < 1 || n < 2) {
+			scheduleUIUpdate()
+			return
+		}
+		const marginLeft = layout.margin.left
+		const pw = layout.pw
+		let t = (px - marginLeft) / pw
+		if (t < 0) t = 0
+		if (t > 1) t = 1
+		const vr = layout.vr || getViewRange()
+		// 用连续逻辑下标作锚，避免 fromX 取整导致锚点跳动
+		const liBefore = vr.count <= 1
+			? vr.start
+			: (vr.start + t * (vr.count - 1))
+		panViewSoLiAtPixel(liBefore, px)
 		scheduleUIUpdate()
 	}
 
@@ -2569,7 +2977,42 @@
 	}
 
 	function zoomY(factor) {
+		// 工具栏：以视口垂直中心为锚
+		const layout = plotLayout
+		if (layout && layout.ph > 1) {
+			zoomYAt(factor, layout.margin.top + layout.ph * 0.5)
+			return
+		}
 		view.yZoom = Math.max(Y_ZOOM_MIN, Math.min(Y_ZOOM_MAX, view.yZoom * factor))
+		scheduleUIUpdate()
+	}
+
+	/** Y 轴缩放并以画布 py 处的映射值为锚 */
+	function zoomYAt(factor, py) {
+		const layout = plotLayout
+		if (!layout || !layout.ph || layout.ph < 1) {
+			zoomY(factor)
+			return
+		}
+		const oldZoom = view.yZoom
+		const newZoom = Math.max(Y_ZOOM_MIN, Math.min(Y_ZOOM_MAX, oldZoom * factor))
+		if (newZoom === oldZoom) return
+
+		let frac = (py - layout.margin.top) / layout.ph
+		if (frac < 0) frac = 0
+		if (frac > 1) frac = 1
+		// 画布上→下对应 mapYMax→mapYMin
+		const oldMin = layout.yMin
+		const oldMax = layout.yMax
+		const oldSpan = oldMax - oldMin || 1
+		const mv = oldMax - frac * oldSpan
+		const oldMid = (oldMin + oldMax) / 2
+		const oldHalf = oldSpan / 2
+		const newHalf = oldHalf * (oldZoom / newZoom)
+		// 保持 mv 仍在 frac 位置 → 新中点
+		const newMid = mv + newHalf * (2 * frac - 1)
+		view.yZoom = newZoom
+		view.yPanOffset = view.yPanOffset + (newMid - oldMid)
 		scheduleUIUpdate()
 	}
 
@@ -3065,6 +3508,25 @@
 		bindClick('blu-cursor-clear', clearSelection)
 		bindClick('blu-cursor-all', selectAllData)
 		bindClick('blu-cursor-zoom', zoomToSelection)
+		bindClick('blu-cursor-snap-a', function () { snapCursorEdgeNow('a') })
+		bindClick('blu-cursor-snap-b', function () { snapCursorEdgeNow('b') })
+		bindClick('blu-cursor-period', snapCursorsToPeriod)
+
+		const elSnap = E('blu-cursor-snap')
+		if (elSnap) {
+			elSnap.value = cursorSnapMode
+			elSnap.addEventListener('change', function () {
+				const v = elSnap.value
+				cursorSnapMode = (v === 'rise' || v === 'fall' || v === 'either') ? v : 'free'
+				// 已有选择时切换模式立即贴沿，便于测频
+				if (cursorSnapMode !== 'free' && view.cursorA != null && view.cursorB != null) {
+					view.cursorA = snapLogicalToEdge(view.cursorA)
+					view.cursorB = snapLogicalToEdge(view.cursorB)
+					updateCursorInfo()
+					scheduleUIUpdate()
+				}
+			})
+		}
 
 		const canvas = E('blu-canvas')
 		if (canvas) {
@@ -3073,8 +3535,10 @@
 				const factor = e.deltaY > 0 ? (1 / 1.15) : 1.15
 				const rect = canvas.getBoundingClientRect()
 				const cx = e.clientX - rect.left
+				const cy = e.clientY - rect.top
 				// 指针在左侧 Y 轴刻度区，或按住 Shift：缩放 Y；否则缩放 X
-				if (e.shiftKey || isOverYAxis(cx)) zoomY(factor)
+				// 均以指针位置为锚（非视口中心）
+				if (e.shiftKey || isOverYAxis(cx)) zoomYAt(factor, cy)
 				else zoomXAt(factor, cx)
 			}, { passive: false })
 
@@ -3135,14 +3599,17 @@
 				const y = e.clientY - rect.top
 				hover = { x: x, y: y }
 
-				// 悬停在游标线上显示 ew-resize
+				// 悬停：Y 轴 ns-resize · 游标线 ew-resize · 其余 crosshair
 				if (!cursorEdgeDrag && !selectDrag && !drag && plotLayout) {
-					canvas.style.cursor = hitTestCursorEdge(x) ? 'ew-resize' : 'crosshair'
+					if (isOverYAxis(x)) canvas.style.cursor = 'ns-resize'
+					else if (hitTestCursorEdge(x)) canvas.style.cursor = 'ew-resize'
+					else canvas.style.cursor = 'crosshair'
 				}
 
 				if (cursorEdgeDrag && plotLayout) {
 					const li = plotLayout.fromX(x)
-					setCursorEdge(cursorEdgeDrag.edge, li)
+					// 拖动中跟手，不吸附
+					setCursorEdge(cursorEdgeDrag.edge, li, { snap: false })
 					scheduleUIUpdate()
 					return
 				}
@@ -3175,6 +3642,11 @@
 			})
 			canvas.addEventListener('pointerup', function (e) {
 				if (cursorEdgeDrag) {
+					// 松手时按模式吸附边沿
+					if (cursorSnapMode !== 'free' && cursorEdgeDrag.edge) {
+						const cur = cursorEdgeDrag.edge === 'a' ? view.cursorA : view.cursorB
+						setCursorEdge(cursorEdgeDrag.edge, cur, { snap: true })
+					}
 					cursorEdgeDrag = null
 					canvas.style.cursor = 'crosshair'
 					updateCursorInfo()
@@ -3182,12 +3654,28 @@
 					return
 				}
 				if (selectDrag) {
-					const a = selectDrag.li0
-					const b = selectDrag.li1
+					let a = selectDrag.li0
+					let b = selectDrag.li1
 					selectDrag = null
 					if (a != null && b != null && a !== b) {
-						view.cursorA = clampLogical(a)
-						view.cursorB = clampLogical(b)
+						a = clampLogical(a)
+						b = clampLogical(b)
+						if (cursorSnapMode !== 'free') {
+							const a0 = a
+							const b0 = b
+							a = snapLogicalToEdge(a)
+							b = snapLogicalToEdge(b)
+							// 两端贴到同一沿时，B 向右再找下一同向沿，避免选择塌缩
+							if (a != null && b != null && a === b) {
+								const kind = cursorSnapMode === 'fall' ? 'fall'
+									: (cursorSnapMode === 'either' ? 'rise' : 'rise')
+								const b2 = findNearestEdge(a + 2, kind, a + 1, ringCount - 1)
+								if (b2 != null && b2 > a) b = b2
+								else { a = a0; b = b0 }
+							}
+						}
+						view.cursorA = a
+						view.cursorB = b
 						setScrollPaused(true)
 					}
 					updateCursorInfo()
