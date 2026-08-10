@@ -900,6 +900,22 @@
                         <span class="blu-toolbar-sep" aria-hidden="true"></span>
 
                         <div class="blu-tb-group blu-tb-action">
+                            <div class="blu-acq-trig-group" id="blu-acq-trig-group" title="采样沿触发：设备先 START，等沿再入库 / 遇沿自动 STOP。电平与波形「触发」共用（Auto 或手动 µA）">
+                                <span class="blu-acq-trig-label">沿启</span>
+                                <select id="blu-acq-trig-start" class="blu-acq-trig-select" title="沿启动入库：关 / ↑ / ↓ / 任意（点采样后先 Arm，命中沿才写波形）">
+                                    <option value="off" selected>关</option>
+                                    <option value="rise">↑</option>
+                                    <option value="fall">↓</option>
+                                    <option value="either">↕</option>
+                                </select>
+                                <span class="blu-acq-trig-label">沿停</span>
+                                <select id="blu-acq-trig-stop" class="blu-acq-trig-select" title="沿停止采样：关 / ↑ / ↓ / 任意（入库后命中沿自动 STOP）">
+                                    <option value="off" selected>关</option>
+                                    <option value="rise">↑</option>
+                                    <option value="fall">↓</option>
+                                    <option value="either">↕</option>
+                                </select>
+                            </div>
                             <button class="btn btn-sm btn-success" id="blu-start" title="开始 / 停止采样">
                                 <i class="bi bi-play-fill"></i> 采样
                             </button>
@@ -982,6 +998,16 @@
                                         <i class="bi bi-lock"></i>
                                     </button>
                                     <button type="button" class="blu-y-scale-hint" id="blu-y-scale-hint" hidden title="">建议 Log</button>
+                                </div>
+                                <div class="blu-zoom-group blu-scope-trig-group" id="blu-scope-trig-group" title="示波器式显示触发：沿对齐后钉住视口，周期波形更稳（不控制采样启停）">
+                                    <span class="blu-zoom-label">触发</span>
+                                    <select id="blu-scope-trig" class="blu-scope-trig-select" title="显示触发：关 / 上升沿 / 下降沿 / 任意沿">
+                                        <option value="off" selected>关</option>
+                                        <option value="rise">↑沿</option>
+                                        <option value="fall">↓沿</option>
+                                        <option value="either">任意</option>
+                                    </select>
+                                    <input type="text" id="blu-scope-trig-level" class="blu-scope-trig-level" placeholder="Auto µA" title="触发电平（µA）。留空=自动（近期 min/max 中点）。示例：100、1.5mA、200uA" autocomplete="off" spellcheck="false">
                                 </div>
                                 <div class="blu-zoom-group">
                                     <button class="btn btn-sm btn-outline-secondary" id="blu-pause-scroll" title="暂停波形滚动（数据仍在采集）">

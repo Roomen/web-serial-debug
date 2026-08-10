@@ -36,6 +36,16 @@
 	const LOG_SUGGEST_EXIT = 50 // 建议 Log 退出阈值（滞回，防闪）
 	const LOG_LINEAR_HINT_RATIO = 10 // Log 下动态范围过小 → 建议线性
 	const LOG_LINEAR_HINT_EXIT = 25 // 建议线性退出阈值（滞回）
+	// 软建议时间域防抖：Live 脉冲进出会让 ratio 在阈值两侧抖，仅靠比值滞回不够
+	const HINT_RATIO_EMA_ALPHA = 0.12 // ratio EMA 平滑系数（越小越稳）
+	const HINT_ENTER_HOLD_MS = 450 // 目标建议需持续这么久才显示
+	const HINT_EXIT_HOLD_MS = 1600 // 目标清空需持续这么久才关掉
+	const HINT_MIN_SHOW_MS = 2800 // 一旦显示，至少保持这么久
+	const HINT_INVALID_KEEP_MS = 900 // 窗口 lo/hi 短暂无效时沿用上一 ratio
+	// 示波器式显示触发：沿对齐视口，周期信号看起来钉住
+	const SCOPE_TRIG_POS_FRAC = 0.25 // 触发点在视口内水平位置（左→右）
+	const SCOPE_TRIG_SCAN_MAX = 80000 // 单批最大扫描点数，防卡 UI
+	const SCOPE_TRIG_HOLDOFF_MIN_PTS = 16
 	// 预热：丢掉上电/切档瞬态。原先 targetHz*2s 在 100k 下约 2s 才见波形，过长；
 	// 改为约 0.25s 输出点（与 Python「约 2s@200Hz」同量级的短瞬态，但不再拖数秒）
 	const WARMUP_SEC = 0.25
@@ -122,7 +132,35 @@
 	let symlogLinthreshUA = SYMLOG_LINTHRESH_DEFAULT_UA
 	let yAxisLocked = false // Lock Y：冻结自动量程，Live 不再跟
 	let yScaleHint = '' // '' | 'log' | 'linear' — 工具条轻提示，不自动硬切
+	let yScaleHintRatioEma = null // 平滑后的 max/min+ 比值
+	let yScaleHintLastValidAt = 0 // 最近一次有效 ratio 时间
+	let yScaleHintChangedAt = 0 // 当前 yScaleHint 写入时间（MIN_SHOW）
+	let yScaleHintCandidate = '' // 待切换目标
+	let yScaleHintCandidateAt = 0 // 候选开始持续的时间
 	let liveMode = true // PPK Live：视口贴着最新数据
+	// 示波器显示触发（不控制采样启停；只钉视口）
+	// mode: 'off' | 'rise' | 'fall' | 'either'
+	let scopeTrigMode = 'off'
+	let scopeTrigLevelUA = null // 手动电平 µA；auto 时每次刷新估算
+	let scopeTrigLevelAuto = true
+	let scopeTrigState = 0 // -1 below / 1 above / 0 unknown（跨批滞回）
+	let scopeTrigLockLi = null // 当前钉住的触发逻辑下标
+	let scopeTrigLastLi = null // 上一触发点（holdoff / 估周期）
+	let scopeTrigPeriodPts = null // EMA 边沿间隔（点）
+	let scopeTrigUserOverride = false // 用户平移/缩放时暂时不强制钉视口
+	let scopeTrigUiKey = ''
+	// 采样沿触发（门控入库 / 自动停采；与显示触发独立，可共用电平）
+	// 'off' | 'rise' | 'fall' | 'either'
+	let acqTrigStart = 'off' // 开始采样后等沿再入库
+	let acqTrigStop = 'off' // 入库后等沿自动 STOP
+	let acqTrigStoreEnabled = true // false=已 START 但在等启动沿
+	let acqTrigStartState = 0 // 启动沿滞回 -1/0/1
+	let acqTrigStopState = 0 // 停止沿滞回
+	let acqTrigStopPending = false // 批末异步 stopSampling
+	let acqTrigStartLatched = false // 本会话已触发过启动沿
+	let acqTrigUiKey = ''
+	let acqPreMin = Infinity // 等启动沿期间的 min（Auto 电平）
+	let acqPreMax = -Infinity
 
 	// 原始流统计
 	let rawStreamCount = 0
@@ -1329,6 +1367,10 @@
 		deviceStreamHz = 0
 		rawStreamCount = 0
 		rawStreamFirstTs = 0
+		resetYScaleHintState()
+		syncYScaleUi() // 无数据时 updateCanvas early return，须直接刷 DOM
+		resetScopeTriggerState()
+		if (scopeTrigMode !== 'off') syncScopeTrigUi()
 		if (log) bluLog('数据已清空')
 		scheduleUIUpdate()
 	}
@@ -1384,6 +1426,20 @@
 		view.xOffset = 0
 		view.yPanOffset = 0
 		setScrollPaused(false)
+		// 采样沿触发：Arm 后先 START 设备，等沿再入库；停沿在入库后生效
+		acqTrigStopPending = false
+		acqTrigStartLatched = false
+		acqTrigStartState = 0
+		acqTrigStopState = 0
+		acqPreMin = Infinity
+		acqPreMax = -Infinity
+		if (acqTrigStart !== 'off') {
+			acqTrigStoreEnabled = false
+			bluLog('采样沿启动已 Arm：等待 ' + acqEdgeLabel(acqTrigStart) +
+				' 后开始入库（电平 ' + (scopeTrigLevelAuto ? 'Auto' : fmtCurrent(scopeTrigLevelUA)) + '）')
+		} else {
+			acqTrigStoreEnabled = true
+		}
 		bluSampling = true
 		updateSampleBtn()
 		startStallWatch()
@@ -1394,10 +1450,13 @@
 		requestWakeLock() // 不 await，不挡采样
 		const warmMs = targetRateHz > 0 ? Math.round(warmupLeft / targetRateHz * 1000) : 0
 		const ramSec = estimateDurationSec(RING_CAP_MAX, targetRateHz)
+		const acqTag = (acqTrigStart !== 'off' ? ' · 等' + acqEdgeLabel(acqTrigStart) + '入库' : '') +
+			(acqTrigStop !== 'off' ? ' · 遇' + acqEdgeLabel(acqTrigStop) + '停采' : '')
 		bluLog((startOk ? 'AVERAGE_START' : 'AVERAGE_START 可能失败') +
 			' · 目标 ' + getRatePreset().label +
 			' · ' + (recordMode === 'long' ? '长期统计' : '波形') +
 			' · Live 滚动' +
+			acqTag +
 			' · 预热约 ' + warmMs + ' ms（' + warmupLeft + ' 点）' +
 			(recordMode === 'wave'
 				? (' · RAM ' + fmtGb(storageCfg.ramGB) + '≈' + fmtDuration(ramSec) +
@@ -1411,6 +1470,9 @@
 		// 先停入库，再 STOP；对照 API stop_measuring：发 STOP 后 get_data 丢弃残留
 		bluSampling = false
 		dropSampleStream = true
+		acqTrigStoreEnabled = true
+		acqTrigStopPending = false
+		acqTrigStartLatched = false
 		stopStallWatch()
 		updateSampleBtn()
 		try { await bluWrite(PROTO.cmdAverageStop(), 'AVERAGE_STOP') } catch (e) {}
@@ -1421,16 +1483,39 @@
 		scheduleUIUpdate()
 	}
 
+	function acqEdgeLabel(mode) {
+		if (mode === 'rise') return '↑沿'
+		if (mode === 'fall') return '↓沿'
+		if (mode === 'either') return '任意沿'
+		return '关'
+	}
+
 	function updateSampleBtn() {
 		const el = E('blu-start')
 		if (!el) return
 		if (bluSampling) {
 			el.className = 'btn btn-sm btn-danger'
-			el.innerHTML = '<i class="bi bi-stop-fill"></i> 停止'
+			if (!acqTrigStoreEnabled && acqTrigStart !== 'off') {
+				el.innerHTML = '<i class="bi bi-hourglass-split"></i> 等沿…'
+				el.title = '已 Arm：等待 ' + acqEdgeLabel(acqTrigStart) + ' 开始入库 · 点击取消'
+			} else {
+				el.innerHTML = '<i class="bi bi-stop-fill"></i> 停止'
+				el.title = acqTrigStop !== 'off'
+					? ('采样中 · 遇' + acqEdgeLabel(acqTrigStop) + '自动停 · 点击立即停')
+					: '停止采样'
+			}
 		} else {
 			el.className = 'btn btn-sm btn-success'
 			el.innerHTML = '<i class="bi bi-play-fill"></i> 采样'
+			el.title = (acqTrigStart !== 'off' || acqTrigStop !== 'off')
+				? ('开始采样' +
+					(acqTrigStart !== 'off' ? '（等' + acqEdgeLabel(acqTrigStart) + '入库）' : '') +
+					(acqTrigStop !== 'off' ? '（遇' + acqEdgeLabel(acqTrigStop) + '停）' : ''))
+				: '开始 / 停止采样'
 		}
+		// 等待态边框等与按钮同步
+		acqTrigUiKey = ''
+		syncAcqTrigUi()
 	}
 
 	function setScrollPaused(on) {
@@ -1470,11 +1555,60 @@
 		if (el) el.value = recordMode
 		bluLog('录制模式：' + (recordMode === 'long' ? '长期统计（不存波形）' : '波形'))
 		if (bluSampling) clearAllData(false)
+		// 长期模式无波形：关闭显示触发，避免「等待」误解
+		if (recordMode === 'long' && scopeTrigMode !== 'off') {
+			setScopeTrigMode('off')
+		}
+		const trigSel = E('blu-scope-trig')
+		const trigLvl = E('blu-scope-trig-level')
+		if (trigSel) trigSel.disabled = recordMode === 'long'
+		if (trigLvl) trigLvl.disabled = recordMode === 'long'
 		scheduleUIUpdate()
 	}
 
 	function isLogLikeY() {
 		return yScaleMode === 'log' || yScaleMode === 'symlog'
+	}
+
+	/** 复位软建议状态（切换 Y 刻度 / 清空数据时） */
+	function resetYScaleHintState() {
+		yScaleHint = ''
+		yScaleHintRatioEma = null
+		yScaleHintLastValidAt = 0
+		yScaleHintChangedAt = 0
+		yScaleHintCandidate = ''
+		yScaleHintCandidateAt = 0
+		yScaleUiKey = ''
+	}
+
+	/**
+	 * 把「想要的建议」经时间滞回落到 yScaleHint。
+	 * - 进入：需持续 HINT_ENTER_HOLD_MS
+	 * - 退出：需持续 HINT_EXIT_HOLD_MS，且已显示 ≥ HINT_MIN_SHOW_MS
+	 */
+	function commitYScaleHintWant(want, now) {
+		if (want == null) want = ''
+		if (want === yScaleHint) {
+			yScaleHintCandidate = ''
+			yScaleHintCandidateAt = 0
+			return
+		}
+		// 已显示时强制最短展示，避免脉冲一闪就灭
+		if (yScaleHint && want === '' && yScaleHintChangedAt > 0 &&
+			(now - yScaleHintChangedAt) < HINT_MIN_SHOW_MS) {
+			return
+		}
+		if (want !== yScaleHintCandidate) {
+			yScaleHintCandidate = want
+			yScaleHintCandidateAt = now
+			return
+		}
+		const hold = want === '' ? HINT_EXIT_HOLD_MS : HINT_ENTER_HOLD_MS
+		if ((now - yScaleHintCandidateAt) < hold) return
+		yScaleHint = want
+		yScaleHintChangedAt = now
+		yScaleHintCandidate = ''
+		yScaleHintCandidateAt = 0
 	}
 
 	function setYScaleMode(mode) {
@@ -1491,8 +1625,7 @@
 		yAxisLocked = false
 		lockSnapFloorUA = null
 		lockSnapLinthreshUA = null
-		yScaleHint = ''
-		yScaleUiKey = ''
+		resetYScaleHintState()
 		if (next === 'symlog') symlogLinthreshUA = SYMLOG_LINTHRESH_DEFAULT_UA
 		if (next === 'log') logFloorUA = LOG_FLOOR_DEFAULT_UA
 		resetYAuto()
@@ -1841,15 +1974,50 @@
 				const o = outs[k]
 				if (warmupLeft > 0) {
 					warmupLeft--
+					// 预热只 seed 滞回、不消费沿（避免窄脉冲被预热吃掉导致一直等）
+					if (!acqTrigStoreEnabled && acqTrigStart !== 'off') {
+						feedAcqEdgeState(o.iUA, 'start', { seedOnly: true })
+					}
 					continue
+				}
+				// 本批已排队停采：不再入库
+				if (acqTrigStopPending) continue
+				// 沿启动：未命中前不入库（设备已 START，只是门控存储）
+				if (!acqTrigStoreEnabled) {
+					if (acqTrigStart === 'off') {
+						acqTrigStoreEnabled = true
+					} else if (feedAcqEdgeState(o.iUA, 'start')) {
+						acqTrigStoreEnabled = true
+						acqTrigStartLatched = true
+						acqTrigStopState = 0 // 启动后重新 seed 停沿
+						bluLog('沿触发：开始入库（' + acqEdgeLabel(acqTrigStart) +
+							' @ ' + fmtCurrent(o.iUA) + '）', 'success')
+						updateSampleBtn()
+					} else {
+						continue
+					}
 				}
 				ingestStored(o.tMs, o.iUA)
 				stored++
+				// 沿停止：命中后批末异步 STOP（避免在读循环里 await）
+				if (acqTrigStop !== 'off' && !acqTrigStopPending &&
+					feedAcqEdgeState(o.iUA, 'stop')) {
+					acqTrigStopPending = true
+					bluLog('沿触发：停止采样（' + acqEdgeLabel(acqTrigStop) +
+						' @ ' + fmtCurrent(o.iUA) + '）', 'success')
+				}
 			}
 		}
 
+		if (acqTrigStopPending && bluSampling) {
+			acqTrigStopPending = false
+			stopSampling()
+		}
+
 		// 暂停滚动：新样本入库后钉住历史视口（顺序存储，旧下标不左移）
-		if (bluSampling && stored > 0 && scrollPaused) {
+		// 显示触发激活且已锁定时由 getViewRange 钉触发点，不再累加 xOffset
+		if (bluSampling && stored > 0 && scrollPaused &&
+			!(scopeTrigMode !== 'off' && scopeTrigLockLi != null && !scopeTrigUserOverride)) {
 			const maxOff = Math.max(0, dataCount() - 1)
 			if (drag && drag.liAnchor != null) {
 				// 跟手：用当前指针位置重算视口，使抓取点仍在指针下
@@ -1859,6 +2027,13 @@
 			} else {
 				view.xOffset = Math.min(maxOff, view.xOffset + stored)
 			}
+		}
+
+		// 示波器显示触发：扫描本批新点，命中则钉视口
+		if (stored > 0 && scopeTrigMode !== 'off' && recordMode === 'wave') {
+			const n = dataCount()
+			const from = Math.max(1, n - stored)
+			scanScopeTrigger(from, n - 1)
 		}
 
 		if (bluSampling) {
@@ -1950,10 +2125,35 @@
 		return Math.min(n, viewPts)
 	}
 
+	function isScopeTrigViewLocked() {
+		// 拖动跟手中不强制钉视口；用户平移后 override 直到下次触发
+		return scopeTrigMode !== 'off' &&
+			scopeTrigLockLi != null &&
+			!scopeTrigUserOverride &&
+			!(drag && drag.moved)
+	}
+
 	function getViewRange() {
 		const n = ringCount
 		if (n < 2) return { start: 0, end: 0, count: 0 }
 		const viewPts = currentViewPts()
+		// 示波器显示触发：把触发点钉在视口固定水平位置
+		if (isScopeTrigViewLocked()) {
+			const pre = Math.max(0, Math.min(viewPts - 1, Math.round(viewPts * SCOPE_TRIG_POS_FRAC)))
+			let start = scopeTrigLockLi - pre
+			let end = start + viewPts - 1
+			if (start < 0) {
+				start = 0
+				end = Math.min(n - 1, viewPts - 1)
+			}
+			if (end >= n) {
+				end = n - 1
+				start = Math.max(0, end - viewPts + 1)
+			}
+			if (end < start) end = start
+			view.xOffset = Math.max(0, n - 1 - end)
+			return { start: start, end: end, count: end - start + 1 }
+		}
 		// Live / 继续滚动：视口右端永远是最新样点
 		if (liveMode && !scrollPaused) {
 			view.xOffset = 0
@@ -1970,6 +2170,342 @@
 		if (end >= n) end = n - 1
 		if (end < 0) end = 0
 		return { start: start, end: end, count: end - start + 1 }
+	}
+
+	/** 自动触发电平：近期窗口 min/max 中点（µA） */
+	function getScopeTrigLevelUA() {
+		if (!scopeTrigLevelAuto && scopeTrigLevelUA != null && isFinite(scopeTrigLevelUA)) {
+			return scopeTrigLevelUA
+		}
+		const n = ringCount
+		if (n < 2) return scopeTrigLevelUA != null && isFinite(scopeTrigLevelUA) ? scopeTrigLevelUA : 0
+		const win = Math.min(n, Math.max(currentViewPts() * 4, 2000))
+		const mm = rangeMinMax(n - win, n - 1)
+		if (!mm) return 0
+		const thr = (mm.min + mm.max) * 0.5
+		scopeTrigLevelUA = thr // 供 UI 只读展示
+		return thr
+	}
+
+	function getScopeTrigHyst(thr) {
+		const n = ringCount
+		const win = Math.min(n, Math.max(currentViewPts() * 2, 1000))
+		const mm = n >= 2 ? rangeMinMax(n - win, n - 1) : null
+		if (mm) {
+			const span = Math.abs(mm.max - mm.min)
+			return Math.max(span * 0.03, Math.abs(thr) * 0.01, 1e-9)
+		}
+		return Math.max(Math.abs(thr) * 0.05, 1e-9)
+	}
+
+	function getScopeHoldoffPts() {
+		if (scopeTrigPeriodPts != null && scopeTrigPeriodPts > 4) {
+			return Math.max(SCOPE_TRIG_HOLDOFF_MIN_PTS, Math.floor(scopeTrigPeriodPts * 0.55))
+		}
+		return Math.max(SCOPE_TRIG_HOLDOFF_MIN_PTS, Math.floor(currentViewPts() * 0.05))
+	}
+
+	/**
+	 * 在 [from,to] 扫描边沿；命中则更新 scopeTrigLockLi。
+	 * 跨批保持 scopeTrigState 滞回，降低噪声假触发。
+	 */
+	function scanScopeTrigger(from, to) {
+		if (scopeTrigMode === 'off' || recordMode !== 'wave') return
+		const n = ringCount
+		if (n < 3) return
+		let scanLo = Math.max(1, from | 0)
+		let scanHi = Math.min(n - 1, to | 0)
+		if (scanHi < scanLo) return
+		// 边沿检测必须逐步；超长区间只扫尾部，避免漏沿 + 卡 UI
+		let truncated = false
+		if (scanHi - scanLo + 1 > SCOPE_TRIG_SCAN_MAX) {
+			scanLo = scanHi - SCOPE_TRIG_SCAN_MAX + 1
+			truncated = true
+		}
+
+		const thr = getScopeTrigLevelUA()
+		const hyst = getScopeTrigHyst(thr)
+		const thrHi = thr + hyst
+		const thrLo = thr - hyst
+		// 截断后批前 state 已过期，必须用扫窗前一点重 seed，防假沿
+		let state = truncated ? 0 : scopeTrigState
+		if (state === 0) {
+			const v0 = ringIAt(Math.max(0, scanLo - 1))
+			if (isFinite(v0)) {
+				if (v0 >= thrHi) state = 1
+				else if (v0 <= thrLo) state = -1
+			}
+		}
+		const holdoff = getScopeHoldoffPts()
+		let fired = null
+		for (let i = scanLo; i <= scanHi; i++) {
+			const v = ringIAt(i)
+			if (!isFinite(v)) continue
+			let edge = null
+			if (state <= 0 && v >= thrHi) {
+				edge = 'rise'
+				state = 1
+			} else if (state >= 0 && v <= thrLo) {
+				edge = 'fall'
+				state = -1
+			} else if (state === 0) {
+				if (v >= thrHi) state = 1
+				else if (v <= thrLo) state = -1
+			}
+			if (!edge) continue
+			if (scopeTrigMode === 'rise' && edge !== 'rise') continue
+			if (scopeTrigMode === 'fall' && edge !== 'fall') continue
+			if (scopeTrigLastLi != null && (i - scopeTrigLastLi) < holdoff) continue
+			fired = i
+			// 继续扫到本批最后一个合格沿，钉住最新周期（示波器连续触发）
+		}
+		scopeTrigState = state
+		if (fired == null) return
+
+		if (scopeTrigLastLi != null) {
+			const dp = fired - scopeTrigLastLi
+			if (dp > 4) {
+				scopeTrigPeriodPts = scopeTrigPeriodPts == null
+					? dp
+					: (scopeTrigPeriodPts * 0.65 + dp * 0.35)
+			}
+		}
+		scopeTrigLastLi = fired
+		scopeTrigLockLi = fired
+		scopeTrigUserOverride = false
+		// 退出 Live 滚动，由 getViewRange 钉触发点
+		liveMode = false
+	}
+
+	function resetScopeTriggerState() {
+		scopeTrigState = 0
+		scopeTrigLockLi = null
+		scopeTrigLastLi = null
+		scopeTrigPeriodPts = null
+		scopeTrigUserOverride = false
+		scopeTrigUiKey = ''
+	}
+
+	/** 用户主动改视口（平移/minimap/跳转/缩放到选择）时暂时放开触发钉住 */
+	function beginScopeTrigUserOverride() {
+		if (scopeTrigMode === 'off') return
+		scopeTrigUserOverride = true
+	}
+
+	/** 在已有缓冲上按当前模式重扫并尽量钉住 */
+	function rescanScopeTriggerRecent() {
+		if (scopeTrigMode === 'off' || recordMode !== 'wave' || ringCount < 10) return
+		scopeTrigLastLi = null
+		scopeTrigLockLi = null
+		scopeTrigPeriodPts = null
+		scopeTrigState = 0
+		scopeTrigUserOverride = false
+		const from = Math.max(1, ringCount - Math.max(currentViewPts() * 3, 4000))
+		scanScopeTrigger(from, ringCount - 1)
+	}
+
+	function setScopeTrigMode(mode) {
+		const next = (mode === 'rise' || mode === 'fall' || mode === 'either') ? mode : 'off'
+		if (next === scopeTrigMode) {
+			syncScopeTrigUi()
+			return
+		}
+		scopeTrigMode = next
+		resetScopeTriggerState()
+		if (next === 'off') {
+			// 回到 Live（若用户未手动暂停）
+			if (!scrollPaused) {
+				liveMode = true
+				view.xOffset = 0
+			}
+		} else if (recordMode === 'long') {
+			// 长期模式无波形可钉
+			scopeTrigMode = 'off'
+			bluLog('长期统计模式不支持显示触发', 'warn')
+		} else {
+			// 开启：先扫近期数据，尽快钉住；未命中则保持当前/Live 直到新沿
+			rescanScopeTriggerRecent()
+			if (scopeTrigLockLi == null && !scrollPaused) {
+				// 等待触发期间仍 Live，便于看到信号
+				liveMode = true
+			}
+		}
+		syncScopeTrigUi()
+		scheduleUIUpdate()
+	}
+
+	function setScopeTrigLevelFromInput(raw) {
+		const s = (raw == null ? '' : String(raw)).trim()
+		if (!s) {
+			scopeTrigLevelAuto = true
+			scopeTrigLevelUA = null
+			scopeTrigState = 0
+			if (scopeTrigMode !== 'off') rescanScopeTriggerRecent()
+			syncScopeTrigUi()
+			scheduleUIUpdate()
+			return
+		}
+		// 支持 1.2 / 1.2mA / 500uA / 500µA / 1nA
+		let m = s.match(/^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*(nA|uA|µA|mA|A)?$/i)
+		if (!m) {
+			bluLog('触发电平格式无效（示例：100、1.5mA、200uA）', 'warn')
+			syncScopeTrigUi()
+			return
+		}
+		let v = parseFloat(m[1])
+		const unit = (m[2] || 'uA').toLowerCase()
+		if (unit === 'a') v *= 1e6
+		else if (unit === 'ma') v *= 1e3
+		else if (unit === 'na') v *= 1e-3
+		// uA / µA：已是 µA
+		if (!isFinite(v)) {
+			bluLog('触发电平数值无效', 'warn')
+			return
+		}
+		scopeTrigLevelAuto = false
+		scopeTrigLevelUA = v
+		// 重扫近期以新电平对齐（并清 override）
+		if (scopeTrigMode !== 'off') rescanScopeTriggerRecent()
+		else scopeTrigState = 0
+		syncScopeTrigUi()
+		scheduleUIUpdate()
+	}
+
+	function syncScopeTrigUi() {
+		const thrKey = (scopeTrigLevelUA != null && isFinite(scopeTrigLevelUA))
+			? scopeTrigLevelUA.toPrecision(4)
+			: ''
+		const key = scopeTrigMode + '|' + (scopeTrigLevelAuto ? 'a' : 'm') + '|' + thrKey
+		if (key === scopeTrigUiKey) return
+		scopeTrigUiKey = key
+		const sel = E('blu-scope-trig')
+		if (sel && sel.value !== scopeTrigMode) sel.value = scopeTrigMode
+		const inp = E('blu-scope-trig-level')
+		if (inp && document.activeElement !== inp) {
+			if (scopeTrigLevelAuto) {
+				inp.value = ''
+				inp.placeholder = thrKey
+					? ('Auto ' + fmtCurrent(scopeTrigLevelUA))
+					: 'Auto µA'
+			} else {
+				inp.value = String(scopeTrigLevelUA)
+				inp.placeholder = 'µA'
+			}
+		}
+		const grp = E('blu-scope-trig-group')
+		if (grp) grp.classList.toggle('is-active', scopeTrigMode !== 'off')
+	}
+
+	/** 采样沿电平：手动 / 已入库窗口 Auto / 等待期 pre-range Auto */
+	function getAcqTrigLevelUA(iUA) {
+		if (!scopeTrigLevelAuto && scopeTrigLevelUA != null && isFinite(scopeTrigLevelUA)) {
+			return scopeTrigLevelUA
+		}
+		if (ringCount >= 8) return getScopeTrigLevelUA()
+		// 等启动沿：用尚未入库的 pre min/max 估中点
+		if (isFinite(acqPreMin) && isFinite(acqPreMax) && acqPreMax > acqPreMin) {
+			const thr = (acqPreMin + acqPreMax) * 0.5
+			scopeTrigLevelUA = thr
+			return thr
+		}
+		if (isFinite(iUA)) return iUA // 冷启动退化
+		return 0
+	}
+
+	/**
+	 * 采样沿状态机（逐点）。kind: 'start' | 'stop'
+	 * opts.seedOnly：只更新滞回状态、永不返回沿（预热用）
+	 * 返回 true 表示本点产生了匹配边沿。
+	 * 电平复用显示触发的手动值，或 Auto（窗口 / 等待期 pre-range）。
+	 */
+	function feedAcqEdgeState(iUA, kind, opts) {
+		if (!isFinite(iUA)) return false
+		const mode = kind === 'stop' ? acqTrigStop : acqTrigStart
+		if (mode === 'off') return false
+		// 等待入库阶段累计 pre-range，供 Auto 电平
+		if (!acqTrigStoreEnabled) {
+			if (iUA < acqPreMin) acqPreMin = iUA
+			if (iUA > acqPreMax) acqPreMax = iUA
+		}
+		const thr = getAcqTrigLevelUA(iUA)
+		// 无波形缓冲时用相对滞回；有数据时用窗口 span
+		let hyst
+		if (ringCount >= 8) {
+			hyst = getScopeTrigHyst(thr)
+		} else if (isFinite(acqPreMin) && acqPreMax > acqPreMin) {
+			hyst = Math.max((acqPreMax - acqPreMin) * 0.05, Math.abs(thr) * 0.02, 1e-6)
+		} else {
+			hyst = Math.max(Math.abs(thr) * 0.05, Math.abs(iUA) * 0.03, 1e-6)
+		}
+		const thrHi = thr + hyst
+		const thrLo = thr - hyst
+		let state = kind === 'stop' ? acqTrigStopState : acqTrigStartState
+		let edge = null
+		// unknown 只 seed、不产生沿，避免启动瞬间/停沿复位时「已在高电平」假触发
+		if (state === 0) {
+			if (iUA >= thrHi) state = 1
+			else if (iUA <= thrLo) state = -1
+		} else if (state < 0 && iUA >= thrHi) {
+			edge = 'rise'
+			state = 1
+		} else if (state > 0 && iUA <= thrLo) {
+			edge = 'fall'
+			state = -1
+		}
+		if (kind === 'stop') acqTrigStopState = state
+		else acqTrigStartState = state
+		if (opts && opts.seedOnly) return false
+		if (!edge) return false
+		if (mode === 'rise' && edge !== 'rise') return false
+		if (mode === 'fall' && edge !== 'fall') return false
+		// either：rise/fall 均可
+		// 配置了启动沿但尚未命中启动：忽略停沿
+		if (kind === 'stop' && acqTrigStart !== 'off' && !acqTrigStartLatched) {
+			return false
+		}
+		return true
+	}
+
+	function setAcqTrigStart(mode) {
+		const next = (mode === 'rise' || mode === 'fall' || mode === 'either') ? mode : 'off'
+		acqTrigStart = next
+		// 未在采：复位等待态。采样中（含等沿）：立即按新模式生效；
+		// 等沿时改回 off 会在下一输出点开闸入库。
+		if (!bluSampling) {
+			acqTrigStoreEnabled = true
+			acqTrigStartState = 0
+		} else if (next === 'off' && !acqTrigStoreEnabled) {
+			acqTrigStoreEnabled = true
+			acqTrigStartLatched = true
+			acqTrigStopState = 0
+			bluLog('已取消沿启动门控，立即入库')
+		}
+		syncAcqTrigUi()
+		updateSampleBtn()
+	}
+
+	function setAcqTrigStop(mode) {
+		const next = (mode === 'rise' || mode === 'fall' || mode === 'either') ? mode : 'off'
+		acqTrigStop = next
+		if (bluSampling) acqTrigStopState = 0
+		syncAcqTrigUi()
+		updateSampleBtn()
+	}
+
+	function syncAcqTrigUi() {
+		const key = acqTrigStart + '|' + acqTrigStop + '|' +
+			(bluSampling ? (acqTrigStoreEnabled ? 'r' : 'w') : '0')
+		if (key === acqTrigUiKey) return
+		acqTrigUiKey = key
+		const elS = E('blu-acq-trig-start')
+		if (elS && elS.value !== acqTrigStart) elS.value = acqTrigStart
+		const elT = E('blu-acq-trig-stop')
+		if (elT && elT.value !== acqTrigStop) elT.value = acqTrigStop
+		const grp = E('blu-acq-trig-group')
+		if (grp) {
+			grp.classList.toggle('is-active', acqTrigStart !== 'off' || acqTrigStop !== 'off')
+			grp.classList.toggle('is-waiting', bluSampling && !acqTrigStoreEnabled)
+		}
 	}
 
 	/**
@@ -2289,6 +2825,7 @@
 		opts = opts || {}
 		li = clampLogical(li)
 		if (li == null || ringCount < 2) return
+		beginScopeTrigUserOverride()
 		setScrollPaused(true)
 		liveMode = false
 		let viewPts = Math.max(MIN_VIEW_POINTS, Math.round(DEFAULT_VIEW_POINTS / view.xZoom))
@@ -3375,38 +3912,55 @@
 	}
 
 	/**
-	 * 建议 Log / 建议线性：进入阈值 + 退出阈值滞回，避免 Live 在阈值附近闪提示。
+	 * 建议 Log / 建议线性：
+	 * 1) 比值进入/退出滞回（LOG_SUGGEST_* / LOG_LINEAR_*）
+	 * 2) ratio EMA 平滑，压住 Live 脉冲进出视口的毛刺
+	 * 3) 时间域进入/退出 hold + 最短展示，避免按钮 hidden 抖动
+	 * 4) 窗口 lo/hi 短暂无效时沿用上一有效 ratio，不立刻清掉建议
 	 */
 	function updateYScaleHint(yMin, yMax, minPositive) {
+		const now = performance.now()
 		const pos = (minPositive > 0 && isFinite(minPositive)) ? minPositive : null
 		const hi = isFinite(yMax) ? Math.abs(yMax) : 0
 		const lo = pos != null ? pos : (isFinite(yMin) && yMin > 0 ? yMin : null)
-		if (!(lo > 0) || !(hi > 0)) {
-			yScaleHint = ''
+		const valid = (lo > 0) && (hi > 0)
+
+		if (valid) {
+			const ratio = hi / lo
+			yScaleHintLastValidAt = now
+			if (!(yScaleHintRatioEma > 0) || !isFinite(yScaleHintRatioEma)) {
+				yScaleHintRatioEma = ratio
+			} else {
+				yScaleHintRatioEma += (ratio - yScaleHintRatioEma) * HINT_RATIO_EMA_ALPHA
+			}
+		} else if (!(yScaleHintRatioEma > 0) ||
+			!isFinite(yScaleHintRatioEma) ||
+			(now - yScaleHintLastValidAt) > HINT_INVALID_KEEP_MS) {
+			// 长时间无有效比值：走时间滞回清空（不硬切）
+			commitYScaleHintWant('', now)
 			return
 		}
-		const ratio = hi / lo
+		// else：短暂无效，继续用 EMA
+
+		const r = yScaleHintRatioEma
+		let want = ''
 		if (yScaleMode === 'linear') {
 			if (yScaleHint === 'log') {
-				// 已显示「建议 Log」：仅当动态范围明显收窄才关掉
-				if (ratio < LOG_SUGGEST_EXIT) yScaleHint = ''
-			} else if (ratio >= LOG_SUGGEST_RATIO) {
-				yScaleHint = 'log'
-			} else {
-				yScaleHint = ''
+				// 已显示「建议 Log」：仅当动态范围明显收窄才想关掉
+				want = (r < LOG_SUGGEST_EXIT) ? '' : 'log'
+			} else if (r >= LOG_SUGGEST_RATIO) {
+				want = 'log'
 			}
 		} else if (isLogLikeY()) {
 			if (yScaleHint === 'linear') {
-				// 已显示「建议线性」：仅当动态范围明显变大才关掉
-				if (ratio > LOG_LINEAR_HINT_EXIT) yScaleHint = ''
-			} else if (ratio > 0 && ratio < LOG_LINEAR_HINT_RATIO) {
-				yScaleHint = 'linear'
-			} else {
-				yScaleHint = ''
+				// 已显示「建议线性」：仅当动态范围明显变大才想关掉
+				want = (r > LOG_LINEAR_HINT_EXIT) ? '' : 'linear'
+			} else if (r > 0 && r < LOG_LINEAR_HINT_RATIO) {
+				want = 'linear'
 			}
-		} else {
-			yScaleHint = ''
 		}
+		// 非 linear/log-like：want 保持 ''，经时间滞回灭掉
+		commitYScaleHintWant(want, now)
 	}
 
 	function updateCanvas() {
@@ -3453,6 +4007,11 @@
 				w / 2, h / 2 + 12
 			)
 			plotLayout = null
+			// early return 不跑 updateYScaleHint：硬清建议并同步 DOM，避免按钮残留
+			if (yScaleHint || yScaleHintCandidate || yScaleHintRatioEma != null) {
+				resetYScaleHintState()
+			}
+			syncYScaleUi()
 			drawMinimapStrip()
 			return
 		}
@@ -3463,6 +4022,10 @@
 			ctx.textAlign = 'center'
 			ctx.fillText('等待采样数据…（仅电流波形）', w / 2, h / 2)
 			plotLayout = null
+			if (yScaleHint || yScaleHintCandidate || yScaleHintRatioEma != null) {
+				resetYScaleHintState()
+			}
+			syncYScaleUi()
 			drawMinimapStrip()
 			return
 		}
@@ -3830,6 +4393,50 @@
 		}
 		ctx.stroke()
 
+		// 示波器显示触发：电平线 + 触发点竖线
+		if (scopeTrigMode !== 'off') {
+			const thr = getScopeTrigLevelUA()
+			if (isFinite(thr)) {
+				const yThr = toY(thr)
+				if (isFinite(yThr) && yThr >= margin.top - 2 && yThr <= margin.top + ph + 2) {
+					ctx.save()
+					ctx.strokeStyle = 'rgba(236, 72, 153, 0.75)'
+					ctx.lineWidth = 1
+					ctx.setLineDash([5, 4])
+					ctx.beginPath()
+					ctx.moveTo(margin.left, yThr)
+					ctx.lineTo(margin.left + pw, yThr)
+					ctx.stroke()
+					ctx.setLineDash([])
+					ctx.fillStyle = 'rgba(236, 72, 153, 0.9)'
+					ctx.font = '10px monospace'
+					ctx.textAlign = 'left'
+					ctx.fillText(
+						'Trig ' + (scopeTrigMode === 'rise' ? '↑' : scopeTrigMode === 'fall' ? '↓' : '↕') +
+						' ' + fmtCurrent(thr) + (scopeTrigLevelAuto ? ' auto' : ''),
+						margin.left + 6,
+						Math.max(margin.top + 10, Math.min(margin.top + ph - 4, yThr - 4))
+					)
+					ctx.restore()
+				}
+			}
+			if (scopeTrigLockLi != null &&
+				scopeTrigLockLi >= vr.start && scopeTrigLockLi <= vr.end) {
+				const xT = toX(scopeTrigLockLi)
+				if (isFinite(xT)) {
+					ctx.save()
+					ctx.strokeStyle = 'rgba(236, 72, 153, 0.55)'
+					ctx.lineWidth = 1
+					ctx.setLineDash([2, 3])
+					ctx.beginPath()
+					ctx.moveTo(xT, margin.top)
+					ctx.lineTo(xT, margin.top + ph)
+					ctx.stroke()
+					ctx.restore()
+				}
+			}
+		}
+
 		if (bucketSize <= 1 && vr.count <= 60) {
 			ctx.fillStyle = accent
 			for (let k = 0; k < drawnPts.length; k += 2) {
@@ -3985,20 +4592,33 @@
 		const totalDur = ringCount > 1 ? (ringCount - 1) * samplePeriodSec : 0
 		const scaleTag = yScaleMode === 'log' ? ' · LogY'
 			: (yScaleMode === 'symlog' ? ' · Symlog' : '')
+		let trigTag = ''
+		if (scopeTrigMode !== 'off') {
+			const edgeCh = scopeTrigMode === 'rise' ? '↑' : scopeTrigMode === 'fall' ? '↓' : '↕'
+			if (scopeTrigLockLi != null && !scopeTrigUserOverride) {
+				trigTag = ' · Trig' + edgeCh + '钉住'
+			} else if (scopeTrigUserOverride) {
+				trigTag = ' · Trig' + edgeCh + '手移'
+			} else {
+				trigTag = ' · Trig' + edgeCh + '等待'
+			}
+		}
 		ctx.fillText(
 			'窗口 ' + fmtDuration(winDur) + ' / 总 ' + fmtDuration(totalDur) +
 			' · 实测 ' + fmtHz(samplePeriodSec > 0 ? 1 / samplePeriodSec : 0) +
 			'Hz/目标 ' + fmtHz(targetRateHz) + 'Hz' +
 			scaleTag +
 			(yAxisLocked ? ' · Y-Lock' : '') +
-			(liveMode && !scrollPaused ? ' · Live' : '') +
-			(scrollPaused ? ' · 已暂停滚动' : ''),
+			(liveMode && !scrollPaused && scopeTrigMode === 'off' ? ' · Live' : '') +
+			(scrollPaused && !(scopeTrigMode !== 'off' && scopeTrigLockLi != null) ? ' · 已暂停滚动' : '') +
+			trigTag,
 			margin.left + pw / 2,
 			h - 6
 		)
 
-		// 同步工具条「建议 Log/线性」提示（轻量，不自动硬切）
+		// 同步工具条「建议 Log/线性」与触发控件（脏检查，避免每帧 DOM 写）
 		syncYScaleUi()
+		if (scopeTrigMode !== 'off') syncScopeTrigUi()
 
 		drawMinimapStrip()
 	}
@@ -4260,6 +4880,7 @@
 		if (!sel) return
 		const n = sel.b - sel.a + 1
 		if (n < MIN_VIEW_POINTS) return
+		beginScopeTrigUserOverride()
 		// 使视口约等于选择宽度
 		view.xZoom = clampXZoom(DEFAULT_VIEW_POINTS / n)
 		liveMode = false
@@ -4504,6 +5125,8 @@
 		view.xOffset = 0
 		view.cursorA = 0
 		view.cursorB = ringCount - 1
+		// 导入后若显示触发开启，重扫钉住（clearAllData 已清锁）
+		if (scopeTrigMode !== 'off') rescanScopeTriggerRecent()
 		invalidateOverallStat()
 		analysisCache = null
 		updateCursorInfo()
@@ -4611,6 +5234,17 @@
 		view.xZoom = 1
 		view.xOffset = 0
 		view.yPanOffset = 0
+		scopeTrigUserOverride = false
+		if (scopeTrigMode !== 'off') {
+			// 触发模式：清锁并重扫，尽快重新钉住
+			rescanScopeTriggerRecent()
+			if (scopeTrigLockLi == null) setScrollPaused(false)
+			else {
+				liveMode = false
+				scheduleUIUpdate()
+			}
+			return
+		}
 		// 复位 X 并回到最新波形（Live）
 		setScrollPaused(false)
 	}
@@ -5077,6 +5711,43 @@
 		}
 		syncYScaleUi()
 
+		const elScopeTrig = E('blu-scope-trig')
+		if (elScopeTrig) {
+			elScopeTrig.value = scopeTrigMode
+			elScopeTrig.addEventListener('change', function () {
+				setScopeTrigMode(elScopeTrig.value)
+			})
+		}
+		const elScopeLvl = E('blu-scope-trig-level')
+		if (elScopeLvl) {
+			const applyLvl = function () { setScopeTrigLevelFromInput(elScopeLvl.value) }
+			elScopeLvl.addEventListener('change', applyLvl)
+			elScopeLvl.addEventListener('keydown', function (e) {
+				if (e.key === 'Enter') {
+					e.preventDefault()
+					applyLvl()
+					elScopeLvl.blur()
+				}
+			})
+		}
+		syncScopeTrigUi()
+
+		const elAcqStart = E('blu-acq-trig-start')
+		if (elAcqStart) {
+			elAcqStart.value = acqTrigStart
+			elAcqStart.addEventListener('change', function () {
+				setAcqTrigStart(elAcqStart.value)
+			})
+		}
+		const elAcqStop = E('blu-acq-trig-stop')
+		if (elAcqStop) {
+			elAcqStop.value = acqTrigStop
+			elAcqStop.addEventListener('change', function () {
+				setAcqTrigStop(elAcqStop.value)
+			})
+		}
+		syncAcqTrigUi()
+
 		const elPause = E('blu-pause-scroll')
 		if (elPause) elPause.addEventListener('click', function () {
 			setScrollPaused(!scrollPaused)
@@ -5352,6 +6023,8 @@
 						if (plotLayout) drag.liAnchor = plotLayout.fromX(drag.x0)
 					}
 					if (drag.moved) {
+						// 用户平移：暂时退出触发钉视口，直到下一次沿
+						beginScopeTrigUserOverride()
 						// 跟手：抓取的数据点始终停在当前鼠标 X 下
 						panViewSoLiAtPixel(drag.liAnchor, x)
 						if (plotLayout && plotLayout.ph > 0) {
@@ -5435,6 +6108,7 @@
 					start = 0
 					end = Math.min(ringCount - 1, start + viewPts - 1)
 				}
+				beginScopeTrigUserOverride()
 				liveMode = false
 				if (!scrollPaused) setScrollPaused(true)
 				view.xOffset = Math.max(0, ringCount - 1 - end)

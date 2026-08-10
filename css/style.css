@@ -3805,6 +3805,55 @@ hr {
   font-weight: 600;
 }
 
+.blu-acq-trig-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 4px;
+  height: var(--blu-control-h, 28px);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+}
+
+.blu-acq-trig-group.is-active {
+  border-color: rgba(16, 185, 129, 0.55);
+}
+
+.blu-acq-trig-group.is-waiting {
+  border-color: rgba(245, 158, 11, 0.65);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.2);
+}
+
+.blu-acq-trig-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.blu-acq-trig-group.is-active .blu-acq-trig-label {
+  color: #34d399;
+}
+
+.blu-acq-trig-group.is-waiting .blu-acq-trig-label {
+  color: #f59e0b;
+}
+
+.blu-acq-trig-select {
+  min-width: 42px;
+  max-width: 52px;
+  height: 22px;
+  padding: 0 2px;
+  font-size: 0.7rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
 .blu-connect-bar-right {
   display: flex;
   gap: 4px;
@@ -4688,6 +4737,50 @@ body.blu-wave-fullscreen-open {
 
 .blu-y-scale-hint[hidden] {
   display: none !important;
+}
+
+.blu-scope-trig-group {
+  gap: 4px;
+}
+
+.blu-scope-trig-group.is-active .blu-zoom-label {
+  color: #ec4899;
+}
+
+.blu-scope-trig-select {
+  min-width: 64px;
+  max-width: 80px;
+  height: 28px;
+  padding: 0 4px;
+  font-size: 0.72rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.blu-scope-trig-group.is-active .blu-scope-trig-select {
+  border-color: rgba(236, 72, 153, 0.55);
+  color: #f9a8d4;
+}
+
+.blu-scope-trig-level {
+  width: 88px;
+  height: 28px;
+  padding: 0 6px;
+  font-size: 0.72rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.blu-scope-trig-level:focus {
+  outline: none;
+  border-color: rgba(236, 72, 153, 0.65);
+  box-shadow: 0 0 0 2px rgba(236, 72, 153, 0.15);
 }
 
 .blu-cursor-group {
