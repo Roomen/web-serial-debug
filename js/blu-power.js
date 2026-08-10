@@ -1500,6 +1500,14 @@
 		if (el) el.value = recordMode
 		bluLog('录制模式：' + (recordMode === 'long' ? '长期统计（不存波形）' : '波形'))
 		if (bluSampling) clearAllData(false)
+		// 长期模式无波形：关闭显示触发，避免「等待」误解
+		if (recordMode === 'long' && scopeTrigMode !== 'off') {
+			setScopeTrigMode('off')
+		}
+		const trigSel = E('blu-scope-trig')
+		const trigLvl = E('blu-scope-trig-level')
+		if (trigSel) trigSel.disabled = recordMode === 'long'
+		if (trigLvl) trigLvl.disabled = recordMode === 'long'
 		scheduleUIUpdate()
 	}
 
@@ -2121,15 +2129,18 @@
 		let scanHi = Math.min(n - 1, to | 0)
 		if (scanHi < scanLo) return
 		// 边沿检测必须逐步；超长区间只扫尾部，避免漏沿 + 卡 UI
+		let truncated = false
 		if (scanHi - scanLo + 1 > SCOPE_TRIG_SCAN_MAX) {
 			scanLo = scanHi - SCOPE_TRIG_SCAN_MAX + 1
+			truncated = true
 		}
 
 		const thr = getScopeTrigLevelUA()
 		const hyst = getScopeTrigHyst(thr)
 		const thrHi = thr + hyst
 		const thrLo = thr - hyst
-		let state = scopeTrigState
+		// 截断后批前 state 已过期，必须用扫窗前一点重 seed，防假沿
+		let state = truncated ? 0 : scopeTrigState
 		if (state === 0) {
 			const v0 = ringIAt(Math.max(0, scanLo - 1))
 			if (isFinite(v0)) {
@@ -2187,6 +2198,24 @@
 		scopeTrigUiKey = ''
 	}
 
+	/** 用户主动改视口（平移/minimap/跳转/缩放到选择）时暂时放开触发钉住 */
+	function beginScopeTrigUserOverride() {
+		if (scopeTrigMode === 'off') return
+		scopeTrigUserOverride = true
+	}
+
+	/** 在已有缓冲上按当前模式重扫并尽量钉住 */
+	function rescanScopeTriggerRecent() {
+		if (scopeTrigMode === 'off' || recordMode !== 'wave' || ringCount < 10) return
+		scopeTrigLastLi = null
+		scopeTrigLockLi = null
+		scopeTrigPeriodPts = null
+		scopeTrigState = 0
+		scopeTrigUserOverride = false
+		const from = Math.max(1, ringCount - Math.max(currentViewPts() * 3, 4000))
+		scanScopeTrigger(from, ringCount - 1)
+	}
+
 	function setScopeTrigMode(mode) {
 		const next = (mode === 'rise' || mode === 'fall' || mode === 'either') ? mode : 'off'
 		if (next === scopeTrigMode) {
@@ -2201,12 +2230,13 @@
 				liveMode = true
 				view.xOffset = 0
 			}
+		} else if (recordMode === 'long') {
+			// 长期模式无波形可钉
+			scopeTrigMode = 'off'
+			bluLog('长期统计模式不支持显示触发', 'warn')
 		} else {
 			// 开启：先扫近期数据，尽快钉住；未命中则保持当前/Live 直到新沿
-			if (ringCount > 10) {
-				const from = Math.max(1, ringCount - Math.max(currentViewPts() * 3, 4000))
-				scanScopeTrigger(from, ringCount - 1)
-			}
+			rescanScopeTriggerRecent()
 			if (scopeTrigLockLi == null && !scrollPaused) {
 				// 等待触发期间仍 Live，便于看到信号
 				liveMode = true
@@ -2600,6 +2630,7 @@
 		opts = opts || {}
 		li = clampLogical(li)
 		if (li == null || ringCount < 2) return
+		beginScopeTrigUserOverride()
 		setScrollPaused(true)
 		liveMode = false
 		let viewPts = Math.max(MIN_VIEW_POINTS, Math.round(DEFAULT_VIEW_POINTS / view.xZoom))
@@ -4654,6 +4685,7 @@
 		if (!sel) return
 		const n = sel.b - sel.a + 1
 		if (n < MIN_VIEW_POINTS) return
+		beginScopeTrigUserOverride()
 		// 使视口约等于选择宽度
 		view.xZoom = clampXZoom(DEFAULT_VIEW_POINTS / n)
 		liveMode = false
@@ -4898,6 +4930,8 @@
 		view.xOffset = 0
 		view.cursorA = 0
 		view.cursorB = ringCount - 1
+		// 导入后若显示触发开启，重扫钉住（clearAllData 已清锁）
+		if (scopeTrigMode !== 'off') rescanScopeTriggerRecent()
 		invalidateOverallStat()
 		analysisCache = null
 		updateCursorInfo()
@@ -5786,7 +5820,7 @@
 					}
 					if (drag.moved) {
 						// 用户平移：暂时退出触发钉视口，直到下一次沿
-						if (scopeTrigMode !== 'off') scopeTrigUserOverride = true
+						beginScopeTrigUserOverride()
 						// 跟手：抓取的数据点始终停在当前鼠标 X 下
 						panViewSoLiAtPixel(drag.liAnchor, x)
 						if (plotLayout && plotLayout.ph > 0) {
@@ -5870,6 +5904,7 @@
 					start = 0
 					end = Math.min(ringCount - 1, start + viewPts - 1)
 				}
+				beginScopeTrigUserOverride()
 				liveMode = false
 				if (!scrollPaused) setScrollPaused(true)
 				view.xOffset = Math.max(0, ringCount - 1 - end)
