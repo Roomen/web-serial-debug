@@ -900,6 +900,22 @@
                         <span class="blu-toolbar-sep" aria-hidden="true"></span>
 
                         <div class="blu-tb-group blu-tb-action">
+                            <div class="blu-acq-trig-group" id="blu-acq-trig-group" title="采样沿触发：设备先 START，等沿再入库 / 遇沿自动 STOP。电平与波形「触发」共用（Auto 或手动 µA）">
+                                <span class="blu-acq-trig-label">沿启</span>
+                                <select id="blu-acq-trig-start" class="blu-acq-trig-select" title="沿启动入库：关 / ↑ / ↓ / 任意（点采样后先 Arm，命中沿才写波形）">
+                                    <option value="off" selected>关</option>
+                                    <option value="rise">↑</option>
+                                    <option value="fall">↓</option>
+                                    <option value="either">↕</option>
+                                </select>
+                                <span class="blu-acq-trig-label">沿停</span>
+                                <select id="blu-acq-trig-stop" class="blu-acq-trig-select" title="沿停止采样：关 / ↑ / ↓ / 任意（入库后命中沿自动 STOP）">
+                                    <option value="off" selected>关</option>
+                                    <option value="rise">↑</option>
+                                    <option value="fall">↓</option>
+                                    <option value="either">↕</option>
+                                </select>
+                            </div>
                             <button class="btn btn-sm btn-success" id="blu-start" title="开始 / 停止采样">
                                 <i class="bi bi-play-fill"></i> 采样
                             </button>

@@ -149,6 +149,18 @@
 	let scopeTrigPeriodPts = null // EMA 边沿间隔（点）
 	let scopeTrigUserOverride = false // 用户平移/缩放时暂时不强制钉视口
 	let scopeTrigUiKey = ''
+	// 采样沿触发（门控入库 / 自动停采；与显示触发独立，可共用电平）
+	// 'off' | 'rise' | 'fall' | 'either'
+	let acqTrigStart = 'off' // 开始采样后等沿再入库
+	let acqTrigStop = 'off' // 入库后等沿自动 STOP
+	let acqTrigStoreEnabled = true // false=已 START 但在等启动沿
+	let acqTrigStartState = 0 // 启动沿滞回 -1/0/1
+	let acqTrigStopState = 0 // 停止沿滞回
+	let acqTrigStopPending = false // 批末异步 stopSampling
+	let acqTrigStartLatched = false // 本会话已触发过启动沿
+	let acqTrigUiKey = ''
+	let acqPreMin = Infinity // 等启动沿期间的 min（Auto 电平）
+	let acqPreMax = -Infinity
 
 	// 原始流统计
 	let rawStreamCount = 0
@@ -1414,6 +1426,20 @@
 		view.xOffset = 0
 		view.yPanOffset = 0
 		setScrollPaused(false)
+		// 采样沿触发：Arm 后先 START 设备，等沿再入库；停沿在入库后生效
+		acqTrigStopPending = false
+		acqTrigStartLatched = false
+		acqTrigStartState = 0
+		acqTrigStopState = 0
+		acqPreMin = Infinity
+		acqPreMax = -Infinity
+		if (acqTrigStart !== 'off') {
+			acqTrigStoreEnabled = false
+			bluLog('采样沿启动已 Arm：等待 ' + acqEdgeLabel(acqTrigStart) +
+				' 后开始入库（电平 ' + (scopeTrigLevelAuto ? 'Auto' : fmtCurrent(scopeTrigLevelUA)) + '）')
+		} else {
+			acqTrigStoreEnabled = true
+		}
 		bluSampling = true
 		updateSampleBtn()
 		startStallWatch()
@@ -1424,10 +1450,13 @@
 		requestWakeLock() // 不 await，不挡采样
 		const warmMs = targetRateHz > 0 ? Math.round(warmupLeft / targetRateHz * 1000) : 0
 		const ramSec = estimateDurationSec(RING_CAP_MAX, targetRateHz)
+		const acqTag = (acqTrigStart !== 'off' ? ' · 等' + acqEdgeLabel(acqTrigStart) + '入库' : '') +
+			(acqTrigStop !== 'off' ? ' · 遇' + acqEdgeLabel(acqTrigStop) + '停采' : '')
 		bluLog((startOk ? 'AVERAGE_START' : 'AVERAGE_START 可能失败') +
 			' · 目标 ' + getRatePreset().label +
 			' · ' + (recordMode === 'long' ? '长期统计' : '波形') +
 			' · Live 滚动' +
+			acqTag +
 			' · 预热约 ' + warmMs + ' ms（' + warmupLeft + ' 点）' +
 			(recordMode === 'wave'
 				? (' · RAM ' + fmtGb(storageCfg.ramGB) + '≈' + fmtDuration(ramSec) +
@@ -1441,6 +1470,9 @@
 		// 先停入库，再 STOP；对照 API stop_measuring：发 STOP 后 get_data 丢弃残留
 		bluSampling = false
 		dropSampleStream = true
+		acqTrigStoreEnabled = true
+		acqTrigStopPending = false
+		acqTrigStartLatched = false
 		stopStallWatch()
 		updateSampleBtn()
 		try { await bluWrite(PROTO.cmdAverageStop(), 'AVERAGE_STOP') } catch (e) {}
@@ -1451,16 +1483,39 @@
 		scheduleUIUpdate()
 	}
 
+	function acqEdgeLabel(mode) {
+		if (mode === 'rise') return '↑沿'
+		if (mode === 'fall') return '↓沿'
+		if (mode === 'either') return '任意沿'
+		return '关'
+	}
+
 	function updateSampleBtn() {
 		const el = E('blu-start')
 		if (!el) return
 		if (bluSampling) {
 			el.className = 'btn btn-sm btn-danger'
-			el.innerHTML = '<i class="bi bi-stop-fill"></i> 停止'
+			if (!acqTrigStoreEnabled && acqTrigStart !== 'off') {
+				el.innerHTML = '<i class="bi bi-hourglass-split"></i> 等沿…'
+				el.title = '已 Arm：等待 ' + acqEdgeLabel(acqTrigStart) + ' 开始入库 · 点击取消'
+			} else {
+				el.innerHTML = '<i class="bi bi-stop-fill"></i> 停止'
+				el.title = acqTrigStop !== 'off'
+					? ('采样中 · 遇' + acqEdgeLabel(acqTrigStop) + '自动停 · 点击立即停')
+					: '停止采样'
+			}
 		} else {
 			el.className = 'btn btn-sm btn-success'
 			el.innerHTML = '<i class="bi bi-play-fill"></i> 采样'
+			el.title = (acqTrigStart !== 'off' || acqTrigStop !== 'off')
+				? ('开始采样' +
+					(acqTrigStart !== 'off' ? '（等' + acqEdgeLabel(acqTrigStart) + '入库）' : '') +
+					(acqTrigStop !== 'off' ? '（遇' + acqEdgeLabel(acqTrigStop) + '停）' : ''))
+				: '开始 / 停止采样'
 		}
+		// 等待态边框等与按钮同步
+		acqTrigUiKey = ''
+		syncAcqTrigUi()
 	}
 
 	function setScrollPaused(on) {
@@ -1919,11 +1974,42 @@
 				const o = outs[k]
 				if (warmupLeft > 0) {
 					warmupLeft--
+					// 预热阶段也推进启动沿状态机，避免预热结束瞬间假沿
+					if (!acqTrigStoreEnabled && acqTrigStart !== 'off') {
+						feedAcqEdgeState(o.iUA, 'start')
+					}
 					continue
+				}
+				// 沿启动：未命中前不入库（设备已 START，只是门控存储）
+				if (!acqTrigStoreEnabled) {
+					if (acqTrigStart === 'off') {
+						acqTrigStoreEnabled = true
+					} else if (feedAcqEdgeState(o.iUA, 'start')) {
+						acqTrigStoreEnabled = true
+						acqTrigStartLatched = true
+						acqTrigStopState = 0 // 启动后重新 seed 停沿
+						bluLog('沿触发：开始入库（' + acqEdgeLabel(acqTrigStart) +
+							' @ ' + fmtCurrent(o.iUA) + '）', 'success')
+						updateSampleBtn()
+					} else {
+						continue
+					}
 				}
 				ingestStored(o.tMs, o.iUA)
 				stored++
+				// 沿停止：命中后批末异步 STOP（避免在读循环里 await）
+				if (acqTrigStop !== 'off' && !acqTrigStopPending &&
+					feedAcqEdgeState(o.iUA, 'stop')) {
+					acqTrigStopPending = true
+					bluLog('沿触发：停止采样（' + acqEdgeLabel(acqTrigStop) +
+						' @ ' + fmtCurrent(o.iUA) + '）', 'success')
+				}
 			}
+		}
+
+		if (acqTrigStopPending && bluSampling) {
+			acqTrigStopPending = false
+			stopSampling()
 		}
 
 		// 暂停滚动：新样本入库后钉住历史视口（顺序存储，旧下标不左移）
@@ -2306,6 +2392,110 @@
 		}
 		const grp = E('blu-scope-trig-group')
 		if (grp) grp.classList.toggle('is-active', scopeTrigMode !== 'off')
+	}
+
+	/** 采样沿电平：手动 / 已入库窗口 Auto / 等待期 pre-range Auto */
+	function getAcqTrigLevelUA(iUA) {
+		if (!scopeTrigLevelAuto && scopeTrigLevelUA != null && isFinite(scopeTrigLevelUA)) {
+			return scopeTrigLevelUA
+		}
+		if (ringCount >= 8) return getScopeTrigLevelUA()
+		// 等启动沿：用尚未入库的 pre min/max 估中点
+		if (isFinite(acqPreMin) && isFinite(acqPreMax) && acqPreMax > acqPreMin) {
+			const thr = (acqPreMin + acqPreMax) * 0.5
+			scopeTrigLevelUA = thr
+			return thr
+		}
+		if (isFinite(iUA)) return iUA // 冷启动退化
+		return 0
+	}
+
+	/**
+	 * 采样沿状态机（逐点）。kind: 'start' | 'stop'
+	 * 返回 true 表示本点产生了匹配边沿。
+	 * 电平复用显示触发的手动值，或 Auto（窗口 / 等待期 pre-range）。
+	 */
+	function feedAcqEdgeState(iUA, kind) {
+		if (!isFinite(iUA)) return false
+		const mode = kind === 'stop' ? acqTrigStop : acqTrigStart
+		if (mode === 'off') return false
+		// 等待入库阶段累计 pre-range，供 Auto 电平
+		if (!acqTrigStoreEnabled) {
+			if (iUA < acqPreMin) acqPreMin = iUA
+			if (iUA > acqPreMax) acqPreMax = iUA
+		}
+		const thr = getAcqTrigLevelUA(iUA)
+		// 无波形缓冲时用相对滞回；有数据时用窗口 span
+		let hyst
+		if (ringCount >= 8) {
+			hyst = getScopeTrigHyst(thr)
+		} else if (isFinite(acqPreMin) && acqPreMax > acqPreMin) {
+			hyst = Math.max((acqPreMax - acqPreMin) * 0.05, Math.abs(thr) * 0.02, 1e-6)
+		} else {
+			hyst = Math.max(Math.abs(thr) * 0.05, Math.abs(iUA) * 0.03, 1e-6)
+		}
+		const thrHi = thr + hyst
+		const thrLo = thr - hyst
+		let state = kind === 'stop' ? acqTrigStopState : acqTrigStartState
+		let edge = null
+		// unknown 只 seed、不产生沿，避免启动瞬间/停沿复位时「已在高电平」假触发
+		if (state === 0) {
+			if (iUA >= thrHi) state = 1
+			else if (iUA <= thrLo) state = -1
+		} else if (state < 0 && iUA >= thrHi) {
+			edge = 'rise'
+			state = 1
+		} else if (state > 0 && iUA <= thrLo) {
+			edge = 'fall'
+			state = -1
+		}
+		if (kind === 'stop') acqTrigStopState = state
+		else acqTrigStartState = state
+		if (!edge) return false
+		if (mode === 'rise' && edge !== 'rise') return false
+		if (mode === 'fall' && edge !== 'fall') return false
+		// either：rise/fall 均可
+		// 配置了启动沿但尚未命中启动：忽略停沿
+		if (kind === 'stop' && acqTrigStart !== 'off' && !acqTrigStartLatched) {
+			return false
+		}
+		return true
+	}
+
+	function setAcqTrigStart(mode) {
+		const next = (mode === 'rise' || mode === 'fall' || mode === 'either') ? mode : 'off'
+		acqTrigStart = next
+		// 采样中途改「启动沿」只影响下次；停沿可热改
+		if (!bluSampling) {
+			acqTrigStoreEnabled = true
+			acqTrigStartState = 0
+		}
+		syncAcqTrigUi()
+		updateSampleBtn()
+	}
+
+	function setAcqTrigStop(mode) {
+		const next = (mode === 'rise' || mode === 'fall' || mode === 'either') ? mode : 'off'
+		acqTrigStop = next
+		if (bluSampling) acqTrigStopState = 0
+		syncAcqTrigUi()
+		updateSampleBtn()
+	}
+
+	function syncAcqTrigUi() {
+		const key = acqTrigStart + '|' + acqTrigStop + '|' +
+			(bluSampling ? (acqTrigStoreEnabled ? 'r' : 'w') : '0')
+		if (key === acqTrigUiKey) return
+		acqTrigUiKey = key
+		const elS = E('blu-acq-trig-start')
+		if (elS && elS.value !== acqTrigStart) elS.value = acqTrigStart
+		const elT = E('blu-acq-trig-stop')
+		if (elT && elT.value !== acqTrigStop) elT.value = acqTrigStop
+		const grp = E('blu-acq-trig-group')
+		if (grp) {
+			grp.classList.toggle('is-active', acqTrigStart !== 'off' || acqTrigStop !== 'off')
+			grp.classList.toggle('is-waiting', bluSampling && !acqTrigStoreEnabled)
+		}
 	}
 
 	/**
@@ -5531,6 +5721,22 @@
 			})
 		}
 		syncScopeTrigUi()
+
+		const elAcqStart = E('blu-acq-trig-start')
+		if (elAcqStart) {
+			elAcqStart.value = acqTrigStart
+			elAcqStart.addEventListener('change', function () {
+				setAcqTrigStart(elAcqStart.value)
+			})
+		}
+		const elAcqStop = E('blu-acq-trig-stop')
+		if (elAcqStop) {
+			elAcqStop.value = acqTrigStop
+			elAcqStop.addEventListener('change', function () {
+				setAcqTrigStop(elAcqStop.value)
+			})
+		}
+		syncAcqTrigUi()
 
 		const elPause = E('blu-pause-scroll')
 		if (elPause) elPause.addEventListener('click', function () {
