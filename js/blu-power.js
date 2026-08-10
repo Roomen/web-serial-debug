@@ -2252,6 +2252,7 @@
 			scopeTrigLevelAuto = true
 			scopeTrigLevelUA = null
 			scopeTrigState = 0
+			if (scopeTrigMode !== 'off') rescanScopeTriggerRecent()
 			syncScopeTrigUi()
 			scheduleUIUpdate()
 			return
@@ -2275,15 +2276,9 @@
 		}
 		scopeTrigLevelAuto = false
 		scopeTrigLevelUA = v
-		scopeTrigState = 0
-		// 重扫近期以新电平对齐
-		if (scopeTrigMode !== 'off' && ringCount > 10) {
-			scopeTrigLastLi = null
-			scopeTrigLockLi = null
-			scopeTrigPeriodPts = null
-			const from = Math.max(1, ringCount - Math.max(currentViewPts() * 3, 4000))
-			scanScopeTrigger(from, ringCount - 1)
-		}
+		// 重扫近期以新电平对齐（并清 override）
+		if (scopeTrigMode !== 'off') rescanScopeTriggerRecent()
+		else scopeTrigState = 0
 		syncScopeTrigUi()
 		scheduleUIUpdate()
 	}
@@ -5042,14 +5037,7 @@
 		scopeTrigUserOverride = false
 		if (scopeTrigMode !== 'off') {
 			// 触发模式：清锁并重扫，尽快重新钉住
-			scopeTrigLockLi = null
-			scopeTrigLastLi = null
-			scopeTrigPeriodPts = null
-			scopeTrigState = 0
-			if (ringCount > 10) {
-				const from = Math.max(1, ringCount - Math.max(currentViewPts() * 3, 4000))
-				scanScopeTrigger(from, ringCount - 1)
-			}
+			rescanScopeTriggerRecent()
 			if (scopeTrigLockLi == null) setScrollPaused(false)
 			else {
 				liveMode = false
