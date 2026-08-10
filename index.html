@@ -974,7 +974,16 @@
                                     </button>
                                 </div>
                                 <div class="blu-cursor-group">
-                                    <span class="blu-cursor-hint" title="Shift+拖动新建选择 · 拖边界微调">Shift+拖选 · 拖边界微调</span>
+                                    <span class="blu-cursor-hint" title="Shift+拖动新建选择 · 拖边界微调 · 滚轮以指针为锚缩放">Shift+拖选 · 滚轮锚点缩放</span>
+                                    <select id="blu-cursor-snap" class="blu-cursor-mode-select" title="游标边沿吸附（测频用时域边沿，无需 FFT）">
+                                        <option value="free">自由</option>
+                                        <option value="rise">上升沿</option>
+                                        <option value="fall">下降沿</option>
+                                        <option value="either">任意沿</option>
+                                    </select>
+                                    <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-snap-a" title="A 吸附到最近边沿">A→沿</button>
+                                    <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-snap-b" title="B 吸附到最近边沿">B→沿</button>
+                                    <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-period" title="A/B 贴到相邻同向边沿（测一个周期）">测周期</button>
                                     <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-clear" title="清除选择">清除</button>
                                     <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-all" title="选择全部数据">全选</button>
                                     <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-zoom" title="缩放到选择区间">缩放到选择</button>
@@ -1066,12 +1075,12 @@
                                     </div>
                                 </div>
                             </div>
-                            <div class="blu-stat-card blu-stat-card-cursor" title="Shift+拖动选择区间">
+                            <div class="blu-stat-card blu-stat-card-cursor" title="Shift+拖动选择区间 · 边沿吸附测频（时域，非 FFT）">
                                 <div class="blu-stat-card-head">
                                     <span class="blu-stat-card-title"><i class="bi bi-rulers"></i> 选择</span>
                                 </div>
                                 <div id="blu-stat-cursor-empty" class="blu-stat-empty">
-                                    按住 <kbd>Shift</kbd> + 左键拖动选择区间
+                                    按住 <kbd>Shift</kbd> 拖动选择 · 可吸附边沿测频
                                 </div>
                                 <div id="blu-stat-cursor-grid" class="blu-stat-card-grid blu-stat-card-grid-6" style="display:none">
                                     <div class="blu-stat-cell">
@@ -1106,11 +1115,23 @@
                                         <span class="blu-stat-v" id="blu-stat-cursor-charge-mah">--</span>
                                         <span class="blu-stat-k">容量</span>
                                     </div>
+                                    <div class="blu-stat-cell" title="游标间距 Δt">
+                                        <span class="blu-stat-v" id="blu-stat-cursor-dt">--</span>
+                                        <span class="blu-stat-k">Δt</span>
+                                    </div>
+                                    <div class="blu-stat-cell" title="边沿周期频率；† 表示退回 1/Δt">
+                                        <span class="blu-stat-v" id="blu-stat-cursor-freq">--</span>
+                                        <span class="blu-stat-k">频率</span>
+                                    </div>
+                                    <div class="blu-stat-cell" title="B 点电流 − A 点电流">
+                                        <span class="blu-stat-v" id="blu-stat-cursor-di">--</span>
+                                        <span class="blu-stat-k">ΔI</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
                     </div>
-                    <div class="blu-pwr-note-foot">功率 / 电荷 / 能量按设定电压计算 · 选择区间：Shift+左键拖动 · 修正参数来自 get_modifiers · 速率以实测为准</div>
+                    <div class="blu-pwr-note-foot">功率 / 电荷 / 能量按设定电压计算 · 选择：Shift+拖动 · 边沿吸附测频（时域 1/周期，非 FFT）· 滚轮以指针为锚缩放 · 修正参数来自 get_modifiers · 速率以实测为准</div>
 
                     <div class="blu-log-card" id="blu-log-card">
                         <div class="blu-log-title" id="blu-log-toggle" title="悬停展开 · 点击固定/收起">

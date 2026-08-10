@@ -4313,7 +4313,15 @@ body.blu-wave-fullscreen-open {
 }
 
 .blu-cursor-mode-select {
-  min-width: 92px;
+  min-width: 72px;
+  max-width: 96px;
+  height: 28px;
+  padding: 0 4px;
+  font-size: 0.72rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
 }
 
 .blu-cursor-info {
