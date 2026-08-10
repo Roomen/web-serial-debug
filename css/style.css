@@ -4324,12 +4324,6 @@ body.blu-wave-fullscreen-open {
   color: var(--text-primary);
 }
 
-.blu-cursor-info {
-  font-size: 0.7rem;
-  font-family: var(--font-mono);
-  color: var(--text-secondary);
-}
-
 .blu-canvas {
   flex: 1 1 auto;
   min-height: 0;

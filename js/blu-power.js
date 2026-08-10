@@ -857,6 +857,8 @@
 	// 示波器式游标吸附：free | rise | fall | either（测频用边沿间隔，不需要 FFT）
 	let cursorSnapMode = 'free'
 	const EDGE_SEARCH_MAX = 80000 // 单次边沿搜索上限，防卡 UI（全选大缓冲时抽稀）
+	// 选择测量缓存：供画布浮标用，避免每帧重扫边沿
+	let cursorMeasureCache = null
 	let yAutoTargetMin = null
 	let yAutoTargetMax = null
 	let yAutoDispMin = null
@@ -1232,6 +1234,7 @@
 		view.xOffset = 0
 		view.cursorA = null
 		view.cursorB = null
+		cursorMeasureCache = null
 		dispInit = false
 		firstStoredTs = 0
 		sessionT0Ms = 0
@@ -2489,10 +2492,61 @@
 			ctx.fillStyle = 'rgba(148, 163, 184, ' + (fillAlpha != null ? fillAlpha : 0.18) + ')'
 			ctx.fillRect(Math.min(x0, x1), margin.top, Math.abs(x1 - x0), ph)
 		}
+		/** 画布浮标：多行 label/value，锚在 (ax, ay) 附近 */
+		function drawFloatBox(rows, ax, ay, opts) {
+			opts = opts || {}
+			if (!rows || !rows.length) return
+			ctx.font = '11px monospace'
+			let labelW = 0
+			let valW = 0
+			for (let r = 0; r < rows.length; r++) {
+				const lw = ctx.measureText(rows[r][0]).width
+				const vw = ctx.measureText(rows[r][1]).width
+				if (lw > labelW) labelW = lw
+				if (vw > valW) valW = vw
+			}
+			const padX = 8
+			const gap = 8
+			const boxW = Math.ceil(padX * 2 + labelW + gap + valW)
+			const rowH = 14
+			const boxH = rows.length * rowH + 8
+			let bx = ax + (opts.offsetX != null ? opts.offsetX : 12)
+			if (bx + boxW > margin.left + pw) bx = ax - 12 - boxW
+			if (bx < margin.left) bx = margin.left
+			let by = ay - (opts.centerY ? boxH / 2 : 0)
+			if (opts.offsetY != null) by = ay + opts.offsetY
+			by = Math.min(Math.max(margin.top, by), margin.top + ph - boxH)
+			ctx.globalAlpha = 0.94
+			ctx.fillStyle = bg
+			ctx.fillRect(bx, by, boxW, boxH)
+			ctx.globalAlpha = 1
+			ctx.strokeStyle = opts.border || grid
+			ctx.lineWidth = 1
+			ctx.strokeRect(bx, by, boxW, boxH)
+			ctx.textAlign = 'left'
+			const valX = bx + padX + labelW + gap
+			for (let r = 0; r < rows.length; r++) {
+				const ty = by + 4 + rowH * r + 11
+				ctx.fillStyle = muted
+				ctx.fillText(rows[r][0], bx + padX, ty)
+				ctx.fillStyle = opts.valueColor || fg
+				ctx.fillText(rows[r][1], valX, ty)
+			}
+		}
+
 		if (selectDrag && selectDrag.li0 != null && selectDrag.li1 != null) {
 			drawSelectionFill(selectDrag.li0, selectDrag.li1, 0.22)
 			drawEdgeLine(toX(selectDrag.li0), true, 'A', cursorCol)
 			drawEdgeLine(toX(selectDrag.li1), true, 'B', '#ec4899')
+			// 拖选预览：只显示瞬时 Δt / ΔI（边沿扫描留给松手后缓存）
+			const m = buildSelectionMeasure(selectDrag.li0, selectDrag.li1, { light: true })
+			if (m && m.rows.length) {
+				const xa = toX(Math.min(selectDrag.li0, selectDrag.li1))
+				const xb = toX(Math.max(selectDrag.li0, selectDrag.li1))
+				drawFloatBox(m.rows, (xa + xb) / 2, margin.top + 8, {
+					offsetX: 0, offsetY: 0, border: cursorCol,
+				})
+			}
 		} else if (view.cursorA != null && view.cursorB != null) {
 			const ca = clampLogical(view.cursorA)
 			const cb = clampLogical(view.cursorB)
@@ -2501,6 +2555,18 @@
 			const actB = cursorEdgeDrag && cursorEdgeDrag.edge === 'b'
 			drawEdgeLine(toX(ca), actA, 'A', cursorCol)
 			drawEdgeLine(toX(cb), actB, 'B', '#ec4899')
+			// 选择测量浮标（Δt / 频率 / ΔI / 占空…）；拖边界时只算轻量 Δt/ΔI
+			const m = cursorEdgeDrag
+				? buildSelectionMeasure(ca, cb, { light: true })
+				: ensureCursorMeasureCache(ca, cb)
+			if (m && m.rows.length) {
+				const xa = toX(Math.min(ca, cb))
+				const xb = toX(Math.max(ca, cb))
+				const midX = (xa + xb) / 2
+				drawFloatBox(m.rows, midX, margin.top + 8, {
+					offsetX: 0, offsetY: 0, border: cursorCol,
+				})
+			}
 		}
 
 		if (hover && !(drag && drag.moved)) {
@@ -2521,39 +2587,14 @@
 			ctx.beginPath()
 			ctx.arc(px, py, 3, 0, Math.PI * 2)
 			ctx.fill()
+			// 悬停点浮标：仅当前点信息（选择测量见上方选择浮标，避免重复长串）
 			const rows = [
 				['t', fmtTimeAxis(indexToTime(hli))],
 				['I', fmtCurrent(hi)],
 				['U', (setVoltageMv != null && isFinite(setVoltageMv)) ? (setVoltageMv + ' mV') : '--'],
 				['P', fmtPower(hi * setVoltageV())],
 			]
-			ctx.font = '11px monospace'
-			let boxW = 0
-			for (let r = 0; r < rows.length; r++) {
-				const wpx = ctx.measureText(rows[r][0] + ' ' + rows[r][1]).width
-				if (wpx > boxW) boxW = wpx
-			}
-			boxW += 16
-			const rowH = 14
-			const boxH = rows.length * rowH + 8
-			let bx = px + 12
-			if (bx + boxW > margin.left + pw) bx = px - 12 - boxW
-			if (bx < margin.left) bx = margin.left
-			let by = Math.min(Math.max(margin.top, hover.y - boxH / 2), margin.top + ph - boxH)
-			ctx.globalAlpha = 0.94
-			ctx.fillStyle = bg
-			ctx.fillRect(bx, by, boxW, boxH)
-			ctx.globalAlpha = 1
-			ctx.strokeStyle = grid
-			ctx.strokeRect(bx, by, boxW, boxH)
-			ctx.textAlign = 'left'
-			for (let r = 0; r < rows.length; r++) {
-				const ty = by + 4 + rowH * r + 11
-				ctx.fillStyle = muted
-				ctx.fillText(rows[r][0], bx + 8, ty)
-				ctx.fillStyle = fg
-				ctx.fillText(rows[r][1], bx + 8 + 14, ty)
-			}
+			drawFloatBox(rows, px, hover.y, { offsetX: 12, centerY: true })
 		}
 
 		ctx.fillStyle = muted
@@ -2654,49 +2695,71 @@
 		})
 	}
 
+	/**
+	 * 构建选择区间测量行（画布浮标用）。
+	 * light=true 时跳过边沿扫描，仅 Δt/ΔI（拖选预览）。
+	 */
+	function buildSelectionMeasure(a, b, opts) {
+		opts = opts || {}
+		a = clampLogical(a)
+		b = clampLogical(b)
+		if (a == null || b == null || a === b) return null
+		if (a > b) { const t = a; a = b; b = t }
+		const dt = (b - a) * samplePeriodSec
+		const ia = ringIAt(a)
+		const ib = ringIAt(b)
+		const rows = [
+			['A', fmtTimeAxis(indexToTime(a))],
+			['B', fmtTimeAxis(indexToTime(b))],
+			['Δt', fmtDuration(dt)],
+		]
+		if (!opts.light) {
+			const timing = measureSelectionTiming(a, b)
+			// 优先边沿频率；不足两沿时退回 1/Δt
+			if (timing.freqHz != null) {
+				rows.push(['f', fmtFreq(timing.freqHz) + (timing.nPeriod ? ' n=' + timing.nPeriod : '')])
+			} else if (dt > 0) {
+				rows.push(['1/Δt', fmtFreq(1 / dt)])
+			}
+			if (timing.duty != null) {
+				rows.push(['占空', (timing.duty * 100).toFixed(1) + '%'])
+			}
+		} else if (dt > 0) {
+			rows.push(['1/Δt', fmtFreq(1 / dt)])
+		}
+		if (isFinite(ia) && isFinite(ib)) {
+			rows.push(['ΔI', fmtCurrent(ib - ia)])
+		}
+		return { a: a, b: b, dt: dt, rows: rows }
+	}
+
+	function ensureCursorMeasureCache(a, b) {
+		a = clampLogical(a)
+		b = clampLogical(b)
+		if (a == null || b == null) {
+			cursorMeasureCache = null
+			return null
+		}
+		if (a > b) { const t = a; a = b; b = t }
+		const key = a + '|' + b + '|' + ringCount + '|' + samplePeriodSec
+		if (cursorMeasureCache && cursorMeasureCache.key === key) return cursorMeasureCache
+		const m = buildSelectionMeasure(a, b, { light: false })
+		if (!m) {
+			cursorMeasureCache = null
+			return null
+		}
+		cursorMeasureCache = { key: key, a: m.a, b: m.b, dt: m.dt, rows: m.rows }
+		return cursorMeasureCache
+	}
+
 	function updateCursorInfo() {
-		const el = E('blu-cursor-info')
-		if (!el) return
+		// 测量改画在画布浮标；此处只刷新缓存，工具栏不再堆长串
 		const sel = getSelectionRange()
 		if (!sel) {
-			el.textContent = ''
-			const elF = E('blu-stat-cursor-freq')
-			const elDt = E('blu-stat-cursor-dt')
-			const elDi = E('blu-stat-cursor-di')
-			if (elF) elF.textContent = '--'
-			if (elDt) elDt.textContent = '--'
-			if (elDi) elDi.textContent = '--'
+			cursorMeasureCache = null
 			return
 		}
-		const dt = (sel.b - sel.a) * samplePeriodSec
-		const timing = measureSelectionTiming(sel.a, sel.b)
-		const ia = ringIAt(sel.a)
-		const ib = ringIAt(sel.b)
-		let parts = [
-			fmtTimeAxis(indexToTime(sel.a)) + ' – ' + fmtTimeAxis(indexToTime(sel.b)),
-			'Δt ' + fmtDuration(dt),
-		]
-		// 双游标 Δt 频率（1/Δt）：经典示波器测频，无需 FFT
-		if (dt > 0) parts.push('1/Δt ' + fmtFreq(1 / dt))
-		if (timing.freqHz != null) {
-			parts.push('边沿 f≈' + fmtFreq(timing.freqHz) +
-				(timing.nPeriod ? ' (n=' + timing.nPeriod + ')' : ''))
-		}
-		if (timing.duty != null) parts.push('占空 ' + (timing.duty * 100).toFixed(1) + '%')
-		if (isFinite(ia) && isFinite(ib)) parts.push('ΔI ' + fmtCurrent(ib - ia))
-		el.textContent = parts.join(' · ')
-
-		const elF = E('blu-stat-cursor-freq')
-		const elDt = E('blu-stat-cursor-dt')
-		const elDi = E('blu-stat-cursor-di')
-		if (elDt) elDt.textContent = fmtDuration(dt)
-		// 优先显示边沿估计频率；不足两个上升沿时退回 1/Δt
-		if (elF) {
-			if (timing.freqHz != null) elF.textContent = fmtFreq(timing.freqHz)
-			else if (dt > 0) elF.textContent = fmtFreq(1 / dt) + '†'
-			else elF.textContent = '--'
-		}
-		if (elDi) elDi.textContent = (isFinite(ia) && isFinite(ib)) ? fmtCurrent(ib - ia) : '--'
+		ensureCursorMeasureCache(sel.a, sel.b)
 	}
 
 	function clearSelection() {
