@@ -1974,12 +1974,14 @@
 				const o = outs[k]
 				if (warmupLeft > 0) {
 					warmupLeft--
-					// 预热阶段也推进启动沿状态机，避免预热结束瞬间假沿
+					// 预热只 seed 滞回、不消费沿（避免窄脉冲被预热吃掉导致一直等）
 					if (!acqTrigStoreEnabled && acqTrigStart !== 'off') {
-						feedAcqEdgeState(o.iUA, 'start')
+						feedAcqEdgeState(o.iUA, 'start', { seedOnly: true })
 					}
 					continue
 				}
+				// 本批已排队停采：不再入库
+				if (acqTrigStopPending) continue
 				// 沿启动：未命中前不入库（设备已 START，只是门控存储）
 				if (!acqTrigStoreEnabled) {
 					if (acqTrigStart === 'off') {
@@ -2412,10 +2414,11 @@
 
 	/**
 	 * 采样沿状态机（逐点）。kind: 'start' | 'stop'
+	 * opts.seedOnly：只更新滞回状态、永不返回沿（预热用）
 	 * 返回 true 表示本点产生了匹配边沿。
 	 * 电平复用显示触发的手动值，或 Auto（窗口 / 等待期 pre-range）。
 	 */
-	function feedAcqEdgeState(iUA, kind) {
+	function feedAcqEdgeState(iUA, kind, opts) {
 		if (!isFinite(iUA)) return false
 		const mode = kind === 'stop' ? acqTrigStop : acqTrigStart
 		if (mode === 'off') return false
@@ -2451,6 +2454,7 @@
 		}
 		if (kind === 'stop') acqTrigStopState = state
 		else acqTrigStartState = state
+		if (opts && opts.seedOnly) return false
 		if (!edge) return false
 		if (mode === 'rise' && edge !== 'rise') return false
 		if (mode === 'fall' && edge !== 'fall') return false
@@ -2465,10 +2469,16 @@
 	function setAcqTrigStart(mode) {
 		const next = (mode === 'rise' || mode === 'fall' || mode === 'either') ? mode : 'off'
 		acqTrigStart = next
-		// 采样中途改「启动沿」只影响下次；停沿可热改
+		// 未在采：复位等待态。采样中（含等沿）：立即按新模式生效；
+		// 等沿时改回 off 会在下一输出点开闸入库。
 		if (!bluSampling) {
 			acqTrigStoreEnabled = true
 			acqTrigStartState = 0
+		} else if (next === 'off' && !acqTrigStoreEnabled) {
+			acqTrigStoreEnabled = true
+			acqTrigStartLatched = true
+			acqTrigStopState = 0
+			bluLog('已取消沿启动门控，立即入库')
 		}
 		syncAcqTrigUi()
 		updateSampleBtn()
