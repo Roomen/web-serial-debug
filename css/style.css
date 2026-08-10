@@ -4244,6 +4244,346 @@ hr {
   padding-left: 4px;
 }
 
+/* ---- 分析面板：默认可折叠；读数 / 事件 / FFT / 电池 / 叠画 ---- */
+.blu-analysis {
+  flex-shrink: 0;
+  margin-top: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.blu-analysis-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-height: 30px;
+  padding: 2px 6px;
+  background: var(--bg-surface-hover);
+}
+
+.blu-analysis.is-collapsed .blu-analysis-bar {
+  border-bottom: none;
+}
+
+.blu-analysis:not(.is-collapsed) .blu-analysis-bar {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.blu-analysis-toggle {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.blu-analysis-toggle:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.blu-analysis-chevron {
+  font-size: 0.7rem;
+  transition: transform 0.15s ease;
+}
+
+.blu-analysis:not(.is-collapsed) .blu-analysis-chevron {
+  transform: rotate(90deg);
+}
+
+.blu-analysis-scope-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.blu-analysis-scope-hint {
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blu-analysis-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-left: auto;
+}
+
+.blu-analysis-tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.blu-analysis-tab:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.blu-analysis-tab.is-active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.blu-analysis-body[hidden] {
+  display: none !important;
+}
+
+.blu-analysis-panels {
+  min-height: 0;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.blu-analysis-panel {
+  padding: 6px 8px;
+}
+
+.blu-analysis-panel[hidden] {
+  display: none !important;
+}
+
+.blu-analysis-empty {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  padding: 8px 4px;
+  text-align: center;
+}
+
+.blu-readout-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px 8px;
+}
+
+.blu-readout-row {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.blu-readout-k {
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.blu-readout-v {
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.blu-events-toolbar,
+.blu-fft-toolbar,
+.blu-battery-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.blu-events-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.blu-analysis-input {
+  width: 72px;
+  height: 24px;
+  padding: 0 4px;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.blu-analysis-select {
+  height: 24px;
+  padding: 0 4px;
+  font-size: 0.72rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.blu-events-meta {
+  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.blu-events-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  min-height: 0;
+}
+
+.blu-events-col-title {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.blu-events-list {
+  max-height: 140px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-body);
+}
+
+.blu-event-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.68rem;
+  font-family: var(--font-mono);
+  text-align: left;
+  cursor: pointer;
+}
+
+.blu-event-item:last-child {
+  border-bottom: none;
+}
+
+.blu-event-item:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.blu-event-item .blu-ev-tag {
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.blu-event-item .blu-ev-tag.is-high {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.blu-event-item .blu-ev-tag.is-low {
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+  color: var(--success);
+}
+
+.blu-event-item .blu-ev-meta {
+  color: var(--text-muted);
+  font-size: 0.62rem;
+}
+
+.blu-fft-layout {
+  display: grid;
+  grid-template-columns: 1fr minmax(140px, 28%);
+  gap: 8px;
+  min-height: 0;
+}
+
+.blu-fft-canvas,
+.blu-ov-canvas {
+  width: 100%;
+  height: 110px;
+  display: block;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-body);
+  cursor: crosshair;
+}
+
+.blu-fft-peaks .blu-events-list,
+.blu-events-list {
+  max-height: 110px;
+}
+
+.blu-battery-result {
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  padding: 4px 2px;
+}
+
+.blu-battery-result strong {
+  color: var(--accent);
+  font-size: 1rem;
+}
+
+.blu-import-label {
+  margin: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+@media (max-width: 900px) {
+  .blu-readout-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .blu-analysis-tabs {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .blu-events-cols,
+  .blu-fft-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 .blu-wave-wrap {
   display: flex;
   flex-direction: column;

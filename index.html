@@ -909,9 +909,19 @@
                             <button class="btn btn-sm btn-outline-secondary" id="blu-clear" title="清空波形与统计">
                                 <i class="bi bi-eraser"></i> 清空
                             </button>
-                            <button class="btn btn-sm btn-outline-secondary" id="blu-export" title="导出 CSV">
+                            <button class="btn btn-sm btn-outline-secondary" id="blu-export" title="导出全部 CSV">
                                 <i class="bi bi-download"></i> 导出
                             </button>
+                            <button class="btn btn-sm btn-outline-secondary" id="blu-export-sel" title="导出选择区间 CSV">
+                                <i class="bi bi-scissors"></i> 选区
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" id="blu-export-report" title="导出分析报告（JSON）">
+                                <i class="bi bi-file-earmark-text"></i> 报告
+                            </button>
+                            <label class="btn btn-sm btn-outline-secondary blu-import-label" id="blu-import-label" title="导入 CSV 回放（timestamp_s,current_uA）">
+                                <i class="bi bi-upload"></i> 导入
+                                <input type="file" id="blu-import" accept=".csv,text/csv,text/plain" hidden>
+                            </label>
                             <button class="btn btn-sm btn-outline-secondary" id="blu-clear-log" title="清空运行日志">
                                 <i class="bi bi-journal-text"></i> 日志
                             </button>
@@ -1082,9 +1092,10 @@
                                     </div>
                                 </div>
                             </div>
-                            <div class="blu-stat-card blu-stat-card-cursor" title="Shift+拖动选择区间 · 边沿吸附测频（时域，非 FFT）">
+                            <div class="blu-stat-card blu-stat-card-cursor" title="Shift+拖动选择区间 · 边沿吸附测频 · 扩展分析见下方可折叠面板">
                                 <div class="blu-stat-card-head">
                                     <span class="blu-stat-card-title"><i class="bi bi-rulers"></i> 选择</span>
+                                    <span class="blu-stat-card-n" id="blu-stat-cursor-n"></span>
                                 </div>
                                 <div id="blu-stat-cursor-empty" class="blu-stat-empty">
                                     按住 <kbd>Shift</kbd> 拖动选择 · 可吸附边沿测频
@@ -1125,8 +1136,140 @@
                                 </div>
                             </div>
                         </div>
+
+                        <!-- 分析面板：默认可折叠；数据源=选择/窗口/自动 -->
+                        <div class="blu-analysis is-collapsed" id="blu-analysis">
+                            <div class="blu-analysis-bar">
+                                <button type="button" class="blu-analysis-toggle" id="blu-analysis-toggle" title="展开 / 收起分析（收起后不占高度）" aria-expanded="false">
+                                    <i class="bi bi-chevron-right blu-analysis-chevron"></i>
+                                    <span>分析</span>
+                                </button>
+                                <label class="blu-analysis-scope-label" title="读数/事件/FFT/叠画的数据区间">
+                                    区间
+                                    <select id="blu-analysis-scope" class="blu-analysis-select" aria-label="分析数据源">
+                                        <option value="auto" selected>自动</option>
+                                        <option value="selection">选择</option>
+                                        <option value="window">窗口</option>
+                                    </select>
+                                </label>
+                                <span class="blu-analysis-scope-hint" id="blu-analysis-scope-hint" title="当前分析区间来源"></span>
+                                <div class="blu-analysis-tabs" role="tablist">
+                                    <button type="button" class="blu-analysis-tab is-active" data-tab="readout" role="tab" aria-selected="true">读数</button>
+                                    <button type="button" class="blu-analysis-tab" data-tab="events" role="tab">事件</button>
+                                    <button type="button" class="blu-analysis-tab" data-tab="fft" role="tab">FFT</button>
+                                    <button type="button" class="blu-analysis-tab" data-tab="battery" role="tab">电池</button>
+                                    <button type="button" class="blu-analysis-tab" data-tab="overlay" role="tab">叠画</button>
+                                </div>
+                            </div>
+                            <div class="blu-analysis-body" id="blu-analysis-body" hidden>
+                                <div class="blu-analysis-panels">
+                                    <div class="blu-analysis-panel is-active" id="blu-panel-readout" data-panel="readout">
+                                        <div id="blu-readout-empty" class="blu-analysis-empty">无可用区间 · 自动/选择需框选，或改「窗口」用当前视口 · 也可先暂停再分析</div>
+                                        <div id="blu-readout-body" class="blu-readout-grid" hidden>
+                                            <div class="blu-readout-row"><span class="blu-readout-k">源</span><span class="blu-readout-v" id="blu-ro-src">--</span></div>
+                                            <div class="blu-readout-row"><span class="blu-readout-k">A / B</span><span class="blu-readout-v" id="blu-ro-ab">--</span></div>
+                                            <div class="blu-readout-row"><span class="blu-readout-k">Δt</span><span class="blu-readout-v" id="blu-ro-dt">--</span></div>
+                                            <div class="blu-readout-row"><span class="blu-readout-k">Ia / Ib</span><span class="blu-readout-v" id="blu-ro-iab">--</span></div>
+                                            <div class="blu-readout-row"><span class="blu-readout-k">ΔI</span><span class="blu-readout-v" id="blu-ro-di">--</span></div>
+                                            <div class="blu-readout-row"><span class="blu-readout-k">f（边沿）</span><span class="blu-readout-v" id="blu-ro-freq">--</span></div>
+                                            <div class="blu-readout-row"><span class="blu-readout-k">周期 / 占空</span><span class="blu-readout-v" id="blu-ro-period">--</span></div>
+                                            <div class="blu-readout-row"><span class="blu-readout-k">低 / 高</span><span class="blu-readout-v" id="blu-ro-levels">--</span></div>
+                                            <div class="blu-readout-row"><span class="blu-readout-k">RMS / PP</span><span class="blu-readout-v" id="blu-ro-rms">--</span></div>
+                                            <div class="blu-readout-row"><span class="blu-readout-k">每周期 Q</span><span class="blu-readout-v" id="blu-ro-qcycle">--</span></div>
+                                        </div>
+                                    </div>
+                                    <div class="blu-analysis-panel" id="blu-panel-events" data-panel="events" hidden>
+                                        <div class="blu-events-toolbar">
+                                            <label class="blu-events-field">尖峰阈
+                                                <input type="number" id="blu-spike-thr" class="blu-analysis-input" step="any" placeholder="自动" title="µA，空=自动（均值+3σ）">
+                                            </label>
+                                            <label class="blu-events-field">最小宽
+                                                <input type="number" id="blu-spike-minw" class="blu-analysis-input" value="2" min="1" step="1" title="最小样点数">
+                                            </label>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-events-refresh" title="按当前区间重算">刷新</button>
+                                            <span class="blu-events-meta" id="blu-events-meta"></span>
+                                        </div>
+                                        <div class="blu-events-cols">
+                                            <div class="blu-events-col">
+                                                <div class="blu-events-col-title">尖峰 <span id="blu-spike-count">0</span></div>
+                                                <div class="blu-events-list" id="blu-spike-list"></div>
+                                            </div>
+                                            <div class="blu-events-col">
+                                                <div class="blu-events-col-title">分段 <span id="blu-seg-count">0</span></div>
+                                                <div class="blu-events-list" id="blu-seg-list"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="blu-analysis-panel" id="blu-panel-fft" data-panel="fft" hidden>
+                                        <div class="blu-fft-toolbar">
+                                            <label class="blu-events-field">窗
+                                                <select id="blu-fft-window" class="blu-analysis-select" title="窗函数">
+                                                    <option value="hann" selected>Hann</option>
+                                                    <option value="flattop">Flat-top</option>
+                                                    <option value="rect">Rect</option>
+                                                </select>
+                                            </label>
+                                            <label class="blu-events-field">
+                                                <input type="checkbox" id="blu-fft-remove-dc" checked> 去 DC
+                                            </label>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-fft-refresh">计算</button>
+                                            <span class="blu-events-meta" id="blu-fft-meta"></span>
+                                        </div>
+                                        <div class="blu-fft-layout">
+                                            <canvas id="blu-fft-canvas" class="blu-fft-canvas" title="点击谱峰：时域缩放到约 5 个周期"></canvas>
+                                            <div class="blu-fft-peaks">
+                                                <div class="blu-events-col-title">Top 峰</div>
+                                                <div class="blu-events-list" id="blu-fft-peak-list"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="blu-analysis-panel" id="blu-panel-battery" data-panel="battery" hidden>
+                                        <div class="blu-battery-form">
+                                            <label class="blu-events-field">容量 mAh
+                                                <input type="number" id="blu-bat-mah" class="blu-analysis-input" value="200" min="0.001" step="any">
+                                            </label>
+                                            <label class="blu-events-field">可用比例
+                                                <input type="number" id="blu-bat-derate" class="blu-analysis-input" value="0.9" min="0.1" max="1" step="0.01">
+                                            </label>
+                                            <label class="blu-events-field">电流源
+                                                <select id="blu-bat-src" class="blu-analysis-select" title="用哪段平均电流估算">
+                                                    <option value="analysis" selected>分析区间</option>
+                                                    <option value="selection">选择区</option>
+                                                    <option value="window">窗口</option>
+                                                    <option value="overall">总体</option>
+                                                </select>
+                                            </label>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-bat-calc">估算</button>
+                                        </div>
+                                        <div class="blu-battery-result" id="blu-bat-result">
+                                            <div class="blu-analysis-empty">输入电池容量，用平均电流估算续航</div>
+                                        </div>
+                                    </div>
+                                    <div class="blu-analysis-panel" id="blu-panel-overlay" data-panel="overlay" hidden>
+                                        <div class="blu-fft-toolbar">
+                                            <label class="blu-events-field">周期
+                                                <select id="blu-ov-src" class="blu-analysis-select" title="周期来源">
+                                                    <option value="edge" selected>边沿测频</option>
+                                                    <option value="fft">FFT 主峰</option>
+                                                    <option value="manual">手动</option>
+                                                </select>
+                                            </label>
+                                            <label class="blu-events-field">周期(s)
+                                                <input type="number" id="blu-ov-period" class="blu-analysis-input" step="any" placeholder="自动" title="手动秒数">
+                                            </label>
+                                            <label class="blu-events-field">最大周期数
+                                                <input type="number" id="blu-ov-max" class="blu-analysis-input" value="24" min="2" max="64" step="1">
+                                            </label>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-ov-refresh">叠画</button>
+                                            <span class="blu-events-meta" id="blu-ov-meta"></span>
+                                        </div>
+                                        <canvas id="blu-ov-canvas" class="blu-ov-canvas" title="多周期叠加（灰）+ 平均（亮）"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="blu-pwr-note-foot">功率 / 电荷 / 能量按设定电压计算 · 选择：Shift+拖动 · 边沿吸附测频（时域 1/周期，非 FFT）· Y：Linear/Log/Symlog（Log 默认 floor≈1nA，decade 刻度）· Lock Y 冻结量程 · Live 滚轮只缩放不暂停 · 暂停后以指针为锚 · 修正参数来自 get_modifiers · 速率以实测为准</div>
+                    <div class="blu-pwr-note-foot">功率 / 电荷 / 能量按设定电压计算 · 分析面板默认可折叠 · 区间：自动/选择/窗口 · Y：Linear/Log/Symlog · 导入 CSV 可离线回放 · 速率以实测为准</div>
 
                     <div class="blu-log-card" id="blu-log-card">
                         <div class="blu-log-title" id="blu-log-toggle" title="悬停展开 · 点击固定/收起">
@@ -1343,6 +1486,7 @@
     <script src="js/firmware-packager.js"></script>
     <script src="js/blu-protocol.js"></script>
     <script src="js/blu-storage.js"></script>
+    <script src="js/blu-analysis.js"></script>
     <script src="js/blu-power.js"></script>
 
 </body>
