@@ -974,7 +974,7 @@
                                     </button>
                                 </div>
                                 <div class="blu-cursor-group">
-                                    <span class="blu-cursor-hint" title="Shift+拖动新建选择 · 拖边界微调 · 滚轮以指针为锚缩放">Shift+拖选 · 滚轮锚点缩放</span>
+                                    <span class="blu-cursor-hint" title="Shift+拖动新建选择 · 拖边界微调 · 暂停后滚轮以指针为锚缩放 · Live 下只改倍率继续滚动">Shift+拖选 · 暂停后锚点缩放</span>
                                     <select id="blu-cursor-snap" class="blu-cursor-mode-select" title="游标边沿吸附（测频用时域边沿，无需 FFT）">
                                         <option value="free">自由</option>
                                         <option value="rise">上升沿</option>
@@ -1131,7 +1131,7 @@
                             </div>
                         </div>
                     </div>
-                    <div class="blu-pwr-note-foot">功率 / 电荷 / 能量按设定电压计算 · 选择：Shift+拖动 · 边沿吸附测频（时域 1/周期，非 FFT）· 滚轮以指针为锚缩放 · 修正参数来自 get_modifiers · 速率以实测为准</div>
+                    <div class="blu-pwr-note-foot">功率 / 电荷 / 能量按设定电压计算 · 选择：Shift+拖动 · 边沿吸附测频（时域 1/周期，非 FFT）· Live 滚轮只缩放不暂停 · 暂停后以指针为锚 · 修正参数来自 get_modifiers · 速率以实测为准</div>
 
                     <div class="blu-log-card" id="blu-log-card">
                         <div class="blu-log-title" id="blu-log-toggle" title="悬停展开 · 点击固定/收起">

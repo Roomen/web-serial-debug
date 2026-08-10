@@ -2860,26 +2860,36 @@
 	}
 
 	function zoomX(factor) {
-		// 工具栏按钮：以视口中心为锚（无指针）
-		const layout = plotLayout
-		if (layout && layout.pw > 1 && ringCount >= 2) {
-			const midPx = layout.margin.left + layout.pw * 0.5
-			zoomXAt(factor, midPx)
+		// Live：只改倍率继续贴最新端；暂停：以视口中心为锚
+		if (!scrollPaused || !plotLayout || plotLayout.pw < 1 || ringCount < 2) {
+			view.xZoom = clampXZoom(view.xZoom * factor)
+			scheduleUIUpdate()
 			return
 		}
-		view.xZoom = clampXZoom(view.xZoom * factor)
-		scheduleUIUpdate()
+		const midPx = plotLayout.margin.left + plotLayout.pw * 0.5
+		zoomXAt(factor, midPx)
 	}
 
 	/**
-	 * X 轴缩放并以画布像素 px 下的数据点为锚（示波器常见行为）。
-	 * Live 滚动时会暂停，否则 getViewRange 强制贴最新端会丢掉锚点。
+	 * X 轴缩放。
+	 * - Live / 继续滚动：只改倍率，不暂停、不跟鼠标（视口右端始终最新）
+	 * - 已暂停：以画布像素 px 下的数据点为锚（跟手缩放）
 	 */
 	function zoomXAt(factor, px) {
+		const prev = view.xZoom
+		view.xZoom = clampXZoom(view.xZoom * factor)
+		if (view.xZoom === prev) {
+			scheduleUIUpdate()
+			return
+		}
+		// 滚动模式下无需锚点：getViewRange 会贴最新端
+		if (!scrollPaused) {
+			scheduleUIUpdate()
+			return
+		}
 		const layout = plotLayout
 		const n = dataCount()
 		if (!layout || layout.pw < 1 || n < 2) {
-			view.xZoom = clampXZoom(view.xZoom * factor)
 			scheduleUIUpdate()
 			return
 		}
@@ -2893,15 +2903,6 @@
 		const liBefore = vr.count <= 1
 			? vr.start
 			: (vr.start + t * (vr.count - 1))
-
-		const prev = view.xZoom
-		view.xZoom = clampXZoom(view.xZoom * factor)
-		if (view.xZoom === prev) {
-			scheduleUIUpdate()
-			return
-		}
-		// 必须退出 Live，锚点才能保留在指针下
-		if (!scrollPaused) setScrollPaused(true)
 		panViewSoLiAtPixel(liBefore, px)
 		scheduleUIUpdate()
 	}
