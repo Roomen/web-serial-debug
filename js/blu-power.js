@@ -1341,6 +1341,7 @@
 		rawStreamCount = 0
 		rawStreamFirstTs = 0
 		resetYScaleHintState()
+		syncYScaleUi() // 无数据时 updateCanvas early return，须直接刷 DOM
 		if (log) bluLog('数据已清空')
 		scheduleUIUpdate()
 	}
@@ -3522,6 +3523,11 @@
 				w / 2, h / 2 + 12
 			)
 			plotLayout = null
+			// early return 不跑 updateYScaleHint：硬清建议并同步 DOM，避免按钮残留
+			if (yScaleHint || yScaleHintCandidate || yScaleHintRatioEma != null) {
+				resetYScaleHintState()
+			}
+			syncYScaleUi()
 			drawMinimapStrip()
 			return
 		}
@@ -3532,6 +3538,10 @@
 			ctx.textAlign = 'center'
 			ctx.fillText('等待采样数据…（仅电流波形）', w / 2, h / 2)
 			plotLayout = null
+			if (yScaleHint || yScaleHintCandidate || yScaleHintRatioEma != null) {
+				resetYScaleHintState()
+			}
+			syncYScaleUi()
 			drawMinimapStrip()
 			return
 		}
