@@ -29,7 +29,9 @@
 	const LOG_FLOOR_MAX_UA = 1 // 1 µA 上限，避免 floor 跟到线性区
 	const SYMLOG_LINTHRESH_DEFAULT_UA = 1 // 1 µA：近 0 近似线性
 	const LOG_SUGGEST_RATIO = 100 // 窗口 max/min+ 超过此值 → 建议 Log
+	const LOG_SUGGEST_EXIT = 50 // 建议 Log 退出阈值（滞回，防闪）
 	const LOG_LINEAR_HINT_RATIO = 10 // Log 下动态范围过小 → 建议线性
+	const LOG_LINEAR_HINT_EXIT = 25 // 建议线性退出阈值（滞回）
 	// 预热：丢掉上电/切档瞬态。原先 targetHz*2s 在 100k 下约 2s 才见波形，过长；
 	// 改为约 0.25s 输出点（与 Python「约 2s@200Hz」同量级的短瞬态，但不再拖数秒）
 	const WARMUP_SEC = 0.25
@@ -756,8 +758,10 @@
 
 	function bucketMinMaxGlobal(lo, hi) {
 		// 全局逻辑下标闭区间 [lo, hi]
+		// minPos：桶内最小正电流（供 Log floor / 建议 Log；与包络 min 分离，负/零不污染）
 		let mn = Infinity
 		let mx = -Infinity
+		let minPos = Infinity
 		let first = 0
 		let last = 0
 		let got = false
@@ -777,6 +781,8 @@
 					last = l
 					if (ch.minI < mn) mn = ch.minI
 					if (ch.maxI > mx) mx = ch.maxI
+					// 整块无逐点：仅当 minI>0 可知 minPos；minI≤0 时无法从块级统计推断
+					if (ch.minI > 0 && ch.minI < minPos) minPos = ch.minI
 				} else {
 					const buf = getChunkBuf(ch)
 					if (buf) {
@@ -787,6 +793,7 @@
 							last = v
 							if (v < mn) mn = v
 							if (v > mx) mx = v
+							if (v > 0 && v < minPos) minPos = v
 						}
 					} else {
 						// 冷块未回读：包络用块级 min/max；部分区间端点用中点，避免整块 first/last 造成假跳变
@@ -798,6 +805,7 @@
 						last = mid
 						if (ch.minI < mn) mn = ch.minI
 						if (ch.maxI > mx) mx = ch.maxI
+						if (ch.minI > 0 && ch.minI < minPos) minPos = ch.minI
 					}
 				}
 			}
@@ -805,9 +813,12 @@
 			if (base > hi) break
 		}
 		if (!got || !isFinite(mn) || !isFinite(mx)) {
-			return { min: 0, max: 0, first: 0, last: 0, loAbs: lo, hiAbs: hi }
+			return { min: 0, max: 0, first: 0, last: 0, minPos: Infinity, loAbs: lo, hiAbs: hi }
 		}
-		return { min: mn, max: mx, first: first, last: last, loAbs: lo, hiAbs: hi }
+		return {
+			min: mn, max: mx, first: first, last: last,
+			minPos: minPos, loAbs: lo, hiAbs: hi,
+		}
 	}
 
 	// 绘制用 min/max 分桶（PPK dataAccumulator：每像素 min/max 包络）
@@ -1433,6 +1444,7 @@
 		yAxisLocked = false
 		lockSnapFloorUA = null
 		lockSnapLinthreshUA = null
+		yScaleHint = ''
 		yScaleUiKey = ''
 		if (next === 'symlog') symlogLinthreshUA = SYMLOG_LINTHRESH_DEFAULT_UA
 		if (next === 'log') logFloorUA = LOG_FLOOR_DEFAULT_UA
@@ -1446,21 +1458,46 @@
 	let lockSnapLinthreshUA = null
 	let yScaleUiKey = ''
 
+	/** 把当前可见 Y 映射域（含 zoom/pan）烘焙进 auto disp，并清零 zoom/pan */
+	function bakeVisibleYRangeToLock() {
+		let mapMin = null
+		let mapMax = null
+		if (plotLayout && isFinite(plotLayout.yMin) && isFinite(plotLayout.yMax)) {
+			mapMin = plotLayout.yMin
+			mapMax = plotLayout.yMax
+		} else if (yAutoDispMin != null && yAutoDispMax != null) {
+			mapMin = yAutoDispMin
+			mapMax = yAutoDispMax
+			if (view.yZoom !== 1) {
+				const mid = (mapMin + mapMax) / 2
+				const half = (mapMax - mapMin) / 2 / view.yZoom
+				mapMin = mid - half
+				mapMax = mid + half
+			}
+			if (view.yPanOffset) {
+				mapMin += view.yPanOffset
+				mapMax += view.yPanOffset
+			}
+		}
+		if (mapMin == null || mapMax == null || !(mapMax > mapMin)) return false
+		yAutoTargetMin = mapMin
+		yAutoTargetMax = mapMax
+		yAutoDispMin = mapMin
+		yAutoDispMax = mapMax
+		view.yZoom = 1
+		view.yPanOffset = 0
+		return true
+	}
+
 	function setYAxisLocked(on) {
 		const next = !!on
 		if (next && !yAxisLocked) {
-			// 快照当前映射参数；若已有显示范围则冻结为 target/disp
-			lockSnapFloorUA = logFloorUA
-			lockSnapLinthreshUA = symlogLinthreshUA
-			if (plotLayout && isFinite(plotLayout.yMin) && isFinite(plotLayout.yMax)) {
-				// 把当前可见映射域（含 zoom/pan）烘焙为锁定基座
-				yAutoTargetMin = plotLayout.yMin
-				yAutoTargetMax = plotLayout.yMax
-				yAutoDispMin = plotLayout.yMin
-				yAutoDispMax = plotLayout.yMax
-				view.yZoom = 1
-				view.yPanOffset = 0
-			}
+			// 快照映射参数 + 尽量烘焙当前可见范围（无 plotLayout 时退回 yAutoDisp*）
+			lockSnapFloorUA = logFloorUA > 0 ? logFloorUA : LOG_FLOOR_DEFAULT_UA
+			lockSnapLinthreshUA = symlogLinthreshUA > 0
+				? symlogLinthreshUA
+				: SYMLOG_LINTHRESH_DEFAULT_UA
+			bakeVisibleYRangeToLock()
 		}
 		if (!next) {
 			lockSnapFloorUA = null
@@ -1468,6 +1505,7 @@
 			// 解锁：保留当前 yAutoDisp* 作起点，下一帧继续跟
 		}
 		yAxisLocked = next
+		yScaleUiKey = ''
 		syncYScaleUi()
 		scheduleUIUpdate()
 	}
@@ -2443,7 +2481,7 @@
 
 	/**
 	 * Symlog 自动量程（映射域）。
-	 * Lock 时不改 linthresh，避免 asinh 单位与冻结 map 域不一致。
+	 * Lock 时不改 linthresh；未锁时 linthresh 带滞回，避免 Live 边界抖。
 	 */
 	function computeSymlogAutoMapRange(yMinRaw, yMaxRaw) {
 		let th
@@ -2451,10 +2489,18 @@
 			th = lockSnapLinthreshUA
 			symlogLinthreshUA = th
 		} else {
-			// linthresh：默认 1 µA；若数据全在很小范围可略收
-			th = SYMLOG_LINTHRESH_DEFAULT_UA
 			const span = Math.max(Math.abs(yMinRaw), Math.abs(yMaxRaw), 1e-9)
-			if (span < th * 0.2) th = Math.max(LOG_FLOOR_DEFAULT_UA, niceNumber(span / 2))
+			const cur = symlogLinthreshUA > 0 ? symlogLinthreshUA : SYMLOG_LINTHRESH_DEFAULT_UA
+			// 默认 1 µA；全窗口很小时才收紧；span 明显变大再抬回默认
+			if (span < SYMLOG_LINTHRESH_DEFAULT_UA * 0.2) {
+				const proposed = Math.max(LOG_FLOOR_DEFAULT_UA, niceNumber(span / 2))
+				if (proposed < cur * 0.5) th = proposed
+				else th = cur
+			} else if (span > cur * 4 && cur < SYMLOG_LINTHRESH_DEFAULT_UA) {
+				th = SYMLOG_LINTHRESH_DEFAULT_UA
+			} else {
+				th = cur
+			}
 			symlogLinthreshUA = th
 		}
 		let lo = isFinite(yMinRaw) ? yMinRaw : -th
@@ -2527,6 +2573,9 @@
 		return { mapMin: yAutoDispMin, mapMax: yAutoDispMax }
 	}
 
+	/**
+	 * 建议 Log / 建议线性：进入阈值 + 退出阈值滞回，避免 Live 在阈值附近闪提示。
+	 */
 	function updateYScaleHint(yMin, yMax, minPositive) {
 		const pos = (minPositive > 0 && isFinite(minPositive)) ? minPositive : null
 		const hi = isFinite(yMax) ? Math.abs(yMax) : 0
@@ -2536,9 +2585,27 @@
 			return
 		}
 		const ratio = hi / lo
-		if (yScaleMode === 'linear' && ratio >= LOG_SUGGEST_RATIO) yScaleHint = 'log'
-		else if (isLogLikeY() && ratio > 0 && ratio < LOG_LINEAR_HINT_RATIO) yScaleHint = 'linear'
-		else yScaleHint = ''
+		if (yScaleMode === 'linear') {
+			if (yScaleHint === 'log') {
+				// 已显示「建议 Log」：仅当动态范围明显收窄才关掉
+				if (ratio < LOG_SUGGEST_EXIT) yScaleHint = ''
+			} else if (ratio >= LOG_SUGGEST_RATIO) {
+				yScaleHint = 'log'
+			} else {
+				yScaleHint = ''
+			}
+		} else if (isLogLikeY()) {
+			if (yScaleHint === 'linear') {
+				// 已显示「建议线性」：仅当动态范围明显变大才关掉
+				if (ratio > LOG_LINEAR_HINT_EXIT) yScaleHint = ''
+			} else if (ratio > 0 && ratio < LOG_LINEAR_HINT_RATIO) {
+				yScaleHint = 'linear'
+			} else {
+				yScaleHint = ''
+			}
+		} else {
+			yScaleHint = ''
+		}
 	}
 
 	function updateCanvas() {
@@ -2627,8 +2694,12 @@
 				if (!entry) continue
 				if (entry.min < yMin) yMin = entry.min
 				if (entry.max > yMax) yMax = entry.max
-				// 桶 min 若为正则参与 minPositive（包络线性聚合，保持 PPK 语义）
-				if (entry.min > 0 && entry.min < minPositive) minPositive = entry.min
+				// 优先桶内精确 minPos；回退到 min>0（整块无逐点时 minPos 可能未知）
+				if (entry.minPos > 0 && isFinite(entry.minPos) && entry.minPos < minPositive) {
+					minPositive = entry.minPos
+				} else if (entry.min > 0 && entry.min < minPositive) {
+					minPositive = entry.min
+				}
 				cols.push({ x: (entry.loAbs + entry.hiAbs) / 2 - ringBase, entry: entry })
 			}
 		}
