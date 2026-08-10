@@ -4304,6 +4304,52 @@ body.blu-wave-fullscreen-open {
   font-family: var(--font-mono);
 }
 
+.blu-y-scale-group {
+  gap: 4px;
+}
+
+.blu-y-scale-select {
+  min-width: 78px;
+  max-width: 96px;
+  height: 28px;
+  padding: 0 4px;
+  font-size: 0.72rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+#blu-y-lock.active {
+  color: var(--accent, #3b82f6);
+  border-color: var(--accent, #3b82f6);
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.blu-y-scale-hint {
+  appearance: none;
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.blu-y-scale-hint:hover {
+  background: rgba(245, 158, 11, 0.22);
+}
+
+.blu-y-scale-hint[hidden] {
+  display: none !important;
+}
+
 .blu-cursor-group {
   display: flex;
   align-items: center;

@@ -961,9 +961,17 @@
                                     <button class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-icon-btn" id="blu-zoom-y-out" title="Y 轴缩小">&minus;</button>
                                     <button class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-icon-btn" id="blu-zoom-y-reset" title="Y 轴复位"><i class="bi bi-arrow-repeat"></i></button>
                                 </div>
-                                <div class="form-check form-check-inline m-0">
-                                    <input class="form-check-input" type="checkbox" id="blu-y-log">
-                                    <label class="form-check-label" for="blu-y-log" title="对数 Y 轴（nA–A 跨度）">Log Y</label>
+                                <div class="blu-zoom-group blu-y-scale-group">
+                                    <span class="blu-zoom-label">Y轴</span>
+                                    <select id="blu-y-scale" class="blu-y-scale-select" title="Y 轴刻度：Linear 线性 · Log 真对数 · Symlog 近零线性/大电流压缩">
+                                        <option value="linear">Linear</option>
+                                        <option value="log">Log</option>
+                                        <option value="symlog">Symlog</option>
+                                    </select>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-y-lock" title="锁定当前 Y 范围（Live 不再自动跟）" aria-pressed="false">
+                                        <i class="bi bi-lock"></i>
+                                    </button>
+                                    <button type="button" class="blu-y-scale-hint" id="blu-y-scale-hint" hidden title="">建议 Log</button>
                                 </div>
                                 <div class="blu-zoom-group">
                                     <button class="btn btn-sm btn-outline-secondary" id="blu-pause-scroll" title="暂停波形滚动（数据仍在采集）">
@@ -1118,7 +1126,7 @@
                             </div>
                         </div>
                     </div>
-                    <div class="blu-pwr-note-foot">功率 / 电荷 / 能量按设定电压计算 · 选择：Shift+拖动 · 边沿吸附测频（时域 1/周期，非 FFT）· Live 滚轮只缩放不暂停 · 暂停后以指针为锚 · 修正参数来自 get_modifiers · 速率以实测为准</div>
+                    <div class="blu-pwr-note-foot">功率 / 电荷 / 能量按设定电压计算 · 选择：Shift+拖动 · 边沿吸附测频（时域 1/周期，非 FFT）· Y：Linear/Log/Symlog（Log 默认 floor≈1nA，decade 刻度）· Lock Y 冻结量程 · Live 滚轮只缩放不暂停 · 暂停后以指针为锚 · 修正参数来自 get_modifiers · 速率以实测为准</div>
 
                     <div class="blu-log-card" id="blu-log-card">
                         <div class="blu-log-title" id="blu-log-toggle" title="悬停展开 · 点击固定/收起">

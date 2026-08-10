@@ -23,7 +23,15 @@
 	const Y_AXIS_HIT_PAD_PX = 6
 	const DRAG_THRESHOLD_PX = 4
 	const PERIOD_LOCK_SEC = 10
-	const LOG_FLOOR_UA = 0.2 // PPK log 友好下限 0.2 µA
+	// Log Y：默认 floor 1 nA（优于 PPK 固定 ~200 nA，睡眠电流可分辨）
+	const LOG_FLOOR_DEFAULT_UA = 1e-3 // 1 nA
+	const LOG_FLOOR_MIN_UA = 1e-4 // 0.1 nA
+	const LOG_FLOOR_MAX_UA = 1 // 1 µA 上限，避免 floor 跟到线性区
+	const SYMLOG_LINTHRESH_DEFAULT_UA = 1 // 1 µA：近 0 近似线性
+	const LOG_SUGGEST_RATIO = 100 // 窗口 max/min+ 超过此值 → 建议 Log
+	const LOG_SUGGEST_EXIT = 50 // 建议 Log 退出阈值（滞回，防闪）
+	const LOG_LINEAR_HINT_RATIO = 10 // Log 下动态范围过小 → 建议线性
+	const LOG_LINEAR_HINT_EXIT = 25 // 建议线性退出阈值（滞回）
 	// 预热：丢掉上电/切档瞬态。原先 targetHz*2s 在 100k 下约 2s 才见波形，过长；
 	// 改为约 0.25s 输出点（与 Python「约 2s@200Hz」同量级的短瞬态，但不再拖数秒）
 	const WARMUP_SEC = 0.25
@@ -104,7 +112,12 @@
 	let lastPointTMs = 0
 	let warmupLeft = 0
 	let recordMode = 'wave' // 'wave' | 'long'
-	let yAxisLog = false
+	// Y 刻度：'linear' | 'log' | 'symlog'（Symlog 为 asinh，近 0 可读、容忍负噪声）
+	let yScaleMode = 'linear'
+	let logFloorUA = LOG_FLOOR_DEFAULT_UA
+	let symlogLinthreshUA = SYMLOG_LINTHRESH_DEFAULT_UA
+	let yAxisLocked = false // Lock Y：冻结自动量程，Live 不再跟
+	let yScaleHint = '' // '' | 'log' | 'linear' — 工具条轻提示，不自动硬切
 	let liveMode = true // PPK Live：视口贴着最新数据
 
 	// 原始流统计
@@ -745,8 +758,10 @@
 
 	function bucketMinMaxGlobal(lo, hi) {
 		// 全局逻辑下标闭区间 [lo, hi]
+		// minPos：桶内最小正电流（供 Log floor / 建议 Log；与包络 min 分离，负/零不污染）
 		let mn = Infinity
 		let mx = -Infinity
+		let minPos = Infinity
 		let first = 0
 		let last = 0
 		let got = false
@@ -766,6 +781,8 @@
 					last = l
 					if (ch.minI < mn) mn = ch.minI
 					if (ch.maxI > mx) mx = ch.maxI
+					// 整块无逐点：仅当 minI>0 可知 minPos；minI≤0 时无法从块级统计推断
+					if (ch.minI > 0 && ch.minI < minPos) minPos = ch.minI
 				} else {
 					const buf = getChunkBuf(ch)
 					if (buf) {
@@ -776,6 +793,7 @@
 							last = v
 							if (v < mn) mn = v
 							if (v > mx) mx = v
+							if (v > 0 && v < minPos) minPos = v
 						}
 					} else {
 						// 冷块未回读：包络用块级 min/max；部分区间端点用中点，避免整块 first/last 造成假跳变
@@ -787,6 +805,7 @@
 						last = mid
 						if (ch.minI < mn) mn = ch.minI
 						if (ch.maxI > mx) mx = ch.maxI
+						if (ch.minI > 0 && ch.minI < minPos) minPos = ch.minI
 					}
 				}
 			}
@@ -794,9 +813,12 @@
 			if (base > hi) break
 		}
 		if (!got || !isFinite(mn) || !isFinite(mx)) {
-			return { min: 0, max: 0, first: 0, last: 0, loAbs: lo, hiAbs: hi }
+			return { min: 0, max: 0, first: 0, last: 0, minPos: Infinity, loAbs: lo, hiAbs: hi }
 		}
-		return { min: mn, max: mx, first: first, last: last, loAbs: lo, hiAbs: hi }
+		return {
+			min: mn, max: mx, first: first, last: last,
+			minPos: minPos, loAbs: lo, hiAbs: hi,
+		}
 	}
 
 	// 绘制用 min/max 分桶（PPK dataAccumulator：每像素 min/max 包络）
@@ -993,12 +1015,35 @@
 	}
 
 	function fmtCurrent(ua) {
+		if (!isFinite(ua)) return '--'
 		const a = Math.abs(ua)
 		if (a >= 1e6) return (ua / 1e6).toFixed(3) + ' A'
 		if (a >= 1e3) return (ua / 1e3).toFixed(3) + ' mA'
 		if (a >= 1) return ua.toFixed(2) + ' µA'
 		if (a >= 1e-3) return (ua * 1e3).toFixed(2) + ' nA'
-		return ua.toFixed(2) + ' µA'
+		if (a > 0) return (ua * 1e3).toFixed(3) + ' nA'
+		return '0'
+	}
+
+	/** 刻度标签：1/2/5×10ⁿ 风格，自动 nA/µA/mA/A（无空格，省左侧宽度） */
+	function fmtCurrentTick(ua) {
+		if (!isFinite(ua)) return ''
+		if (ua === 0) return '0'
+		const sign = ua < 0 ? '-' : ''
+		const a = Math.abs(ua)
+		let unit, scaled
+		if (a >= 1e6) { unit = 'A'; scaled = a / 1e6 }
+		else if (a >= 1e3) { unit = 'mA'; scaled = a / 1e3 }
+		else if (a >= 1) { unit = 'µA'; scaled = a }
+		else { unit = 'nA'; scaled = a * 1e3 }
+		let text
+		if (scaled >= 100) text = scaled.toFixed(0)
+		else if (scaled >= 10) text = (Math.abs(scaled - Math.round(scaled)) < 0.05)
+			? String(Math.round(scaled)) : scaled.toFixed(1)
+		else if (scaled >= 1) text = (Math.abs(scaled - Math.round(scaled)) < 0.05)
+			? String(Math.round(scaled)) : scaled.toFixed(1)
+		else text = scaled.toPrecision(2)
+		return sign + text + unit
 	}
 
 	function fmtPower(uw) {
@@ -1381,12 +1426,133 @@
 		scheduleUIUpdate()
 	}
 
-	function setYAxisLog(on) {
-		yAxisLog = !!on
-		const el = E('blu-y-log')
-		if (el) el.checked = yAxisLog
+	function isLogLikeY() {
+		return yScaleMode === 'log' || yScaleMode === 'symlog'
+	}
+
+	function setYScaleMode(mode) {
+		const next = (mode === 'log' || mode === 'symlog') ? mode : 'linear'
+		if (next === yScaleMode) {
+			syncYScaleUi()
+			return
+		}
+		yScaleMode = next
+		// 切换刻度时清空自动量程与平移/缩放，避免炸轴
+		view.yZoom = 1
+		view.yPanOffset = 0
+		view.yMode = 'auto'
+		yAxisLocked = false
+		lockSnapFloorUA = null
+		lockSnapLinthreshUA = null
+		yScaleHint = ''
+		yScaleUiKey = ''
+		if (next === 'symlog') symlogLinthreshUA = SYMLOG_LINTHRESH_DEFAULT_UA
+		if (next === 'log') logFloorUA = LOG_FLOOR_DEFAULT_UA
 		resetYAuto()
+		syncYScaleUi()
 		scheduleUIUpdate()
+	}
+
+	// Lock 时一并冻结的映射参数（避免 span 锁住但 floor/linthresh 仍变 → 曲线漂移）
+	let lockSnapFloorUA = null
+	let lockSnapLinthreshUA = null
+	let yScaleUiKey = ''
+
+	/** 把当前可见 Y 映射域（含 zoom/pan）烘焙进 auto disp，并清零 zoom/pan */
+	function bakeVisibleYRangeToLock() {
+		let mapMin = null
+		let mapMax = null
+		if (plotLayout && isFinite(plotLayout.yMin) && isFinite(plotLayout.yMax)) {
+			mapMin = plotLayout.yMin
+			mapMax = plotLayout.yMax
+		} else if (yAutoDispMin != null && yAutoDispMax != null) {
+			mapMin = yAutoDispMin
+			mapMax = yAutoDispMax
+			if (view.yZoom !== 1) {
+				const mid = (mapMin + mapMax) / 2
+				const half = (mapMax - mapMin) / 2 / view.yZoom
+				mapMin = mid - half
+				mapMax = mid + half
+			}
+			if (view.yPanOffset) {
+				mapMin += view.yPanOffset
+				mapMax += view.yPanOffset
+			}
+		}
+		if (mapMin == null || mapMax == null || !(mapMax > mapMin)) return false
+		yAutoTargetMin = mapMin
+		yAutoTargetMax = mapMax
+		yAutoDispMin = mapMin
+		yAutoDispMax = mapMax
+		view.yZoom = 1
+		view.yPanOffset = 0
+		return true
+	}
+
+	function setYAxisLocked(on) {
+		const next = !!on
+		if (next && !yAxisLocked) {
+			// 快照映射参数 + 尽量烘焙当前可见范围（无 plotLayout 时退回 yAutoDisp*）
+			lockSnapFloorUA = logFloorUA > 0 ? logFloorUA : LOG_FLOOR_DEFAULT_UA
+			lockSnapLinthreshUA = symlogLinthreshUA > 0
+				? symlogLinthreshUA
+				: SYMLOG_LINTHRESH_DEFAULT_UA
+			bakeVisibleYRangeToLock()
+		}
+		if (!next) {
+			lockSnapFloorUA = null
+			lockSnapLinthreshUA = null
+			// 解锁：保留当前 yAutoDisp* 作起点，下一帧继续跟
+		}
+		yAxisLocked = next
+		yScaleUiKey = ''
+		syncYScaleUi()
+		scheduleUIUpdate()
+	}
+
+	function syncYScaleUi() {
+		// 脏检查：Live 每帧 paint 时避免无意义 DOM 写
+		const key = yScaleMode + '|' + (yAxisLocked ? '1' : '0') + '|' + yScaleHint
+		if (key === yScaleUiKey) return
+		yScaleUiKey = key
+		const sel = E('blu-y-scale')
+		if (sel && sel.value !== yScaleMode) sel.value = yScaleMode
+		// 兼容旧 checkbox（若仍存在）
+		const legacy = E('blu-y-log')
+		if (legacy) legacy.checked = yScaleMode === 'log'
+		const lockBtn = E('blu-y-lock')
+		if (lockBtn) {
+			lockBtn.classList.toggle('active', yAxisLocked)
+			lockBtn.setAttribute('aria-pressed', yAxisLocked ? 'true' : 'false')
+			lockBtn.title = yAxisLocked
+				? 'Y 轴已锁定（Live 不再自动跟范围）· 点击解锁'
+				: '锁定当前 Y 范围（Live 不再自动跟）'
+			const icon = lockBtn.querySelector('i')
+			if (icon) icon.className = yAxisLocked ? 'bi bi-lock-fill' : 'bi bi-lock'
+		}
+		const hint = E('blu-y-scale-hint')
+		if (hint) {
+			if (yScaleHint === 'log' && yScaleMode === 'linear') {
+				hint.hidden = false
+				hint.textContent = '建议 Log'
+				hint.title = '窗口动态范围大，对数 Y 更易看清 nA 睡眠与 mA 脉冲'
+				hint.dataset.action = 'log'
+			} else if (yScaleHint === 'linear' && isLogLikeY()) {
+				hint.hidden = false
+				hint.textContent = '建议线性'
+				hint.title = '窗口动态范围较小，线性 Y 通常更易读'
+				hint.dataset.action = 'linear'
+			} else {
+				hint.hidden = true
+				hint.textContent = ''
+				hint.dataset.action = ''
+			}
+		}
+	}
+
+	/** @deprecated 兼容旧调用；请用 setYScaleMode */
+	function setYAxisLog(on) {
+		setYScaleMode(on ? 'log' : 'linear')
 	}
 
 	async function requestWakeLock() {
@@ -2137,12 +2303,309 @@
 		return nf * Math.pow(10, exp)
 	}
 
+	function asinh(x) {
+		// 稳定 asinh：大负值用 |x| 路径，避免 x+sqrt(x²+1) 相消
+		if (typeof Math.asinh === 'function') return Math.asinh(x)
+		const ax = Math.abs(x)
+		if (ax === 0) return 0
+		if (ax > 1e8) return (x < 0 ? -1 : 1) * (Math.log(ax) + Math.LN2)
+		const a = Math.log(ax + Math.sqrt(ax * ax + 1))
+		return x < 0 ? -a : a
+	}
+
+	function sinh(x) {
+		const e = Math.exp(x)
+		return (e - 1 / e) / 2
+	}
+
+	/**
+	 * 按窗口 minPositive 自适应 log floor（µA），钳在 [MIN, MAX]。
+	 * 策略：floor ≈ 10^floor(log10(min+ * 0.5))，默认 1 nA。
+	 * Lock 时返回快照，不随窗口抖动。
+	 */
+	function adaptLogFloor(minPositive) {
+		if (yAxisLocked && lockSnapFloorUA != null) return lockSnapFloorUA
+		if (!(minPositive > 0) || !isFinite(minPositive)) {
+			return logFloorUA > 0 ? logFloorUA : LOG_FLOOR_DEFAULT_UA
+		}
+		// 略低于窗口最小正值，便于谷底不贴轴
+		let f = minPositive * 0.5
+		if (f < LOG_FLOOR_MIN_UA) f = LOG_FLOOR_MIN_UA
+		if (f > LOG_FLOOR_MAX_UA) f = LOG_FLOOR_MAX_UA
+		// 贴到 1×10ⁿ
+		const exp = Math.floor(Math.log10(f))
+		f = Math.pow(10, exp)
+		if (f < LOG_FLOOR_MIN_UA) f = LOG_FLOOR_MIN_UA
+		if (f > LOG_FLOOR_MAX_UA) f = LOG_FLOOR_MAX_UA
+		// 轻度滞回：抬高 floor 需 min+ 明显更高，避免 Live 噪声台阶跳
+		const cur = logFloorUA > 0 ? logFloorUA : LOG_FLOOR_DEFAULT_UA
+		if (f > cur && minPositive < cur * 8) return cur
+		return f
+	}
+
+	/** Pure log：y = log10(max(floor, v))；负/零 clamp 到 floor（不污染线性统计） */
 	function logMap(v) {
-		return Math.log10(Math.max(LOG_FLOOR_UA, v))
+		const floor = logFloorUA > 0 ? logFloorUA : LOG_FLOOR_DEFAULT_UA
+		if (!isFinite(v) || v <= floor) return Math.log10(floor)
+		return Math.log10(v)
 	}
 
 	function logUnmap(lv) {
+		if (!isFinite(lv)) return logFloorUA
 		return Math.pow(10, lv)
+	}
+
+	/** Symlog（asinh）：近 0 近似线性、大电流压缩、容忍少量负噪声 */
+	function symlogMap(v) {
+		const th = symlogLinthreshUA > 0 ? symlogLinthreshUA : SYMLOG_LINTHRESH_DEFAULT_UA
+		if (!isFinite(v)) return 0
+		return asinh(v / th)
+	}
+
+	function symlogUnmap(mv) {
+		const th = symlogLinthreshUA > 0 ? symlogLinthreshUA : SYMLOG_LINTHRESH_DEFAULT_UA
+		if (!isFinite(mv)) return 0
+		return th * sinh(mv)
+	}
+
+	function mapYValue(v) {
+		if (yScaleMode === 'log') return logMap(v)
+		if (yScaleMode === 'symlog') return symlogMap(v)
+		return v
+	}
+
+	function unmapYValue(mv) {
+		if (yScaleMode === 'log') return logUnmap(mv)
+		if (yScaleMode === 'symlog') return symlogUnmap(mv)
+		return mv
+	}
+
+	/**
+	 * 在线性值空间生成 decade 主刻度 + 2/5（及 3–9 淡线）次刻度，再由调用方 map→像素。
+	 * @returns {{ major: number[], minor: number[], faint: number[] }}
+	 */
+	function buildLogTicks(linMin, linMax, floor) {
+		const lo = Math.max(floor > 0 ? floor : LOG_FLOOR_DEFAULT_UA, Math.min(linMin, linMax))
+		const hi = Math.max(lo * 1.0001, Math.max(linMin, linMax))
+		const exp0 = Math.floor(Math.log10(lo))
+		const exp1 = Math.ceil(Math.log10(hi))
+		const major = []
+		const minor = [] // 2、5
+		const faint = [] // 3,4,6,7,8,9
+		for (let e = exp0; e <= exp1; e++) {
+			const base = Math.pow(10, e)
+			if (base >= lo * 0.999 && base <= hi * 1.001) major.push(base)
+			for (let m = 2; m <= 9; m++) {
+				const v = m * base
+				if (v < lo * 0.999 || v > hi * 1.001) continue
+				if (m === 2 || m === 5) minor.push(v)
+				else faint.push(v)
+			}
+		}
+		return { major: major, minor: minor, faint: faint }
+	}
+
+	/**
+	 * Symlog 刻度：0 附近线性步长 + 外侧 decade。
+	 */
+	function buildSymlogTicks(linMin, linMax, linthresh) {
+		const th = linthresh > 0 ? linthresh : SYMLOG_LINTHRESH_DEFAULT_UA
+		const lo = Math.min(linMin, linMax)
+		const hi = Math.max(linMin, linMax)
+		const major = []
+		const minor = []
+		const faint = []
+		// 线性区：±th 内用 nice 步长
+		const linLo = Math.max(lo, -th)
+		const linHi = Math.min(hi, th)
+		if (linHi > linLo) {
+			const step = niceNumber((linHi - linLo) / 4) || th / 2
+			const g0 = Math.floor(linLo / step) * step
+			for (let v = g0; v <= linHi + step * 0.01; v += step) {
+				if (v >= lo - step * 0.01 && v <= hi + step * 0.01) {
+					if (Math.abs(v) < step * 1e-9) major.push(0)
+					else major.push(v)
+				}
+			}
+		}
+		// 外侧正负 decade（|v| > th）
+		function outer(sign) {
+			const a0 = Math.max(th, sign > 0 ? Math.max(th, lo) : Math.max(th, -hi))
+			const a1 = sign > 0 ? Math.max(a0, hi) : Math.max(a0, -lo)
+			if (!(a1 > th * 0.5)) return
+			const ticks = buildLogTicks(Math.max(th, a0), a1, th)
+			for (let i = 0; i < ticks.major.length; i++) major.push(sign * ticks.major[i])
+			for (let i = 0; i < ticks.minor.length; i++) minor.push(sign * ticks.minor[i])
+			for (let i = 0; i < ticks.faint.length; i++) faint.push(sign * ticks.faint[i])
+		}
+		if (hi > th) outer(1)
+		if (lo < -th) outer(-1)
+		// 去重并排序
+		function uniq(arr) {
+			arr.sort(function (a, b) { return a - b })
+			const out = []
+			for (let i = 0; i < arr.length; i++) {
+				if (!out.length || Math.abs(arr[i] - out[out.length - 1]) > 1e-15 * Math.max(1, Math.abs(arr[i]))) {
+					out.push(arr[i])
+				}
+			}
+			return out
+		}
+		return { major: uniq(major), minor: uniq(minor), faint: uniq(faint) }
+	}
+
+	/**
+	 * Log 自动量程：decade snap + 半 decade 边距；返回映射域 [mapMin, mapMax]。
+	 */
+	function computeLogAutoMapRange(yMinRaw, yMaxRaw, minPositive) {
+		logFloorUA = adaptLogFloor(minPositive)
+		const floor = logFloorUA
+		let loLin = (minPositive > 0 && isFinite(minPositive)) ? minPositive : floor
+		let hiLin = isFinite(yMaxRaw) ? yMaxRaw : floor * 10
+		if (!(hiLin > 0) || !isFinite(hiLin)) hiLin = floor * 10
+		loLin = Math.max(floor, loLin)
+		hiLin = Math.max(hiLin, loLin * 1.01)
+		// decade snap：下取 floor decade，上取 ceil decade；半 decade 边距
+		let mapMin = Math.floor(Math.log10(loLin))
+		let mapMax = Math.ceil(Math.log10(hiLin))
+		// 至少 1 decade，避免贴死
+		if (mapMax - mapMin < 1) mapMax = mapMin + 1
+		// 数据贴近边界时加半 decade 边距
+		const loM = Math.log10(loLin)
+		const hiM = Math.log10(hiLin)
+		if (loM - mapMin < 0.15) mapMin -= 0.5
+		if (mapMax - hiM < 0.15) mapMax += 0.5
+		if (mapMax <= mapMin) mapMax = mapMin + 1
+		return { mapMin: mapMin, mapMax: mapMax, floor: floor }
+	}
+
+	/**
+	 * Symlog 自动量程（映射域）。
+	 * Lock 时不改 linthresh；未锁时 linthresh 带滞回，避免 Live 边界抖。
+	 */
+	function computeSymlogAutoMapRange(yMinRaw, yMaxRaw) {
+		let th
+		if (yAxisLocked && lockSnapLinthreshUA != null) {
+			th = lockSnapLinthreshUA
+			symlogLinthreshUA = th
+		} else {
+			const span = Math.max(Math.abs(yMinRaw), Math.abs(yMaxRaw), 1e-9)
+			const cur = symlogLinthreshUA > 0 ? symlogLinthreshUA : SYMLOG_LINTHRESH_DEFAULT_UA
+			// 默认 1 µA；全窗口很小时才收紧；span 明显变大再抬回默认
+			if (span < SYMLOG_LINTHRESH_DEFAULT_UA * 0.2) {
+				const proposed = Math.max(LOG_FLOOR_DEFAULT_UA, niceNumber(span / 2))
+				if (proposed < cur * 0.5) th = proposed
+				else th = cur
+			} else if (span > cur * 4 && cur < SYMLOG_LINTHRESH_DEFAULT_UA) {
+				th = SYMLOG_LINTHRESH_DEFAULT_UA
+			} else {
+				th = cur
+			}
+			symlogLinthreshUA = th
+		}
+		let lo = isFinite(yMinRaw) ? yMinRaw : -th
+		let hi = isFinite(yMaxRaw) ? yMaxRaw : th
+		if (hi < lo) { const t = lo; lo = hi; hi = t }
+		// 边距 8%
+		const pad = (hi - lo) * 0.08 || th * 0.2
+		lo -= pad
+		hi += pad
+		// 保证跨过一点线性区
+		if (hi - lo < th * 0.5) {
+			const mid = (hi + lo) / 2
+			lo = mid - th * 0.25
+			hi = mid + th * 0.25
+		}
+		return { mapMin: symlogMap(lo), mapMax: symlogMap(hi), linthresh: th }
+	}
+
+	/**
+	 * Live 自动量程滞回：越界立即扩、显著偏小才缩（防脉冲狂跳）。
+	 * expand: target+disp 同步外扩（立即看得见）；shrink: 仅 target 收，disp 缓跟。
+	 * Lock: 完全冻结 target/disp 与映射参数（floor/linthresh 另有快照）。
+	 */
+	function applyYAutoHysteresis(qMin, qMax, opts) {
+		opts = opts || {}
+		const expandPad = opts.expandPad != null ? opts.expandPad : 0
+		const shrinkRatio = opts.shrinkRatio != null ? opts.shrinkRatio : 0.55
+		if (yAxisLocked) {
+			if (yAutoTargetMin == null) {
+				yAutoTargetMin = qMin
+				yAutoTargetMax = qMax
+			}
+			if (yAutoDispMin == null) {
+				yAutoDispMin = yAutoTargetMin
+				yAutoDispMax = yAutoTargetMax
+			}
+			return { mapMin: yAutoDispMin, mapMax: yAutoDispMax }
+		}
+		if (yAutoTargetMin == null) {
+			yAutoTargetMin = qMin
+			yAutoTargetMax = qMax
+			yAutoDispMin = qMin
+			yAutoDispMax = qMax
+			return { mapMin: yAutoDispMin, mapMax: yAutoDispMax }
+		}
+		const curRange = yAutoTargetMax - yAutoTargetMin || 1
+		const needExpandLo = qMin < yAutoTargetMin - expandPad
+		const needExpandHi = qMax > yAutoTargetMax + expandPad
+		const needShrink = (qMax - qMin) < curRange * shrinkRatio
+		if (needExpandLo || needExpandHi) {
+			// 只外扩越界侧，避免脉冲把另一侧一并拉开后难收回
+			if (needExpandLo) yAutoTargetMin = qMin
+			if (needExpandHi) yAutoTargetMax = qMax
+		} else if (needShrink) {
+			yAutoTargetMin = qMin
+			yAutoTargetMax = qMax
+		}
+		if (yAutoDispMin == null) {
+			yAutoDispMin = yAutoTargetMin
+			yAutoDispMax = yAutoTargetMax
+		} else {
+			const alpha = opts.alpha != null ? opts.alpha : 0.3
+			// 外扩：disp 立即贴齐 target，脉冲顶不被裁一帧
+			if (yAutoTargetMin < yAutoDispMin) yAutoDispMin = yAutoTargetMin
+			if (yAutoTargetMax > yAutoDispMax) yAutoDispMax = yAutoTargetMax
+			// 内收：缓跟
+			yAutoDispMin += (yAutoTargetMin - yAutoDispMin) * alpha
+			yAutoDispMax += (yAutoTargetMax - yAutoDispMax) * alpha
+		}
+		return { mapMin: yAutoDispMin, mapMax: yAutoDispMax }
+	}
+
+	/**
+	 * 建议 Log / 建议线性：进入阈值 + 退出阈值滞回，避免 Live 在阈值附近闪提示。
+	 */
+	function updateYScaleHint(yMin, yMax, minPositive) {
+		const pos = (minPositive > 0 && isFinite(minPositive)) ? minPositive : null
+		const hi = isFinite(yMax) ? Math.abs(yMax) : 0
+		const lo = pos != null ? pos : (isFinite(yMin) && yMin > 0 ? yMin : null)
+		if (!(lo > 0) || !(hi > 0)) {
+			yScaleHint = ''
+			return
+		}
+		const ratio = hi / lo
+		if (yScaleMode === 'linear') {
+			if (yScaleHint === 'log') {
+				// 已显示「建议 Log」：仅当动态范围明显收窄才关掉
+				if (ratio < LOG_SUGGEST_EXIT) yScaleHint = ''
+			} else if (ratio >= LOG_SUGGEST_RATIO) {
+				yScaleHint = 'log'
+			} else {
+				yScaleHint = ''
+			}
+		} else if (isLogLikeY()) {
+			if (yScaleHint === 'linear') {
+				// 已显示「建议线性」：仅当动态范围明显变大才关掉
+				if (ratio > LOG_LINEAR_HINT_EXIT) yScaleHint = ''
+			} else if (ratio > 0 && ratio < LOG_LINEAR_HINT_RATIO) {
+				yScaleHint = 'linear'
+			} else {
+				yScaleHint = ''
+			}
+		} else {
+			yScaleHint = ''
+		}
 	}
 
 	function updateCanvas() {
@@ -2210,6 +2673,7 @@
 		const bucketSize = computeBucketSize(vr.count, pw)
 		let yMin = Infinity
 		let yMax = -Infinity
+		let minPositive = Infinity // 窗口最小正电流（自适应 floor / 建议 Log）
 		let cols = null
 		if (bucketSize <= 1) {
 			for (let li = vr.start; li <= vr.end; li++) {
@@ -2217,6 +2681,7 @@
 				if (!isFinite(v)) continue
 				if (v < yMin) yMin = v
 				if (v > yMax) yMax = v
+				if (v > 0 && v < minPositive) minPositive = v
 			}
 		} else {
 			const absStart = ringBase + vr.start
@@ -2229,81 +2694,105 @@
 				if (!entry) continue
 				if (entry.min < yMin) yMin = entry.min
 				if (entry.max > yMax) yMax = entry.max
+				// 优先桶内精确 minPos；回退到 min>0（整块无逐点时 minPos 可能未知）
+				if (entry.minPos > 0 && isFinite(entry.minPos) && entry.minPos < minPositive) {
+					minPositive = entry.minPos
+				} else if (entry.min > 0 && entry.min < minPositive) {
+					minPositive = entry.min
+				}
 				cols.push({ x: (entry.loAbs + entry.hiAbs) / 2 - ringBase, entry: entry })
 			}
 		}
 		if (!isFinite(yMin) || !isFinite(yMax)) {
 			const vv = ringIAt(vr.end)
-			yMin = vv - 1
-			yMax = vv + 1
+			yMin = (isFinite(vv) ? vv : 0) - 1
+			yMax = (isFinite(vv) ? vv : 0) + 1
 		}
 		if (yMax === yMin) {
 			yMax += 1
 			yMin -= 1
 		}
+		if (!(minPositive > 0) || !isFinite(minPositive)) minPositive = Infinity
 
-		// log 映射范围
-		let mapYMin = yMin
-		let mapYMax = yMax
-		if (yAxisLog) {
-			mapYMin = logMap(Math.max(LOG_FLOOR_UA, yMin))
-			mapYMax = logMap(Math.max(LOG_FLOOR_UA, yMax))
-			if (mapYMax <= mapYMin) mapYMax = mapYMin + 1
-		}
+		updateYScaleHint(yMin, yMax, minPositive)
 
-		const pad = (mapYMax - mapYMin) * 0.08 || 1
-		mapYMin -= pad
-		mapYMax += pad
-
+		// ---- 映射域自动量程 ----
+		let mapYMin
+		let mapYMax
 		if (view.yMode === 'manual') {
-			if (yAxisLog) {
-				mapYMin = logMap(Math.max(LOG_FLOOR_UA, view.yMin))
-				mapYMax = logMap(Math.max(LOG_FLOOR_UA, view.yMax))
+			// 手工范围（线性值）→ 映射
+			if (yScaleMode === 'log') {
+				if (!yAxisLocked) logFloorUA = adaptLogFloor(minPositive)
+				else if (lockSnapFloorUA != null) logFloorUA = lockSnapFloorUA
+				mapYMin = logMap(Math.max(logFloorUA, view.yMin))
+				mapYMax = logMap(Math.max(logFloorUA, view.yMax))
+			} else if (yScaleMode === 'symlog') {
+				if (yAxisLocked && lockSnapLinthreshUA != null) symlogLinthreshUA = lockSnapLinthreshUA
+				mapYMin = symlogMap(view.yMin)
+				mapYMax = symlogMap(view.yMax)
 			} else {
 				mapYMin = view.yMin
 				mapYMax = view.yMax
 			}
-		} else {
-			const rawRange = mapYMax - mapYMin || 1
-			const step5 = niceNumber(rawRange / 4)
-			const qMin = Math.floor(mapYMin / step5) * step5
-			const qMax = Math.ceil(mapYMax / step5) * step5
-			if (yAutoTargetMin == null) {
-				yAutoTargetMin = qMin
-				yAutoTargetMax = qMax
-			} else {
-				const curRange = yAutoTargetMax - yAutoTargetMin || 1
-				const needExpand = qMin < yAutoTargetMin || qMax > yAutoTargetMax
-				const needShrink = (qMax - qMin) < curRange * 0.6
-				if (needExpand || needShrink) {
-					yAutoTargetMin = qMin
-					yAutoTargetMax = qMax
-				}
-			}
-			if (yAutoDispMin == null) {
-				yAutoDispMin = yAutoTargetMin
-				yAutoDispMax = yAutoTargetMax
-			} else {
-				yAutoDispMin += (yAutoTargetMin - yAutoDispMin) * 0.3
-				yAutoDispMax += (yAutoTargetMax - yAutoDispMax) * 0.3
+			if (mapYMax <= mapYMin) mapYMax = mapYMin + 1
+		} else if (yAxisLocked && yAutoDispMin != null && yAutoDispMax != null) {
+			// Lock：整段跳过 auto 重算，避免 floor/linthresh/span 任一漂移
+			if (yScaleMode === 'log' && lockSnapFloorUA != null) logFloorUA = lockSnapFloorUA
+			if (yScaleMode === 'symlog' && lockSnapLinthreshUA != null) {
+				symlogLinthreshUA = lockSnapLinthreshUA
 			}
 			mapYMin = yAutoDispMin
 			mapYMax = yAutoDispMax
-			if (view.yZoom !== 1) {
-				const mid = (mapYMin + mapYMax) / 2
-				const half = (mapYMax - mapYMin) / 2 / view.yZoom
-				mapYMin = mid - half
-				mapYMax = mid + half
-			}
+		} else if (yScaleMode === 'log') {
+			const lr = computeLogAutoMapRange(yMin, yMax, minPositive)
+			// Log：decade 滞回更强（shrink 需缩到半 decade 级），减少脉冲狂跳
+			const hy = applyYAutoHysteresis(lr.mapMin, lr.mapMax, {
+				shrinkRatio: 0.5,
+				alpha: 0.35,
+			})
+			mapYMin = hy.mapMin
+			mapYMax = hy.mapMax
+		} else if (yScaleMode === 'symlog') {
+			const sr = computeSymlogAutoMapRange(yMin, yMax)
+			const hy = applyYAutoHysteresis(sr.mapMin, sr.mapMax, {
+				shrinkRatio: 0.55,
+				alpha: 0.3,
+			})
+			mapYMin = hy.mapMin
+			mapYMax = hy.mapMax
+		} else {
+			// 线性：nice 等分 + 原有滞回
+			let rawMin = yMin
+			let rawMax = yMax
+			const padLin = (rawMax - rawMin) * 0.08 || 1
+			rawMin -= padLin
+			rawMax += padLin
+			const rawRange = rawMax - rawMin || 1
+			const step5 = niceNumber(rawRange / 4)
+			const qMin = Math.floor(rawMin / step5) * step5
+			const qMax = Math.ceil(rawMax / step5) * step5
+			const hy = applyYAutoHysteresis(qMin, qMax, {
+				shrinkRatio: 0.6,
+				alpha: 0.3,
+			})
+			mapYMin = hy.mapMin
+			mapYMax = hy.mapMax
+		}
+
+		// 用户 Y 缩放（映射域中心缩放 = Log 下倍率语义正确）
+		if (view.yMode !== 'manual' && view.yZoom !== 1) {
+			const mid = (mapYMin + mapYMax) / 2
+			const half = (mapYMax - mapYMin) / 2 / view.yZoom
+			mapYMin = mid - half
+			mapYMax = mid + half
 		}
 		if (view.yPanOffset) {
 			mapYMin += view.yPanOffset
 			mapYMax += view.yPanOffset
 		}
 
-		// 线性自动轴：把 0 µA 纳入可见范围，便于画零线基准。
-		// 用户已 Y 缩放/平移时不再强行贴 0，否则会抵消 zoomYAt 的指针锚点
-		if (!yAxisLog && view.yMode !== 'manual' && view.yZoom === 1 && !view.yPanOffset) {
+		// 线性自动轴：把 0 µA 纳入可见范围；用户已 Y 缩放/平移时不强制贴 0
+		if (yScaleMode === 'linear' && view.yMode !== 'manual' && view.yZoom === 1 && !view.yPanOffset && !yAxisLocked) {
 			if (mapYMin > 0) mapYMin = 0
 			if (mapYMax < 0) mapYMax = 0
 			if (mapYMax === mapYMin) {
@@ -2311,6 +2800,7 @@
 				mapYMin -= 1
 			}
 		}
+		if (!(mapYMax > mapYMin)) mapYMax = mapYMin + 1
 
 		const t0 = indexToTime(vr.start)
 		const t1 = indexToTime(vr.end)
@@ -2320,7 +2810,7 @@
 			return margin.left + t * pw
 		}
 		function mapVal(v) {
-			return yAxisLog ? logMap(v) : v
+			return mapYValue(v)
 		}
 		function toY(v) {
 			const mv = mapVal(v)
@@ -2331,32 +2821,107 @@
 			const li = Math.round(vr.start + t * (vr.count - 1))
 			return Math.max(vr.start, Math.min(vr.end, li))
 		}
+		/** 像素 Y → 线性电流（悬停/调试用；浮标始终显示线性） */
+		function fromYPixel(py) {
+			const frac = (py - margin.top) / ph
+			const mv = mapYMax - frac * (mapYMax - mapYMin)
+			return unmapYValue(mv)
+		}
 
 		plotLayout = {
 			margin: margin, pw: pw, ph: ph, w: w, h: h,
 			vr: vr, yMin: mapYMin, yMax: mapYMax, toX: toX, toY: toY, fromX: fromX,
-			t0: t0, t1: t1, yAxisLog: yAxisLog,
+			fromYPixel: fromYPixel,
+			t0: t0, t1: t1,
+			yAxisLog: yScaleMode === 'log',
+			yScaleMode: yScaleMode,
+			logFloorUA: logFloorUA,
+			symlogLinthreshUA: symlogLinthreshUA,
 		}
 
-		// Y grid
-		ctx.strokeStyle = grid
-		ctx.lineWidth = 0.6
-		for (let g = 0; g <= 4; g++) {
-			const y = margin.top + (g / 4) * ph
+		// ---- Y 网格：Log/Symlog 在线性值空间选 tick 再映射；线性仍 nice 等分 ----
+		function drawYGridLine(valLin, style) {
+			const y = toY(valLin)
+			if (!isFinite(y) || y < margin.top - 1 || y > margin.top + ph + 1) return null
 			ctx.beginPath()
 			ctx.moveTo(margin.left, y)
 			ctx.lineTo(w - margin.right, y)
+			if (style === 'major') {
+				ctx.strokeStyle = grid
+				ctx.lineWidth = 0.7
+				ctx.globalAlpha = 1
+			} else if (style === 'minor') {
+				ctx.strokeStyle = grid
+				ctx.lineWidth = 0.5
+				ctx.globalAlpha = 0.55
+			} else {
+				ctx.strokeStyle = grid
+				ctx.lineWidth = 0.4
+				ctx.globalAlpha = 0.28
+			}
 			ctx.stroke()
-			const mv = mapYMax - (g / 4) * (mapYMax - mapYMin)
-			const val = yAxisLog ? logUnmap(mv) : mv
-			ctx.fillStyle = muted
-			ctx.font = '10px monospace'
-			ctx.textAlign = 'right'
-			ctx.fillText(fmtCurrent(val).replace(' ', ''), margin.left - 4, y + 3)
+			ctx.globalAlpha = 1
+			return y
 		}
 
-		// 0 µA 参考线：贯穿绘图区的虚线 + 左侧刻度标记（线性轴；Log 无真正 0）
-		if (!yAxisLog && mapYMin <= 0 && mapYMax >= 0) {
+		if (yScaleMode === 'log') {
+			const linLo = unmapYValue(mapYMin)
+			const linHi = unmapYValue(mapYMax)
+			const ticks = buildLogTicks(linLo, linHi, logFloorUA)
+			for (let i = 0; i < ticks.faint.length; i++) drawYGridLine(ticks.faint[i], 'faint')
+			for (let i = 0; i < ticks.minor.length; i++) {
+				const y = drawYGridLine(ticks.minor[i], 'minor')
+				if (y == null) continue
+				// 2/5 仅在跨 decade 较少时标数字，避免挤
+				if (ticks.major.length <= 3) {
+					ctx.fillStyle = muted
+					ctx.font = '9px monospace'
+					ctx.textAlign = 'right'
+					ctx.fillText(fmtCurrentTick(ticks.minor[i]), margin.left - 4, y + 3)
+				}
+			}
+			for (let i = 0; i < ticks.major.length; i++) {
+				const y = drawYGridLine(ticks.major[i], 'major')
+				if (y == null) continue
+				ctx.fillStyle = muted
+				ctx.font = '10px monospace'
+				ctx.textAlign = 'right'
+				ctx.fillText(fmtCurrentTick(ticks.major[i]), margin.left - 4, y + 3)
+			}
+		} else if (yScaleMode === 'symlog') {
+			const linLo = unmapYValue(mapYMin)
+			const linHi = unmapYValue(mapYMax)
+			const ticks = buildSymlogTicks(linLo, linHi, symlogLinthreshUA)
+			for (let i = 0; i < ticks.faint.length; i++) drawYGridLine(ticks.faint[i], 'faint')
+			for (let i = 0; i < ticks.minor.length; i++) drawYGridLine(ticks.minor[i], 'minor')
+			for (let i = 0; i < ticks.major.length; i++) {
+				const y = drawYGridLine(ticks.major[i], 'major')
+				if (y == null) continue
+				ctx.fillStyle = muted
+				ctx.font = '10px monospace'
+				ctx.textAlign = 'right'
+				ctx.fillText(fmtCurrentTick(ticks.major[i]), margin.left - 4, y + 3)
+			}
+		} else {
+			ctx.strokeStyle = grid
+			ctx.lineWidth = 0.6
+			for (let g = 0; g <= 4; g++) {
+				const y = margin.top + (g / 4) * ph
+				ctx.beginPath()
+				ctx.moveTo(margin.left, y)
+				ctx.lineTo(w - margin.right, y)
+				ctx.stroke()
+				const mv = mapYMax - (g / 4) * (mapYMax - mapYMin)
+				const val = mv
+				ctx.fillStyle = muted
+				ctx.font = '10px monospace'
+				ctx.textAlign = 'right'
+				ctx.fillText(fmtCurrent(val).replace(' ', ''), margin.left - 4, y + 3)
+			}
+		}
+
+		// 0 µA 参考线：线性轴；Symlog 也可画 0（真正穿过 0）
+		if ((yScaleMode === 'linear' || yScaleMode === 'symlog') && mapYMin <= 0 && mapYMax >= 0) {
 			const y0 = toY(0)
 			if (y0 >= margin.top - 0.5 && y0 <= margin.top + ph + 0.5) {
 				ctx.save()
@@ -2368,18 +2933,33 @@
 				ctx.lineTo(w - margin.right, y0)
 				ctx.stroke()
 				ctx.setLineDash([])
-				// 左侧刻度强调
 				ctx.fillStyle = fg
 				ctx.font = 'bold 10px monospace'
 				ctx.textAlign = 'right'
-				ctx.fillText('0 µA', margin.left - 4, y0 + 3)
-				// 途中短标签
+				ctx.fillText('0', margin.left - 4, y0 + 3)
 				ctx.textAlign = 'left'
 				ctx.font = '10px monospace'
 				ctx.fillStyle = muted
 				ctx.fillText('0', margin.left + 4, y0 - 3)
 				ctx.restore()
 			}
+		}
+
+		// Log / Symlog 角标：模式 + floor / linthresh
+		if (isLogLikeY()) {
+			ctx.save()
+			ctx.font = '10px monospace'
+			ctx.textAlign = 'left'
+			ctx.fillStyle = muted
+			let badge
+			if (yScaleMode === 'log') {
+				badge = 'Log I · floor ' + fmtCurrentTick(logFloorUA)
+			} else {
+				badge = 'Symlog · linthresh ' + fmtCurrentTick(symlogLinthreshUA)
+			}
+			if (yAxisLocked) badge += ' · Y-Lock'
+			ctx.fillText(badge, margin.left + 6, margin.top + 12)
+			ctx.restore()
 		}
 
 		const xTicks = 6
@@ -2602,16 +3182,22 @@
 		ctx.textAlign = 'center'
 		const winDur = (vr.count > 1) ? (vr.count - 1) * samplePeriodSec : 0
 		const totalDur = ringCount > 1 ? (ringCount - 1) * samplePeriodSec : 0
+		const scaleTag = yScaleMode === 'log' ? ' · LogY'
+			: (yScaleMode === 'symlog' ? ' · Symlog' : '')
 		ctx.fillText(
 			'窗口 ' + fmtDuration(winDur) + ' / 总 ' + fmtDuration(totalDur) +
 			' · 实测 ' + fmtHz(samplePeriodSec > 0 ? 1 / samplePeriodSec : 0) +
 			'Hz/目标 ' + fmtHz(targetRateHz) + 'Hz' +
-			(yAxisLog ? ' · LogY' : '') +
+			scaleTag +
+			(yAxisLocked ? ' · Y-Lock' : '') +
 			(liveMode && !scrollPaused ? ' · Live' : '') +
 			(scrollPaused ? ' · 已暂停滚动' : ''),
 			margin.left + pw / 2,
 			h - 6
 		)
+
+		// 同步工具条「建议 Log/线性」提示（轻量，不自动硬切）
+		syncYScaleUi()
 
 		drawMinimapStrip()
 	}
@@ -3028,7 +3614,12 @@
 		view.yZoom = 1
 		view.yPanOffset = 0
 		view.yMode = 'auto'
+		yAxisLocked = false
+		lockSnapFloorUA = null
+		lockSnapLinthreshUA = null
+		yScaleUiKey = ''
 		resetYAuto()
+		syncYScaleUi()
 		scheduleUIUpdate()
 	}
 
@@ -3451,12 +4042,35 @@
 			}).catch(function () { /* 忽略 */ })
 		}
 
+		const elYScale = E('blu-y-scale')
+		if (elYScale) {
+			elYScale.value = yScaleMode
+			elYScale.addEventListener('change', function () {
+				setYScaleMode(elYScale.value)
+			})
+		}
+		// 兼容旧 Log checkbox
 		const elYLog = E('blu-y-log')
 		if (elYLog) {
 			elYLog.addEventListener('change', function () {
 				setYAxisLog(this.checked)
 			})
 		}
+		const elYLock = E('blu-y-lock')
+		if (elYLock) {
+			elYLock.addEventListener('click', function () {
+				setYAxisLocked(!yAxisLocked)
+			})
+		}
+		const elYHint = E('blu-y-scale-hint')
+		if (elYHint) {
+			elYHint.addEventListener('click', function () {
+				const act = elYHint.dataset.action
+				if (act === 'log') setYScaleMode('log')
+				else if (act === 'linear') setYScaleMode('linear')
+			})
+		}
+		syncYScaleUi()
 
 		const elPause = E('blu-pause-scroll')
 		if (elPause) elPause.addEventListener('click', function () {

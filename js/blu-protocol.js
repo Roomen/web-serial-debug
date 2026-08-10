@@ -379,8 +379,8 @@
 			this._addDefault(timestampSec)
 		}
 		let v = valueUA
-		// log 友好：过小值抬到 0.2 µA（PPK 用 200 nA）
-		if (v < 0.2) v = 0.2
+		// minimap 下限：1 nA（与主波形 Log floor 默认对齐；不再抬到 0.2 µA）
+		if (v < 1e-3) v = 1e-3
 
 		this.lastElementFoldCount++
 		const alpha = 1 / this.lastElementFoldCount
