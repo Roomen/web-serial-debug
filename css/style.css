@@ -4690,6 +4690,50 @@ body.blu-wave-fullscreen-open {
   display: none !important;
 }
 
+.blu-scope-trig-group {
+  gap: 4px;
+}
+
+.blu-scope-trig-group.is-active .blu-zoom-label {
+  color: #ec4899;
+}
+
+.blu-scope-trig-select {
+  min-width: 64px;
+  max-width: 80px;
+  height: 28px;
+  padding: 0 4px;
+  font-size: 0.72rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.blu-scope-trig-group.is-active .blu-scope-trig-select {
+  border-color: rgba(236, 72, 153, 0.55);
+  color: #f9a8d4;
+}
+
+.blu-scope-trig-level {
+  width: 88px;
+  height: 28px;
+  padding: 0 6px;
+  font-size: 0.72rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.blu-scope-trig-level:focus {
+  outline: none;
+  border-color: rgba(236, 72, 153, 0.65);
+  box-shadow: 0 0 0 2px rgba(236, 72, 153, 0.15);
+}
+
 .blu-cursor-group {
   display: flex;
   align-items: center;

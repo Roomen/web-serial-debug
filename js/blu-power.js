@@ -42,6 +42,10 @@
 	const HINT_EXIT_HOLD_MS = 1600 // 目标清空需持续这么久才关掉
 	const HINT_MIN_SHOW_MS = 2800 // 一旦显示，至少保持这么久
 	const HINT_INVALID_KEEP_MS = 900 // 窗口 lo/hi 短暂无效时沿用上一 ratio
+	// 示波器式显示触发：沿对齐视口，周期信号看起来钉住
+	const SCOPE_TRIG_POS_FRAC = 0.25 // 触发点在视口内水平位置（左→右）
+	const SCOPE_TRIG_SCAN_MAX = 80000 // 单批最大扫描点数，防卡 UI
+	const SCOPE_TRIG_HOLDOFF_MIN_PTS = 16
 	// 预热：丢掉上电/切档瞬态。原先 targetHz*2s 在 100k 下约 2s 才见波形，过长；
 	// 改为约 0.25s 输出点（与 Python「约 2s@200Hz」同量级的短瞬态，但不再拖数秒）
 	const WARMUP_SEC = 0.25
@@ -134,6 +138,17 @@
 	let yScaleHintCandidate = '' // 待切换目标
 	let yScaleHintCandidateAt = 0 // 候选开始持续的时间
 	let liveMode = true // PPK Live：视口贴着最新数据
+	// 示波器显示触发（不控制采样启停；只钉视口）
+	// mode: 'off' | 'rise' | 'fall' | 'either'
+	let scopeTrigMode = 'off'
+	let scopeTrigLevelUA = null // 手动电平 µA；auto 时每次刷新估算
+	let scopeTrigLevelAuto = true
+	let scopeTrigState = 0 // -1 below / 1 above / 0 unknown（跨批滞回）
+	let scopeTrigLockLi = null // 当前钉住的触发逻辑下标
+	let scopeTrigLastLi = null // 上一触发点（holdoff / 估周期）
+	let scopeTrigPeriodPts = null // EMA 边沿间隔（点）
+	let scopeTrigUserOverride = false // 用户平移/缩放时暂时不强制钉视口
+	let scopeTrigUiKey = ''
 
 	// 原始流统计
 	let rawStreamCount = 0
@@ -1342,6 +1357,8 @@
 		rawStreamFirstTs = 0
 		resetYScaleHintState()
 		syncYScaleUi() // 无数据时 updateCanvas early return，须直接刷 DOM
+		resetScopeTriggerState()
+		if (scopeTrigMode !== 'off') syncScopeTrigUi()
 		if (log) bluLog('数据已清空')
 		scheduleUIUpdate()
 	}
@@ -1902,7 +1919,9 @@
 		}
 
 		// 暂停滚动：新样本入库后钉住历史视口（顺序存储，旧下标不左移）
-		if (bluSampling && stored > 0 && scrollPaused) {
+		// 显示触发激活且已锁定时由 getViewRange 钉触发点，不再累加 xOffset
+		if (bluSampling && stored > 0 && scrollPaused &&
+			!(scopeTrigMode !== 'off' && scopeTrigLockLi != null && !scopeTrigUserOverride)) {
 			const maxOff = Math.max(0, dataCount() - 1)
 			if (drag && drag.liAnchor != null) {
 				// 跟手：用当前指针位置重算视口，使抓取点仍在指针下
@@ -1912,6 +1931,13 @@
 			} else {
 				view.xOffset = Math.min(maxOff, view.xOffset + stored)
 			}
+		}
+
+		// 示波器显示触发：扫描本批新点，命中则钉视口
+		if (stored > 0 && scopeTrigMode !== 'off' && recordMode === 'wave') {
+			const n = dataCount()
+			const from = Math.max(1, n - stored)
+			scanScopeTrigger(from, n - 1)
 		}
 
 		if (bluSampling) {
@@ -2003,10 +2029,35 @@
 		return Math.min(n, viewPts)
 	}
 
+	function isScopeTrigViewLocked() {
+		// 拖动跟手中不强制钉视口；用户平移后 override 直到下次触发
+		return scopeTrigMode !== 'off' &&
+			scopeTrigLockLi != null &&
+			!scopeTrigUserOverride &&
+			!(drag && drag.moved)
+	}
+
 	function getViewRange() {
 		const n = ringCount
 		if (n < 2) return { start: 0, end: 0, count: 0 }
 		const viewPts = currentViewPts()
+		// 示波器显示触发：把触发点钉在视口固定水平位置
+		if (isScopeTrigViewLocked()) {
+			const pre = Math.max(0, Math.min(viewPts - 1, Math.round(viewPts * SCOPE_TRIG_POS_FRAC)))
+			let start = scopeTrigLockLi - pre
+			let end = start + viewPts - 1
+			if (start < 0) {
+				start = 0
+				end = Math.min(n - 1, viewPts - 1)
+			}
+			if (end >= n) {
+				end = n - 1
+				start = Math.max(0, end - viewPts + 1)
+			}
+			if (end < start) end = start
+			view.xOffset = Math.max(0, n - 1 - end)
+			return { start: start, end: end, count: end - start + 1 }
+		}
 		// Live / 继续滚动：视口右端永远是最新样点
 		if (liveMode && !scrollPaused) {
 			view.xOffset = 0
@@ -2023,6 +2074,213 @@
 		if (end >= n) end = n - 1
 		if (end < 0) end = 0
 		return { start: start, end: end, count: end - start + 1 }
+	}
+
+	/** 自动触发电平：近期窗口 min/max 中点（µA） */
+	function getScopeTrigLevelUA() {
+		if (!scopeTrigLevelAuto && scopeTrigLevelUA != null && isFinite(scopeTrigLevelUA)) {
+			return scopeTrigLevelUA
+		}
+		const n = ringCount
+		if (n < 2) return scopeTrigLevelUA != null && isFinite(scopeTrigLevelUA) ? scopeTrigLevelUA : 0
+		const win = Math.min(n, Math.max(currentViewPts() * 4, 2000))
+		const mm = rangeMinMax(n - win, n - 1)
+		if (!mm) return 0
+		const thr = (mm.min + mm.max) * 0.5
+		scopeTrigLevelUA = thr // 供 UI 只读展示
+		return thr
+	}
+
+	function getScopeTrigHyst(thr) {
+		const n = ringCount
+		const win = Math.min(n, Math.max(currentViewPts() * 2, 1000))
+		const mm = n >= 2 ? rangeMinMax(n - win, n - 1) : null
+		if (mm) {
+			const span = Math.abs(mm.max - mm.min)
+			return Math.max(span * 0.03, Math.abs(thr) * 0.01, 1e-9)
+		}
+		return Math.max(Math.abs(thr) * 0.05, 1e-9)
+	}
+
+	function getScopeHoldoffPts() {
+		if (scopeTrigPeriodPts != null && scopeTrigPeriodPts > 4) {
+			return Math.max(SCOPE_TRIG_HOLDOFF_MIN_PTS, Math.floor(scopeTrigPeriodPts * 0.55))
+		}
+		return Math.max(SCOPE_TRIG_HOLDOFF_MIN_PTS, Math.floor(currentViewPts() * 0.05))
+	}
+
+	/**
+	 * 在 [from,to] 扫描边沿；命中则更新 scopeTrigLockLi。
+	 * 跨批保持 scopeTrigState 滞回，降低噪声假触发。
+	 */
+	function scanScopeTrigger(from, to) {
+		if (scopeTrigMode === 'off' || recordMode !== 'wave') return
+		const n = ringCount
+		if (n < 3) return
+		let scanLo = Math.max(1, from | 0)
+		let scanHi = Math.min(n - 1, to | 0)
+		if (scanHi < scanLo) return
+		// 边沿检测必须逐步；超长区间只扫尾部，避免漏沿 + 卡 UI
+		if (scanHi - scanLo + 1 > SCOPE_TRIG_SCAN_MAX) {
+			scanLo = scanHi - SCOPE_TRIG_SCAN_MAX + 1
+		}
+
+		const thr = getScopeTrigLevelUA()
+		const hyst = getScopeTrigHyst(thr)
+		const thrHi = thr + hyst
+		const thrLo = thr - hyst
+		let state = scopeTrigState
+		if (state === 0) {
+			const v0 = ringIAt(Math.max(0, scanLo - 1))
+			if (isFinite(v0)) {
+				if (v0 >= thrHi) state = 1
+				else if (v0 <= thrLo) state = -1
+			}
+		}
+		const holdoff = getScopeHoldoffPts()
+		let fired = null
+		for (let i = scanLo; i <= scanHi; i++) {
+			const v = ringIAt(i)
+			if (!isFinite(v)) continue
+			let edge = null
+			if (state <= 0 && v >= thrHi) {
+				edge = 'rise'
+				state = 1
+			} else if (state >= 0 && v <= thrLo) {
+				edge = 'fall'
+				state = -1
+			} else if (state === 0) {
+				if (v >= thrHi) state = 1
+				else if (v <= thrLo) state = -1
+			}
+			if (!edge) continue
+			if (scopeTrigMode === 'rise' && edge !== 'rise') continue
+			if (scopeTrigMode === 'fall' && edge !== 'fall') continue
+			if (scopeTrigLastLi != null && (i - scopeTrigLastLi) < holdoff) continue
+			fired = i
+			// 继续扫到本批最后一个合格沿，钉住最新周期（示波器连续触发）
+		}
+		scopeTrigState = state
+		if (fired == null) return
+
+		if (scopeTrigLastLi != null) {
+			const dp = fired - scopeTrigLastLi
+			if (dp > 4) {
+				scopeTrigPeriodPts = scopeTrigPeriodPts == null
+					? dp
+					: (scopeTrigPeriodPts * 0.65 + dp * 0.35)
+			}
+		}
+		scopeTrigLastLi = fired
+		scopeTrigLockLi = fired
+		scopeTrigUserOverride = false
+		// 退出 Live 滚动，由 getViewRange 钉触发点
+		liveMode = false
+	}
+
+	function resetScopeTriggerState() {
+		scopeTrigState = 0
+		scopeTrigLockLi = null
+		scopeTrigLastLi = null
+		scopeTrigPeriodPts = null
+		scopeTrigUserOverride = false
+		scopeTrigUiKey = ''
+	}
+
+	function setScopeTrigMode(mode) {
+		const next = (mode === 'rise' || mode === 'fall' || mode === 'either') ? mode : 'off'
+		if (next === scopeTrigMode) {
+			syncScopeTrigUi()
+			return
+		}
+		scopeTrigMode = next
+		resetScopeTriggerState()
+		if (next === 'off') {
+			// 回到 Live（若用户未手动暂停）
+			if (!scrollPaused) {
+				liveMode = true
+				view.xOffset = 0
+			}
+		} else {
+			// 开启：先扫近期数据，尽快钉住；未命中则保持当前/Live 直到新沿
+			if (ringCount > 10) {
+				const from = Math.max(1, ringCount - Math.max(currentViewPts() * 3, 4000))
+				scanScopeTrigger(from, ringCount - 1)
+			}
+			if (scopeTrigLockLi == null && !scrollPaused) {
+				// 等待触发期间仍 Live，便于看到信号
+				liveMode = true
+			}
+		}
+		syncScopeTrigUi()
+		scheduleUIUpdate()
+	}
+
+	function setScopeTrigLevelFromInput(raw) {
+		const s = (raw == null ? '' : String(raw)).trim()
+		if (!s) {
+			scopeTrigLevelAuto = true
+			scopeTrigLevelUA = null
+			scopeTrigState = 0
+			syncScopeTrigUi()
+			scheduleUIUpdate()
+			return
+		}
+		// 支持 1.2 / 1.2mA / 500uA / 500µA / 1nA
+		let m = s.match(/^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*(nA|uA|µA|mA|A)?$/i)
+		if (!m) {
+			bluLog('触发电平格式无效（示例：100、1.5mA、200uA）', 'warn')
+			syncScopeTrigUi()
+			return
+		}
+		let v = parseFloat(m[1])
+		const unit = (m[2] || 'uA').toLowerCase()
+		if (unit === 'a') v *= 1e6
+		else if (unit === 'ma') v *= 1e3
+		else if (unit === 'na') v *= 1e-3
+		// uA / µA：已是 µA
+		if (!isFinite(v)) {
+			bluLog('触发电平数值无效', 'warn')
+			return
+		}
+		scopeTrigLevelAuto = false
+		scopeTrigLevelUA = v
+		scopeTrigState = 0
+		// 重扫近期以新电平对齐
+		if (scopeTrigMode !== 'off' && ringCount > 10) {
+			scopeTrigLastLi = null
+			scopeTrigLockLi = null
+			scopeTrigPeriodPts = null
+			const from = Math.max(1, ringCount - Math.max(currentViewPts() * 3, 4000))
+			scanScopeTrigger(from, ringCount - 1)
+		}
+		syncScopeTrigUi()
+		scheduleUIUpdate()
+	}
+
+	function syncScopeTrigUi() {
+		const thrKey = (scopeTrigLevelUA != null && isFinite(scopeTrigLevelUA))
+			? scopeTrigLevelUA.toPrecision(4)
+			: ''
+		const key = scopeTrigMode + '|' + (scopeTrigLevelAuto ? 'a' : 'm') + '|' + thrKey
+		if (key === scopeTrigUiKey) return
+		scopeTrigUiKey = key
+		const sel = E('blu-scope-trig')
+		if (sel && sel.value !== scopeTrigMode) sel.value = scopeTrigMode
+		const inp = E('blu-scope-trig-level')
+		if (inp && document.activeElement !== inp) {
+			if (scopeTrigLevelAuto) {
+				inp.value = ''
+				inp.placeholder = thrKey
+					? ('Auto ' + fmtCurrent(scopeTrigLevelUA))
+					: 'Auto µA'
+			} else {
+				inp.value = String(scopeTrigLevelUA)
+				inp.placeholder = 'µA'
+			}
+		}
+		const grp = E('blu-scope-trig-group')
+		if (grp) grp.classList.toggle('is-active', scopeTrigMode !== 'off')
 	}
 
 	/**
@@ -3909,6 +4167,50 @@
 		}
 		ctx.stroke()
 
+		// 示波器显示触发：电平线 + 触发点竖线
+		if (scopeTrigMode !== 'off') {
+			const thr = getScopeTrigLevelUA()
+			if (isFinite(thr)) {
+				const yThr = toY(thr)
+				if (isFinite(yThr) && yThr >= margin.top - 2 && yThr <= margin.top + ph + 2) {
+					ctx.save()
+					ctx.strokeStyle = 'rgba(236, 72, 153, 0.75)'
+					ctx.lineWidth = 1
+					ctx.setLineDash([5, 4])
+					ctx.beginPath()
+					ctx.moveTo(margin.left, yThr)
+					ctx.lineTo(margin.left + pw, yThr)
+					ctx.stroke()
+					ctx.setLineDash([])
+					ctx.fillStyle = 'rgba(236, 72, 153, 0.9)'
+					ctx.font = '10px monospace'
+					ctx.textAlign = 'left'
+					ctx.fillText(
+						'Trig ' + (scopeTrigMode === 'rise' ? '↑' : scopeTrigMode === 'fall' ? '↓' : '↕') +
+						' ' + fmtCurrent(thr) + (scopeTrigLevelAuto ? ' auto' : ''),
+						margin.left + 6,
+						Math.max(margin.top + 10, Math.min(margin.top + ph - 4, yThr - 4))
+					)
+					ctx.restore()
+				}
+			}
+			if (scopeTrigLockLi != null &&
+				scopeTrigLockLi >= vr.start && scopeTrigLockLi <= vr.end) {
+				const xT = toX(scopeTrigLockLi)
+				if (isFinite(xT)) {
+					ctx.save()
+					ctx.strokeStyle = 'rgba(236, 72, 153, 0.55)'
+					ctx.lineWidth = 1
+					ctx.setLineDash([2, 3])
+					ctx.beginPath()
+					ctx.moveTo(xT, margin.top)
+					ctx.lineTo(xT, margin.top + ph)
+					ctx.stroke()
+					ctx.restore()
+				}
+			}
+		}
+
 		if (bucketSize <= 1 && vr.count <= 60) {
 			ctx.fillStyle = accent
 			for (let k = 0; k < drawnPts.length; k += 2) {
@@ -4064,20 +4366,33 @@
 		const totalDur = ringCount > 1 ? (ringCount - 1) * samplePeriodSec : 0
 		const scaleTag = yScaleMode === 'log' ? ' · LogY'
 			: (yScaleMode === 'symlog' ? ' · Symlog' : '')
+		let trigTag = ''
+		if (scopeTrigMode !== 'off') {
+			const edgeCh = scopeTrigMode === 'rise' ? '↑' : scopeTrigMode === 'fall' ? '↓' : '↕'
+			if (scopeTrigLockLi != null && !scopeTrigUserOverride) {
+				trigTag = ' · Trig' + edgeCh + '钉住'
+			} else if (scopeTrigUserOverride) {
+				trigTag = ' · Trig' + edgeCh + '手移'
+			} else {
+				trigTag = ' · Trig' + edgeCh + '等待'
+			}
+		}
 		ctx.fillText(
 			'窗口 ' + fmtDuration(winDur) + ' / 总 ' + fmtDuration(totalDur) +
 			' · 实测 ' + fmtHz(samplePeriodSec > 0 ? 1 / samplePeriodSec : 0) +
 			'Hz/目标 ' + fmtHz(targetRateHz) + 'Hz' +
 			scaleTag +
 			(yAxisLocked ? ' · Y-Lock' : '') +
-			(liveMode && !scrollPaused ? ' · Live' : '') +
-			(scrollPaused ? ' · 已暂停滚动' : ''),
+			(liveMode && !scrollPaused && scopeTrigMode === 'off' ? ' · Live' : '') +
+			(scrollPaused && !(scopeTrigMode !== 'off' && scopeTrigLockLi != null) ? ' · 已暂停滚动' : '') +
+			trigTag,
 			margin.left + pw / 2,
 			h - 6
 		)
 
-		// 同步工具条「建议 Log/线性」提示（轻量，不自动硬切）
+		// 同步工具条「建议 Log/线性」与触发控件（脏检查，避免每帧 DOM 写）
 		syncYScaleUi()
+		if (scopeTrigMode !== 'off') syncScopeTrigUi()
 
 		drawMinimapStrip()
 	}
@@ -4690,6 +5005,24 @@
 		view.xZoom = 1
 		view.xOffset = 0
 		view.yPanOffset = 0
+		scopeTrigUserOverride = false
+		if (scopeTrigMode !== 'off') {
+			// 触发模式：清锁并重扫，尽快重新钉住
+			scopeTrigLockLi = null
+			scopeTrigLastLi = null
+			scopeTrigPeriodPts = null
+			scopeTrigState = 0
+			if (ringCount > 10) {
+				const from = Math.max(1, ringCount - Math.max(currentViewPts() * 3, 4000))
+				scanScopeTrigger(from, ringCount - 1)
+			}
+			if (scopeTrigLockLi == null) setScrollPaused(false)
+			else {
+				liveMode = false
+				scheduleUIUpdate()
+			}
+			return
+		}
 		// 复位 X 并回到最新波形（Live）
 		setScrollPaused(false)
 	}
@@ -5156,6 +5489,27 @@
 		}
 		syncYScaleUi()
 
+		const elScopeTrig = E('blu-scope-trig')
+		if (elScopeTrig) {
+			elScopeTrig.value = scopeTrigMode
+			elScopeTrig.addEventListener('change', function () {
+				setScopeTrigMode(elScopeTrig.value)
+			})
+		}
+		const elScopeLvl = E('blu-scope-trig-level')
+		if (elScopeLvl) {
+			const applyLvl = function () { setScopeTrigLevelFromInput(elScopeLvl.value) }
+			elScopeLvl.addEventListener('change', applyLvl)
+			elScopeLvl.addEventListener('keydown', function (e) {
+				if (e.key === 'Enter') {
+					e.preventDefault()
+					applyLvl()
+					elScopeLvl.blur()
+				}
+			})
+		}
+		syncScopeTrigUi()
+
 		const elPause = E('blu-pause-scroll')
 		if (elPause) elPause.addEventListener('click', function () {
 			setScrollPaused(!scrollPaused)
@@ -5431,6 +5785,8 @@
 						if (plotLayout) drag.liAnchor = plotLayout.fromX(drag.x0)
 					}
 					if (drag.moved) {
+						// 用户平移：暂时退出触发钉视口，直到下一次沿
+						if (scopeTrigMode !== 'off') scopeTrigUserOverride = true
 						// 跟手：抓取的数据点始终停在当前鼠标 X 下
 						panViewSoLiAtPixel(drag.liAnchor, x)
 						if (plotLayout && plotLayout.ph > 0) {

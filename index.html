@@ -983,6 +983,16 @@
                                     </button>
                                     <button type="button" class="blu-y-scale-hint" id="blu-y-scale-hint" hidden title="">建议 Log</button>
                                 </div>
+                                <div class="blu-zoom-group blu-scope-trig-group" id="blu-scope-trig-group" title="示波器式显示触发：沿对齐后钉住视口，周期波形更稳（不控制采样启停）">
+                                    <span class="blu-zoom-label">触发</span>
+                                    <select id="blu-scope-trig" class="blu-scope-trig-select" title="显示触发：关 / 上升沿 / 下降沿 / 任意沿">
+                                        <option value="off" selected>关</option>
+                                        <option value="rise">↑沿</option>
+                                        <option value="fall">↓沿</option>
+                                        <option value="either">任意</option>
+                                    </select>
+                                    <input type="text" id="blu-scope-trig-level" class="blu-scope-trig-level" placeholder="Auto µA" title="触发电平（µA）。留空=自动（近期 min/max 中点）。示例：100、1.5mA、200uA" autocomplete="off" spellcheck="false">
+                                </div>
                                 <div class="blu-zoom-group">
                                     <button class="btn btn-sm btn-outline-secondary" id="blu-pause-scroll" title="暂停波形滚动（数据仍在采集）">
                                         <i class="bi bi-pause-fill"></i> 暂停滚动
