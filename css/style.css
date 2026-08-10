@@ -4244,7 +4244,7 @@ hr {
   padding-left: 4px;
 }
 
-/* ---- 分析面板：读数 / 事件 / FFT / 电池 / 叠画 ---- */
+/* ---- 分析面板：默认可折叠；读数 / 事件 / FFT / 电池 / 叠画 ---- */
 .blu-analysis {
   flex-shrink: 0;
   margin-top: 4px;
@@ -4254,12 +4254,78 @@ hr {
   overflow: hidden;
 }
 
+.blu-analysis-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-height: 30px;
+  padding: 2px 6px;
+  background: var(--bg-surface-hover);
+}
+
+.blu-analysis.is-collapsed .blu-analysis-bar {
+  border-bottom: none;
+}
+
+.blu-analysis:not(.is-collapsed) .blu-analysis-bar {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.blu-analysis-toggle {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.blu-analysis-toggle:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.blu-analysis-chevron {
+  font-size: 0.7rem;
+  transition: transform 0.15s ease;
+}
+
+.blu-analysis:not(.is-collapsed) .blu-analysis-chevron {
+  transform: rotate(90deg);
+}
+
+.blu-analysis-scope-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.blu-analysis-scope-hint {
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .blu-analysis-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 0;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-surface-hover);
+  margin-left: auto;
 }
 
 .blu-analysis-tab {
@@ -4267,12 +4333,11 @@ hr {
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 600;
-  padding: 6px 12px;
+  padding: 4px 8px;
   cursor: pointer;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
+  border-radius: var(--radius-sm);
 }
 
 .blu-analysis-tab:hover {
@@ -4282,17 +4347,21 @@ hr {
 
 .blu-analysis-tab.is-active {
   color: var(--accent);
-  border-bottom-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.blu-analysis-body[hidden] {
+  display: none !important;
 }
 
 .blu-analysis-panels {
-  min-height: 120px;
-  max-height: 220px;
+  min-height: 0;
+  max-height: 180px;
   overflow: auto;
 }
 
 .blu-analysis-panel {
-  padding: 8px 10px;
+  padding: 6px 8px;
 }
 
 .blu-analysis-panel[hidden] {
@@ -4300,38 +4369,41 @@ hr {
 }
 
 .blu-analysis-empty {
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   color: var(--text-muted);
-  padding: 12px 4px;
+  padding: 8px 4px;
   text-align: center;
 }
 
 .blu-readout-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 4px 10px;
+  gap: 2px 8px;
 }
 
 .blu-readout-row {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
   min-width: 0;
 }
 
 .blu-readout-k {
-  font-size: 0.62rem;
+  font-size: 0.6rem;
   color: var(--text-muted);
+  flex-shrink: 0;
 }
 
 .blu-readout-v {
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-family: var(--font-mono);
   font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .blu-events-toolbar,
@@ -4463,7 +4535,7 @@ hr {
 .blu-fft-canvas,
 .blu-ov-canvas {
   width: 100%;
-  height: 140px;
+  height: 110px;
   display: block;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -4471,8 +4543,9 @@ hr {
   cursor: crosshair;
 }
 
-.blu-fft-peaks .blu-events-list {
-  max-height: 140px;
+.blu-fft-peaks .blu-events-list,
+.blu-events-list {
+  max-height: 110px;
 }
 
 .blu-battery-result {
@@ -4497,7 +4570,12 @@ hr {
 
 @media (max-width: 900px) {
   .blu-readout-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .blu-analysis-tabs {
+    margin-left: 0;
+    width: 100%;
   }
 
   .blu-events-cols,

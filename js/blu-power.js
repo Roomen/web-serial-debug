@@ -885,15 +885,41 @@
 	const EDGE_SEARCH_MAX = 80000 // 单次边沿搜索上限，防卡 UI（全选大缓冲时抽稀）
 	// 选择测量缓存：供画布浮标用，避免每帧重扫边沿
 	let cursorMeasureCache = null
-	// 分析面板：读数 / 事件 / FFT / 电池 / 叠画
+	// 分析面板：读数 / 事件 / FFT / 电池 / 叠画（默认可折叠，不占波形高度）
 	let analysisTab = 'readout'
-	let analysisCache = null // { key, samples, step, rateHz, a, b, basic, levels, timing, spikes, segs, fft, cycles }
+	let analysisScope = 'auto' // auto | selection | window
+	let analysisCollapsed = true
+	let analysisCache = null // { key, source, samples, … }
 	let analysisPending = false
 	let analysisTimer = null
 	let analysisLastRenderKey = '' // 避免 digit 定时器反复重绘 DOM
-	let analysisHadSelection = false
-	const ANALYSIS_MAX_SAMPLES = 262144 // 选择区抽取上限，防卡 UI
+	let analysisHadRange = false
+	const ANALYSIS_CFG_KEY = 'blu-analysis-ui'
+	const ANALYSIS_MAX_SAMPLES = 262144 // 区间抽取上限，防卡 UI
 	const ANALYSIS_DEBOUNCE_MS = 80
+
+	function loadAnalysisUiCfg() {
+		try {
+			const raw = localStorage.getItem(ANALYSIS_CFG_KEY)
+			if (!raw) return
+			const o = JSON.parse(raw)
+			if (o && (o.scope === 'auto' || o.scope === 'selection' || o.scope === 'window')) {
+				analysisScope = o.scope
+			}
+			if (o && typeof o.collapsed === 'boolean') analysisCollapsed = o.collapsed
+		} catch (e) { /* 忽略 */ }
+	}
+
+	function saveAnalysisUiCfg() {
+		try {
+			localStorage.setItem(ANALYSIS_CFG_KEY, JSON.stringify({
+				scope: analysisScope,
+				collapsed: analysisCollapsed,
+			}))
+		} catch (e) { /* 忽略 */ }
+	}
+
+	loadAnalysisUiCfg()
 	let yAutoTargetMin = null
 	let yAutoTargetMax = null
 	let yAutoDispMin = null
@@ -1414,6 +1440,13 @@
 		if (!scrollPaused) {
 			view.xOffset = 0
 			liveMode = true
+		} else if (analysisScope !== 'selection') {
+			// 暂停后窗口冻结，允许分析用当前视口重算
+			if (analysisCache && analysisCache.source === 'window') {
+				analysisCache = null
+				analysisLastRenderKey = ''
+			}
+			scheduleAnalysisRefresh(true)
 		}
 		const el = E('blu-pause-scroll')
 		if (el) {
@@ -2196,16 +2229,6 @@
 			set('-max', '--')
 			set('-min', '--')
 			set('-n', '')
-			if (prefix === 'blu-stat-cursor') {
-				set('-rms', '--')
-				set('-pp', '--')
-				set('-low', '--')
-				set('-high', '--')
-				set('-duty', '--')
-				set('-freq', '--')
-				set('-qcycle', '--')
-				set('-ab', '--')
-			}
 			if (opts.showEmpty) {
 				if (emptyEl) emptyEl.style.display = ''
 				if (gridEl) gridEl.style.display = 'none'
@@ -2225,17 +2248,6 @@
 		set('-max', fmtCurrent(st.maxI))
 		set('-min', fmtCurrent(st.minI))
 		set('-n', st.n ? (st.n + ' 点') : '')
-		if (prefix === 'blu-stat-cursor' && opts.extra) {
-			const ex = opts.extra
-			set('-rms', ex.rms != null ? fmtCurrent(ex.rms) : '--')
-			set('-pp', ex.pp != null ? fmtCurrent(ex.pp) : '--')
-			set('-low', ex.lowAvg != null ? fmtCurrent(ex.lowAvg) : '--')
-			set('-high', ex.highAvg != null ? fmtCurrent(ex.highAvg) : '--')
-			set('-duty', ex.duty != null ? ((ex.duty * 100).toFixed(1) + '%') : '--')
-			set('-freq', ex.freqHz != null ? fmtFreq(ex.freqHz) : '--')
-			set('-qcycle', ex.qCycle != null ? fmtCharge(ex.qCycle) : '--')
-			set('-ab', ex.ab || '--')
-		}
 	}
 
 	/**
@@ -2302,12 +2314,40 @@
 		scheduleUIUpdate()
 	}
 
-	function analysisCacheKey(a, b) {
-		// 下标稳定（只追加归档不滑动），无需 ringCount；Live 下避免半秒重算
-		return a + '|' + b + '|' + samplePeriodSec + '|' + (setVoltageMv || '')
+	/**
+	 * 分析区间：selection | window | auto（有选择用选择，否则窗口）
+	 * 返回 { a, b, source } 或 null
+	 */
+	function getAnalysisRange() {
+		if (recordMode !== 'wave' || ringCount < 2) return null
+		const sel = getSelectionRange()
+		if (analysisScope === 'selection') {
+			return sel ? { a: sel.a, b: sel.b, source: 'selection' } : null
+		}
+		if (analysisScope === 'window') {
+			const vr = getViewRange()
+			if (vr.count < 2) return null
+			return { a: vr.start, b: vr.end, source: 'window' }
+		}
+		// auto
+		if (sel) return { a: sel.a, b: sel.b, source: 'selection' }
+		const vr = getViewRange()
+		if (vr.count < 2) return null
+		return { a: vr.start, b: vr.end, source: 'window' }
+	}
+
+	function analysisSourceLabel(src) {
+		if (src === 'selection') return '选择'
+		if (src === 'window') return '窗口'
+		return src || '--'
+	}
+
+	function analysisCacheKey(a, b, source) {
+		return (source || '') + '|' + a + '|' + b + '|' + samplePeriodSec + '|' + (setVoltageMv || '')
 	}
 
 	function scheduleAnalysisRefresh(force) {
+		if (analysisCollapsed && !force) return
 		if (analysisTimer) clearTimeout(analysisTimer)
 		analysisTimer = setTimeout(function () {
 			analysisTimer = null
@@ -2315,35 +2355,59 @@
 		}, ANALYSIS_DEBOUNCE_MS)
 	}
 
+	function syncAnalysisScopeHint(pack) {
+		const el = E('blu-analysis-scope-hint')
+		if (!el) return
+		if (!pack) {
+			el.textContent = analysisScope === 'selection' ? '无选择' : '无区间'
+			return
+		}
+		el.textContent = analysisSourceLabel(pack.source) + ' · ' +
+			fmtDuration((pack.b - pack.a) * samplePeriodSec)
+	}
+
 	function getOrBuildAnalysisPack(force) {
-		const sel = getSelectionRange()
-		if (!sel || recordMode !== 'wave') {
-			analysisCache = null
+		const range = getAnalysisRange()
+		if (!range) {
+			// Live 窗口滚动态：保留上一份 window 缓存，避免半空
+			if (!force && analysisCache && analysisCache.source === 'window' &&
+				analysisScope !== 'selection' && !scrollPaused) {
+				return analysisCache
+			}
+			// 选择模式无框选：丢弃旧缓存，避免显示过期区间
+			if (analysisScope === 'selection') analysisCache = null
+			syncAnalysisScopeHint(null)
 			return null
 		}
-		const key = analysisCacheKey(sel.a, sel.b)
+		// Live 贴最新端时窗口端点一直动：非强制且未暂停则沿用缓存，避免 60fps 重算
+		if (range.source === 'window' && !scrollPaused && !force &&
+			analysisCache && analysisCache.source === 'window') {
+			return analysisCache
+		}
+		const key = analysisCacheKey(range.a, range.b, range.source)
 		if (!force && analysisCache && analysisCache.key === key) return analysisCache
-		const ext = extractRangeSamples(sel.a, sel.b, ANALYSIS_MAX_SAMPLES)
+		const ext = extractRangeSamples(range.a, range.b, ANALYSIS_MAX_SAMPLES)
 		if (!ext) {
 			analysisCache = null
+			syncAnalysisScopeHint(null)
 			return null
 		}
-		const timing = measureSelectionTiming(sel.a, sel.b)
+		const timing = measureSelectionTiming(range.a, range.b)
 		const basic = ANAL ? ANAL.basicStats(ext.samples) : null
 		const thr = timing.thr != null ? timing.thr : (basic ? (basic.min + basic.max) * 0.5 : 0)
 		const levels = ANAL ? ANAL.twoLevelStats(ext.samples, thr, Math.abs(basic ? basic.pp * 0.02 : 0)) : null
 		let qCycle = null
 		if (timing.periodSec != null && timing.periodSec > 0 && basic && basic.n) {
-			// 每周期电荷 ≈ avgI(µA) * period(s) = µC
 			qCycle = basic.avg * timing.periodSec
 		} else if (basic && basic.n && ext.nRaw > 1 && timing.nPeriod > 0) {
-			const st = calcStats(sel.a, sel.b + 1)
+			const st = calcStats(range.a, range.b + 1)
 			if (st && st.chargeUC != null) qCycle = st.chargeUC / timing.nPeriod
 		}
 		const pack = {
 			key: key,
-			a: sel.a,
-			b: sel.b,
+			source: range.source,
+			a: range.a,
+			b: range.b,
 			ext: ext,
 			basic: basic,
 			levels: levels,
@@ -2356,23 +2420,6 @@
 		}
 		analysisCache = pack
 		return pack
-	}
-
-	function fillCursorExtrasFromPack(pack) {
-		if (!pack) return null
-		const b = pack.basic
-		const lv = pack.levels
-		const tm = pack.timing
-		return {
-			rms: b ? b.rms : null,
-			pp: b ? b.pp : null,
-			lowAvg: lv ? lv.lowAvg : null,
-			highAvg: lv ? lv.highAvg : null,
-			duty: lv && lv.duty != null ? lv.duty : (tm ? tm.duty : null),
-			freqHz: tm ? tm.freqHz : null,
-			qCycle: pack.qCycle,
-			ab: fmtTimeAxis(indexToTime(pack.a)) + ' · ' + fmtTimeAxis(indexToTime(pack.b)),
-		}
 	}
 
 	function updateReadoutPanel(pack) {
@@ -2392,8 +2439,10 @@
 		const ia = ringIAt(pack.a)
 		const ib = ringIAt(pack.b)
 		const dt = (pack.b - pack.a) * samplePeriodSec
-		set('blu-ro-a', fmtTimeAxis(indexToTime(pack.a)) + '  ' + (isFinite(ia) ? fmtCurrent(ia) : ''))
-		set('blu-ro-b', fmtTimeAxis(indexToTime(pack.b)) + '  ' + (isFinite(ib) ? fmtCurrent(ib) : ''))
+		set('blu-ro-src', analysisSourceLabel(pack.source) +
+			(pack.ext && pack.ext.step > 1 ? ' · 抽稀1/' + pack.ext.step : ''))
+		set('blu-ro-ab',
+			fmtTimeAxis(indexToTime(pack.a)) + ' → ' + fmtTimeAxis(indexToTime(pack.b)))
 		set('blu-ro-dt', fmtDuration(dt))
 		set('blu-ro-iab', (isFinite(ia) ? fmtCurrent(ia) : '--') + ' / ' + (isFinite(ib) ? fmtCurrent(ib) : '--'))
 		set('blu-ro-di', isFinite(ia) && isFinite(ib) ? fmtCurrent(ib - ia) : '--')
@@ -2440,8 +2489,8 @@
 		const cSp = E('blu-spike-count')
 		const cSeg = E('blu-seg-count')
 		if (!pack || !pack.ext) {
-			if (listSp) listSp.innerHTML = '<div class="blu-analysis-empty">无选择</div>'
-			if (listSeg) listSeg.innerHTML = '<div class="blu-analysis-empty">无选择</div>'
+			if (listSp) listSp.innerHTML = '<div class="blu-analysis-empty">无可用区间</div>'
+			if (listSeg) listSeg.innerHTML = '<div class="blu-analysis-empty">无可用区间</div>'
 			if (meta) meta.textContent = ''
 			if (cSp) cSp.textContent = '0'
 			if (cSeg) cSeg.textContent = '0'
@@ -2624,7 +2673,7 @@
 		const list = E('blu-fft-peak-list')
 		if (!pack) {
 			if (meta) meta.textContent = ''
-			if (list) list.innerHTML = '<div class="blu-analysis-empty">无选择</div>'
+			if (list) list.innerHTML = '<div class="blu-analysis-empty">无可用区间</div>'
 			drawFftCanvas(null)
 			return
 		}
@@ -2684,14 +2733,26 @@
 		const srcEl = E('blu-bat-src')
 		const mah = mahEl ? parseFloat(mahEl.value) : NaN
 		const derate = derEl ? parseFloat(derEl.value) : 0.9
-		const src = srcEl ? srcEl.value : 'selection'
+		const src = srcEl ? srcEl.value : 'analysis'
 		let avgI = null
 		let label = ''
 		if (src === 'selection') {
+			const sel = getSelectionRange()
+			if (sel) {
+				const ext = extractRangeSamples(sel.a, sel.b, ANALYSIS_MAX_SAMPLES)
+				if (ext && ANAL) {
+					const basic = ANAL.basicStats(ext.samples)
+					if (basic && basic.n) {
+						avgI = basic.avg
+						label = '选择区'
+					}
+				}
+			}
+		} else if (src === 'analysis') {
 			const pack = getOrBuildAnalysisPack(false)
 			if (pack && pack.basic) {
 				avgI = pack.basic.avg
-				label = '选择区'
+				label = '分析区间(' + analysisSourceLabel(pack.source) + ')'
 			}
 		} else if (src === 'window') {
 			const vr = getViewRange()
@@ -2858,22 +2919,27 @@
 	}
 
 	function refreshAnalysis(force) {
+		if (analysisCollapsed) {
+			// 收起时只更新 bar 上的区间提示，不占高度、不重绘面板
+			if (!analysisPending) syncAnalysisScopeHint(getOrBuildAnalysisPack(false))
+			return
+		}
 		if (analysisPending) return
 		analysisPending = true
 		try {
 			const pack = getOrBuildAnalysisPack(!!force)
-			const rkey = (pack ? pack.key : 'none') + '|' + analysisTab + '|' + (force ? 'f' : '')
-			// 选择未变且非强制：跳过 DOM/canvas 重绘（digit 定时器约 2Hz）
+			syncAnalysisScopeHint(pack)
+			const rkey = (pack ? pack.key : 'none') + '|' + analysisTab + '|' + analysisScope
+			// 区间未变且非强制：跳过 DOM/canvas 重绘
 			if (!force && rkey === analysisLastRenderKey && pack) {
 				return
 			}
-			if (!force && !pack && !analysisHadSelection && analysisLastRenderKey === 'none|' + analysisTab + '|') {
+			if (!force && !pack && !analysisHadRange && analysisLastRenderKey.indexOf('none|') === 0) {
 				return
 			}
-			analysisLastRenderKey = pack ? (pack.key + '|' + analysisTab + '|') : ('none|' + analysisTab + '|')
-			analysisHadSelection = !!pack
+			analysisLastRenderKey = pack ? rkey : ('none|' + analysisTab + '|' + analysisScope)
+			analysisHadRange = !!pack
 			updateReadoutPanel(pack)
-			// 选择卡扩展字段在 updateStats 里填
 			if (analysisTab === 'events') renderEventsPanel(pack)
 			else if (analysisTab === 'fft') renderFftPanel(pack)
 			else if (analysisTab === 'battery') updateBatteryPanel()
@@ -2883,7 +2949,38 @@
 		}
 	}
 
-	function setAnalysisTab(tab) {
+	function setAnalysisCollapsed(collapsed) {
+		analysisCollapsed = !!collapsed
+		const root = E('blu-analysis')
+		const body = E('blu-analysis-body')
+		const btn = E('blu-analysis-toggle')
+		if (root) root.classList.toggle('is-collapsed', analysisCollapsed)
+		if (body) body.hidden = analysisCollapsed
+		if (btn) {
+			btn.setAttribute('aria-expanded', analysisCollapsed ? 'false' : 'true')
+			btn.title = analysisCollapsed ? '展开分析面板' : '收起分析面板（不占高度）'
+		}
+		saveAnalysisUiCfg()
+		if (!analysisCollapsed) {
+			analysisLastRenderKey = ''
+			refreshAnalysis(true)
+		}
+	}
+
+	function setAnalysisScope(scope) {
+		if (scope !== 'selection' && scope !== 'window') scope = 'auto'
+		if (scope === analysisScope) return
+		analysisScope = scope
+		analysisCache = null
+		analysisLastRenderKey = ''
+		const el = E('blu-analysis-scope')
+		if (el && el.value !== analysisScope) el.value = analysisScope
+		saveAnalysisUiCfg()
+		scheduleAnalysisRefresh(true)
+	}
+
+	function setAnalysisTab(tab, opts) {
+		opts = opts || {}
 		const tabs = ['readout', 'events', 'fft', 'battery', 'overlay']
 		if (tabs.indexOf(tab) < 0) tab = 'readout'
 		const changed = analysisTab !== tab
@@ -2898,9 +2995,13 @@
 			panel.hidden = !on
 			panel.classList.toggle('is-active', on)
 		})
-		// 切 tab 强制重绘当前面板
+		// 用户点 tab 时若收起则展开；初始化 silent 不强制展开
+		if (analysisCollapsed && opts.expandIfCollapsed !== false && !opts.silent) {
+			setAnalysisCollapsed(false)
+			return
+		}
 		if (changed) analysisLastRenderKey = ''
-		refreshAnalysis(true)
+		if (!analysisCollapsed) refreshAnalysis(true)
 	}
 
 	function invalidateOverallStat() {
@@ -2940,11 +3041,7 @@
 		fillStatRow('blu-stat-window', calcStats(vr.start, vr.end + 1))
 		const sel = getSelectionRange()
 		if (sel) {
-			const pack = getOrBuildAnalysisPack(false)
-			fillStatRow('blu-stat-cursor', calcStats(sel.a, sel.b + 1), {
-				showEmpty: true,
-				extra: fillCursorExtrasFromPack(pack),
-			})
+			fillStatRow('blu-stat-cursor', calcStats(sel.a, sel.b + 1), { showEmpty: true })
 		} else {
 			fillStatRow('blu-stat-cursor', emptyStats(), { showEmpty: true })
 		}
@@ -4043,21 +4140,33 @@
 	}
 
 	function updateCursorInfo() {
-		// 测量改画在画布浮标；选择变化时才刷新分析面板（避免 digit 2Hz 重绘）
+		// 测量改画在画布浮标；区间变化时刷新分析（收起则只更新 hint）
 		const sel = getSelectionRange()
 		if (!sel) {
 			cursorMeasureCache = null
-			if (analysisHadSelection || analysisCache) {
-				analysisCache = null
-				analysisLastRenderKey = ''
+		} else {
+			ensureCursorMeasureCache(sel.a, sel.b)
+		}
+		// auto/selection 依赖选择；window 依赖视口（暂停后才重算）
+		if (analysisCollapsed) {
+			syncAnalysisScopeHint(getOrBuildAnalysisPack(false))
+			return
+		}
+		const range = getAnalysisRange()
+		if (!range) {
+			if (analysisHadRange || analysisCache) {
+				// 选择清空且 scope=selection 时丢缓存
+				if (analysisScope === 'selection') {
+					analysisCache = null
+					analysisLastRenderKey = ''
+				}
 				scheduleAnalysisRefresh(true)
 			}
 			return
 		}
-		ensureCursorMeasureCache(sel.a, sel.b)
-		const key = analysisCacheKey(sel.a, sel.b)
+		const key = analysisCacheKey(range.a, range.b, range.source)
 		if (!analysisCache || analysisCache.key !== key) {
-			scheduleAnalysisRefresh(false)
+			scheduleAnalysisRefresh(range.source === 'window' ? true : false)
 		}
 	}
 
@@ -5021,7 +5130,20 @@
 			})
 		}
 
-		// 分析面板 tabs + 控件
+		// 分析面板：折叠 / 区间 / tabs
+		const elAnToggle = E('blu-analysis-toggle')
+		if (elAnToggle) {
+			elAnToggle.addEventListener('click', function () {
+				setAnalysisCollapsed(!analysisCollapsed)
+			})
+		}
+		const elAnScope = E('blu-analysis-scope')
+		if (elAnScope) {
+			elAnScope.value = analysisScope
+			elAnScope.addEventListener('change', function () {
+				setAnalysisScope(elAnScope.value)
+			})
+		}
 		document.querySelectorAll('.blu-analysis-tab').forEach(function (btn) {
 			btn.addEventListener('click', function () {
 				setAnalysisTab(btn.getAttribute('data-tab') || 'readout')
@@ -5029,28 +5151,34 @@
 		})
 		const elEvRef = E('blu-events-refresh')
 		if (elEvRef) elEvRef.addEventListener('click', function () {
+			if (analysisCollapsed) setAnalysisCollapsed(false)
+			analysisCache = null
+			analysisLastRenderKey = ''
 			const pack = getOrBuildAnalysisPack(true)
 			if (pack) {
 				pack.spikes = null
 				pack.segs = null
 			}
 			renderEventsPanel(getOrBuildAnalysisPack(false))
+			syncAnalysisScopeHint(analysisCache)
 		})
 		const elFftRef = E('blu-fft-refresh')
 		if (elFftRef) elFftRef.addEventListener('click', function () {
-			const pack = getOrBuildAnalysisPack(true)
-			if (pack) pack.fft = null
-			renderFftPanel(getOrBuildAnalysisPack(false))
+			if (analysisCollapsed) setAnalysisCollapsed(false)
+			if (analysisCache) analysisCache.fft = null
+			analysisLastRenderKey = ''
+			renderFftPanel(getOrBuildAnalysisPack(true))
+			syncAnalysisScopeHint(analysisCache)
 		})
 		const elFftWin = E('blu-fft-window')
 		if (elFftWin) elFftWin.addEventListener('change', function () {
 			if (analysisCache) analysisCache.fft = null
-			if (analysisTab === 'fft') renderFftPanel(getOrBuildAnalysisPack(false))
+			if (!analysisCollapsed && analysisTab === 'fft') renderFftPanel(getOrBuildAnalysisPack(false))
 		})
 		const elFftDc = E('blu-fft-remove-dc')
 		if (elFftDc) elFftDc.addEventListener('change', function () {
 			if (analysisCache) analysisCache.fft = null
-			if (analysisTab === 'fft') renderFftPanel(getOrBuildAnalysisPack(false))
+			if (!analysisCollapsed && analysisTab === 'fft') renderFftPanel(getOrBuildAnalysisPack(false))
 		})
 		const elBatCalc = E('blu-bat-calc')
 		if (elBatCalc) elBatCalc.addEventListener('click', updateBatteryPanel)
@@ -5060,9 +5188,11 @@
 		})
 		const elOvRef = E('blu-ov-refresh')
 		if (elOvRef) elOvRef.addEventListener('click', function () {
-			const pack = getOrBuildAnalysisPack(true)
-			if (pack) pack.cycles = null
-			renderOverlayPanel(getOrBuildAnalysisPack(false))
+			if (analysisCollapsed) setAnalysisCollapsed(false)
+			if (analysisCache) analysisCache.cycles = null
+			analysisLastRenderKey = ''
+			renderOverlayPanel(getOrBuildAnalysisPack(true))
+			syncAnalysisScopeHint(analysisCache)
 		})
 		const fftCanvas = E('blu-fft-canvas')
 		if (fftCanvas) {
@@ -5083,7 +5213,9 @@
 				zoomToFreqPeriod(freq, pack)
 			})
 		}
-		setAnalysisTab('readout')
+		// 恢复折叠/区间偏好；tabs 默认读数（silent 不强制展开）
+		setAnalysisTab('readout', { silent: true })
+		setAnalysisCollapsed(analysisCollapsed)
 
 		const bindClick = function (id, fn) {
 			const el = E(id)
