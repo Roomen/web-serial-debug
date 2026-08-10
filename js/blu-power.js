@@ -36,6 +36,12 @@
 	const LOG_SUGGEST_EXIT = 50 // 建议 Log 退出阈值（滞回，防闪）
 	const LOG_LINEAR_HINT_RATIO = 10 // Log 下动态范围过小 → 建议线性
 	const LOG_LINEAR_HINT_EXIT = 25 // 建议线性退出阈值（滞回）
+	// 软建议时间域防抖：Live 脉冲进出会让 ratio 在阈值两侧抖，仅靠比值滞回不够
+	const HINT_RATIO_EMA_ALPHA = 0.12 // ratio EMA 平滑系数（越小越稳）
+	const HINT_ENTER_HOLD_MS = 450 // 目标建议需持续这么久才显示
+	const HINT_EXIT_HOLD_MS = 1600 // 目标清空需持续这么久才关掉
+	const HINT_MIN_SHOW_MS = 2800 // 一旦显示，至少保持这么久
+	const HINT_INVALID_KEEP_MS = 900 // 窗口 lo/hi 短暂无效时沿用上一 ratio
 	// 预热：丢掉上电/切档瞬态。原先 targetHz*2s 在 100k 下约 2s 才见波形，过长；
 	// 改为约 0.25s 输出点（与 Python「约 2s@200Hz」同量级的短瞬态，但不再拖数秒）
 	const WARMUP_SEC = 0.25
@@ -122,6 +128,11 @@
 	let symlogLinthreshUA = SYMLOG_LINTHRESH_DEFAULT_UA
 	let yAxisLocked = false // Lock Y：冻结自动量程，Live 不再跟
 	let yScaleHint = '' // '' | 'log' | 'linear' — 工具条轻提示，不自动硬切
+	let yScaleHintRatioEma = null // 平滑后的 max/min+ 比值
+	let yScaleHintLastValidAt = 0 // 最近一次有效 ratio 时间
+	let yScaleHintChangedAt = 0 // 当前 yScaleHint 写入时间（MIN_SHOW）
+	let yScaleHintCandidate = '' // 待切换目标
+	let yScaleHintCandidateAt = 0 // 候选开始持续的时间
 	let liveMode = true // PPK Live：视口贴着最新数据
 
 	// 原始流统计
@@ -1329,6 +1340,7 @@
 		deviceStreamHz = 0
 		rawStreamCount = 0
 		rawStreamFirstTs = 0
+		resetYScaleHintState()
 		if (log) bluLog('数据已清空')
 		scheduleUIUpdate()
 	}
@@ -1477,6 +1489,47 @@
 		return yScaleMode === 'log' || yScaleMode === 'symlog'
 	}
 
+	/** 复位软建议状态（切换 Y 刻度 / 清空数据时） */
+	function resetYScaleHintState() {
+		yScaleHint = ''
+		yScaleHintRatioEma = null
+		yScaleHintLastValidAt = 0
+		yScaleHintChangedAt = 0
+		yScaleHintCandidate = ''
+		yScaleHintCandidateAt = 0
+		yScaleUiKey = ''
+	}
+
+	/**
+	 * 把「想要的建议」经时间滞回落到 yScaleHint。
+	 * - 进入：需持续 HINT_ENTER_HOLD_MS
+	 * - 退出：需持续 HINT_EXIT_HOLD_MS，且已显示 ≥ HINT_MIN_SHOW_MS
+	 */
+	function commitYScaleHintWant(want, now) {
+		if (want == null) want = ''
+		if (want === yScaleHint) {
+			yScaleHintCandidate = ''
+			yScaleHintCandidateAt = 0
+			return
+		}
+		// 已显示时强制最短展示，避免脉冲一闪就灭
+		if (yScaleHint && want === '' && yScaleHintChangedAt > 0 &&
+			(now - yScaleHintChangedAt) < HINT_MIN_SHOW_MS) {
+			return
+		}
+		if (want !== yScaleHintCandidate) {
+			yScaleHintCandidate = want
+			yScaleHintCandidateAt = now
+			return
+		}
+		const hold = want === '' ? HINT_EXIT_HOLD_MS : HINT_ENTER_HOLD_MS
+		if ((now - yScaleHintCandidateAt) < hold) return
+		yScaleHint = want
+		yScaleHintChangedAt = now
+		yScaleHintCandidate = ''
+		yScaleHintCandidateAt = 0
+	}
+
 	function setYScaleMode(mode) {
 		const next = (mode === 'log' || mode === 'symlog') ? mode : 'linear'
 		if (next === yScaleMode) {
@@ -1491,8 +1544,7 @@
 		yAxisLocked = false
 		lockSnapFloorUA = null
 		lockSnapLinthreshUA = null
-		yScaleHint = ''
-		yScaleUiKey = ''
+		resetYScaleHintState()
 		if (next === 'symlog') symlogLinthreshUA = SYMLOG_LINTHRESH_DEFAULT_UA
 		if (next === 'log') logFloorUA = LOG_FLOOR_DEFAULT_UA
 		resetYAuto()
@@ -3375,38 +3427,55 @@
 	}
 
 	/**
-	 * 建议 Log / 建议线性：进入阈值 + 退出阈值滞回，避免 Live 在阈值附近闪提示。
+	 * 建议 Log / 建议线性：
+	 * 1) 比值进入/退出滞回（LOG_SUGGEST_* / LOG_LINEAR_*）
+	 * 2) ratio EMA 平滑，压住 Live 脉冲进出视口的毛刺
+	 * 3) 时间域进入/退出 hold + 最短展示，避免按钮 hidden 抖动
+	 * 4) 窗口 lo/hi 短暂无效时沿用上一有效 ratio，不立刻清掉建议
 	 */
 	function updateYScaleHint(yMin, yMax, minPositive) {
+		const now = performance.now()
 		const pos = (minPositive > 0 && isFinite(minPositive)) ? minPositive : null
 		const hi = isFinite(yMax) ? Math.abs(yMax) : 0
 		const lo = pos != null ? pos : (isFinite(yMin) && yMin > 0 ? yMin : null)
-		if (!(lo > 0) || !(hi > 0)) {
-			yScaleHint = ''
+		const valid = (lo > 0) && (hi > 0)
+
+		if (valid) {
+			const ratio = hi / lo
+			yScaleHintLastValidAt = now
+			if (!(yScaleHintRatioEma > 0) || !isFinite(yScaleHintRatioEma)) {
+				yScaleHintRatioEma = ratio
+			} else {
+				yScaleHintRatioEma += (ratio - yScaleHintRatioEma) * HINT_RATIO_EMA_ALPHA
+			}
+		} else if (!(yScaleHintRatioEma > 0) ||
+			!isFinite(yScaleHintRatioEma) ||
+			(now - yScaleHintLastValidAt) > HINT_INVALID_KEEP_MS) {
+			// 长时间无有效比值：走时间滞回清空（不硬切）
+			commitYScaleHintWant('', now)
 			return
 		}
-		const ratio = hi / lo
+		// else：短暂无效，继续用 EMA
+
+		const r = yScaleHintRatioEma
+		let want = ''
 		if (yScaleMode === 'linear') {
 			if (yScaleHint === 'log') {
-				// 已显示「建议 Log」：仅当动态范围明显收窄才关掉
-				if (ratio < LOG_SUGGEST_EXIT) yScaleHint = ''
-			} else if (ratio >= LOG_SUGGEST_RATIO) {
-				yScaleHint = 'log'
-			} else {
-				yScaleHint = ''
+				// 已显示「建议 Log」：仅当动态范围明显收窄才想关掉
+				want = (r < LOG_SUGGEST_EXIT) ? '' : 'log'
+			} else if (r >= LOG_SUGGEST_RATIO) {
+				want = 'log'
 			}
 		} else if (isLogLikeY()) {
 			if (yScaleHint === 'linear') {
-				// 已显示「建议线性」：仅当动态范围明显变大才关掉
-				if (ratio > LOG_LINEAR_HINT_EXIT) yScaleHint = ''
-			} else if (ratio > 0 && ratio < LOG_LINEAR_HINT_RATIO) {
-				yScaleHint = 'linear'
-			} else {
-				yScaleHint = ''
+				// 已显示「建议线性」：仅当动态范围明显变大才想关掉
+				want = (r > LOG_LINEAR_HINT_EXIT) ? '' : 'linear'
+			} else if (r > 0 && r < LOG_LINEAR_HINT_RATIO) {
+				want = 'linear'
 			}
-		} else {
-			yScaleHint = ''
 		}
+		// 非 linear/log-like：want 保持 ''，经时间滞回灭掉
+		commitYScaleHintWant(want, now)
 	}
 
 	function updateCanvas() {
