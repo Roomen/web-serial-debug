@@ -1431,6 +1431,9 @@
 		view.yPanOffset = 0
 		view.yMode = 'auto'
 		yAxisLocked = false
+		lockSnapFloorUA = null
+		lockSnapLinthreshUA = null
+		yScaleUiKey = ''
 		if (next === 'symlog') symlogLinthreshUA = SYMLOG_LINTHRESH_DEFAULT_UA
 		if (next === 'log') logFloorUA = LOG_FLOOR_DEFAULT_UA
 		resetYAuto()
@@ -1438,17 +1441,42 @@
 		scheduleUIUpdate()
 	}
 
+	// Lock 时一并冻结的映射参数（避免 span 锁住但 floor/linthresh 仍变 → 曲线漂移）
+	let lockSnapFloorUA = null
+	let lockSnapLinthreshUA = null
+	let yScaleUiKey = ''
+
 	function setYAxisLocked(on) {
-		yAxisLocked = !!on
-		// 锁定时冻结当前显示范围；解锁后从当前帧重新跟
-		if (!yAxisLocked) {
-			// 保持当前 yAutoDisp* 作起点，避免瞬间跳回
+		const next = !!on
+		if (next && !yAxisLocked) {
+			// 快照当前映射参数；若已有显示范围则冻结为 target/disp
+			lockSnapFloorUA = logFloorUA
+			lockSnapLinthreshUA = symlogLinthreshUA
+			if (plotLayout && isFinite(plotLayout.yMin) && isFinite(plotLayout.yMax)) {
+				// 把当前可见映射域（含 zoom/pan）烘焙为锁定基座
+				yAutoTargetMin = plotLayout.yMin
+				yAutoTargetMax = plotLayout.yMax
+				yAutoDispMin = plotLayout.yMin
+				yAutoDispMax = plotLayout.yMax
+				view.yZoom = 1
+				view.yPanOffset = 0
+			}
 		}
+		if (!next) {
+			lockSnapFloorUA = null
+			lockSnapLinthreshUA = null
+			// 解锁：保留当前 yAutoDisp* 作起点，下一帧继续跟
+		}
+		yAxisLocked = next
 		syncYScaleUi()
 		scheduleUIUpdate()
 	}
 
 	function syncYScaleUi() {
+		// 脏检查：Live 每帧 paint 时避免无意义 DOM 写
+		const key = yScaleMode + '|' + (yAxisLocked ? '1' : '0') + '|' + yScaleHint
+		if (key === yScaleUiKey) return
+		yScaleUiKey = key
 		const sel = E('blu-y-scale')
 		if (sel && sel.value !== yScaleMode) sel.value = yScaleMode
 		// 兼容旧 checkbox（若仍存在）
@@ -2238,10 +2266,13 @@
 	}
 
 	function asinh(x) {
-		// 稳定 asinh
+		// 稳定 asinh：大负值用 |x| 路径，避免 x+sqrt(x²+1) 相消
+		if (typeof Math.asinh === 'function') return Math.asinh(x)
 		const ax = Math.abs(x)
-		if (ax > 1e8) return Math.sign(x) * (Math.log(ax) + Math.LN2)
-		return Math.log(x + Math.sqrt(x * x + 1))
+		if (ax === 0) return 0
+		if (ax > 1e8) return (x < 0 ? -1 : 1) * (Math.log(ax) + Math.LN2)
+		const a = Math.log(ax + Math.sqrt(ax * ax + 1))
+		return x < 0 ? -a : a
 	}
 
 	function sinh(x) {
@@ -2252,10 +2283,12 @@
 	/**
 	 * 按窗口 minPositive 自适应 log floor（µA），钳在 [MIN, MAX]。
 	 * 策略：floor ≈ 10^floor(log10(min+ * 0.5))，默认 1 nA。
+	 * Lock 时返回快照，不随窗口抖动。
 	 */
 	function adaptLogFloor(minPositive) {
+		if (yAxisLocked && lockSnapFloorUA != null) return lockSnapFloorUA
 		if (!(minPositive > 0) || !isFinite(minPositive)) {
-			return LOG_FLOOR_DEFAULT_UA
+			return logFloorUA > 0 ? logFloorUA : LOG_FLOOR_DEFAULT_UA
 		}
 		// 略低于窗口最小正值，便于谷底不贴轴
 		let f = minPositive * 0.5
@@ -2266,6 +2299,9 @@
 		f = Math.pow(10, exp)
 		if (f < LOG_FLOOR_MIN_UA) f = LOG_FLOOR_MIN_UA
 		if (f > LOG_FLOOR_MAX_UA) f = LOG_FLOOR_MAX_UA
+		// 轻度滞回：抬高 floor 需 min+ 明显更高，避免 Live 噪声台阶跳
+		const cur = logFloorUA > 0 ? logFloorUA : LOG_FLOOR_DEFAULT_UA
+		if (f > cur && minPositive < cur * 8) return cur
 		return f
 	}
 
@@ -2407,13 +2443,20 @@
 
 	/**
 	 * Symlog 自动量程（映射域）。
+	 * Lock 时不改 linthresh，避免 asinh 单位与冻结 map 域不一致。
 	 */
 	function computeSymlogAutoMapRange(yMinRaw, yMaxRaw) {
-		// linthresh：默认 1 µA；若数据全在很小范围可略收
-		let th = SYMLOG_LINTHRESH_DEFAULT_UA
-		const span = Math.max(Math.abs(yMinRaw), Math.abs(yMaxRaw), 1e-9)
-		if (span < th * 0.2) th = Math.max(LOG_FLOOR_DEFAULT_UA, niceNumber(span / 2))
-		symlogLinthreshUA = th
+		let th
+		if (yAxisLocked && lockSnapLinthreshUA != null) {
+			th = lockSnapLinthreshUA
+			symlogLinthreshUA = th
+		} else {
+			// linthresh：默认 1 µA；若数据全在很小范围可略收
+			th = SYMLOG_LINTHRESH_DEFAULT_UA
+			const span = Math.max(Math.abs(yMinRaw), Math.abs(yMaxRaw), 1e-9)
+			if (span < th * 0.2) th = Math.max(LOG_FLOOR_DEFAULT_UA, niceNumber(span / 2))
+			symlogLinthreshUA = th
+		}
 		let lo = isFinite(yMinRaw) ? yMinRaw : -th
 		let hi = isFinite(yMaxRaw) ? yMaxRaw : th
 		if (hi < lo) { const t = lo; lo = hi; hi = t }
@@ -2431,38 +2474,53 @@
 	}
 
 	/**
-	 * Live 自动量程滞回：仅当目标显著越界才扩、显著偏小才缩（防脉冲狂跳）。
-	 * expand: 立即；shrink: 目标跨度 < 当前 * shrinkRatio 才收。
+	 * Live 自动量程滞回：越界立即扩、显著偏小才缩（防脉冲狂跳）。
+	 * expand: target+disp 同步外扩（立即看得见）；shrink: 仅 target 收，disp 缓跟。
+	 * Lock: 完全冻结 target/disp 与映射参数（floor/linthresh 另有快照）。
 	 */
 	function applyYAutoHysteresis(qMin, qMax, opts) {
 		opts = opts || {}
 		const expandPad = opts.expandPad != null ? opts.expandPad : 0
 		const shrinkRatio = opts.shrinkRatio != null ? opts.shrinkRatio : 0.55
-		if (yAutoTargetMin == null || yAxisLocked) {
+		if (yAxisLocked) {
 			if (yAutoTargetMin == null) {
 				yAutoTargetMin = qMin
 				yAutoTargetMax = qMax
 			}
-		} else {
-			const curRange = yAutoTargetMax - yAutoTargetMin || 1
-			const needExpand = qMin < yAutoTargetMin - expandPad || qMax > yAutoTargetMax + expandPad
-			const needShrink = (qMax - qMin) < curRange * shrinkRatio
-			if (needExpand || needShrink) {
-				yAutoTargetMin = qMin
-				yAutoTargetMax = qMax
-			}
-		}
-		// 平滑跟：锁定时冻结 disp
-		if (yAxisLocked) {
 			if (yAutoDispMin == null) {
 				yAutoDispMin = yAutoTargetMin
 				yAutoDispMax = yAutoTargetMax
 			}
-		} else if (yAutoDispMin == null) {
+			return { mapMin: yAutoDispMin, mapMax: yAutoDispMax }
+		}
+		if (yAutoTargetMin == null) {
+			yAutoTargetMin = qMin
+			yAutoTargetMax = qMax
+			yAutoDispMin = qMin
+			yAutoDispMax = qMax
+			return { mapMin: yAutoDispMin, mapMax: yAutoDispMax }
+		}
+		const curRange = yAutoTargetMax - yAutoTargetMin || 1
+		const needExpandLo = qMin < yAutoTargetMin - expandPad
+		const needExpandHi = qMax > yAutoTargetMax + expandPad
+		const needShrink = (qMax - qMin) < curRange * shrinkRatio
+		if (needExpandLo || needExpandHi) {
+			// 只外扩越界侧，避免脉冲把另一侧一并拉开后难收回
+			if (needExpandLo) yAutoTargetMin = qMin
+			if (needExpandHi) yAutoTargetMax = qMax
+		} else if (needShrink) {
+			yAutoTargetMin = qMin
+			yAutoTargetMax = qMax
+		}
+		if (yAutoDispMin == null) {
 			yAutoDispMin = yAutoTargetMin
 			yAutoDispMax = yAutoTargetMax
 		} else {
 			const alpha = opts.alpha != null ? opts.alpha : 0.3
+			// 外扩：disp 立即贴齐 target，脉冲顶不被裁一帧
+			if (yAutoTargetMin < yAutoDispMin) yAutoDispMin = yAutoTargetMin
+			if (yAutoTargetMax > yAutoDispMax) yAutoDispMax = yAutoTargetMax
+			// 内收：缓跟
 			yAutoDispMin += (yAutoTargetMin - yAutoDispMin) * alpha
 			yAutoDispMax += (yAutoTargetMax - yAutoDispMax) * alpha
 		}
@@ -2593,10 +2651,12 @@
 		if (view.yMode === 'manual') {
 			// 手工范围（线性值）→ 映射
 			if (yScaleMode === 'log') {
-				logFloorUA = adaptLogFloor(minPositive)
+				if (!yAxisLocked) logFloorUA = adaptLogFloor(minPositive)
+				else if (lockSnapFloorUA != null) logFloorUA = lockSnapFloorUA
 				mapYMin = logMap(Math.max(logFloorUA, view.yMin))
 				mapYMax = logMap(Math.max(logFloorUA, view.yMax))
 			} else if (yScaleMode === 'symlog') {
+				if (yAxisLocked && lockSnapLinthreshUA != null) symlogLinthreshUA = lockSnapLinthreshUA
 				mapYMin = symlogMap(view.yMin)
 				mapYMax = symlogMap(view.yMax)
 			} else {
@@ -2604,12 +2664,20 @@
 				mapYMax = view.yMax
 			}
 			if (mapYMax <= mapYMin) mapYMax = mapYMin + 1
+		} else if (yAxisLocked && yAutoDispMin != null && yAutoDispMax != null) {
+			// Lock：整段跳过 auto 重算，避免 floor/linthresh/span 任一漂移
+			if (yScaleMode === 'log' && lockSnapFloorUA != null) logFloorUA = lockSnapFloorUA
+			if (yScaleMode === 'symlog' && lockSnapLinthreshUA != null) {
+				symlogLinthreshUA = lockSnapLinthreshUA
+			}
+			mapYMin = yAutoDispMin
+			mapYMax = yAutoDispMax
 		} else if (yScaleMode === 'log') {
 			const lr = computeLogAutoMapRange(yMin, yMax, minPositive)
 			// Log：decade 滞回更强（shrink 需缩到半 decade 级），减少脉冲狂跳
 			const hy = applyYAutoHysteresis(lr.mapMin, lr.mapMax, {
 				shrinkRatio: 0.5,
-				alpha: yAxisLocked ? 0 : 0.35,
+				alpha: 0.35,
 			})
 			mapYMin = hy.mapMin
 			mapYMax = hy.mapMax
@@ -2617,7 +2685,7 @@
 			const sr = computeSymlogAutoMapRange(yMin, yMax)
 			const hy = applyYAutoHysteresis(sr.mapMin, sr.mapMax, {
 				shrinkRatio: 0.55,
-				alpha: yAxisLocked ? 0 : 0.3,
+				alpha: 0.3,
 			})
 			mapYMin = hy.mapMin
 			mapYMax = hy.mapMax
@@ -2634,7 +2702,7 @@
 			const qMax = Math.ceil(rawMax / step5) * step5
 			const hy = applyYAutoHysteresis(qMin, qMax, {
 				shrinkRatio: 0.6,
-				alpha: yAxisLocked ? 0 : 0.3,
+				alpha: 0.3,
 			})
 			mapYMin = hy.mapMin
 			mapYMax = hy.mapMax
@@ -3476,6 +3544,9 @@
 		view.yPanOffset = 0
 		view.yMode = 'auto'
 		yAxisLocked = false
+		lockSnapFloorUA = null
+		lockSnapLinthreshUA = null
+		yScaleUiKey = ''
 		resetYAuto()
 		syncYScaleUi()
 		scheduleUIUpdate()
