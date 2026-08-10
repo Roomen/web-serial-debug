@@ -890,6 +890,8 @@
 	let analysisCache = null // { key, samples, step, rateHz, a, b, basic, levels, timing, spikes, segs, fft, cycles }
 	let analysisPending = false
 	let analysisTimer = null
+	let analysisLastRenderKey = '' // 避免 digit 定时器反复重绘 DOM
+	let analysisHadSelection = false
 	const ANALYSIS_MAX_SAMPLES = 262144 // 选择区抽取上限，防卡 UI
 	const ANALYSIS_DEBOUNCE_MS = 80
 	let yAutoTargetMin = null
@@ -2860,6 +2862,16 @@
 		analysisPending = true
 		try {
 			const pack = getOrBuildAnalysisPack(!!force)
+			const rkey = (pack ? pack.key : 'none') + '|' + analysisTab + '|' + (force ? 'f' : '')
+			// 选择未变且非强制：跳过 DOM/canvas 重绘（digit 定时器约 2Hz）
+			if (!force && rkey === analysisLastRenderKey && pack) {
+				return
+			}
+			if (!force && !pack && !analysisHadSelection && analysisLastRenderKey === 'none|' + analysisTab + '|') {
+				return
+			}
+			analysisLastRenderKey = pack ? (pack.key + '|' + analysisTab + '|') : ('none|' + analysisTab + '|')
+			analysisHadSelection = !!pack
 			updateReadoutPanel(pack)
 			// 选择卡扩展字段在 updateStats 里填
 			if (analysisTab === 'events') renderEventsPanel(pack)
@@ -2874,6 +2886,7 @@
 	function setAnalysisTab(tab) {
 		const tabs = ['readout', 'events', 'fft', 'battery', 'overlay']
 		if (tabs.indexOf(tab) < 0) tab = 'readout'
+		const changed = analysisTab !== tab
 		analysisTab = tab
 		document.querySelectorAll('.blu-analysis-tab').forEach(function (btn) {
 			const on = btn.getAttribute('data-tab') === tab
@@ -2885,7 +2898,9 @@
 			panel.hidden = !on
 			panel.classList.toggle('is-active', on)
 		})
-		refreshAnalysis(false)
+		// 切 tab 强制重绘当前面板
+		if (changed) analysisLastRenderKey = ''
+		refreshAnalysis(true)
 	}
 
 	function invalidateOverallStat() {
@@ -4028,16 +4043,22 @@
 	}
 
 	function updateCursorInfo() {
-		// 测量改画在画布浮标；此处只刷新缓存，并触发分析面板
+		// 测量改画在画布浮标；选择变化时才刷新分析面板（避免 digit 2Hz 重绘）
 		const sel = getSelectionRange()
 		if (!sel) {
 			cursorMeasureCache = null
-			analysisCache = null
-			scheduleAnalysisRefresh(true)
+			if (analysisHadSelection || analysisCache) {
+				analysisCache = null
+				analysisLastRenderKey = ''
+				scheduleAnalysisRefresh(true)
+			}
 			return
 		}
 		ensureCursorMeasureCache(sel.a, sel.b)
-		scheduleAnalysisRefresh(false)
+		const key = analysisCacheKey(sel.a, sel.b)
+		if (!analysisCache || analysisCache.key !== key) {
+			scheduleAnalysisRefresh(false)
+		}
 	}
 
 	function clearSelection() {
@@ -4328,6 +4349,8 @@
 			bluLog('CSV 有效点不足（需要 timestamp_s,current_uA）', 'warn')
 			return
 		}
+		// 回放必须波形模式，否则统计/分析/画布走长期路径
+		if (recordMode !== 'wave') setRecordMode('wave')
 		// 估采样周期
 		let dtSum = 0
 		let dtN = 0
@@ -4340,6 +4363,7 @@
 		}
 		const dt = dtN ? (dtSum / dtN) : (1 / targetRateHz)
 		clearAllData(false)
+		analysisLastRenderKey = ''
 		samplePeriodSec = dt > 0 ? dt : (1 / targetRateHz)
 		periodLocked = true
 		deviceStreamHz = samplePeriodSec > 0 ? (1 / samplePeriodSec) : targetRateHz
