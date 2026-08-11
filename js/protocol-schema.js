@@ -102,11 +102,12 @@ window.SK_TAGS = {
 		{ id: 33, name: '阀门电池电压', type: 'BYTE[2]', desc: '0.01V' }
 	],
 	'3': [
-		{ id: 0, name: '过流告警阈值', type: 'BYTE[4]', desc: 'L/h 可按口径自动重置', dec: { t: 'float', unit: 'L/h' } },
-		{ id: 1, name: '持续过流告警时间', type: 'BYTE', desc: '分钟 默认30' },
-		{ id: 2, name: '反流告警阈值', type: 'BYTE[4]', desc: 'L/h 可按口径自动重置', dec: { t: 'float', unit: 'L/h' } },
-		{ id: 3, name: '持续反流告警时间', type: 'BYTE', desc: '分钟 默认30' },
-		{ id: 4, name: '电压告警阈值', type: 'BYTE[2]', desc: '0.01V' },
+		// 过流/反流阈值: 协议为 Uint32 LE 单位 L/h（非 IEEE float；如 35 0c 00 00 = 3125）
+		{ id: 0, name: '过流告警阈值', type: 'BYTE[4]', desc: 'Uint32 LE 单位L/h 可按口径自动重置', dec: { t: 'num', unit: 'L/h' } },
+		{ id: 1, name: '持续过流告警时间', type: 'BYTE', desc: '分钟 默认30', dec: { t: 'num', unit: '分钟' } },
+		{ id: 2, name: '反流告警阈值', type: 'BYTE[4]', desc: 'Uint32 LE 单位L/h 可按口径自动重置', dec: { t: 'num', unit: 'L/h' } },
+		{ id: 3, name: '持续反流告警时间', type: 'BYTE', desc: '分钟 默认30', dec: { t: 'num', unit: '分钟' } },
+		{ id: 4, name: '电压告警阈值', type: 'BYTE[2]', desc: 'Uint16 LE 0.01V', dec: { t: 'num', unit: 'V', scale: 0.01 } },
 		{ id: 5, name: '即时告警ID', type: 'BYTE[2]', desc: '16位位域 bit0磁干扰 bit1机电分离 bit2过流 bit3反流 bit4水温 bit5水压 bit6厚膜采样 bit7存储 bit8防冻 bit9漏水 bit10环境温度 bit11-15保留', dec: { t: 'bits', fields: [
 			{ bits: 0, name: '磁干扰', map: { 0: '无', 1: '有' } },
 			{ bits: 1, name: '机电分离', map: { 0: '无', 1: '有' } },
@@ -128,11 +129,14 @@ window.SK_TAGS = {
 		{ id: 11, name: '上报重发间隔', type: 'BYTE', desc: '分钟 默认20' },
 		{ id: 12, name: '数据采样间隔', type: 'BYTE[2]', desc: '分钟 1-1440 须30整数倍' },
 		{ id: 13, name: '结算日参数', type: 'BYTE[1+1]', desc: '起始日1B+结算日间隔(天)1B' },
-		{ id: 14, name: '密集数据采样起始时间', type: 'BYTE', desc: '小时 0-23 当天有效' },
-		{ id: 15, name: '密集数据采样间隔', type: 'BYTE', desc: '分钟 默认5 须5整数倍' },
+		{ id: 14, name: '密集数据采样起始时间', type: 'BYTE', desc: '小时 0-23 当天有效', dec: { t: 'num', unit: '时' } },
+		{ id: 15, name: '密集数据采样间隔', type: 'BYTE', desc: '分钟 默认5 须5整数倍', dec: { t: 'num', unit: '分钟' } },
 		{ id: 16, name: 'SN密钥', type: 'BYTE[16]', desc: 'ASCII' },
-		{ id: 17, name: '计量底度', type: 'BYTE[4]', desc: 'L' },
-		{ id: 18, name: '水表口径', type: 'BYTE', desc: '1=15mm 2=20mm 3=25mm 4=32mm 5=40mm 6=50mm 7=65mm 8=80mm 9=100mm 10=125mm 11=150mm 12=200mm 13=250mm 14=300mm' },
+		{ id: 17, name: '计量底度', type: 'BYTE[4]', desc: 'Uint32 LE 单位L', dec: { t: 'num', unit: 'L' } },
+		{ id: 18, name: '水表口径', type: 'BYTE', desc: '1—15口径 2—20 … 14—300；0xFF未设置', dec: { t: 'enum', map: {
+			1: 'DN15', 2: 'DN20', 3: 'DN25', 4: 'DN32', 5: 'DN40', 6: 'DN50', 7: 'DN65',
+			8: 'DN80', 9: 'DN100', 10: 'DN125', 11: 'DN150', 12: 'DN200', 13: 'DN250', 14: 'DN300'
+		} } },
 		{ id: 19, name: '用户表号', type: 'BYTE[10]', desc: 'BCD 高位补0' },
 		{ id: 20, name: '水表实时时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
 		{ id: 21, name: '维护后台服务器地址端口', type: 'BYTE[32]', desc: 'ASCII ip与端口逗号分隔' },

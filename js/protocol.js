@@ -286,12 +286,20 @@
 	}
 	function numUnit(desc) {
 		if (!desc) return { scale: 1, unit: '' }
-		// 先匹配明确单位词,避免把 0x00 / 3B / 2B 等字节说明当成 scale+unit
-		const w = desc.match(/(L\/h|us\/cm|mg\/L|uA|kPa|NTU|mAH|pH|℃|L|V|秒|分钟|天|小时|次|us)/)
+		// 优先「系数+单位」: 0.01V / 0.1℃ / 0.1pH / 0.1NTU（勿先匹配裸 V/L）
+		let m = desc.match(/(?:^|[^\d.])(\d+\.\d+)\s*(V|v|℃|pH|NTU|mAH|kPa|L\/h|mg\/L|us\/cm|uA|mm|mV|mA|%)/i)
+		if (m) {
+			let u = m[2]
+			if (u === 'v') u = 'V'
+			return { scale: parseFloat(m[1]), unit: u }
+		}
+		// 明确多字符单位
+		const w = desc.match(/(L\/h|us\/cm|mg\/L|uA|kPa|NTU|mAH|pH|℃|分钟|小时|天|秒|次|mV|mA|kHz|MHz|%)/)
 		if (w) return { scale: 1, unit: w[1] }
-		// 仅接受「数值+单位」且单位不是单独的 x/B/b(易与 0x00、3B 冲突)
-		let m = desc.match(/(?:^|[^\w.])([\d.]+)\s*(mAH|kPa|NTU|pH|℃|L\/h|mg\/L|us\/cm|uA|mm|mV|mA|kHz|MHz|%)/i)
-		if (m) return { scale: parseFloat(m[1]), unit: m[2] }
+		// 单独 L / V（歧义较大,放最后）
+		if (/单位\s*L\b|Uint32.*\bL\b|\b单位L\b/i.test(desc)) return { scale: 1, unit: 'L' }
+		if (/单位\s*0\.01\s*[Vv]|0\.01\s*[Vv]/.test(desc)) return { scale: 0.01, unit: 'V' }
+		if (/\b[Vv]\b|单位.*[Vv]/.test(desc)) return { scale: 1, unit: 'V' }
 		return { scale: 1, unit: '' }
 	}
 	function readNum(raw, desc) {
@@ -322,11 +330,14 @@
 			if (Object.keys(map).length) return map
 		}
 		// 0停止 1启用 2运输模式 / 1二值压缩 2标准图片 …
-		const re = /(^|[\s,;，；])(\d+)\s*([^\d\s=:][^\s,;，；]*)/g
+		// 不匹配 0-23 这类范围（数字后紧跟 -数字）
+		const re = /(^|[\s,;，；])(\d+)(?!\s*-\s*\d)\s*([^\d\s=:-][^\s,;，；]*)/g
 		let m
 		while ((m = re.exec(desc)) !== null) {
 			const label = m[3].replace(/[)）].*$/, '')
-			if (label && !/^(B|字节|次|秒|分钟|天|小时|位)$/.test(label)) map[+m[2]] = label
+			if (!label || /^(B|字节|次|秒|分钟|天|小时|时|位|mm)$/.test(label)) continue
+			if (/^[-–]/.test(label)) continue
+			map[+m[2]] = label
 		}
 		return map
 	}
@@ -423,11 +434,17 @@
 				case 'float': { const nu = numUnit(desc); return fmtNum(f32le(raw), nu.unit) }
 				case 'num': {
 					const nu = numUnit(desc)
+					const scale = (dec.scale != null) ? dec.scale : nu.scale
+					const unit = dec.unit || nu.unit
 					let v = readNum(raw, desc)
-					if (nu.scale !== 1) v = v * nu.scale
-					return fmtNum(v, nu.unit)
+					if (scale !== 1) v = v * scale
+					return fmtNum(v, unit)
 				}
-				case 'enum': return (dec.map[raw[0]] != null) ? (raw[0] + ':' + dec.map[raw[0]]) : hexbytes(raw)
+				case 'enum': {
+					const code = raw[0] & 0xff
+					if (code === 0xff) return '未设置'
+					return (dec.map[code] != null) ? (code + ':' + dec.map[code]) : ('0x' + code.toString(16).toUpperCase())
+				}
 				case 'bits': return renderBitsHint(dec.fields, raw)
 				case 'alarmTime': return renderAlarmTime(raw)
 				case 'alarmObjTime': return renderAlarmObjTime(raw)
@@ -446,8 +463,8 @@
 				case 'battery': return '总容量' + (u16leRead(raw, 0) * 10) + 'mAH 起始容量' + (u16leRead(raw, 2) * 10) + 'mAH'
 				case 'tempThresh': return '低温' + signed8([raw[0]]) + '℃ 高温' + signed8([raw[1]]) + '℃'
 				case 'reportTime': {
-					const p = n => String(n).padStart(2, '0')
-					return '上报时间 ' + p(raw[0]) + ':' + p(raw[1]) + ' 最大上报时长' + u16leRead(raw, 2) + '分'
+					// BYTE0=起始日DD, BYTE1=起始时hh, BYTE2-3=最大上报时长(分钟,预留)
+					return '起始日' + raw[0] + '日 ' + raw[1] + '时 最大上报时长' + u16leRead(raw, 2) + '分'
 				}
 				case 'range': return (dec.labels ? dec.labels[0] : '起始') + ':' + raw[0] + '点 ' + (dec.labels ? dec.labels[1] : '结束') + ':' + raw[1] + '点'
 				case 'upErr': {
@@ -636,9 +653,12 @@
 	function usesBaseWater(def) {
 		if (!def) return false
 		if (def.baseUnit) return true
+		// 「基准水量」字段本身是枚举码, 不是流量读数
+		if (def.name === '基准水量') return false
 		const blob = (def.desc || '') + ' ' + (def.name || '') + ' ' + (def.type || '')
-		if (/L\/h|℃|kPa|%|us\/cm|NTU|mg\/L|pH|分钟|秒|V\b|mA|mV/.test(blob)) return false
-		return /基准水量|周期点总累积|周期累积|冻结累计|日结点总累计|密集时间点总累积|总累积流量|正累积|逆累积|净累积/.test(blob)
+		if (/L\/h|℃|kPa|%|us\/cm|NTU|mg\/L|pH|分钟|秒|V\b|mA|mV|每圈/.test(blob)) return false
+		// 「单位同基准水量」的流量类字段
+		return /单位同.*基准水量|周期点总累积|周期累积|冻结累计|日结点总累计|密集时间点总累积|总累积流量|正累积流量|逆累积流量|净累积/.test(blob)
 	}
 
 	function rawNumeric(def, raw) {
