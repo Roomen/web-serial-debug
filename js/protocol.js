@@ -595,28 +595,41 @@
 		return formatDateTime(d, 0)
 	}
 
-	function renderSeries(def, raw, meta) {
+	function buildSeriesRows(def, raw, meta) {
 		const elem = def ? typeLen(def.type) : null
-		if (!elem || elem <= 0) return hexbytes(raw)
+		if (!elem || elem <= 0) return null
 		const n = Math.floor(raw.length / elem)
-		if (n <= 0) return hexbytes(raw)
+		if (n <= 0) return null
 		const interval = meta && meta.interval != null ? meta.interval : null
 		const startStr = meta && meta.startStr
 		const declared = meta && meta.count != null ? meta.count : null
+		const daily = interval != null && interval >= 1440
 		let head = n + '条'
-		if (declared != null && declared !== n) head += '(声明' + declared + ')'
-		if (interval != null) head += ' 间隔' + interval + '分钟'
-		if (startStr) head += ' 起始' + startStr
-		const lines = [head]
+		if (declared != null && declared !== n) head += '(声明' + declared + '，实际' + n + ')'
+		if (interval != null) {
+			if (daily) head += ' · 日冻结'
+			else head += ' · 间隔' + interval + '分钟'
+		}
+		if (startStr) head += ' · 起' + (daily ? String(startStr).slice(0, 10) : startStr)
+		const rows = []
 		for (let i = 0; i < n; i++) {
 			const slice = raw.subarray(i * elem, (i + 1) * elem)
 			const val = renderValue(def, slice)
 			let label = '#' + (i + 1)
 			if (startStr && interval != null) {
 				const t = addMinutesToTimeStr(startStr, i * interval)
-				if (t) label = t
+				if (t) label = daily ? t.slice(0, 10) : t
 			}
-			lines.push(label + ' → ' + val)
+			rows.push({ label: label, value: val })
+		}
+		return { summary: head, rows: rows, daily: daily, timeCol: daily ? '日期' : (interval != null ? '时间' : '序号') }
+	}
+	function renderSeries(def, raw, meta) {
+		const ser = buildSeriesRows(def, raw, meta)
+		if (!ser) return hexbytes(raw)
+		const lines = [ser.summary]
+		for (let i = 0; i < ser.rows.length; i++) {
+			lines.push(ser.rows[i].label + ' → ' + ser.rows[i].value)
 		}
 		return lines.join('\n')
 	}
@@ -762,12 +775,17 @@
 				if (need <= 0) need = Math.min(elem, remain)
 				const raw = payload.subarray(j, j + need)
 				j += need
+				const ser = buildSeriesRows(def, raw, seriesMeta)
 				items.push({
 					id,
 					name: def ? def.name : ('ID' + id),
 					raw: Array.from(raw),
-					decoded: renderSeries(def, raw, seriesMeta),
-					series: true
+					decoded: ser ? (ser.summary + '\n' + ser.rows.map(function (r) { return r.label + ' → ' + r.value }).join('\n')) : renderSeries(def, raw, seriesMeta),
+					series: true,
+					seriesSummary: ser ? ser.summary : '',
+					seriesRows: ser ? ser.rows : null,
+					seriesTimeCol: ser ? ser.timeCol : '序号',
+					seriesDaily: ser ? !!ser.daily : false
 				})
 				// 截断尾渣: 不足一条记录或下一固定字段时丢弃, 避免伪 ID
 				if (j < payload.length) {
@@ -1274,12 +1292,23 @@
 				if (t.items && t.items.length) {
 					h += '<div class="sk-parse-items">'
 					for (const it of t.items) {
-						const body = escHtml(it.decoded || hexbytes(it.raw))
 						const tip = 'raw:' + escHtml(hexbytes(it.raw))
 						const label = 'ID' + it.id + ' ' + escHtml(it.name || '') + ' = '
-						if (it.series) {
+						if (it.series && it.seriesRows && it.seriesRows.length) {
+							const timeCol = escHtml(it.seriesTimeCol || '序号')
+							h += '<div class="sk-parse-series' + (it.seriesDaily ? ' is-daily' : '') + '" title="' + tip + '">'
+							h += '<div class="sk-parse-series-head">' + label + '<span class="sk-parse-series-sum">' + escHtml(it.seriesSummary || '') + '</span></div>'
+							h += '<div class="sk-parse-series-wrap"><table class="sk-parse-series-table"><thead><tr><th>' + timeCol + '</th><th>数值</th></tr></thead><tbody>'
+							for (let ri = 0; ri < it.seriesRows.length; ri++) {
+								const row = it.seriesRows[ri]
+								h += '<tr><td class="sk-ser-t">' + escHtml(row.label) + '</td><td class="sk-ser-v">' + escHtml(row.value) + '</td></tr>'
+							}
+							h += '</tbody></table></div></div>'
+						} else if (it.series) {
+							const body = escHtml(it.decoded || hexbytes(it.raw))
 							h += '<div class="sk-parse-series" title="' + tip + '">' + label + body + '</div>'
 						} else {
+							const body = escHtml(it.decoded || hexbytes(it.raw))
 							h += '<span class="sk-parse-item" title="' + tip + '">' + label + body + '</span>'
 						}
 					}

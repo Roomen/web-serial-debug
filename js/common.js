@@ -1023,7 +1023,8 @@
 	function dailyQueryBytes(count) {
 		const d = new Date()
 		const yy = d.getFullYear() % 100
-		return [toBcdByte(yy), toBcdByte(d.getMonth() + 1), toBcdByte(d.getDate()), (count | 0) & 0xff]
+		const n = Math.max(1, Math.min(60, count | 0))
+		return [toBcdByte(yy), toBcdByte(d.getMonth() + 1), toBcdByte(d.getDate()), n & 0xff]
 	}
 	// Tag10-ID23 错误日志：YYMMDDhhmmss 6B BCD + 条数1B
 	function errLogQueryBytes(count) {
@@ -1034,6 +1035,36 @@
 			toBcdByte(d.getHours()), toBcdByte(d.getMinutes()), toBcdByte(d.getSeconds()),
 			(count | 0) & 0xff
 		]
+	}
+	// Tag10-ID5 历史数据：YYYYMMDDhhmmss 7B BCD(高位在前) 当日 00:00:00
+	function histDateQueryBytes(isoDate) {
+		const m = String(isoDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+		if (!m) return null
+		const y = parseInt(m[1], 10)
+		const mo = parseInt(m[2], 10)
+		const day = parseInt(m[3], 10)
+		if (mo < 1 || mo > 12 || day < 1 || day > 31) return null
+		// 用 Date 再校验非法日(如 2/30)
+		const chk = new Date(y, mo - 1, day)
+		if (chk.getFullYear() !== y || chk.getMonth() !== mo - 1 || chk.getDate() !== day) return null
+		return [
+			toBcdByte(Math.floor(y / 100)),
+			toBcdByte(y % 100),
+			toBcdByte(mo),
+			toBcdByte(day),
+			0x00, 0x00, 0x00
+		]
+	}
+	function histDateBounds(maxDays) {
+		const max = Math.max(1, Math.min(60, maxDays || 60))
+		const pad = function (n) { return String(n).padStart(2, '0') }
+		const fmt = function (d) {
+			return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+		}
+		const today = new Date()
+		const minD = new Date(today.getFullYear(), today.getMonth(), today.getDate() - max)
+		const yest = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1)
+		return { min: fmt(minD), max: fmt(today), default: fmt(yest) }
 	}
 	function presetToTlvJson(preset) {
 		const out = []
@@ -1095,6 +1126,11 @@
 					const rawVal = parseInt(paramVal.value.trim(), 10)
 					if (isNaN(rawVal)) return
 					bytes = errLogQueryBytes(rawVal)
+				} else if (preset.param.type === 'histDate') {
+					const iso = paramVal.value.trim()
+					if (!iso) return
+					bytes = histDateQueryBytes(iso)
+					if (!bytes) return
 				} else {
 					const rawVal = parseInt(paramVal.value.trim(), 10)
 					if (isNaN(rawVal)) return
@@ -1123,6 +1159,7 @@
 				paramLabel.textContent = preset.param.label || '参数'
 				if (preset.param.type === 'enum') {
 					paramVal.style.display = 'none'
+					paramVal.type = 'text'
 					paramSelEnum.style.display = ''
 					paramSelEnum.innerHTML = ''
 					const opts = preset.param.options || {}
@@ -1130,13 +1167,15 @@
 					for (const [k, v] of Object.entries(opts)) {
 						const op = document.createElement('option')
 						op.value = k
-						op.textContent = k + ':' + v
+						// 文案优先展示中文说明，值仍用数字 key
+						op.textContent = v ? (String(v)) : String(k)
 						if (String(k) === String(def)) op.selected = true
 						paramSelEnum.appendChild(op)
 					}
 					paramUnit.textContent = ''
 					_currentParamType = 'uint8'
 				} else if (preset.param.type === 'ascii') {
+					paramVal.type = 'text'
 					paramVal.style.display = ''
 					paramVal.style.width = '180px'
 					paramSelEnum.style.display = 'none'
@@ -1145,6 +1184,7 @@
 					paramUnit.textContent = ''
 					_currentParamType = 'ascii'
 				} else if (preset.param.type === 'bcd') {
+					paramVal.type = 'text'
 					paramVal.style.display = ''
 					paramVal.style.width = '180px'
 					paramSelEnum.style.display = 'none'
@@ -1152,23 +1192,43 @@
 					paramUnit.textContent = '(BCD LE)'
 					_currentParamType = 'bcd'
 				} else if (preset.param.type === 'dailyQuery') {
+					paramVal.type = 'number'
 					paramVal.style.display = ''
 					paramVal.style.width = '80px'
 					paramSelEnum.style.display = 'none'
-					paramVal.value = preset.param.default || '7'
-					paramUnit.textContent = '条(日起=今天)'
+					paramVal.min = '1'
+					paramVal.max = String(preset.param.max || 60)
+					paramVal.value = preset.param.default || '30'
+					paramUnit.textContent = '天(日起=今天,≤60)'
 					_currentParamType = 'dailyQuery'
 				} else if (preset.param.type === 'errLogQuery') {
+					paramVal.type = 'number'
 					paramVal.style.display = ''
 					paramVal.style.width = '80px'
 					paramSelEnum.style.display = 'none'
+					paramVal.removeAttribute('min')
+					paramVal.removeAttribute('max')
 					paramVal.value = preset.param.default || '4'
 					paramUnit.textContent = '条(起点=现在)'
 					_currentParamType = 'errLogQuery'
+				} else if (preset.param.type === 'histDate') {
+					const b = histDateBounds(preset.param.maxDays || 60)
+					paramVal.type = 'date'
+					paramVal.style.display = ''
+					paramVal.style.width = '150px'
+					paramSelEnum.style.display = 'none'
+					paramVal.min = b.min
+					paramVal.max = b.max
+					paramVal.value = preset.param.default || b.default
+					paramUnit.textContent = '近' + (preset.param.maxDays || 60) + '日可选'
+					_currentParamType = 'histDate'
 				} else {
+					paramVal.type = 'text'
 					paramVal.style.display = ''
 					paramVal.style.width = '100px'
 					paramSelEnum.style.display = 'none'
+					paramVal.removeAttribute('min')
+					paramVal.removeAttribute('max')
 					paramVal.value = preset.param.default || '0'
 					paramUnit.textContent = preset.param.type === 'uint32le' ? '(uint32 LE)' : preset.param.type === 'uint16le' ? '(uint16 LE)' : '(u8)'
 					_currentParamType = preset.param.type

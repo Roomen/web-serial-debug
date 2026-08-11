@@ -1182,19 +1182,81 @@ body {
 .sk-parse-series {
   flex: 1 1 100%;
   font-size: 0.62rem;
-  padding: 2px 6px;
+  padding: 4px 6px;
   background: var(--bg-code);
-  border-radius: 3px;
+  border-radius: 4px;
   white-space: pre-wrap;
   font-family: var(--font-mono);
   line-height: 1.35;
-  max-height: 220px;
+  max-height: 280px;
   overflow: auto;
   cursor: help;
+  border: 1px solid transparent;
+}
+
+.sk-parse-series.is-daily {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent-light) 40%, var(--bg-code));
 }
 
 .sk-parse-series:hover {
   background: var(--accent-light);
+}
+
+.sk-parse-series-head {
+  font-weight: 600;
+  margin-bottom: 4px;
+  white-space: normal;
+}
+
+.sk-parse-series-sum {
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-left: 2px;
+}
+
+.sk-parse-series-wrap {
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 3px;
+}
+
+.sk-parse-series-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+}
+
+.sk-parse-series-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated, var(--bg-code));
+  text-align: left;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border, #ccc);
+  color: var(--text-secondary);
+  font-weight: 600;
+  z-index: 1;
+}
+
+.sk-parse-series-table td {
+  padding: 1px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border, #ccc) 50%, transparent);
+  white-space: nowrap;
+}
+
+.sk-parse-series-table tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--bg-elevated, #fff) 35%, transparent);
+}
+
+.sk-parse-series-table .sk-ser-t {
+  color: var(--text-secondary);
+  width: 1%;
+}
+
+.sk-parse-series-table .sk-ser-v {
+  font-weight: 500;
 }
 
 .sk-parse-errors {
