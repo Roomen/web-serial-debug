@@ -380,7 +380,7 @@ window.SK_TAGS = {
 		{ id: 0, name: '起始时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss 可设置' },
 		{ id: 1, name: '数据记录间隔', type: 'BYTE', desc: '固定5分钟' },
 		{ id: 2, name: '记录个数', type: 'BYTE', desc: '记录个数' },
-		{ id: 3, name: '记录值', type: 'BYTE[4]', desc: 'Uint16正累计2B+Uint16逆累计2B 间隔5分钟 单位同基准水量' },
+		{ id: 3, name: '记录值', type: 'BYTE[4]', desc: 'Uint16正累计2B+Uint16逆累计2B 固定间隔5min 单位同基准水量' },
 		{ id: 4, name: '记录值', type: 'BYTE[4]', desc: 'Uint32 LE 密集时间点总累积流量 单位同基准水量 ID3与ID4二选一' }
 	],
 	'7': [
@@ -454,26 +454,26 @@ window.SK_TAGS = {
 	],
 	'63': [
 		{ id: 0, name: '采集时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
-		{ id: 1, name: '音频文件（分体）', type: 'BYTE[1+1+2+n]', desc: '总包数1B+包序号1B+包长2B+包数据' },
-		{ id: 2, name: '音频文件（一体）', type: 'BYTE[1+1+2+n]', desc: '总包数1B+包序号1B+包长2B+包数据' },
-		{ id: 3, name: '音频文件（自制）', type: 'BYTE[1+1+2+n]', desc: '总包数1B+包序号1B+包长2B+包数据' },
-		{ id: 4, name: '音频文件（自制）', type: 'BYTE[1+1+2+n]', desc: '总包数1B+包序号1B+包长2B+包数据' }
+		{ id: 1, name: '音频文件（分体）', type: 'BYTE[1+1+2+n]', desc: '总包数1B+包序号1B+包长2B+包数据', dec: { t: 'imgPack' } },
+		{ id: 2, name: '音频文件（一体）', type: 'BYTE[1+1+2+n]', desc: '总包数1B+包序号1B+包长2B+包数据', dec: { t: 'imgPack' } },
+		{ id: 3, name: '当前声音分贝值', type: 'BYTE', desc: '当前声音分贝' },
+		{ id: 4, name: '音频文件(自制)', type: 'BYTE[1+1+2+1+n]', desc: '总包数1B+包序号1B+包长2B+音源类型1B(0-2)+包数据', dec: { t: 'imgPack' } }
 	],
 	'64': [
 		{ id: 0, name: '探头地址', type: 'BYTE[4]', desc: '传感器ID' },
-		{ id: 1, name: '传感器类型', type: 'BYTE', desc: '传感器类型' },
-		{ id: 2, name: '工作模式', type: 'BYTE', desc: '工作模式' },
+		{ id: 1, name: '音频采集时间', type: 'BYTE', desc: '整时点 0-23' },
+		{ id: 2, name: '采集持续时间', type: 'BYTE', desc: '分钟 默认120 最小5 最大240' },
 		{ id: 3, name: 'AMP', type: 'BYTE', desc: '增益高低 0低 1高' },
 		{ id: 4, name: '增益开关', type: 'BYTE', desc: '0关闭 1开启' },
 		{ id: 5, name: '湿度报警阈值', type: 'BYTE', desc: '0-100% 大于该值报警' },
 		{ id: 6, name: '压力报警阈值', type: 'BYTE[2]', desc: '小于该值报警' },
 		{ id: 7, name: '噪声上传使能', type: 'BYTE', desc: '0x00不需要上报' },
 		{ id: 8, name: '音频上传使能', type: 'BYTE', desc: '0x00不需要上报' },
-		{ id: 9, name: '经纬度', type: 'BYTE[32]', desc: 'ASCII WGS84 经度|纬度' },
+		{ id: 9, name: '经纬度', type: 'BYTE[32]', desc: 'ASCII 坐标系 经度|纬度' },
 		{ id: 10, name: '湿度', type: 'BYTE', desc: '0-100%' },
 		{ id: 11, name: '温度', type: 'BYTE', desc: 'int8 -40~85℃' },
 		{ id: 12, name: '压力', type: 'BYTE[2]', desc: '0.01kPa' },
-		{ id: 13, name: '传感器错误标志', type: 'BYTE', desc: 'bit0噪声失败 bit1音频失败 bit2音频不完整等' },
+		{ id: 13, name: '传感器错误标志', type: 'BYTE', desc: 'bit0传感器不能通讯 bit1噪声失败 bit2音频失败 bit3音频不完整 bit4参数错误' },
 		{ id: 14, name: '传感器版本号', type: 'BYTE[16]', desc: '版本' },
 		{ id: 15, name: '传感器电池电压', type: 'BYTE[2]', desc: '0.01V' },
 		{ id: 16, name: '最后一次读取噪声数据', type: 'BYTE[8]', desc: '时间7B+状态1B' },
@@ -610,30 +610,32 @@ window.SK_TAGS = {
 		{ id: 10, name: '记录值', type: 'BYTE[2]', desc: 'kPa 压力' },
 		{ id: 11, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 0.1℃ 环境温度' },
 		{ id: 12, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed us/cm 电导率' },
-		{ id: 13, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 0.1NTU 浊度' },
-		{ id: 14, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 0.1mg/L 余氯' },
-		{ id: 15, name: '记录值', type: 'BYTE[4]', desc: 'int32 LE signed L/h 瞬时流量' },
-		{ id: 16, name: '记录值', type: 'BYTE[4]', desc: 'int32 LE signed 周期流量(大口径)' },
-		{ id: 17, name: '记录值', type: 'BYTE[1+7]', desc: '总累积大口径 BYTE0状态bit0未抄到 BYTE1-7有符号LE' },
-		{ id: 18, name: '记录值', type: 'BYTE[1+7]', desc: '正累积大口径 BYTE0状态 bit0未抄到 BYTE1-7无符号LE' },
-		{ id: 19, name: '记录值', type: 'BYTE[1+7]', desc: '逆累积大口径 BYTE0状态 bit0未抄到 BYTE1-7无符号LE' },
-		{ id: 20, name: '记录值', type: 'BYTE[1+7]', desc: '瞬时相关大口径' },
+		{ id: 13, name: '记录值', type: 'BYTE[2]', desc: '0.1pH 周期平均PH' },
+		{ id: 14, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 0.1NTU 浊度' },
+		{ id: 15, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 0.1mg/L 余氯' },
+		{ id: 16, name: '记录值', type: 'BYTE[4]', desc: 'int32 LE signed L/h 最大瞬时流量' },
+		{ id: 17, name: '记录值', type: 'BYTE[4]', desc: 'int32 LE signed 周期累积流量(大口径) 单位同基准水量' },
+		{ id: 18, name: '记录值', type: 'BYTE[1+7]', desc: '总累积大口径 BYTE0状态bit0未抄到 BYTE1-7有符号LE' },
+		{ id: 19, name: '记录值', type: 'BYTE[1+7]', desc: '正累积大口径 BYTE0状态 bit0未抄到 BYTE1-7无符号LE' },
+		{ id: 20, name: '记录值', type: 'BYTE[1+7]', desc: '逆累积大口径 BYTE0状态 bit0未抄到 BYTE1-7无符号LE' },
 		{ id: 21, name: '记录值', type: 'BYTE[1+3]', desc: '最大瞬时大口径 BYTE0状态 BYTE1-3有符号' },
 		{ id: 22, name: '总线表电池电量', type: 'BYTE', desc: '0-100%' }
 	],
-	'95': null,
-	'96': null,
-	'97': null,
-	'98': null,
-	'99': null,
 	'254': [
 		{ id: 0, name: '错误记录总条数N', type: 'BYTE[2]', desc: '低字节在前' },
 		{ id: 1, name: '错误记录日志', type: 'BYTE[32]*N', desc: '每条32B: ID(2B低位在前)+时间(6B BCD年月日时分秒)+错误代码(2B BCD见异常代码表)+自定义22B; ID范围0-65535; 红外最多4条/平台14条' }
 	]
 }
 
-// Tag95-99 与 Tag94 字段相同
+// Tag95-99 与 Tag94 字段相同（独立拷贝，避免共享引用）
 ;(function () {
 	const base = window.SK_TAGS['94']
-	for (let t = 95; t <= 99; t++) window.SK_TAGS[String(t)] = base
+	for (let t = 95; t <= 99; t++) {
+		window.SK_TAGS[String(t)] = base.map(function (d) {
+			const o = { id: d.id, name: d.name, type: d.type, desc: d.desc }
+			if (d.dec) o.dec = d.dec
+			if (d.unit) o.unit = d.unit
+			return o
+		})
+	}
 })()

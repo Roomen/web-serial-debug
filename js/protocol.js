@@ -545,12 +545,14 @@
 		}
 		return lines.join('\n')
 	}
-	function renderImgPack(raw) {
+	function renderImgPack(raw, dataOff) {
 		if (!raw || raw.length < 4) return hexbytes(raw || [])
 		const total = raw[0]
 		const cur = raw[1]
 		const plen = u16leRead(raw, 2)
-		return '包' + (cur + 1) + '/' + total + ' 本包' + plen + 'B 数据' + hexbytes(raw.subarray(4, Math.min(raw.length, 4 + Math.min(plen, 16)))) + (plen > 16 ? '…' : '')
+		const off = dataOff != null ? dataOff : 4
+		const end = Math.min(raw.length, off + Math.min(plen, 16))
+		return '包' + (cur + 1) + '/' + total + ' 本包' + plen + 'B 数据' + hexbytes(raw.subarray(off, end)) + (plen > 16 ? '…' : '')
 	}
 
 	// Tag5/6/9/20-27/94-99 记录值按「记录个数」重复 N 次
@@ -684,26 +686,34 @@
 				})
 				continue
 			}
-			// 图片/音频分包头: 总包+序号+长度+数据, 变长
-			if (def && (/BYTE\[1\+1\+2\+n\]/.test(def.type || '') || (def.dec && def.dec.t === 'imgPack'))) {
+			// 图片/音频分包头: 总包+序号+长度[+音源类型]+数据, 变长
+			if (def && (def.dec && def.dec.t === 'imgPack' || /BYTE\[1\+1\+2(?:\+1)?\+n\]/.test(def.type || ''))) {
 				const remain = payload.length - j
-				if (remain < 4) {
+				const extra = /BYTE\[1\+1\+2\+1\+n\]/.test(def.type || '') ? 1 : 0
+				const hdr = 4 + extra
+				if (remain < hdr) {
 					const raw = payload.subarray(j)
 					j = payload.length
 					items.push({ id, name: def.name, raw: Array.from(raw), decoded: hexbytes(raw) + ' (不完整)', partial: true })
 					break
 				}
 				const plen = u16leRead(payload, j + 2)
-				let need = 4 + plen
+				let need = hdr + plen
 				if (need > remain) need = remain
 				const raw = payload.subarray(j, j + need)
 				j += need
+				let decoded = renderImgPack(raw, hdr)
+				if (extra && raw.length >= 5) {
+					const srcMap = { 0: '正常音频', 1: '参照音频', 2: '相干音频' }
+					const src = raw[4]
+					decoded = (srcMap[src] != null ? srcMap[src] : ('音源' + src)) + ' ' + decoded
+				}
 				items.push({
 					id,
 					name: def.name,
 					raw: Array.from(raw),
-					decoded: renderImgPack(raw),
-					partial: need < 4 + plen
+					decoded: decoded,
+					partial: need < hdr + plen
 				})
 				continue
 			}
@@ -1478,16 +1488,20 @@
 					j += need
 					continue
 				}
-				if (def && /BYTE\[1\+1\+2\+n\]/.test(def.type || '')) {
+				if (def && (def.dec && def.dec.t === 'imgPack' || /BYTE\[1\+1\+2(?:\+1)?\+n\]/.test(def.type || ''))) {
 					const remain = payload.length - j
-					if (remain < 4) {
+					const extra = /BYTE\[1\+1\+2\+1\+n\]/.test(def.type || '') ? 1 : 0
+					const hdr = 4 + extra
+					if (remain < hdr) {
 						set(pBase + idOff, 1 + remain, prefix + '数据域-' + tagName + ' ' + name + ' (不完整)', itemGrp)
 						break
 					}
 					const plen = u16leRead(payload, j + 2)
-					let need = Math.min(4 + plen, remain)
+					let need = Math.min(hdr + plen, remain)
 					const rawb = payload.subarray(j, j + need)
-					set(pBase + idOff, 1 + need, prefix + '数据域-' + tagName + ' ' + name + ' = ' + renderImgPack(rawb), itemGrp)
+					let tip = renderImgPack(rawb)
+					if (extra && rawb.length >= 5) tip = '音源' + rawb[4] + ' ' + tip
+					set(pBase + idOff, 1 + need, prefix + '数据域-' + tagName + ' ' + name + ' = ' + tip, itemGrp)
 					j += need
 					continue
 				}
