@@ -636,9 +636,31 @@
 					decoded: renderSeries(def, raw, seriesMeta),
 					series: true
 				})
+				// 截断尾渣: 不足一条记录或下一固定字段时丢弃, 避免伪 ID
+				if (j < payload.length) {
+					const left = payload.length - j
+					if (left < elem) break
+					const nid = payload[j]
+					const ndef = idMap[nid]
+					const nlen = ndef ? typeLen(ndef.type) : null
+					if (nlen != null && nlen > 0 && 1 + nlen > left) break
+					if (nlen == null && left < 2) break
+				}
 				continue
 			}
-			if (j + vlen > payload.length) vlen = payload.length - j
+			if (j + vlen > payload.length) {
+				// 字段值被截断: 展示已有字节并停止, 避免尾部残渣再被解成伪 ID
+				const raw = payload.subarray(j)
+				j = payload.length
+				items.push({
+					id,
+					name: def ? def.name : ('ID' + id),
+					raw: Array.from(raw),
+					decoded: (renderValue(def, raw) || hexbytes(raw)) + ' (不完整)',
+					partial: true
+				})
+				break
+			}
 			const raw = payload.subarray(j, j + vlen)
 			j += vlen
 			const decoded = renderValue(def, raw)
@@ -758,22 +780,61 @@
 		}
 	}
 
+	// 单帧数据域合理上限(防把噪声/半帧误判成长帧)
+	const SK_MAX_DATA_LEN = 4096
+
+	// 声明长度超出缓冲时: 有 0x16 则回退实际长度; 否则按截断帧尽量解 TLV
+	function resolveFrameSpan(b, dataOffset, declaredLen) {
+		const out = {
+			declaredLen: declaredLen,
+			dataLen: declaredLen,
+			dataBytes: null,
+			crcRecv: 0,
+			crcCalc: 0,
+			endByte: 0,
+			truncated: false,
+			missingTail: false
+		}
+		if (declaredLen < 0 || declaredLen > SK_MAX_DATA_LEN) return null
+		if (b.length < dataOffset) return null
+		let crcOffset = dataOffset + declaredLen
+		if (crcOffset + 3 <= b.length) {
+			out.dataBytes = b.subarray(dataOffset, crcOffset)
+			out.crcRecv = u16leRead(b, crcOffset)
+			out.crcCalc = W.skCrc16(b.subarray(0, crcOffset))
+			out.endByte = b[crcOffset + 2]
+			return out
+		}
+		// 声明超长: 末尾是结束符时按实长回退
+		if (b.length >= dataOffset + 3 && b[b.length - 1] === 0x16) {
+			const actual = b.length - dataOffset - 3
+			if (actual < 0) return null
+			crcOffset = dataOffset + actual
+			out.dataLen = actual
+			out.dataBytes = b.subarray(dataOffset, crcOffset)
+			out.crcRecv = u16leRead(b, crcOffset)
+			out.crcCalc = W.skCrc16(b.subarray(0, crcOffset))
+			out.endByte = b[crcOffset + 2]
+			out.truncated = actual !== declaredLen
+			return out
+		}
+		// 真截断: 无 CRC/结束符, 剩余字节全部当作数据域尽力解析
+		if (b.length > dataOffset) {
+			out.dataBytes = b.subarray(dataOffset)
+			out.truncated = true
+			out.missingTail = true
+			out.endByte = b[b.length - 1]
+			return out
+		}
+		return null
+	}
+
 	function tryParseUp(b, opt) {
 		if (b.length < 24) return null
-		let dataLen = u16leRead(b, 22)
-		const dataOffset = 24
-		let crcOffset = dataOffset + dataLen
-		// 声明长度超出帧:若以 0x16 结尾则按实际长度回退
-		if (crcOffset + 3 > b.length) {
-			if (b.length >= 27 && b[b.length - 1] === 0x16) {
-				dataLen = b.length - 24 - 3
-				crcOffset = dataOffset + dataLen
-			} else return null
-		}
-		const dataBytes = b.subarray(dataOffset, crcOffset)
-		const crcRecv = u16leRead(b, crcOffset)
-		const crcCalc = W.skCrc16(b.subarray(0, crcOffset))
-		const endByte = b[crcOffset + 2]
+		const declaredLen = u16leRead(b, 22)
+		const span = resolveFrameSpan(b, 24, declaredLen)
+		if (!span) return null
+		const dataBytes = span.dataBytes
 		const ctrl = b[21]
 		const encrypted = (ctrl & 0x01) === 1
 		let dec = { ok: true, bytes: dataBytes, needKey: false }
@@ -802,15 +863,19 @@
 			信号质量CSQ: b[19],
 			功能码: { value: fc, name: (W.SK_FUNC_CODES['0x' + fc.toString(16).toUpperCase().padStart(2, '0')] || {}).name || '' },
 			控制码: { raw: ctrl, 后续帧: (ctrl & 0x80) === 0x80, 加密: encrypted },
-			数据域字节数: dataLen,
-			帧结束符: endByte
+			// 字段展示声明长度; 截断时 actualDataLen 见返回值
+			数据域字节数: declaredLen,
+			帧结束符: span.endByte
 		}
 		return {
 			dir: 'up',
-			crcOk: crcRecv === crcCalc,
-			crcCalc,
-			crcRecv,
-			endOk: endByte === 0x16,
+			crcOk: !span.missingTail && span.crcRecv === span.crcCalc,
+			crcCalc: span.crcCalc,
+			crcRecv: span.crcRecv,
+			endOk: !span.missingTail && span.endByte === 0x16,
+			truncated: span.truncated,
+			missingTail: span.missingTail,
+			actualDataLen: dataBytes.length,
 			encrypted,
 			decryptOk: dec.ok,
 			needKey,
@@ -823,14 +888,10 @@
 
 	function tryParseDown(b, opt) {
 		if (b.length < 16) return null
-		const dataLen = u16leRead(b, 14)
-		const dataOffset = 16
-		const crcOffset = dataOffset + dataLen
-		if (crcOffset + 3 > b.length) return null
-		const dataBytes = b.subarray(dataOffset, crcOffset)
-		const crcRecv = u16leRead(b, crcOffset)
-		const crcCalc = W.skCrc16(b.subarray(0, crcOffset))
-		const endByte = b[crcOffset + 2]
+		const declaredLen = u16leRead(b, 14)
+		const span = resolveFrameSpan(b, 16, declaredLen)
+		if (!span) return null
+		const dataBytes = span.dataBytes
 		const ctrl = b[13]
 		const encrypted = (ctrl & 0x01) === 1
 		let dec = { ok: true, bytes: dataBytes, needKey: false }
@@ -853,15 +914,18 @@
 			平台时间BCD: hexbytes(timeBytes),
 			功能码: { value: fc, name: (W.SK_FUNC_CODES['0x' + fc.toString(16).toUpperCase().padStart(2, '0')] || {}).name || '' },
 			控制码: { raw: ctrl, 后续帧: (ctrl & 0x80) === 0x80, 加密: encrypted },
-			数据域字节数: dataLen,
-			帧结束符: endByte
+			数据域字节数: declaredLen,
+			帧结束符: span.endByte
 		}
 		return {
 			dir: 'down',
-			crcOk: crcRecv === crcCalc,
-			crcCalc,
-			crcRecv,
-			endOk: endByte === 0x16,
+			crcOk: !span.missingTail && span.crcRecv === span.crcCalc,
+			crcCalc: span.crcCalc,
+			crcRecv: span.crcRecv,
+			endOk: !span.missingTail && span.endByte === 0x16,
+			truncated: span.truncated,
+			missingTail: span.missingTail,
+			actualDataLen: dataBytes.length,
 			encrypted,
 			decryptOk: dec.ok,
 			needKey,
@@ -895,6 +959,7 @@
 			const dataLen = p.fields && p.fields['数据域字节数'] != null ? p.fields['数据域字节数'] : -1
 			const exp = (p.dir === 'up' ? 24 : 16) + dataLen + 3
 			if (b.length === exp) s += 50
+			else if (p.truncated && b.length < exp) s += 20 // 截断帧: 长度不足是预期情况
 			else s -= 30
 			const fcObj = p.fields && p.fields['功能码']
 			const fc = fcObj && typeof fcObj === 'object' ? fcObj.value : fcObj
@@ -906,8 +971,12 @@
 			if (p.dir === 'up' && downFc.indexOf(fc) >= 0) s -= 15
 			if (p.tlv && p.tlv.length) s += 8
 			if (p.tlv && p.tlv.some(function (t) { return t.error })) s -= 12
+			// 截断但仍解出 TLV 时加分, 避免被判「无法解析」
+			if (p.truncated && p.tlv && p.tlv.length) s += 18
 			// 退化：上行 dataLen=0 但帧明显长于空数据域最小长度时降权
 			if (p.dir === 'up' && dataLen === 0 && b.length > 27) s -= 20
+			// 截断且完全无 TLV 时略降权
+			if (p.truncated && (!p.tlv || !p.tlv.length)) s -= 10
 			return s
 		}
 		let chosen = null
@@ -926,20 +995,35 @@
 		result.crcOk = chosen.crcOk
 		result.crcCalc = chosen.crcCalc
 		result.crcRecv = chosen.crcRecv
+		result.endOk = !!chosen.endOk
 		result.encrypted = chosen.encrypted
 		result.decryptOk = chosen.decryptOk
 		result.needKey = !!chosen.needKey
+		result.truncated = !!chosen.truncated
+		result.missingTail = !!chosen.missingTail
+		result.actualDataLen = chosen.actualDataLen
 		result.fields = chosen.fields
 		result.tlv = chosen.tlv
 		result.dataBytes = chosen.dataBytes || []
 		result.plainBytes = chosen.plainBytes || []
-		result.ok = chosen.crcOk && chosen.endOk
-		if (chosen.needKey) errors.push('加密报文,请输入密钥')
-		else if (!chosen.endOk) errors.push('帧结束符错误 期望0x16 实际0x' + chosen.fields.帧结束符.toString(16))
-		if (!chosen.crcOk) errors.push('CRC校验失败 收到0x' + chosen.crcRecv.toString(16) + ' 计算0x' + chosen.crcCalc.toString(16))
-		if (chosen.encrypted && !chosen.needKey && !chosen.decryptOk) errors.push('AES解密失败')
+		result.ok = chosen.crcOk && chosen.endOk && !chosen.truncated
 		const expectedLen = (chosen.dir === 'up' ? 24 : 16) + chosen.fields.数据域字节数 + 3
-		if (b.length !== expectedLen) errors.push('报文长度不符 期望' + expectedLen + ' 实际' + b.length)
+		if (chosen.truncated || chosen.missingTail || b.length < expectedLen) {
+			errors.push('报文截断: 声明数据域' + chosen.fields.数据域字节数 + '字节(整帧' + expectedLen + '), 实际' + b.length + '字节')
+		}
+		if (chosen.needKey) errors.push('加密报文,请输入密钥')
+		else if (!chosen.missingTail && !chosen.endOk) {
+			errors.push('帧结束符错误 期望0x16 实际0x' + (chosen.fields.帧结束符 & 0xff).toString(16))
+		}
+		if (!chosen.missingTail && !chosen.crcOk) {
+			errors.push('CRC校验失败 收到0x' + chosen.crcRecv.toString(16) + ' 计算0x' + chosen.crcCalc.toString(16))
+		} else if (chosen.missingTail) {
+			errors.push('缺少CRC与帧结束符(帧未收完)')
+		}
+		if (chosen.encrypted && !chosen.needKey && !chosen.decryptOk) errors.push('AES解密失败')
+		if (!chosen.truncated && !chosen.missingTail && b.length !== expectedLen) {
+			errors.push('报文长度不符 期望' + expectedLen + ' 实际' + b.length)
+		}
 		return result
 	}
 
@@ -1011,7 +1095,7 @@
 
 	W.skFormatFrame = function (p) {
 		const dirArrow = p.dir === 'up' ? '↑' : p.dir === 'down' ? '↓' : '?'
-		const status = (p.crcOk ? '✓' : '✗') + (p.encrypted ? ' 🔒' : '')
+		const status = (p.crcOk ? '✓' : '✗') + (p.encrypted ? ' 🔒' : '') + (p.truncated || p.missingTail ? ' ⚠截断' : '')
 		let h = '<div class="sk-parse">'
 		h += '<div class="sk-parse-bar">' + dirArrow + ' ' + status + '</div>'
 		const f = p.fields || {}
@@ -1152,26 +1236,28 @@
 		}
 		const dataLen = r.fields['数据域字节数'] || 0
 		const crcOffset = dataOffset + dataLen
+		// 截断帧: 只映射缓冲内实际数据域
+		const dataEnd = Math.min(crcOffset, n)
 		const enc = r.encrypted
 		const canDecode = !enc || (r.decryptOk && !r.needKey)
 		//数据域:不加密,或已用密钥成功解密时,可逐字节映射 TLV 含义
-		if (canDecode && crcOffset > dataOffset && crcOffset <= n) {
+		if (canDecode && dataEnd > dataOffset) {
 			let region = null
 			let prefix = ''
 			if (enc) {
 				region = (r.plainBytes && r.plainBytes.length) ? Uint8Array.from(r.plainBytes) : null
 				prefix = '解密后-'
 			} else {
-				region = raw.subarray(dataOffset, crcOffset)
+				region = raw.subarray(dataOffset, dataEnd)
 			}
-			if (region && region.length === crcOffset - dataOffset) {
+			if (region && region.length > 0) {
 				//顶层数据域才尝试剥离 2B 明文长度前缀(与 extractTlv 一致)
 				const fcObj = r.fields && r.fields['功能码']
 				const fc = fcObj && typeof fcObj === 'object' ? fcObj.value : fcObj
 				walkTlvRegion(region, dataOffset, map, prefix, true, isResultValueFunc(fc))
 			}
 		} else if (enc) {
-			set(dataOffset, Math.max(0, crcOffset - dataOffset), '加密数据域(需密钥解密后才有含义)', 'enc' + dataOffset)
+			set(dataOffset, Math.max(0, dataEnd - dataOffset), '加密数据域(需密钥解密后才有含义)', 'enc' + dataOffset)
 		}
 		if (crcOffset + 2 <= n) {
 			set(crcOffset, 2, 'CRC16校验 ' + (r.crcOk ? '✓' : '✗') + ' = ' + hx(raw[crcOffset]) + ' ' + hx(raw[crcOffset + 1]), 'crc' + crcOffset)

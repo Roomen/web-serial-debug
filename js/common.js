@@ -2048,6 +2048,42 @@
 
 	//单个合并包的字节上限，超过就强制断包，避免连续流下缓冲无限增长
 	const SERIAL_PACK_MAX_BYTES = 65536
+	// SEK 帧在分包静默后若仍未收满声明长度, 最多再多等这么久(防低波特/间隙拆帧)
+	const SEK_INCOMPLETE_WAIT_MAX_MS = 3000
+	let serialSekWaitStart = null
+
+	// 若缓冲以 A9 9A 开头且声明长度未到, 返回期望总长; 已完整或非 SEK 返回 0
+	function peekSekIncompleteNeed(buf) {
+		if (!buf || buf.length < 16 || buf[0] !== 0xA9 || buf[1] !== 0x9A) return 0
+		const cands = []
+		const dlDown = buf[14] | (buf[15] << 8)
+		const expDown = 16 + dlDown + 3
+		if (dlDown >= 0 && dlDown <= 4096 && expDown >= 19 && expDown <= 8192) cands.push(expDown)
+		if (buf.length >= 24) {
+			const dlUp = buf[22] | (buf[23] << 8)
+			const expUp = 24 + dlUp + 3
+			if (dlUp >= 0 && dlUp <= 4096 && expUp >= 27 && expUp <= 8192) cands.push(expUp)
+		}
+		if (!cands.length) return 0
+		// 任一候选长度处结束符正确 → 已完整, 不必再等
+		for (let i = 0; i < cands.length; i++) {
+			const exp = cands[i]
+			if (buf.length >= exp && buf[exp - 1] === 0x16) return 0
+		}
+		// 取仍未收满的最大期望长度
+		let need = 0
+		for (let i = 0; i < cands.length; i++) {
+			if (buf.length < cands[i] && cands[i] > need) need = cands[i]
+		}
+		return need
+	}
+
+	function flushSerialPack(buf, startTime) {
+		serialSekWaitStart = null
+		if (!buf || !buf.length) return
+		addLog(buf, true, startTime)
+		addParseLog(buf.slice ? buf.slice() : [...buf], true, startTime)
+	}
 
 	//串口分包合并
 	function dataReceived(data) {
@@ -2065,33 +2101,47 @@
 		//新的合并包开始:记下第一个字节到达的时间,日志显示要用这个而不是flush时间
 		if (serialData.length === 0) {
 			serialDataStartTime = new Date()
+			serialSekWaitStart = null
 		}
 		//不能用 push(...data)：单次读回的块可能上万字节(bufferSize 最大约 1.6M)，
 		//展开成实参会超出调用栈上限抛 RangeError，被外层当成读错误误判为断线
 		for (let i = 0; i < data.length; i++) serialData.push(data[i])
 		if (toolOptions.timeOut == 0) {
-			addLog(serialData, true, serialDataStartTime)
-			addParseLog([...serialData], true, serialDataStartTime)
+			flushSerialPack(serialData, serialDataStartTime)
 			serialData = []
 			return
 		}
 		//持续不断的流永远等不到 timeOut 间隔，缓冲会一直涨到把页面撑爆，超上限就强制断包
 		if (serialData.length >= SERIAL_PACK_MAX_BYTES) {
 			clearTimeout(serialTimer)
-			addLog(serialData, true, serialDataStartTime)
-			addParseLog([...serialData], true, serialDataStartTime)
+			flushSerialPack(serialData, serialDataStartTime)
 			serialData = []
 			return
 		}
 		//清除之前的时钟
 		clearTimeout(serialTimer)
 		const startTime = serialDataStartTime
-		serialTimer = setTimeout(() => {
-			//超时发出
-			addLog(serialData, true, startTime)
-			addParseLog([...serialData], true, startTime)
-			serialData = []
-		}, toolOptions.timeOut)
+		const armFlush = () => {
+			serialTimer = setTimeout(() => {
+				// 协议感知: SEK 帧声明长度未到时, 在上限内继续等后续字节
+				const wantProto = toolOptions.skParseEnable || toolOptions.skHoverEnable ||
+					(window._activeProtocol === 'sek')
+				if (wantProto) {
+					const need = peekSekIncompleteNeed(serialData)
+					if (need > 0 && serialData.length < need && serialData.length < SERIAL_PACK_MAX_BYTES) {
+						if (serialSekWaitStart == null) serialSekWaitStart = Date.now()
+						if (Date.now() - serialSekWaitStart < SEK_INCOMPLETE_WAIT_MAX_MS) {
+							armFlush()
+							return
+						}
+					}
+				}
+				const pack = serialData
+				serialData = []
+				flushSerialPack(pack, startTime)
+			}, toolOptions.timeOut)
+		}
+		armFlush()
 	}
 
 	//对外暴露的串口接口(供固件升级/协议测试等模块使用)
