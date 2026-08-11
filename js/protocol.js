@@ -417,6 +417,8 @@
 					return '最近一次上行异常发生时间:' + bcdTimeOrEmpty(raw.subarray(0, 6)) + ' 最近一次异常发生时的CSQ:' + raw[6] + ' 异常发生的环节:' + (linkMap[raw[7]] != null ? linkMap[raw[7]] : raw[7])
 				}
 				case 'magSignal': return 'CH0=' + raw[0] + ' CH1=' + raw[1]
+				case 'busMeters': return renderBusMeters(raw, dec.rec || 14)
+				case 'imgPack': return renderImgPack(raw)
 			}
 		}
 		if (/YYYYMMDDhhmmss|YYMMDDhhmmss/.test(desc) || (def && def.unit === 'BCD' && (raw.length === 7 || raw.length === 6))) return bcdTime(raw)
@@ -496,11 +498,90 @@
 		return hexbytes(raw)
 	}
 
-	// Tag5/Tag9 记录值按「记录个数」重复 N 次
+	// 总线表状态 ST0/ST1 (协议附表)
+	function renderBusStatus(st0, st1) {
+		const valve = { 0: '开阀', 1: '关阀', 3: '异常' }
+		const parts = []
+		if (st0 & 0x80) parts.push('倒流')
+		if (st0 & 0x40) parts.push('漏水')
+		if (st0 & 0x20) parts.push('过流')
+		if (st0 & 0x10) parts.push('磁干扰')
+		if (st0 & 0x08) parts.push('机电分离')
+		if (st0 & 0x04) parts.push('低压')
+		parts.push('阀:' + (valve[st0 & 0x03] != null ? valve[st0 & 0x03] : (st0 & 0x03)))
+		if (st1 != null) {
+			if (st1 & 0x02) parts.push('采样报警')
+			if (st1 & 0x01) parts.push('断线报警')
+		}
+		return parts.join(' ')
+	}
+	function renderBusMeters(raw, rec) {
+		rec = rec || 14
+		if (!raw || raw.length < rec) return hexbytes(raw || [])
+		const n = Math.floor(raw.length / rec)
+		const unitMap = { 0: '1000L', 1: '100L', 2: '10L', 3: '1L' }
+		const lines = [n + '块表']
+		for (let i = 0; i < n; i++) {
+			const o = i * rec
+			const addr = bcdDecode(raw.subarray(o, o + 7))
+			const reading = u32leRead(raw, o + 7)
+			const st0 = raw[o + 11]
+			const st1 = raw[o + 12]
+			const unit = raw[o + 13]
+			let s = '#' + (i + 1) + ' 地址' + addr + ' 读数' + (reading === 0xffffffff ? '异常' : reading) +
+				' 单位' + (unitMap[unit] != null ? unitMap[unit] : unit) +
+				' ' + renderBusStatus(st0, st1)
+			if (rec >= 18) {
+				s += ' 温度' + (signed16(raw.subarray(o + 14, o + 16)) / 10) + '℃'
+				s += ' 压力' + u16leRead(raw, o + 16) + 'kPa'
+			}
+			if (rec >= 26) {
+				s += ' 环境温度' + (signed16(raw.subarray(o + 18, o + 20)) / 10) + '℃'
+				s += ' 电导率' + signed16(raw.subarray(o + 20, o + 22)) + 'us/cm'
+				s += ' 浊度' + (signed16(raw.subarray(o + 22, o + 24)) / 10) + 'NTU'
+				s += ' 余氯' + (signed16(raw.subarray(o + 24, o + 26)) / 10) + 'mg/L'
+			}
+			lines.push(s)
+		}
+		return lines.join('\n')
+	}
+	function renderImgPack(raw) {
+		if (!raw || raw.length < 4) return hexbytes(raw || [])
+		const total = raw[0]
+		const cur = raw[1]
+		const plen = u16leRead(raw, 2)
+		return '包' + (cur + 1) + '/' + total + ' 本包' + plen + 'B 数据' + hexbytes(raw.subarray(4, Math.min(raw.length, 4 + Math.min(plen, 16)))) + (plen > 16 ? '…' : '')
+	}
+
+	// Tag5/6/9/20-27/94-99 记录值按「记录个数」重复 N 次
 	function isSeriesValueId(tag, id) {
 		if (tag === 5) return (id >= 3 && id <= 17) || id === 19
+		if (tag === 6) return id === 3 || id === 4
 		if (tag === 9) return id === 2
+		if (tag >= 20 && tag <= 27) return id >= 3
+		if (tag >= 94 && tag <= 99) return id >= 6 && id <= 21
 		return false
+	}
+
+	function updateSeriesMeta(tag, id, raw, seriesMeta) {
+		if (id === 0 && raw.length >= 6) seriesMeta.startStr = bcdTime(raw)
+		if (tag === 5 || (tag >= 20 && tag <= 27)) {
+			if (id === 1 && raw.length >= 2) seriesMeta.interval = u16leRead(raw, 0)
+			if (id === 2 && raw.length >= 1) seriesMeta.count = raw[0]
+		}
+		if (tag === 6) {
+			if (id === 1 && raw.length >= 1) seriesMeta.interval = raw[0]
+			if (id === 2 && raw.length >= 1) seriesMeta.count = raw[0]
+			if (seriesMeta.interval == null) seriesMeta.interval = 5
+		}
+		if (tag === 9) {
+			if (id === 1 && raw.length >= 1) seriesMeta.count = raw[0]
+		}
+		if (tag >= 94 && tag <= 99) {
+			if (id === 4 && raw.length >= 2) seriesMeta.interval = u16leRead(raw, 0)
+			if (id === 5 && raw.length >= 1) seriesMeta.count = raw[0]
+		}
+		if (tag === 90 && id === 0 && raw.length >= 1) seriesMeta.count = raw[0]
 	}
 
 	function addMinutesToTimeStr(timeStr, mins) {
@@ -560,7 +641,7 @@
 		const resultMode = !!(opt && opt.resultMode)
 		const seriesMeta = {
 			startStr: null,
-			interval: tag === 9 ? 1440 : null,
+			interval: tag === 9 ? 1440 : (tag === 6 ? 5 : null),
 			count: null
 		}
 		let j = 0
@@ -584,6 +665,48 @@
 				})
 				continue
 			}
+			// 总线表列表: 按个数×记录长度消费
+			if (def && def.dec && def.dec.t === 'busMeters') {
+				const rec = def.dec.rec || 14
+				let cnt = seriesMeta.count
+				if (cnt == null || cnt <= 0) cnt = Math.floor((payload.length - j) / rec)
+				let need = cnt * rec
+				const remain = payload.length - j
+				if (need > remain) need = Math.floor(remain / rec) * rec
+				if (need <= 0) need = Math.min(rec, remain)
+				const raw = payload.subarray(j, j + need)
+				j += need
+				items.push({
+					id,
+					name: def.name || ('ID' + id),
+					raw: Array.from(raw),
+					decoded: renderBusMeters(raw, rec)
+				})
+				continue
+			}
+			// 图片/音频分包头: 总包+序号+长度+数据, 变长
+			if (def && (/BYTE\[1\+1\+2\+n\]/.test(def.type || '') || (def.dec && def.dec.t === 'imgPack'))) {
+				const remain = payload.length - j
+				if (remain < 4) {
+					const raw = payload.subarray(j)
+					j = payload.length
+					items.push({ id, name: def.name, raw: Array.from(raw), decoded: hexbytes(raw) + ' (不完整)', partial: true })
+					break
+				}
+				const plen = u16leRead(payload, j + 2)
+				let need = 4 + plen
+				if (need > remain) need = remain
+				const raw = payload.subarray(j, j + need)
+				j += need
+				items.push({
+					id,
+					name: def.name,
+					raw: Array.from(raw),
+					decoded: renderImgPack(raw),
+					partial: need < 4 + plen
+				})
+				continue
+			}
 			let vlen = def ? typeLen(def.type) : null
 			if (vlen === null) {
 				let k = j
@@ -592,7 +715,7 @@
 				if (vlen <= 0) vlen = 1
 				const raw = payload.subarray(j, j + vlen)
 				j = k
-				items.push({ id, name: 'ID' + id + '(未知)', raw: Array.from(raw), decoded: hexbytes(raw) })
+				items.push({ id, name: def ? def.name : ('ID' + id + '(未知)'), raw: Array.from(raw), decoded: hexbytes(raw) })
 				continue
 			}
 			// NULL: 无 Value,仅 ID(信息查询码等)
@@ -670,12 +793,7 @@
 				raw: Array.from(raw),
 				decoded
 			})
-			if (tag === 5 || tag === 9) {
-				if (id === 0 && raw.length >= 6) seriesMeta.startStr = bcdTime(raw)
-				if (tag === 5 && id === 1 && raw.length >= 2) seriesMeta.interval = u16leRead(raw, 0)
-				if (tag === 5 && id === 2 && raw.length >= 1) seriesMeta.count = raw[0]
-				if (tag === 9 && id === 1 && raw.length >= 1) seriesMeta.count = raw[0]
-			}
+			updateSeriesMeta(tag, id, raw, seriesMeta)
 		}
 		return items
 	}
@@ -1324,7 +1442,7 @@
 			for (const d of defs) idMap[d.id] = d
 			const seriesMeta = {
 				startStr: null,
-				interval: tag === 9 ? 1440 : null,
+				interval: tag === 9 ? 1440 : (tag === 6 ? 5 : null),
 				count: null
 			}
 			let j = 0
@@ -1346,6 +1464,33 @@
 					set(pBase + idOff, 2, tip, itemGrp)
 					continue
 				}
+				if (def && def.dec && def.dec.t === 'busMeters') {
+					const rec = def.dec.rec || 14
+					let cnt = seriesMeta.count
+					if (cnt == null || cnt <= 0) cnt = Math.floor((payload.length - j) / rec)
+					let need = cnt * rec
+					const remain = payload.length - j
+					if (need > remain) need = Math.floor(remain / rec) * rec
+					if (need <= 0) need = Math.min(rec, remain)
+					const rawb = payload.subarray(j, j + need)
+					const tip = prefix + '数据域-' + tagName + ' ' + name + ' = ' + renderBusMeters(rawb, rec)
+					set(pBase + idOff, 1 + need, tip, itemGrp)
+					j += need
+					continue
+				}
+				if (def && /BYTE\[1\+1\+2\+n\]/.test(def.type || '')) {
+					const remain = payload.length - j
+					if (remain < 4) {
+						set(pBase + idOff, 1 + remain, prefix + '数据域-' + tagName + ' ' + name + ' (不完整)', itemGrp)
+						break
+					}
+					const plen = u16leRead(payload, j + 2)
+					let need = Math.min(4 + plen, remain)
+					const rawb = payload.subarray(j, j + need)
+					set(pBase + idOff, 1 + need, prefix + '数据域-' + tagName + ' ' + name + ' = ' + renderImgPack(rawb), itemGrp)
+					j += need
+					continue
+				}
 				let vlen = def ? typeLen(def.type) : null
 				if (vlen === null) {
 					let k = j
@@ -1353,7 +1498,7 @@
 					vlen = k - j
 					if (vlen < 0) vlen = 0
 					const rawb = payload.subarray(j, j + vlen)
-					const tip = prefix + '数据域-' + tagName + ' ID' + id + '(未知) = ' + hexbytes(rawb)
+					const tip = prefix + '数据域-' + tagName + ' ' + name + ' = ' + hexbytes(rawb)
 					set(pBase + idOff, 1 + vlen, tip, itemGrp)
 					j = k
 					continue
@@ -1391,12 +1536,7 @@
 				const tip = prefix + '数据域-' + tagName + ' ' + name + ' = ' + renderValue(def, rawb)
 				set(pBase + idOff, 1 + vlen, tip, itemGrp)
 				j += vlen
-				if (tag === 5 || tag === 9) {
-					if (id === 0 && rawb.length >= 6) seriesMeta.startStr = bcdTime(rawb)
-					if (tag === 5 && id === 1 && rawb.length >= 2) seriesMeta.interval = u16leRead(rawb, 0)
-					if (tag === 5 && id === 2 && rawb.length >= 1) seriesMeta.count = rawb[0]
-					if (tag === 9 && id === 1 && rawb.length >= 1) seriesMeta.count = rawb[0]
-				}
+				updateSeriesMeta(tag, id, rawb, seriesMeta)
 			}
 			if (truncated) break
 			i += 3 + len

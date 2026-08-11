@@ -436,6 +436,18 @@ window.SK_DOWN_PRESETS = [
 			{ name: '查询历史冻结数据', func: '0x03', desc: 'Tag10-ID24 0=前30日 1=31-60日',
 				param: { label: '范围(0/1)', type: 'uint8', default: '0' },
 				tlv: [{ tag: 10, items: [{ id: 24 }] }] },
+			{ name: '查询LoRa参数', func: '0x03', desc: 'Tag35 LoRa/LoRaWAN',
+				tlv: [{ tag: 10, items: [{ id: 35 }] }] },
+			{ name: '查询总线采集器数据', func: '0x03', desc: 'Tag10-ID12 0全表 1-64对应表 响应Tag90',
+				param: { label: '表号(0=全)', type: 'uint8', default: '0' },
+				tlv: [{ tag: 10, items: [{ id: 12 }] }] },
+			{ name: '查询渗漏仪运行参数', func: '0x03', desc: 'Tag64 渗漏仪',
+				tlv: [{ tag: 10, items: [{ id: 19 }] }] },
+			{ name: '查询渗漏仪噪声数据', func: '0x03', desc: 'Tag62 噪声',
+				tlv: [{ tag: 10, items: [{ id: 20 }] }] },
+			{ name: '查询图片数据', func: '0x03', desc: 'Tag10-ID6 1二值 2标准 3识别+二值 响应Tag8',
+				param: { label: '类型(1/2/3)', type: 'uint8', default: '1' },
+				tlv: [{ tag: 10, items: [{ id: 6 }] }] },
 		]
 	},
 ]
