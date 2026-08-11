@@ -3,6 +3,44 @@
 
 	const W = window
 
+	// 基准水量: 协议码 → 升/单位(每圈)。解析会话级, 换表(唯一码变)则重置
+	const BASE_WATER_LITERS = { 0: 1000, 1: 100, 2: 10, 3: 1, 4: 0.1, 5: 0.01, 6: 0.001 }
+	const BASE_WATER_LABEL = {
+		0: '1000L/圈', 1: '100L/圈', 2: '10L/圈', 3: '1L/圈',
+		4: '100mL/圈', 5: '10mL/圈', 6: '1mL/圈'
+	}
+	W.skSession = {
+		deviceUid: null,
+		baseCode: null,
+		baseLiters: 1,
+		baseLabel: '1L(默认·未读基准)',
+		baseSource: null,
+		resetBase: function () {
+			this.baseCode = null
+			this.baseLiters = 1
+			this.baseLabel = '1L(默认·未读基准)'
+			this.baseSource = null
+		},
+		setBase: function (code, source) {
+			if (code == null || code < 0 || code > 6) return false
+			this.baseCode = code & 0xff
+			this.baseLiters = BASE_WATER_LITERS[this.baseCode] != null ? BASE_WATER_LITERS[this.baseCode] : 1
+			this.baseLabel = BASE_WATER_LABEL[this.baseCode] || (this.baseCode + '')
+			this.baseSource = source || 'frame'
+			return true
+		},
+		touchDevice: function (uid) {
+			const u = uid != null ? String(uid) : null
+			if (u && this.deviceUid && this.deviceUid !== u) {
+				this.resetBase()
+			}
+			if (u) this.deviceUid = u
+		},
+		hasBase: function () {
+			return this.baseCode != null
+		}
+	}
+
 	function toBytes(x) {
 		if (x == null) return new Uint8Array(0)
 		if (x instanceof Uint8Array) return new Uint8Array(x)
@@ -595,6 +633,57 @@
 		return formatDateTime(d, 0)
 	}
 
+	function usesBaseWater(def) {
+		if (!def) return false
+		if (def.baseUnit) return true
+		const blob = (def.desc || '') + ' ' + (def.name || '') + ' ' + (def.type || '')
+		if (/L\/h|℃|kPa|%|us\/cm|NTU|mg\/L|pH|分钟|秒|V\b|mA|mV/.test(blob)) return false
+		return /基准水量|周期点总累积|周期累积|冻结累计|日结点总累计|密集时间点总累积|总累积流量|正累积|逆累积|净累积/.test(blob)
+	}
+
+	function rawNumeric(def, raw) {
+		if (!raw || !raw.length) return null
+		const desc = def ? (def.desc || '') : ''
+		const type = def ? (def.type || '') : ''
+		// 全 FF 视为异常
+		let allFF = true
+		for (let i = 0; i < raw.length; i++) if (raw[i] !== 0xff) { allFF = false; break }
+		if (allFF) return null
+		if (/int32 LE signed|Int32 LE signed/.test(desc) || type === 'BYTE[4]' && /带符号|signed/i.test(desc)) {
+			return signed32(raw)
+		}
+		if (/Int16 LE signed|int16 LE signed/.test(desc) || type === 'BYTE[2]' && /signed|带符号|累积流量/.test(desc)) {
+			return signed16(raw)
+		}
+		if (type === 'BYTE[4]' || raw.length === 4) return u32leRead(raw, 0)
+		if (type === 'BYTE[2]' || raw.length === 2) return u16leRead(raw, 0)
+		if (raw.length === 1) return raw[0]
+		if (/BYTE\[1\+7\]/.test(type) && raw.length >= 8) {
+			if (raw[0] & 1) return null
+			return uNle(raw, 1, 7)
+		}
+		return null
+	}
+
+	function formatLiters(liters) {
+		if (liters == null || !isFinite(liters)) return '—'
+		const abs = Math.abs(liters)
+		if (abs >= 1000) {
+			const t = liters / 1000
+			return (Math.round(t * 1000) / 1000) + ' m³'
+		}
+		if (abs > 0 && abs < 1) return (Math.round(liters * 1000) / 1000) + ' L'
+		if (Number.isInteger(liters)) return liters + ' L'
+		return (Math.round(liters * 1000) / 1000) + ' L'
+	}
+
+	function formatFlowWithBase(rawNum) {
+		const b = W.skSession.baseLiters
+		const liters = rawNum * b
+		const unitNote = W.skSession.hasBase() ? '' : '·估'
+		return formatLiters(liters) + unitNote + ' (×' + (W.skSession.hasBase() ? W.skSession.baseLabel : '1L默认') + ')'
+	}
+
 	function buildSeriesRows(def, raw, meta) {
 		const elem = def ? typeLen(def.type) : null
 		if (!elem || elem <= 0) return null
@@ -604,6 +693,7 @@
 		const startStr = meta && meta.startStr
 		const declared = meta && meta.count != null ? meta.count : null
 		const daily = interval != null && interval >= 1440
+		const base = usesBaseWater(def)
 		let head = n + '条'
 		if (declared != null && declared !== n) head += '(声明' + declared + '，实际' + n + ')'
 		if (interval != null) {
@@ -611,27 +701,138 @@
 			else head += ' · 间隔' + interval + '分钟'
 		}
 		if (startStr) head += ' · 起' + (daily ? String(startStr).slice(0, 10) : startStr)
+		if (base) {
+			head += W.skSession.hasBase()
+				? (' · 基准' + W.skSession.baseLabel)
+				: ' · ⚠未读基准(按1L)'
+		}
 		const rows = []
 		for (let i = 0; i < n; i++) {
 			const slice = raw.subarray(i * elem, (i + 1) * elem)
-			const val = renderValue(def, slice)
+			const num = rawNumeric(def, slice)
+			let val
+			let plot = null
+			if (base && num != null) {
+				val = formatFlowWithBase(num)
+				plot = num * W.skSession.baseLiters
+			} else {
+				val = renderValue(def, slice)
+				plot = num
+			}
 			let label = '#' + (i + 1)
 			if (startStr && interval != null) {
 				const t = addMinutesToTimeStr(startStr, i * interval)
 				if (t) label = daily ? t.slice(0, 10) : t
 			}
-			rows.push({ label: label, value: val })
+			rows.push({ label: label, value: val, num: plot, raw: num })
 		}
-		return { summary: head, rows: rows, daily: daily, timeCol: daily ? '日期' : (interval != null ? '时间' : '序号') }
+		// 统计
+		const nums = rows.map(function (r) { return r.num }).filter(function (v) { return v != null && isFinite(v) })
+		let stats = null
+		if (nums.length) {
+			let min = nums[0], max = nums[0], sum = 0
+			for (let i = 0; i < nums.length; i++) {
+				if (nums[i] < min) min = nums[i]
+				if (nums[i] > max) max = nums[i]
+				sum += nums[i]
+			}
+			const first = nums[0]
+			const last = nums[nums.length - 1]
+			stats = {
+				min: min,
+				max: max,
+				avg: sum / nums.length,
+				first: first,
+				last: last,
+				delta: last - first,
+				count: nums.length
+			}
+			head += ' · Δ' + formatLiters(stats.delta) + ' · max' + formatLiters(stats.max)
+		}
+		return {
+			summary: head,
+			rows: rows,
+			daily: daily,
+			timeCol: daily ? '日期' : (interval != null ? '时间' : '序号'),
+			base: base,
+			stats: stats,
+			chartable: nums.length >= 2
+		}
 	}
 	function renderSeries(def, raw, meta) {
 		const ser = buildSeriesRows(def, raw, meta)
 		if (!ser) return hexbytes(raw)
 		const lines = [ser.summary]
-		for (let i = 0; i < ser.rows.length; i++) {
+		const maxShow = 8
+		for (let i = 0; i < ser.rows.length && i < maxShow; i++) {
 			lines.push(ser.rows[i].label + ' → ' + ser.rows[i].value)
 		}
+		if (ser.rows.length > maxShow) lines.push('…共' + ser.rows.length + '条')
 		return lines.join('\n')
+	}
+
+	function noteSessionFromParse(result) {
+		if (!result || !result.fields) return
+		const uid = result.fields['设备唯一编码']
+		if (uid != null) W.skSession.touchDevice(uid)
+		const tlv = result.tlv || []
+		for (let i = 0; i < tlv.length; i++) {
+			const tag = tlv[i].tag
+			if (tag !== 2 && tag !== 3) continue
+			const items = tlv[i].items || []
+			for (let j = 0; j < items.length; j++) {
+				if (items[j].id === 29 && items[j].raw && items[j].raw.length) {
+					W.skSession.setBase(items[j].raw[0], tag === 2 ? 'Tag2-ID29' : 'Tag3-ID29')
+				}
+			}
+		}
+	}
+
+	function seriesPanelHtml(it, tip) {
+		const label = 'ID' + it.id + ' ' + escHtml(it.name || '')
+		const serRows = it.seriesRows || []
+		const chartable = it.seriesChartable !== false && serRows.length >= 2
+		const payload = {
+			rows: serRows.map(function (r) {
+				return { t: r.label, v: r.num, s: r.value, raw: r.raw }
+			}),
+			daily: !!it.seriesDaily,
+			summary: it.seriesSummary || '',
+			baseLabel: W.skSession.hasBase() ? W.skSession.baseLabel : null
+		}
+		let h = '<div class="sk-series-panel' + (it.seriesDaily ? ' is-daily' : '') + '" title="' + tip + '">'
+		h += '<div class="sk-series-head"><span class="sk-series-title">' + label + '</span>'
+		h += '<span class="sk-parse-series-sum">' + escHtml(it.seriesSummary || '') + '</span></div>'
+		if (it.seriesStats) {
+			const st = it.seriesStats
+			h += '<div class="sk-series-stats">'
+			h += '<span>点数 ' + st.count + '</span>'
+			h += '<span>最小 ' + escHtml(formatLiters(st.min)) + '</span>'
+			h += '<span>最大 ' + escHtml(formatLiters(st.max)) + '</span>'
+			h += '<span>起 ' + escHtml(formatLiters(st.first)) + '</span>'
+			h += '<span>止 ' + escHtml(formatLiters(st.last)) + '</span>'
+			h += '<span class="sk-series-delta">Δ ' + escHtml(formatLiters(st.delta)) + '</span>'
+			h += '</div>'
+		}
+		if (chartable) {
+			h += '<div class="sk-series-chart-box">'
+			h += '<canvas class="sk-series-canvas" width="560" height="148" data-sk-series="' +
+				escHtml(JSON.stringify(payload)) + '"></canvas>'
+			h += '<div class="sk-series-tip" hidden></div>'
+			h += '</div>'
+		}
+		const timeCol = escHtml(it.seriesTimeCol || '序号')
+		h += '<details class="sk-series-details"' + (chartable ? '' : ' open') + '>'
+		h += '<summary>明细表 ' + serRows.length + ' 条' + (chartable ? '（默认折叠，点开查看）' : '') + '</summary>'
+		h += '<div class="sk-parse-series-wrap"><table class="sk-parse-series-table"><thead><tr><th>' +
+			timeCol + '</th><th>数值</th></tr></thead><tbody>'
+		for (let ri = 0; ri < serRows.length; ri++) {
+			const row = serRows[ri]
+			h += '<tr><td class="sk-ser-t">' + escHtml(row.label) + '</td><td class="sk-ser-v">' +
+				escHtml(row.value) + '</td></tr>'
+		}
+		h += '</tbody></table></div></details></div>'
+		return h
 	}
 
 	function resultCodeName(code) {
@@ -780,12 +981,15 @@
 					id,
 					name: def ? def.name : ('ID' + id),
 					raw: Array.from(raw),
-					decoded: ser ? (ser.summary + '\n' + ser.rows.map(function (r) { return r.label + ' → ' + r.value }).join('\n')) : renderSeries(def, raw, seriesMeta),
+					decoded: ser ? ser.summary : renderSeries(def, raw, seriesMeta),
 					series: true,
 					seriesSummary: ser ? ser.summary : '',
 					seriesRows: ser ? ser.rows : null,
 					seriesTimeCol: ser ? ser.timeCol : '序号',
-					seriesDaily: ser ? !!ser.daily : false
+					seriesDaily: ser ? !!ser.daily : false,
+					seriesStats: ser ? ser.stats : null,
+					seriesChartable: ser ? !!ser.chartable : false,
+					seriesBase: ser ? !!ser.base : false
 				})
 				// 截断尾渣: 不足一条记录或下一固定字段时丢弃, 避免伪 ID
 				if (j < payload.length) {
@@ -814,7 +1018,16 @@
 			}
 			const raw = payload.subarray(j, j + vlen)
 			j += vlen
-			const decoded = renderValue(def, raw)
+			let decoded = renderValue(def, raw)
+			// 单点流量字段: 有基准则换算为升
+			if (usesBaseWater(def) && raw && raw.length) {
+				const num = rawNumeric(def, raw)
+				if (num != null) decoded = formatFlowWithBase(num)
+			}
+			// 捕获基准水量到会话
+			if ((tag === 2 || tag === 3) && id === 29 && raw && raw.length) {
+				W.skSession.setBase(raw[0], tag === 2 ? 'Tag2-ID29' : 'Tag3-ID29')
+			}
 			items.push({
 				id,
 				name: def ? def.name : ('ID' + id),
@@ -1170,7 +1383,65 @@
 		if (!chosen.truncated && !chosen.missingTail && b.length !== expectedLen) {
 			errors.push('报文长度不符 期望' + expectedLen + ' 实际' + b.length)
 		}
+		// 会话: 设备唯一码 / 基准水量
+		noteSessionFromParse(result)
+		// 同帧基准在序列之后出现时, 回算 series 行/统计
+		if (W.skSession.hasBase() && result.tlv && result.tlv.length) {
+			applyBaseToSeriesTlv(result.tlv)
+		}
+		result.sessionBase = {
+			has: W.skSession.hasBase(),
+			code: W.skSession.baseCode,
+			liters: W.skSession.baseLiters,
+			label: W.skSession.baseLabel,
+			source: W.skSession.baseSource,
+			deviceUid: W.skSession.deviceUid
+		}
 		return result
+	}
+
+	function applyBaseToSeriesTlv(tlv) {
+		const b = W.skSession.baseLiters
+		for (let i = 0; i < tlv.length; i++) {
+			const items = tlv[i].items || []
+			for (let j = 0; j < items.length; j++) {
+				const it = items[j]
+				if (!it.series || !it.seriesRows || !it.seriesRows.length) continue
+				if (!it.seriesBase) continue
+				let min = null, max = null, sum = 0, n = 0
+				for (let k = 0; k < it.seriesRows.length; k++) {
+					const r = it.seriesRows[k]
+					if (r.raw == null || !isFinite(r.raw)) continue
+					r.num = r.raw * b
+					r.value = formatFlowWithBase(r.raw)
+					if (min == null || r.num < min) min = r.num
+					if (max == null || r.num > max) max = r.num
+					sum += r.num
+					n++
+				}
+				if (n > 0) {
+					const first = it.seriesRows.find(function (x) { return x.num != null })
+					const last = it.seriesRows.slice().reverse().find(function (x) { return x.num != null })
+					it.seriesStats = {
+						min: min, max: max, avg: sum / n,
+						first: first ? first.num : min,
+						last: last ? last.num : max,
+						delta: (last && first) ? (last.num - first.num) : 0,
+						count: n
+					}
+					// 刷新摘要中的 Δ/max/基准标记
+					let sumry = it.seriesSummary || ''
+					sumry = sumry.replace(/⚠未读基准\(按1L\)/, '基准' + W.skSession.baseLabel)
+					sumry = sumry.replace(/· 基准[^·]+/, '· 基准' + W.skSession.baseLabel)
+					if (sumry.indexOf('基准') < 0) sumry += ' · 基准' + W.skSession.baseLabel
+					sumry = sumry.replace(/· Δ[^·]+/, '')
+					sumry = sumry.replace(/· max[^·]+/, '')
+					sumry += ' · Δ' + formatLiters(it.seriesStats.delta) + ' · max' + formatLiters(it.seriesStats.max)
+					it.seriesSummary = sumry
+					it.decoded = sumry
+				}
+			}
+		}
 	}
 
 	//在脏字节流中扫描 A9 9A，按声明长度+CRC+EOF 截取首个有效帧
@@ -1244,6 +1515,24 @@
 		const status = (p.crcOk ? '✓' : '✗') + (p.encrypted ? ' 🔒' : '') + (p.truncated || p.missingTail ? ' ⚠截断' : '')
 		let h = '<div class="sk-parse">'
 		h += '<div class="sk-parse-bar">' + dirArrow + ' ' + status + '</div>'
+		// 会话基准水量条
+		const sb = p.sessionBase || {
+			has: W.skSession.hasBase(),
+			label: W.skSession.baseLabel,
+			source: W.skSession.baseSource
+		}
+		if (sb.has) {
+			h += '<div class="sk-base-banner is-ok">基准水量 <b>' + escHtml(sb.label) + '</b>'
+			if (sb.source) h += ' <span class="sk-base-src">(' + escHtml(sb.source) + '·本会话)</span>'
+			h += ' · 流量已换算为升/立方米</div>'
+		} else {
+			const needBase = (p.tlv || []).some(function (t) {
+				return (t.items || []).some(function (it) { return it.seriesBase || (it.decoded && String(it.decoded).indexOf('1L默认') >= 0) })
+			})
+			if (needBase || (p.tlv || []).some(function (t) { return t.tag === 5 || t.tag === 9 || (t.tag >= 94 && t.tag <= 99) })) {
+				h += '<div class="sk-base-banner is-warn">⚠ 未读到基准水量(Tag2/3 ID29)，流量暂按 <b>1L/圈</b> 显示 · 建议先「查询核心数据」或「查询终端参数」</div>'
+			}
+		}
 		const f = p.fields || {}
 		const cells = []
 		const filterKeys = ['帧结束符', '数据域字节数', '平台时间BCD', '控制码']
@@ -1295,15 +1584,7 @@
 						const tip = 'raw:' + escHtml(hexbytes(it.raw))
 						const label = 'ID' + it.id + ' ' + escHtml(it.name || '') + ' = '
 						if (it.series && it.seriesRows && it.seriesRows.length) {
-							const timeCol = escHtml(it.seriesTimeCol || '序号')
-							h += '<div class="sk-parse-series' + (it.seriesDaily ? ' is-daily' : '') + '" title="' + tip + '">'
-							h += '<div class="sk-parse-series-head">' + label + '<span class="sk-parse-series-sum">' + escHtml(it.seriesSummary || '') + '</span></div>'
-							h += '<div class="sk-parse-series-wrap"><table class="sk-parse-series-table"><thead><tr><th>' + timeCol + '</th><th>数值</th></tr></thead><tbody>'
-							for (let ri = 0; ri < it.seriesRows.length; ri++) {
-								const row = it.seriesRows[ri]
-								h += '<tr><td class="sk-ser-t">' + escHtml(row.label) + '</td><td class="sk-ser-v">' + escHtml(row.value) + '</td></tr>'
-							}
-							h += '</tbody></table></div></div>'
+							h += seriesPanelHtml(it, tip)
 						} else if (it.series) {
 							const body = escHtml(it.decoded || hexbytes(it.raw))
 							h += '<div class="sk-parse-series" title="' + tip + '">' + label + body + '</div>'
@@ -1649,5 +1930,188 @@
 		u16leWrite(head, crc)
 		head.push(0x16)
 		return new Uint8Array(head)
+	}
+
+	// 绑定历史序列图表: 折线 + 悬停显示时间/流量
+	W.skBindSeriesCharts = function (root) {
+		if (!root || !root.querySelectorAll) return
+		const canvases = root.querySelectorAll('canvas.sk-series-canvas[data-sk-series]')
+		for (let i = 0; i < canvases.length; i++) {
+			bindOneChart(canvases[i])
+		}
+	}
+
+	function bindOneChart(canvas) {
+		if (!canvas || canvas._skBound) return
+		let data
+		try { data = JSON.parse(canvas.getAttribute('data-sk-series') || '{}') } catch (e) { return }
+		const rows = (data.rows || []).filter(function (r) { return r.v != null && isFinite(r.v) })
+		if (rows.length < 2) return
+		canvas._skBound = true
+		const box = canvas.parentElement
+		const tip = box ? box.querySelector('.sk-series-tip') : null
+		const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1
+
+		function layout() {
+			const w = Math.max(280, (box && box.clientWidth) || canvas.clientWidth || 560)
+			const h = 148
+			canvas.style.width = w + 'px'
+			canvas.style.height = h + 'px'
+			canvas.width = Math.floor(w * dpr)
+			canvas.height = Math.floor(h * dpr)
+			return { w: w, h: h }
+		}
+
+		function draw(hi) {
+			const sz = layout()
+			const ctx = canvas.getContext('2d')
+			if (!ctx) return
+			ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+			const pad = { l: 44, r: 12, t: 12, b: 28 }
+			const pw = sz.w - pad.l - pad.r
+			const ph = sz.h - pad.t - pad.b
+			ctx.clearRect(0, 0, sz.w, sz.h)
+			// 背景
+			ctx.fillStyle = 'rgba(127,127,127,0.06)'
+			ctx.fillRect(pad.l, pad.t, pw, ph)
+
+			let min = rows[0].v, max = rows[0].v
+			for (let i = 0; i < rows.length; i++) {
+				if (rows[i].v < min) min = rows[i].v
+				if (rows[i].v > max) max = rows[i].v
+			}
+			if (min === max) { min -= 1; max += 1 }
+			const span = max - min
+
+			function xAt(i) { return pad.l + (pw * i) / (rows.length - 1) }
+			function yAt(v) { return pad.t + ph - ((v - min) / span) * ph }
+
+			// 网格
+			ctx.strokeStyle = 'rgba(127,127,127,0.2)'
+			ctx.lineWidth = 1
+			ctx.beginPath()
+			for (let g = 0; g <= 4; g++) {
+				const y = pad.t + (ph * g) / 4
+				ctx.moveTo(pad.l, y)
+				ctx.lineTo(pad.l + pw, y)
+			}
+			ctx.stroke()
+
+			// Y 轴刻度
+			ctx.fillStyle = 'rgba(120,120,120,0.9)'
+			ctx.font = '10px ui-monospace, Menlo, monospace'
+			ctx.textAlign = 'right'
+			ctx.textBaseline = 'middle'
+			for (let g = 0; g <= 4; g++) {
+				const v = max - (span * g) / 4
+				const y = pad.t + (ph * g) / 4
+				ctx.fillText(formatLiters(v).replace(' ', ''), pad.l - 4, y)
+			}
+
+			// 折线
+			ctx.strokeStyle = '#3b82f6'
+			ctx.lineWidth = 2
+			ctx.beginPath()
+			for (let i = 0; i < rows.length; i++) {
+				const x = xAt(i), y = yAt(rows[i].v)
+				if (i === 0) ctx.moveTo(x, y)
+				else ctx.lineTo(x, y)
+			}
+			ctx.stroke()
+			// 面积
+			ctx.lineTo(xAt(rows.length - 1), pad.t + ph)
+			ctx.lineTo(xAt(0), pad.t + ph)
+			ctx.closePath()
+			ctx.fillStyle = 'rgba(59,130,246,0.12)'
+			ctx.fill()
+
+			// 点
+			for (let i = 0; i < rows.length; i++) {
+				const x = xAt(i), y = yAt(rows[i].v)
+				const active = hi === i
+				ctx.beginPath()
+				ctx.arc(x, y, active ? 4.5 : 2.5, 0, Math.PI * 2)
+				ctx.fillStyle = active ? '#ef4444' : '#3b82f6'
+				ctx.fill()
+				if (active) {
+					ctx.strokeStyle = '#fff'
+					ctx.lineWidth = 1.5
+					ctx.stroke()
+				}
+			}
+
+			// X 轴: 首/中/尾
+			ctx.fillStyle = 'rgba(120,120,120,0.95)'
+			ctx.textAlign = 'center'
+			ctx.textBaseline = 'top'
+			const ticks = [0, Math.floor((rows.length - 1) / 2), rows.length - 1]
+			const seen = {}
+			for (let ti = 0; ti < ticks.length; ti++) {
+				const idx = ticks[ti]
+				if (seen[idx]) continue
+				seen[idx] = 1
+				const lab = String(rows[idx].t || '')
+				ctx.fillText(lab.length > 10 ? lab.slice(5) : lab, xAt(idx), pad.t + ph + 6)
+			}
+
+			// 悬停十字
+			if (hi != null && hi >= 0 && hi < rows.length) {
+				const x = xAt(hi), y = yAt(rows[hi].v)
+				ctx.strokeStyle = 'rgba(239,68,68,0.45)'
+				ctx.lineWidth = 1
+				ctx.setLineDash([3, 3])
+				ctx.beginPath()
+				ctx.moveTo(x, pad.t)
+				ctx.lineTo(x, pad.t + ph)
+				ctx.moveTo(pad.l, y)
+				ctx.lineTo(pad.l + pw, y)
+				ctx.stroke()
+				ctx.setLineDash([])
+			}
+		}
+
+		function nearest(ev) {
+			const rect = canvas.getBoundingClientRect()
+			const x = ev.clientX - rect.left
+			const padL = 44, padR = 12
+			const pw = rect.width - padL - padR
+			let best = 0, bestD = 1e9
+			for (let i = 0; i < rows.length; i++) {
+				const px = padL + (pw * i) / (rows.length - 1)
+				const d = Math.abs(px - x)
+				if (d < bestD) { bestD = d; best = i }
+			}
+			return best
+		}
+
+		function onMove(ev) {
+			const i = nearest(ev)
+			draw(i)
+			if (!tip) return
+			const r = rows[i]
+			tip.hidden = false
+			tip.innerHTML = '<b>' + escHtml(String(r.t)) + '</b><br/>' +
+				escHtml(r.s || formatLiters(r.v)) +
+				(r.raw != null ? '<br/><span class="sk-tip-raw">原始 ' + escHtml(String(r.raw)) + ' 单位</span>' : '')
+			const rect = canvas.getBoundingClientRect()
+			const boxR = box.getBoundingClientRect()
+			let left = ev.clientX - boxR.left + 12
+			let top = ev.clientY - boxR.top - 10
+			if (left + 140 > boxR.width) left = ev.clientX - boxR.left - 150
+			tip.style.left = left + 'px'
+			tip.style.top = Math.max(0, top) + 'px'
+		}
+		function onLeave() {
+			draw(null)
+			if (tip) tip.hidden = true
+		}
+
+		canvas.addEventListener('mousemove', onMove)
+		canvas.addEventListener('mouseleave', onLeave)
+		if (typeof ResizeObserver !== 'undefined') {
+			const ro = new ResizeObserver(function () { draw(null) })
+			ro.observe(box || canvas)
+		}
+		draw(null)
 	}
 })()

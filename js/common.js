@@ -720,7 +720,11 @@
 			let head = ''
 			if (note) head += '<div class="sk-parse-note">' + HTMLEncode(note) + '</div>'
 			if (r.needKey) head += '<div class="sk-parse-err">⚠ 加密报文,请在右侧「第三方协议」中的「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>'
-			document.getElementById('serial-protocol-output').innerHTML = head + skFormatFrame(r)
+			const outEl = document.getElementById('serial-protocol-output')
+			outEl.innerHTML = head + skFormatFrame(r)
+			if (typeof skBindSeriesCharts === 'function') {
+				try { skBindSeriesCharts(outEl) } catch (e) { /* ignore chart bind */ }
+			}
 		} catch (err) {
 			document.getElementById('serial-protocol-output').innerHTML = '<div class="sk-parse-err">解析异常:' + HTMLEncode(String(err)) + '</div>'
 		}
@@ -1857,6 +1861,13 @@
 			serialToggle.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭串口'
 			serialOpen = true
 			serialClose = false
+			// 新连接: 清空 SEK 会话基准水量, 避免串到上一块表
+			if (window.skSession) {
+				try {
+					window.skSession.resetBase()
+					window.skSession.deviceUid = null
+				} catch (e) { /* */ }
+			}
 			setSerialWantOpen(true)
 			serialStatuChange(true)
 			localStorage.setItem('serialOptions', JSON.stringify(SerialOptions))
@@ -2359,6 +2370,9 @@
 		let tempNode = document.createElement('div')
 		tempNode.innerHTML = html
 		appendLogNode(tempNode)
+		if (typeof skBindSeriesCharts === 'function') {
+			try { skBindSeriesCharts(tempNode) } catch (e) { /* ignore */ }
+		}
 	}
 	//HTML转义
 	function HTMLEncode(html) {
