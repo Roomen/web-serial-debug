@@ -1,11 +1,21 @@
 window.SK_TAG_NAME = {
 	'1': '基础数据', '2': '核心数据', '3': '终端参数', '4': '告警数据',
-	'5': '周期数据', '9': '日结数据', '10': '信息查询码', '11': '处理结果码',
-	'12': '平台回复码', '30': '超声波表参数', '31': '超声波表状态参数',
+	'5': '周期数据', '6': '密集数据', '7': '透传数据', '8': '图片数据',
+	'9': '日结数据', '10': '信息查询码', '11': '处理结果码',
+	'12': '平台回复码',
+	'20': '温度周期上报', '21': '压力周期上报', '22': '环境温度周期上报',
+	'23': '电导率周期上报', '24': 'pH周期上报', '25': '浊度周期上报',
+	'26': '余氯周期上报', '27': '瞬时流量周期上报',
+	'30': '超声波表参数', '31': '超声波表状态参数',
 	'32': '摄像表参数', '33': '总线采集器参数', '34': '无磁传感器参数',
 	'35': 'LoRa/LoRaWAN参数', '36': '阀控参数', '37': '蓝牙参数',
-	'38': '通讯认证参数', '39': '告警参数', '91': '设备运行信息',
-	'92': '设备上行信息', '93': '控制指令', '254': '错误日志记录'
+	'38': '通讯认证参数', '39': '告警参数',
+	'62': '渗漏噪声数据', '63': '渗漏音频数据', '64': '渗漏仪运行参数',
+	'90': '总线采集器数据',
+	'91': '设备运行信息', '92': '设备上行信息', '93': '控制指令',
+	'94': '总线表周期数据', '95': '总线表周期数据', '96': '总线表周期数据',
+	'97': '总线表周期数据', '98': '总线表周期数据', '99': '总线表周期数据',
+	'254': '错误日志记录'
 }
 
 window.SK_MANUFACTURER = { 1: '厂商A', 2: '厂商B' }
@@ -26,7 +36,7 @@ window.SK_PLATFORM_REPLY = {
 window.SK_FUNC_CODES = {
 	'0x01': { name: '参数设置', reqTags: [3, 31, 32, 33, 34, 35, 36, 37, 38, 39], ack: '0x81' },
 	'0x02': { name: '终端数据上报', ack: '0x82', ackTag: 12 },
-	'0x03': { name: '信息查询', reqTag: 10, ack: '0x83', ackTags: [1, 2, 3, 4, 5, 7, 8, 9, 10, 31, 32, 33, 34, 35, 36, 37, 90, 91, 92, 93] },
+	'0x03': { name: '信息查询', reqTag: 10, ack: '0x83', ackTags: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21, 22, 23, 24, 25, 26, 27, 31, 32, 33, 34, 35, 36, 37, 38, 39, 62, 63, 64, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 254] },
 	'0x04': { name: '数据透传', reqTag: 7, ack: '0x84', ackTag: 7 },
 	'0x11': { name: '指令操作', reqTag: 93, ack: '0x91', ackTag: 93 },
 	// 应答功能码: 0x81/0x91 的 TLV Value 为处理结果码(见 Tag11), 非参数原值
@@ -227,6 +237,26 @@ window.SK_TAGS = {
 	],
 	'33': [
 		{ id: 0, name: '总线表组', type: 'BYTE', desc: '默认为0' },
+		{ id: 1, name: '总线表地址1', type: 'BYTE[7]', desc: 'BCD 小端 0或全FF删除该地址' },
+		{ id: 2, name: '总线表地址2', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 3, name: '总线表地址3', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 4, name: '总线表地址4', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 5, name: '总线表地址5', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 6, name: '总线表地址6', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 7, name: '总线表地址7', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 8, name: '总线表地址8', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 9, name: '总线表地址9', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 10, name: '总线表地址10', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 11, name: '总线表地址11', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 12, name: '总线表地址12', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 13, name: '总线表地址13', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 14, name: '总线表地址14', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 15, name: '总线表地址15', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 16, name: '总线表地址16', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 17, name: '总线表地址17', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 18, name: '总线表地址18', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 19, name: '总线表地址19', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 20, name: '总线表地址20', type: 'BYTE[7]', desc: 'BCD 小端' },
 		{ id: 21, name: '抄表日期(旧)', type: 'BYTE[32]', desc: 'BYTE[N]=1表示日期N需抄表 N=1-31' },
 		{ id: 22, name: '抄表定时点', type: 'BYTE', desc: '0-23 时' },
 		{ id: 23, name: '启动延时', type: 'BYTE', desc: '0-10秒' },
@@ -268,7 +298,8 @@ window.SK_TAGS = {
 		{ id: 11, name: '关阀高频上报起止时间', type: 'BYTE[2]', desc: '整点 byte1起 默认6 byte2止 默认18', dec: { t: 'range', labels: ['阀控高频待机起始时间', '阀控高频待机结束时间'] } },
 		{ id: 12, name: '开度调整时间参数', type: 'BYTE[16]', desc: 'byte0频率天 +4时段(起hh起mm开阀度0-100)' },
 		{ id: 13, name: '阀控功能开关', type: 'BYTE', desc: '1开启 0关闭 默认1' },
-		{ id: 14, name: '应急开阀限定用水量', type: 'BYTE[2]', desc: '10L' }
+		{ id: 14, name: '应急开阀限定用水量', type: 'BYTE[2]', desc: '10L' },
+		{ id: 15, name: '表端截止用水读数', type: 'BYTE[8]', desc: '单位L 实时流量大于该值表端自动关阀' }
 	],
 	'37': [
 		{ id: 0, name: '蓝牙表名称', type: 'char[16]', desc: 'ASCII 不足补0' },
@@ -345,10 +376,130 @@ window.SK_TAGS = {
 		{ id: 18, name: '起始时间', type: 'BYTE[7]+BYTE[8]', desc: '周期历史数据(外贸): BCD起始时间+UTC时间戳8B+数据格式+起始值8B+记录个数2B+增量值' },
 		{ id: 19, name: '记录值', type: 'BYTE[20]', desc: '用水量: 起始hhmmss3B+持续s2B+起始累计7B+用水量4B+最小瞬时2B+最大瞬时2B' }
 	],
+	'6': [
+		{ id: 0, name: '起始时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss 可设置' },
+		{ id: 1, name: '数据记录间隔', type: 'BYTE', desc: '固定5分钟' },
+		{ id: 2, name: '记录个数', type: 'BYTE', desc: '记录个数' },
+		{ id: 3, name: '记录值', type: 'BYTE[4]', desc: 'Uint16正累计2B+Uint16逆累计2B 固定间隔5min 单位同基准水量' },
+		{ id: 4, name: '记录值', type: 'BYTE[4]', desc: 'Uint32 LE 密集时间点总累积流量 单位同基准水量 ID3与ID4二选一' }
+	],
+	'7': [
+		{ id: 0, name: '透传数据', type: 'BYTE[n]', desc: 'N字节 设备收到后透传所有字节' }
+	],
+	'8': [
+		{ id: 0, name: '采集时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
+		{ id: 1, name: '识别数据', type: 'BYTE[4+8]', desc: '本地识别结果4B+置信度8B(不解析)' },
+		{ id: 2, name: '二值压缩图片', type: 'BYTE[1+1+2+n]', desc: '总包数1B+当前包序号1B(从0)+包长2B+包数据 每字轮二值图115B' },
+		{ id: 3, name: '灰度图片', type: 'BYTE[1+1+2+n]', desc: '总包数1B+包序号1B+包长2B+包数据 JPEG起FFD8终FFD9' },
+		{ id: 5, name: '单个字轮图片', type: 'BYTE[1+115]', desc: '字轮位置1B+二值化数据115B' }
+	],
 	'9': [
 		{ id: 0, name: '起始时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss 第一个日结点时间' },
 		{ id: 1, name: '记录个数', type: 'BYTE[1]', desc: '日结数据记录个数' },
 		{ id: 2, name: '记录值', type: 'BYTE[4]', desc: 'Uint32 LE 日结点总累计流量 单位同基准水量' }
+	],
+	// Tag20-27: 历史周期上报(已整合进Tag5, 旧固件仍可能上报)
+	'20': [
+		{ id: 0, name: '起始时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
+		{ id: 1, name: '数据记录间隔', type: 'BYTE[2]', desc: '默认30分钟' },
+		{ id: 2, name: '记录个数', type: 'BYTE', desc: '记录个数' },
+		{ id: 3, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 0.1℃ 周期平均温度' }
+	],
+	'21': [
+		{ id: 0, name: '起始时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
+		{ id: 1, name: '数据记录间隔', type: 'BYTE[2]', desc: '默认30分钟' },
+		{ id: 2, name: '记录个数', type: 'BYTE', desc: '记录个数' },
+		{ id: 3, name: '记录值', type: 'BYTE[2]', desc: 'kPa 周期平均压力' }
+	],
+	'22': [
+		{ id: 0, name: '起始时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
+		{ id: 1, name: '数据记录间隔', type: 'BYTE[2]', desc: '默认30分钟' },
+		{ id: 2, name: '记录个数', type: 'BYTE', desc: '记录个数' },
+		{ id: 3, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 0.1℃ 周期平均环境温度' }
+	],
+	'23': [
+		{ id: 0, name: '起始时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
+		{ id: 1, name: '数据记录间隔', type: 'BYTE[2]', desc: '默认30分钟' },
+		{ id: 2, name: '记录个数', type: 'BYTE', desc: '记录个数' },
+		{ id: 3, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed us/cm 周期平均电导率' }
+	],
+	'24': [
+		{ id: 0, name: '起始时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
+		{ id: 1, name: '数据记录间隔', type: 'BYTE[2]', desc: '默认30分钟' },
+		{ id: 2, name: '记录个数', type: 'BYTE', desc: '记录个数' },
+		{ id: 3, name: '记录值', type: 'BYTE[2]', desc: '0.1pH 周期平均pH' }
+	],
+	'25': [
+		{ id: 0, name: '起始时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
+		{ id: 1, name: '数据记录间隔', type: 'BYTE[2]', desc: '默认30分钟' },
+		{ id: 2, name: '记录个数', type: 'BYTE', desc: '记录个数' },
+		{ id: 3, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 0.1NTU 周期平均浊度' }
+	],
+	'26': [
+		{ id: 0, name: '起始时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
+		{ id: 1, name: '数据记录间隔', type: 'BYTE[2]', desc: '默认30分钟' },
+		{ id: 2, name: '记录个数', type: 'BYTE', desc: '记录个数' },
+		{ id: 3, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 0.1mg/L 周期平均余氯' }
+	],
+	'27': [
+		{ id: 0, name: '起始时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
+		{ id: 1, name: '数据记录间隔', type: 'BYTE[2]', desc: '默认30分钟' },
+		{ id: 2, name: '记录个数', type: 'BYTE', desc: '记录个数' },
+		{ id: 3, name: '记录值', type: 'BYTE[4]', desc: 'int32 LE signed L/h 周期瞬时流量' }
+	],
+	'62': [
+		{ id: 0, name: '采集时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
+		{ id: 1, name: '噪声数据（分体）', type: 'BYTE[32]', desc: '传感器原始数据 分体式' },
+		{ id: 2, name: '噪声数据（一体）', type: 'BYTE[110]', desc: '传感器原始数据 一体式 终端只读不处理' }
+	],
+	'63': [
+		{ id: 0, name: '采集时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
+		{ id: 1, name: '音频文件（分体）', type: 'BYTE[1+1+2+n]', desc: '总包数1B+包序号1B+包长2B+包数据', dec: { t: 'imgPack' } },
+		{ id: 2, name: '音频文件（一体）', type: 'BYTE[1+1+2+n]', desc: '总包数1B+包序号1B+包长2B+包数据', dec: { t: 'imgPack' } },
+		{ id: 3, name: '当前声音分贝值', type: 'BYTE', desc: '当前声音分贝' },
+		{ id: 4, name: '音频文件(自制)', type: 'BYTE[1+1+2+1+n]', desc: '总包数1B+包序号1B+包长2B+音源类型1B(0-2)+包数据', dec: { t: 'imgPack' } }
+	],
+	'64': [
+		{ id: 0, name: '探头地址', type: 'BYTE[4]', desc: '传感器ID' },
+		{ id: 1, name: '音频采集时间', type: 'BYTE', desc: '整时点 0-23' },
+		{ id: 2, name: '采集持续时间', type: 'BYTE', desc: '分钟 默认120 最小5 最大240' },
+		{ id: 3, name: 'AMP', type: 'BYTE', desc: '增益高低 0低 1高' },
+		{ id: 4, name: '增益开关', type: 'BYTE', desc: '0关闭 1开启' },
+		{ id: 5, name: '湿度报警阈值', type: 'BYTE', desc: '0-100% 大于该值报警' },
+		{ id: 6, name: '压力报警阈值', type: 'BYTE[2]', desc: '小于该值报警' },
+		{ id: 7, name: '噪声上传使能', type: 'BYTE', desc: '0x00不需要上报' },
+		{ id: 8, name: '音频上传使能', type: 'BYTE', desc: '0x00不需要上报' },
+		{ id: 9, name: '经纬度', type: 'BYTE[32]', desc: 'ASCII 坐标系 经度|纬度' },
+		{ id: 10, name: '湿度', type: 'BYTE', desc: '0-100%' },
+		{ id: 11, name: '温度', type: 'BYTE', desc: 'int8 -40~85℃' },
+		{ id: 12, name: '压力', type: 'BYTE[2]', desc: '0.01kPa' },
+		{ id: 13, name: '传感器错误标志', type: 'BYTE', desc: 'bit0传感器不能通讯 bit1噪声失败 bit2音频失败 bit3音频不完整 bit4参数错误' },
+		{ id: 14, name: '传感器版本号', type: 'BYTE[16]', desc: '版本' },
+		{ id: 15, name: '传感器电池电压', type: 'BYTE[2]', desc: '0.01V' },
+		{ id: 16, name: '最后一次读取噪声数据', type: 'BYTE[8]', desc: '时间7B+状态1B' },
+		{ id: 17, name: '最后一次读取音频数据', type: 'BYTE[8]', desc: '时间7B+状态1B' },
+		{ id: 18, name: '内部校准数据', type: 'BYTE', desc: '最大255 一般10左右' },
+		{ id: 19, name: '传感器内部时间', type: 'BYTE[8]', desc: '年月日时分秒星期+更新标志' },
+		{ id: 20, name: '传感器TuDoTime', type: 'BYTE[8]', desc: '两组模式 起止时分/持续时间/模式' },
+		{ id: 21, name: '当前噪声值（分贝）', type: 'BYTE', desc: '最大99' },
+		{ id: 22, name: '增益倍数', type: 'BYTE', desc: '0-14' },
+		{ id: 23, name: '参考频点', type: 'BYTE[2]', desc: 'uint16 单位10kHz eg9020→90.2MHz' },
+		{ id: 24, name: '参考频点增益', type: 'BYTE', desc: '0-15' },
+		{ id: 25, name: '参考频点信号值', type: 'BYTE', desc: '0-64 只读 需>50' },
+		{ id: 26, name: '上报音源选择', type: 'BYTE', desc: '0正常 1参照 2相干音频' },
+		{ id: 27, name: '参考音频时长', type: 'BYTE', desc: '0-3秒' },
+		{ id: 28, name: '录制音频时长', type: 'BYTE', desc: '2-10秒' },
+		{ id: 29, name: 'GNSS上报使能', type: 'BYTE', desc: '0关闭 1开启' },
+		{ id: 30, name: '最后一次读取GNSS数据', type: 'BYTE[8]', desc: '时间7B+状态1B 0定位失败 1成功' },
+		{ id: 31, name: '加速度计（陀螺仪）', type: 'BYTE[2]', desc: 'BYTE0俯仰角 BYTE1横滚角' },
+		{ id: 200, name: '调试预留', type: 'BYTE[16]', desc: '平台不解析 设备调试' }
+	],
+	'90': [
+		{ id: 0, name: '总线表个数', type: 'BYTE', desc: '1-20 也可至64' },
+		{ id: 1, name: '抄表时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
+		{ id: 2, name: '总线表列表', type: 'BYTE[n]', desc: 'N组:地址7B BCD小端+读数4B+状态2B+单位1B', dec: { t: 'busMeters', rec: 14 } },
+		{ id: 3, name: '总线表列表(温压)', type: 'BYTE[n]', desc: 'N组:地址7B+读数4B+状态2B+单位1B+温度2B+压力2B', dec: { t: 'busMeters', rec: 18 } },
+		{ id: 4, name: '总线表列表(水质)', type: 'BYTE[n]', desc: 'N组:地址7B+读数4B+状态2B+单位1B+温度2B+压力2B+环境温度2B+电导率2B+浊度2B+余氯2B', dec: { t: 'busMeters', rec: 26 } }
 	],
 	'91': [
 		{ id: 0, name: 'MCU复位信息', type: 'BYTE[2+2+2]', desc: '累计复位2B+看门狗复位2B+低电压复位2B', dec: { t: 'resetInfo' } },
@@ -444,8 +595,47 @@ window.SK_TAGS = {
 	'12': [
 		{ id: 0, name: '处理结果', type: 'BYTE', desc: '0处理失败 1处理成功' }
 	],
+	// Tag94~99 总线表周期数据(功能相同, 多表分Tag)
+	'94': [
+		{ id: 0, name: '起始时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
+		{ id: 1, name: '总线表地址', type: 'BYTE[7]', desc: 'BCD 小端' },
+		{ id: 2, name: '总线表电压', type: 'BYTE[2]', desc: '不存在则不传' },
+		{ id: 3, name: '总线表单位', type: 'BYTE', desc: '0=1000L 1=100L 2=10L 3=1L 适用ID6/7' },
+		{ id: 4, name: '数据记录间隔', type: 'BYTE[2]', desc: '默认30分钟' },
+		{ id: 5, name: '记录个数', type: 'BYTE', desc: '记录个数' },
+		{ id: 6, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 周期累积流量' },
+		{ id: 7, name: '记录值', type: 'BYTE[4]', desc: 'int32 LE signed 周期点总累积 全FF异常' },
+		{ id: 8, name: '记录值', type: 'BYTE[2]', desc: '总线表状态 见附表' },
+		{ id: 9, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 0.1℃ 温度' },
+		{ id: 10, name: '记录值', type: 'BYTE[2]', desc: 'kPa 压力' },
+		{ id: 11, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 0.1℃ 环境温度' },
+		{ id: 12, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed us/cm 电导率' },
+		{ id: 13, name: '记录值', type: 'BYTE[2]', desc: '0.1pH 周期平均PH' },
+		{ id: 14, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 0.1NTU 浊度' },
+		{ id: 15, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 0.1mg/L 余氯' },
+		{ id: 16, name: '记录值', type: 'BYTE[4]', desc: 'int32 LE signed L/h 最大瞬时流量' },
+		{ id: 17, name: '记录值', type: 'BYTE[4]', desc: 'int32 LE signed 周期累积流量(大口径) 单位同基准水量' },
+		{ id: 18, name: '记录值', type: 'BYTE[1+7]', desc: '总累积大口径 BYTE0状态bit0未抄到 BYTE1-7有符号LE' },
+		{ id: 19, name: '记录值', type: 'BYTE[1+7]', desc: '正累积大口径 BYTE0状态 bit0未抄到 BYTE1-7无符号LE' },
+		{ id: 20, name: '记录值', type: 'BYTE[1+7]', desc: '逆累积大口径 BYTE0状态 bit0未抄到 BYTE1-7无符号LE' },
+		{ id: 21, name: '记录值', type: 'BYTE[1+3]', desc: '最大瞬时大口径 BYTE0状态 BYTE1-3有符号' },
+		{ id: 22, name: '总线表电池电量', type: 'BYTE', desc: '0-100%' }
+	],
 	'254': [
 		{ id: 0, name: '错误记录总条数N', type: 'BYTE[2]', desc: '低字节在前' },
 		{ id: 1, name: '错误记录日志', type: 'BYTE[32]*N', desc: '每条32B: ID(2B低位在前)+时间(6B BCD年月日时分秒)+错误代码(2B BCD见异常代码表)+自定义22B; ID范围0-65535; 红外最多4条/平台14条' }
 	]
 }
+
+// Tag95-99 与 Tag94 字段相同（独立拷贝，避免共享引用）
+;(function () {
+	const base = window.SK_TAGS['94']
+	for (let t = 95; t <= 99; t++) {
+		window.SK_TAGS[String(t)] = base.map(function (d) {
+			const o = { id: d.id, name: d.name, type: d.type, desc: d.desc }
+			if (d.dec) o.dec = d.dec
+			if (d.unit) o.unit = d.unit
+			return o
+		})
+	}
+})()

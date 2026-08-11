@@ -720,7 +720,11 @@
 			let head = ''
 			if (note) head += '<div class="sk-parse-note">' + HTMLEncode(note) + '</div>'
 			if (r.needKey) head += '<div class="sk-parse-err">⚠ 加密报文,请在右侧「第三方协议」中的「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>'
-			document.getElementById('serial-protocol-output').innerHTML = head + skFormatFrame(r)
+			const outEl = document.getElementById('serial-protocol-output')
+			outEl.innerHTML = head + skFormatFrame(r)
+			if (typeof skBindSeriesCharts === 'function') {
+				try { skBindSeriesCharts(outEl) } catch (e) { /* ignore chart bind */ }
+			}
 		} catch (err) {
 			document.getElementById('serial-protocol-output').innerHTML = '<div class="sk-parse-err">解析异常:' + HTMLEncode(String(err)) + '</div>'
 		}
@@ -1023,7 +1027,8 @@
 	function dailyQueryBytes(count) {
 		const d = new Date()
 		const yy = d.getFullYear() % 100
-		return [toBcdByte(yy), toBcdByte(d.getMonth() + 1), toBcdByte(d.getDate()), (count | 0) & 0xff]
+		const n = Math.max(1, Math.min(60, count | 0))
+		return [toBcdByte(yy), toBcdByte(d.getMonth() + 1), toBcdByte(d.getDate()), n & 0xff]
 	}
 	// Tag10-ID23 错误日志：YYMMDDhhmmss 6B BCD + 条数1B
 	function errLogQueryBytes(count) {
@@ -1034,6 +1039,36 @@
 			toBcdByte(d.getHours()), toBcdByte(d.getMinutes()), toBcdByte(d.getSeconds()),
 			(count | 0) & 0xff
 		]
+	}
+	// Tag10-ID5 历史数据：YYYYMMDDhhmmss 7B BCD(高位在前) 当日 00:00:00
+	function histDateQueryBytes(isoDate) {
+		const m = String(isoDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+		if (!m) return null
+		const y = parseInt(m[1], 10)
+		const mo = parseInt(m[2], 10)
+		const day = parseInt(m[3], 10)
+		if (mo < 1 || mo > 12 || day < 1 || day > 31) return null
+		// 用 Date 再校验非法日(如 2/30)
+		const chk = new Date(y, mo - 1, day)
+		if (chk.getFullYear() !== y || chk.getMonth() !== mo - 1 || chk.getDate() !== day) return null
+		return [
+			toBcdByte(Math.floor(y / 100)),
+			toBcdByte(y % 100),
+			toBcdByte(mo),
+			toBcdByte(day),
+			0x00, 0x00, 0x00
+		]
+	}
+	function histDateBounds(maxDays) {
+		const max = Math.max(1, Math.min(60, maxDays || 60))
+		const pad = function (n) { return String(n).padStart(2, '0') }
+		const fmt = function (d) {
+			return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+		}
+		const today = new Date()
+		const minD = new Date(today.getFullYear(), today.getMonth(), today.getDate() - max)
+		const yest = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1)
+		return { min: fmt(minD), max: fmt(today), default: fmt(yest) }
 	}
 	function presetToTlvJson(preset) {
 		const out = []
@@ -1095,6 +1130,11 @@
 					const rawVal = parseInt(paramVal.value.trim(), 10)
 					if (isNaN(rawVal)) return
 					bytes = errLogQueryBytes(rawVal)
+				} else if (preset.param.type === 'histDate') {
+					const iso = paramVal.value.trim()
+					if (!iso) return
+					bytes = histDateQueryBytes(iso)
+					if (!bytes) return
 				} else {
 					const rawVal = parseInt(paramVal.value.trim(), 10)
 					if (isNaN(rawVal)) return
@@ -1123,6 +1163,7 @@
 				paramLabel.textContent = preset.param.label || '参数'
 				if (preset.param.type === 'enum') {
 					paramVal.style.display = 'none'
+					paramVal.type = 'text'
 					paramSelEnum.style.display = ''
 					paramSelEnum.innerHTML = ''
 					const opts = preset.param.options || {}
@@ -1130,13 +1171,15 @@
 					for (const [k, v] of Object.entries(opts)) {
 						const op = document.createElement('option')
 						op.value = k
-						op.textContent = k + ':' + v
+						// 文案优先展示中文说明，值仍用数字 key
+						op.textContent = v ? (String(v)) : String(k)
 						if (String(k) === String(def)) op.selected = true
 						paramSelEnum.appendChild(op)
 					}
 					paramUnit.textContent = ''
 					_currentParamType = 'uint8'
 				} else if (preset.param.type === 'ascii') {
+					paramVal.type = 'text'
 					paramVal.style.display = ''
 					paramVal.style.width = '180px'
 					paramSelEnum.style.display = 'none'
@@ -1145,6 +1188,7 @@
 					paramUnit.textContent = ''
 					_currentParamType = 'ascii'
 				} else if (preset.param.type === 'bcd') {
+					paramVal.type = 'text'
 					paramVal.style.display = ''
 					paramVal.style.width = '180px'
 					paramSelEnum.style.display = 'none'
@@ -1152,23 +1196,43 @@
 					paramUnit.textContent = '(BCD LE)'
 					_currentParamType = 'bcd'
 				} else if (preset.param.type === 'dailyQuery') {
+					paramVal.type = 'number'
 					paramVal.style.display = ''
 					paramVal.style.width = '80px'
 					paramSelEnum.style.display = 'none'
-					paramVal.value = preset.param.default || '7'
-					paramUnit.textContent = '条(日起=今天)'
+					paramVal.min = '1'
+					paramVal.max = String(preset.param.max || 60)
+					paramVal.value = preset.param.default || '30'
+					paramUnit.textContent = '天(日起=今天,≤60)'
 					_currentParamType = 'dailyQuery'
 				} else if (preset.param.type === 'errLogQuery') {
+					paramVal.type = 'number'
 					paramVal.style.display = ''
 					paramVal.style.width = '80px'
 					paramSelEnum.style.display = 'none'
+					paramVal.removeAttribute('min')
+					paramVal.removeAttribute('max')
 					paramVal.value = preset.param.default || '4'
 					paramUnit.textContent = '条(起点=现在)'
 					_currentParamType = 'errLogQuery'
+				} else if (preset.param.type === 'histDate') {
+					const b = histDateBounds(preset.param.maxDays || 60)
+					paramVal.type = 'date'
+					paramVal.style.display = ''
+					paramVal.style.width = '150px'
+					paramSelEnum.style.display = 'none'
+					paramVal.min = b.min
+					paramVal.max = b.max
+					paramVal.value = preset.param.default || b.default
+					paramUnit.textContent = '近' + (preset.param.maxDays || 60) + '日可选'
+					_currentParamType = 'histDate'
 				} else {
+					paramVal.type = 'text'
 					paramVal.style.display = ''
 					paramVal.style.width = '100px'
 					paramSelEnum.style.display = 'none'
+					paramVal.removeAttribute('min')
+					paramVal.removeAttribute('max')
 					paramVal.value = preset.param.default || '0'
 					paramUnit.textContent = preset.param.type === 'uint32le' ? '(uint32 LE)' : preset.param.type === 'uint16le' ? '(uint16 LE)' : '(u8)'
 					_currentParamType = preset.param.type
@@ -1797,6 +1861,13 @@
 			serialToggle.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭串口'
 			serialOpen = true
 			serialClose = false
+			// 新连接: 清空 SEK 会话基准水量, 避免串到上一块表
+			if (window.skSession) {
+				try {
+					window.skSession.resetBase()
+					window.skSession.deviceUid = null
+				} catch (e) { /* */ }
+			}
 			setSerialWantOpen(true)
 			serialStatuChange(true)
 			localStorage.setItem('serialOptions', JSON.stringify(SerialOptions))
@@ -2048,6 +2119,42 @@
 
 	//单个合并包的字节上限，超过就强制断包，避免连续流下缓冲无限增长
 	const SERIAL_PACK_MAX_BYTES = 65536
+	// SEK 帧在分包静默后若仍未收满声明长度, 最多再多等这么久(防低波特/间隙拆帧)
+	const SEK_INCOMPLETE_WAIT_MAX_MS = 3000
+	let serialSekWaitStart = null
+
+	// 若缓冲以 A9 9A 开头且声明长度未到, 返回期望总长; 已完整或非 SEK 返回 0
+	function peekSekIncompleteNeed(buf) {
+		if (!buf || buf.length < 16 || buf[0] !== 0xA9 || buf[1] !== 0x9A) return 0
+		const cands = []
+		const dlDown = buf[14] | (buf[15] << 8)
+		const expDown = 16 + dlDown + 3
+		if (dlDown >= 0 && dlDown <= 4096 && expDown >= 19 && expDown <= 8192) cands.push(expDown)
+		if (buf.length >= 24) {
+			const dlUp = buf[22] | (buf[23] << 8)
+			const expUp = 24 + dlUp + 3
+			if (dlUp >= 0 && dlUp <= 4096 && expUp >= 27 && expUp <= 8192) cands.push(expUp)
+		}
+		if (!cands.length) return 0
+		// 任一候选长度处结束符正确 → 已完整, 不必再等
+		for (let i = 0; i < cands.length; i++) {
+			const exp = cands[i]
+			if (buf.length >= exp && buf[exp - 1] === 0x16) return 0
+		}
+		// 取仍未收满的最大期望长度
+		let need = 0
+		for (let i = 0; i < cands.length; i++) {
+			if (buf.length < cands[i] && cands[i] > need) need = cands[i]
+		}
+		return need
+	}
+
+	function flushSerialPack(buf, startTime) {
+		serialSekWaitStart = null
+		if (!buf || !buf.length) return
+		addLog(buf, true, startTime)
+		addParseLog(buf.slice ? buf.slice() : [...buf], true, startTime)
+	}
 
 	//串口分包合并
 	function dataReceived(data) {
@@ -2065,33 +2172,47 @@
 		//新的合并包开始:记下第一个字节到达的时间,日志显示要用这个而不是flush时间
 		if (serialData.length === 0) {
 			serialDataStartTime = new Date()
+			serialSekWaitStart = null
 		}
 		//不能用 push(...data)：单次读回的块可能上万字节(bufferSize 最大约 1.6M)，
 		//展开成实参会超出调用栈上限抛 RangeError，被外层当成读错误误判为断线
 		for (let i = 0; i < data.length; i++) serialData.push(data[i])
 		if (toolOptions.timeOut == 0) {
-			addLog(serialData, true, serialDataStartTime)
-			addParseLog([...serialData], true, serialDataStartTime)
+			flushSerialPack(serialData, serialDataStartTime)
 			serialData = []
 			return
 		}
 		//持续不断的流永远等不到 timeOut 间隔，缓冲会一直涨到把页面撑爆，超上限就强制断包
 		if (serialData.length >= SERIAL_PACK_MAX_BYTES) {
 			clearTimeout(serialTimer)
-			addLog(serialData, true, serialDataStartTime)
-			addParseLog([...serialData], true, serialDataStartTime)
+			flushSerialPack(serialData, serialDataStartTime)
 			serialData = []
 			return
 		}
 		//清除之前的时钟
 		clearTimeout(serialTimer)
 		const startTime = serialDataStartTime
-		serialTimer = setTimeout(() => {
-			//超时发出
-			addLog(serialData, true, startTime)
-			addParseLog([...serialData], true, startTime)
-			serialData = []
-		}, toolOptions.timeOut)
+		const armFlush = () => {
+			serialTimer = setTimeout(() => {
+				// 协议感知: SEK 帧声明长度未到时, 在上限内继续等后续字节
+				const wantProto = toolOptions.skParseEnable || toolOptions.skHoverEnable ||
+					(window._activeProtocol === 'sek')
+				if (wantProto) {
+					const need = peekSekIncompleteNeed(serialData)
+					if (need > 0 && serialData.length < need && serialData.length < SERIAL_PACK_MAX_BYTES) {
+						if (serialSekWaitStart == null) serialSekWaitStart = Date.now()
+						if (Date.now() - serialSekWaitStart < SEK_INCOMPLETE_WAIT_MAX_MS) {
+							armFlush()
+							return
+						}
+					}
+				}
+				const pack = serialData
+				serialData = []
+				flushSerialPack(pack, startTime)
+			}, toolOptions.timeOut)
+		}
+		armFlush()
 	}
 
 	//对外暴露的串口接口(供固件升级/协议测试等模块使用)
@@ -2249,6 +2370,9 @@
 		let tempNode = document.createElement('div')
 		tempNode.innerHTML = html
 		appendLogNode(tempNode)
+		if (typeof skBindSeriesCharts === 'function') {
+			try { skBindSeriesCharts(tempNode) } catch (e) { /* ignore */ }
+		}
 	}
 	//HTML转义
 	function HTMLEncode(html) {

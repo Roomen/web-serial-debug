@@ -419,9 +419,6 @@ window.SK_DOWN_PRESETS = [
 				tlv: [{ tag: 10, items: [{ id: 7 }] }] },
 			{ name: '查询设备上行信息', func: '0x03', desc: 'Tag92 上行信息',
 				tlv: [{ tag: 10, items: [{ id: 8 }] }] },
-			{ name: '查询日结数据', func: '0x03', desc: 'Tag10-ID9 起始日YYMMDD(BCD)+个数',
-				param: { label: '个数', type: 'dailyQuery', default: '7' },
-				tlv: [{ tag: 10, items: [{ id: 9 }] }] },
 			{ name: '查询错误日志', func: '0x03', desc: 'Tag10-ID23 起始时间6B BCD+条数',
 				param: { label: '条数', type: 'errLogQuery', default: '4' },
 				tlv: [{ tag: 10, items: [{ id: 23 }] }] },
@@ -433,9 +430,48 @@ window.SK_DOWN_PRESETS = [
 				tlv: [{ tag: 10, items: [{ id: 18 }] }] },
 			{ name: '查询指定ID数据', func: '0x03', desc: 'Tag10-ID0 2B一组(tag+id) 共16组 见TLV',
 				tlv: [{ tag: 10, items: [{ id: 0, value: [] }] }] },
-			{ name: '查询历史冻结数据', func: '0x03', desc: 'Tag10-ID24 0=前30日 1=31-60日',
-				param: { label: '范围(0/1)', type: 'uint8', default: '0' },
+			// 历史数据(最长可查近2个月): 日冻结按月片 + 指定日历史
+			{ name: '查询历史冻结数据', func: '0x03',
+				desc: 'Tag10-ID24 日冻结累计(Tag5间隔1440min) 近2个月分两片查询',
+				param: {
+					label: '月份片',
+					type: 'enum',
+					default: '0',
+					options: {
+						0: '第1月·近30日(含今日)',
+						1: '第2月·往前31~60日'
+					}
+				},
 				tlv: [{ tag: 10, items: [{ id: 24 }] }] },
+			{ name: '查询历史数据(指定日)', func: '0x03',
+				desc: 'Tag10-ID5 指定日YYYYMMDDhhmmss 核心/周期/告警 可选密集 近2个月可选',
+				param: {
+					label: '日期',
+					type: 'histDate',
+					maxDays: 60,
+					default: ''
+				},
+				tlv: [{ tag: 10, items: [{ id: 5 }] }] },
+			{ name: '查询日结数据', func: '0x03', desc: 'Tag10-ID9 起始日YYMMDD(BCD)+个数 最多约60日',
+				param: { label: '天数', type: 'dailyQuery', default: '30', max: 60 },
+				tlv: [{ tag: 10, items: [{ id: 9 }] }] },
+			{ name: '查询LoRa参数', func: '0x03', desc: 'Tag35 LoRa/LoRaWAN',
+				tlv: [{ tag: 10, items: [{ id: 35 }] }] },
+			{ name: '查询总线采集器数据', func: '0x03', desc: 'Tag10-ID12 0全表 1-64对应表 响应Tag90',
+				param: { label: '表号(0=全)', type: 'uint8', default: '0' },
+				tlv: [{ tag: 10, items: [{ id: 12 }] }] },
+			{ name: '查询渗漏仪运行参数', func: '0x03', desc: 'Tag64 渗漏仪',
+				tlv: [{ tag: 10, items: [{ id: 19 }] }] },
+			{ name: '查询渗漏仪噪声数据', func: '0x03', desc: 'Tag62 噪声',
+				tlv: [{ tag: 10, items: [{ id: 20 }] }] },
+			{ name: '查询图片数据', func: '0x03', desc: 'Tag10-ID6 1二值 2标准 3识别+二值 响应Tag8',
+				param: {
+					label: '类型',
+					type: 'enum',
+					default: '1',
+					options: { 1: '二值压缩', 2: '标准图片', 3: '识别+二值' }
+				},
+				tlv: [{ tag: 10, items: [{ id: 6 }] }] },
 		]
 	},
 ]
