@@ -2210,13 +2210,13 @@
 		return String(s || '').trim().toLowerCase().replace(/\s+/g, ' ')
 	}
 
-	/** 从字符串中提取 path token（macOS cu./tty.、Windows COM，大小写不敏感） */
+	/** 从字符串中提取 path token（macOS cu./tty.、Windows COM，大小写不敏感；统一小写便于匹配） */
 	function extractPathTokens(text) {
 		const out = []
 		const re = /(?:cu\.|tty\.)[\w.-]+|\bCOM\d+\b/gi
 		let m
 		while ((m = re.exec(String(text || ''))) !== null) {
-			out.push(m[0])
+			out.push(m[0].toLowerCase())
 		}
 		return out
 	}
@@ -2313,16 +2313,22 @@
 		return fp
 	}
 
-	/** 生成匹配 keys（去重；弱键 usb:vid:pid 打底） */
+	/** 生成匹配 keys（去重；弱键 usb:vid:pid 打底；含 labels 整段以便匹配系统显示名） */
 	function buildPortKeys(fp) {
 		const keys = new Set()
 		const n = normalizeLabel
 		if (fp.vid && fp.pid && fp.sn) keys.add('usb:' + fp.vid + ':' + fp.pid + ':sn:' + fp.sn)
-		if (fp.path) keys.add('path:' + fp.path)
+		if (fp.path) keys.add('path:' + String(fp.path).toLowerCase())
 		if (fp.productName && fp.path) keys.add('label:' + n(fp.productName + ' (' + fp.path + ')'))
 		if (fp.productName) keys.add('prod:' + n(fp.productName))
 		if (fp.vid && fp.pid && fp.productName) keys.add('usb:' + fp.vid + ':' + fp.pid + ':prod:' + n(fp.productName))
 		if (fp.vid && fp.pid) keys.add('usb:' + fp.vid + ':' + fp.pid)
+		// getInfo / 系统风格字符串整段：如 "USB Quad_Serial (cu.usbmodem01234567891)"
+		const labels = fp.labels || []
+		for (let i = 0; i < labels.length; i++) {
+			const lab = n(labels[i])
+			if (lab) keys.add('label:' + lab)
+		}
 		return Array.from(keys)
 	}
 
@@ -2344,14 +2350,34 @@
 			return empty
 		}
 		let fp = buildPortFingerprint(port)
-		if (!isBluetoothSerialPort(port) && navigator.usb && navigator.usb.getDevices) {
+		// WebUSB：仅当同 VID/PID 恰好 1 台已授权设备时取 SN，避免多设备错绑（P2-2）
+		if (navigator.usb && navigator.usb.getDevices) {
 			try {
 				const devices = await navigator.usb.getDevices()
-				for (const d of devices) {
+				const matches = []
+				for (let i = 0; i < devices.length; i++) {
+					const d = devices[i]
 					if (fp.vid && fp.pid && d.vendorId === parseInt(fp.vid, 16) && d.productId === parseInt(fp.pid, 16)) {
-						if (!fp.sn && d.serialNumber) fp.sn = String(d.serialNumber).trim()
-						if (!fp.productName && d.productName) fp.productName = String(d.productName).trim()
-						if (!fp.manufacturerName && d.manufacturerName) fp.manufacturerName = String(d.manufacturerName).trim()
+						matches.push(d)
+					}
+				}
+				if (matches.length === 1) {
+					const d = matches[0]
+					if (!fp.sn && d.serialNumber) fp.sn = String(d.serialNumber).trim()
+					if (!fp.productName && d.productName) fp.productName = String(d.productName).trim()
+					if (!fp.manufacturerName && d.manufacturerName) fp.manufacturerName = String(d.manufacturerName).trim()
+					if (fp.productName) fp.labels.push(fp.productName)
+				} else if (matches.length > 1) {
+					// 多台同型号：只取 productName（若一致），不取 SN
+					const names = {}
+					for (let i = 0; i < matches.length; i++) {
+						const pn = matches[i].productName ? String(matches[i].productName).trim() : ''
+						if (pn) names[pn] = (names[pn] || 0) + 1
+					}
+					const uniq = Object.keys(names)
+					if (uniq.length === 1 && !fp.productName) {
+						fp.productName = uniq[0]
+						fp.labels.push(uniq[0])
 					}
 				}
 			} catch (e) {}
@@ -2476,6 +2502,10 @@
 						return !entryMatchesKeys(entry, target.keys)
 					})
 				} else {
+					// 新建 entry 时也清掉被当前 keys 覆盖的旧 v1 弱键 entry（P2-1）
+					store.entries = store.entries.filter(function (entry) {
+						return !entryMatchesKeys(entry, ident.keys)
+					})
 					store.entries.push({ id: randAliasId(), alias: trimmed, keys: ident.keys.slice(), fingerprint: ident.fingerprint, updatedAt: Date.now() })
 				}
 			} else {
