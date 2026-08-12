@@ -168,7 +168,9 @@
 				switchToDualUI()
 			}
 		} catch (e) {}
-		navigator.serial.getPorts().then(async (ports) => {
+		navigator.serial.getPorts().then(async (allPorts) => {
+			// 自动重连跳过蓝牙串口
+			const ports = allPorts.filter(function (p) { return !isBluetoothSerialPort(p) })
 			if (ports.length === 0) return
 			if (SerialHub.mode === 'dual' && wantA && wantB && ports.length >= 2) {
 				SerialHub.setPort('A', ports[0])
@@ -1964,7 +1966,11 @@
 
 	async function selectPortFor(sid) {
 		try {
-			await navigator.serial.requestPort().then(async (port) => {
+		await navigator.serial.requestPort().then(async (port) => {
+				if (isBluetoothSerialPort(port)) {
+					addLogErr('不支持蓝牙串口，请选择 USB 串口')
+					return
+				}
 				await closeSerial(sid)
 				SerialHub.setPort(sid, port)
 				// 计算 identity key 并刷新显示
@@ -2046,6 +2052,10 @@
 		const port = SerialHub.getPort(sid)
 		if (SerialHub.isOpen(sid)) return
 		if (!port) return
+		if (isBluetoothSerialPort(port)) {
+			addLogErr(`不支持蓝牙串口，请选择 USB 串口`)
+			return
+		}
 		let SerialOptions = {
 			baudRate: parseInt(get('serial-baud')),
 			dataBits: parseInt(get('serial-data-bits')),
@@ -2189,89 +2199,296 @@
 		}
 	}
 
-	// ===== 串口设备别名 =====
-	// port → identityKey 缓存（WeakMap 不行因为 key 需要字符串，用 port 对象引用做 Map）
+	// ===== 串口设备别名 v2（多键指纹 / localStorage entries / 蓝牙过滤） =====
+	// port → 解析后的 { keys, fingerprint } 缓存（port 对象引用做 Map key）
 	const _portIdentityCache = new Map()
-	// port → 内存别名（无 USB identity 时仅本次会话有效）
+	// port → 内存别名（无任何持久 key 时仅本次会话有效）
 	const _sessionAliasByPort = new Map()
 	const ALIAS_STORE_KEY = 'serialPortAliases'
+
+	function normalizeLabel(s) {
+		return String(s || '').trim().toLowerCase().replace(/\s+/g, ' ')
+	}
+
+	/** 从字符串中提取 path token（macOS cu./tty.、Windows COM，大小写不敏感） */
+	function extractPathTokens(text) {
+		const out = []
+		const re = /(?:cu\.|tty\.)[\w.-]+|\bCOM\d+\b/gi
+		let m
+		while ((m = re.exec(String(text || ''))) !== null) {
+			out.push(m[0])
+		}
+		return out
+	}
+
+	/** 蓝牙串口检测（Bluetooth Serial / RFCOMM） */
+	function isBluetoothSerialPort(port) {
+		try {
+			const info = port && port.getInfo ? port.getInfo() : {}
+			if (info.bluetoothServiceClassId != null && info.bluetoothServiceClassId !== '') return true
+			// 无 USB VID/PID 且存在 bluetooth 相关字段
+			if (info.usbVendorId == null && info.usbProductId == null) {
+				const s = JSON.stringify(info).toLowerCase()
+				if (s.indexOf('bluetooth') !== -1 || s.indexOf('rfcomm') !== -1) return true
+			}
+		} catch (e) {}
+		return false
+	}
+
+	function randAliasId() {
+		return 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+	}
+
+	/** 旧 v1 map（{ [key]: name }）→ v2 entries 迁移 + 消毒 */
+	function normalizeAliasStore(raw) {
+		if (raw && raw.version === 2 && Array.isArray(raw.entries)) {
+			return {
+				version: 2,
+				entries: raw.entries.filter(function (e) {
+					return e && typeof e.alias === 'string' && e.alias.trim() && Array.isArray(e.keys) && e.keys.length
+				}).map(function (e) {
+					return {
+						id: e.id || randAliasId(),
+						alias: e.alias.trim().slice(0, 32),
+						keys: e.keys.filter(function (k) { return typeof k === 'string' && k }),
+						fingerprint: e.fingerprint || {},
+						updatedAt: typeof e.updatedAt === 'number' ? e.updatedAt : 0,
+					}
+				}),
+			}
+		}
+		const entries = []
+		if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+			for (const k in raw) {
+				const v = raw[k]
+				if (typeof v === 'string' && v.trim() && k.indexOf(':') !== -1) {
+					entries.push({ id: randAliasId(), alias: v.trim().slice(0, 32), keys: [k], fingerprint: {}, updatedAt: 0 })
+				}
+			}
+		}
+		return { version: 2, entries }
+	}
 
 	function loadAliases() {
 		try {
 			const raw = localStorage.getItem(ALIAS_STORE_KEY)
-			return raw ? JSON.parse(raw) : {}
-		} catch (e) { return {} }
+			if (raw == null) return { version: 2, entries: [] }
+			const parsed = JSON.parse(raw)
+			const store = normalizeAliasStore(parsed)
+			// 旧 v1 map 首次加载后立即回写为 v2
+			if (!(parsed && parsed.version === 2)) saveAliases(store)
+			return store
+		} catch (e) { return { version: 2, entries: [] } }
 	}
-	function saveAliases(aliases) {
-		try { localStorage.setItem(ALIAS_STORE_KEY, JSON.stringify(aliases)) } catch (e) {}
+	function saveAliases(store) {
+		try { localStorage.setItem(ALIAS_STORE_KEY, JSON.stringify(store)) } catch (e) {}
 	}
 
-	/** 获取端口标识键（异步，首调用尝试 WebUSB 取 SN） */
-	async function getPortIdentityKey(port) {
-		if (!port) return null
-		if (_portIdentityCache.has(port)) return _portIdentityCache.get(port)
-		let vid = null, pid = null, sn = null
+	/** 从 port.getInfo() 扫全部自有属性构建指纹（同步部分） */
+	function buildPortFingerprint(port) {
+		const fp = { vid: null, pid: null, sn: null, productName: null, manufacturerName: null, path: null, labels: [] }
+		let info = {}
 		try {
-			const info = port.getInfo ? port.getInfo() : {}
-			if (info.usbVendorId != null) vid = info.usbVendorId.toString(16).padStart(4, '0')
-			if (info.usbProductId != null) pid = info.usbProductId.toString(16).padStart(4, '0')
-			if (info.serialNumber) sn = String(info.serialNumber).trim()
-			else if (info.usbSerialNumber) sn = String(info.usbSerialNumber).trim()
+			info = port && port.getInfo ? port.getInfo() : {}
 		} catch (e) {}
-		if (!vid || !pid) {
-			_portIdentityCache.set(port, null)
-			return null
+		if (info.usbVendorId != null) fp.vid = info.usbVendorId.toString(16).padStart(4, '0')
+		if (info.usbProductId != null) fp.pid = info.usbProductId.toString(16).padStart(4, '0')
+		for (const k in info) {
+			const v = info[k]
+			if (typeof v !== 'string' || !v.trim()) continue
+			const t = v.trim()
+			fp.labels.push(t)
+			const lk = k.toLowerCase()
+			if (!fp.sn && lk.indexOf('serial') !== -1) fp.sn = t
+			else if (!fp.path && lk.indexOf('path') !== -1) {
+				const toks = extractPathTokens(t)
+				if (toks.length) fp.path = toks[0]
+			}
 		}
-		// WebUSB 增强：尝试匹配已授权设备的 serialNumber
-		if (!sn && navigator.usb && navigator.usb.getDevices) {
+		// 从全部字符串字段里兜底提取 path token
+		if (!fp.path) {
+			const toks = extractPathTokens(fp.labels.join(' '))
+			if (toks.length) fp.path = toks[0]
+		}
+		return fp
+	}
+
+	/** 生成匹配 keys（去重；弱键 usb:vid:pid 打底） */
+	function buildPortKeys(fp) {
+		const keys = new Set()
+		const n = normalizeLabel
+		if (fp.vid && fp.pid && fp.sn) keys.add('usb:' + fp.vid + ':' + fp.pid + ':sn:' + fp.sn)
+		if (fp.path) keys.add('path:' + fp.path)
+		if (fp.productName && fp.path) keys.add('label:' + n(fp.productName + ' (' + fp.path + ')'))
+		if (fp.productName) keys.add('prod:' + n(fp.productName))
+		if (fp.vid && fp.pid && fp.productName) keys.add('usb:' + fp.vid + ':' + fp.pid + ':prod:' + n(fp.productName))
+		if (fp.vid && fp.pid) keys.add('usb:' + fp.vid + ':' + fp.pid)
+		return Array.from(keys)
+	}
+
+	function keyScore(key) {
+		if (key.indexOf('path:') === 0) return 100
+		if (key.indexOf(':sn:') !== -1) return 80
+		if (key.indexOf('label:') === 0) return 60
+		if (key.indexOf('prod:') === 0 || key.indexOf(':prod:') !== -1) return 40
+		return 10
+	}
+
+	/** 解析端口身份（异步：WebUSB 按 VID/PID 增强 productName/SN/manufacturerName 后缓存；蓝牙口直接跳过） */
+	async function resolvePortIdentity(port) {
+		if (!port) return { keys: [], fingerprint: {} }
+		if (_portIdentityCache.has(port)) return _portIdentityCache.get(port)
+		if (isBluetoothSerialPort(port)) {
+			const empty = { keys: [], fingerprint: buildPortFingerprint(port) }
+			_portIdentityCache.set(port, empty)
+			return empty
+		}
+		let fp = buildPortFingerprint(port)
+		if (!isBluetoothSerialPort(port) && navigator.usb && navigator.usb.getDevices) {
 			try {
 				const devices = await navigator.usb.getDevices()
 				for (const d of devices) {
-					if (d.vendorId === (parseInt(vid, 16)) && d.productId === (parseInt(pid, 16)) && d.serialNumber) {
-						sn = String(d.serialNumber).trim()
-						break
+					if (fp.vid && fp.pid && d.vendorId === parseInt(fp.vid, 16) && d.productId === parseInt(fp.pid, 16)) {
+						if (!fp.sn && d.serialNumber) fp.sn = String(d.serialNumber).trim()
+						if (!fp.productName && d.productName) fp.productName = String(d.productName).trim()
+						if (!fp.manufacturerName && d.manufacturerName) fp.manufacturerName = String(d.manufacturerName).trim()
 					}
 				}
 			} catch (e) {}
 		}
-		let key
-		if (sn) {
-			key = `usb:${vid}:${pid}:sn:${sn}`
-		} else {
-			key = `usb:${vid}:${pid}`
-		}
-		_portIdentityCache.set(port, key)
-		return key
+		const ident = { keys: buildPortKeys(fp), fingerprint: fp }
+		_portIdentityCache.set(port, ident)
+		return ident
 	}
 
-	/** 获取端口显示名（同步：持久别名 → 会话内存别名 → 默认 VID:PID） */
+	/** 同步兜底身份（缓存未就绪时，不含 WebUSB 增强） */
+	function syncPortIdentity(port) {
+		const fp = buildPortFingerprint(port)
+		return { keys: buildPortKeys(fp), fingerprint: fp }
+	}
+
+	/** 兼容旧调用点：解析并返回身份（无持久 key 时为 null） */
+	async function getPortIdentityKey(port) {
+		const ident = await resolvePortIdentity(port)
+		return ident && ident.keys.length ? ident : null
+	}
+
+	/** 按交集键打分取最高分查别名；无命中返回 null */
+	function lookupAlias(portKeys) {
+		const entries = loadAliases().entries
+		let best = null
+		for (const entry of entries) {
+			if (!entry || !entry.alias || !Array.isArray(entry.keys)) continue
+			let score = 0
+			for (const k of entry.keys) {
+				if (portKeys.indexOf(k) !== -1 && keyScore(k) > score) score = keyScore(k)
+			}
+			if (score > 0 && (!best || score > best.score)) best = { alias: entry.alias, score }
+		}
+		return best
+	}
+
+	/** entry 是否算命中端口：共享强键(≥60: path/label/sn) 或 entry 全部 keys 被覆盖（旧 v1 弱键迁移清理） */
+	function entryMatchesKeys(entry, portKeys) {
+		for (const k of entry.keys) {
+			if (portKeys.indexOf(k) !== -1 && keyScore(k) >= 60) return true
+		}
+		return entry.keys.every(function (k) { return portKeys.indexOf(k) !== -1 })
+	}
+
+	/** 合并目标判定：共享强键才算同一设备；仅当端口自身无强键时才允许弱键全覆盖合并（防同适配器多口互覆盖） */
+	function entryIsSameDevice(entry, portKeys) {
+		for (const k of entry.keys) {
+			if (portKeys.indexOf(k) !== -1 && keyScore(k) >= 60) return true
+		}
+		for (const k of portKeys) {
+			if (keyScore(k) >= 60) return false
+		}
+		return entry.keys.every(function (k) { return portKeys.indexOf(k) !== -1 })
+	}
+
+	/** 无别名时的默认显示名：productName (path) → productName · VID:PID → path → Vendor/Product */
+	function defaultPortDisplayName(fp) {
+		fp = fp || {}
+		const p = fp.productName
+		if (p && fp.path) return p + ' (' + fp.path + ')'
+		if (p && fp.vid && fp.pid) return p + ' · 0x' + fp.vid + ':0x' + fp.pid
+		if (p) return p
+		if (fp.path) return fp.path
+		return 'Vendor: ' + (fp.vid ? '0x' + fp.vid : '未知') + ', Product: ' + (fp.pid ? '0x' + fp.pid : '未知')
+	}
+
+	/** 获取端口显示名（同步：持久别名 → 会话内存别名 → 默认显示名） */
 	function getPortDisplayName(port) {
 		if (!port) return '未知设备'
-		const key = _portIdentityCache.get(port)
-		if (key) {
-			const aliases = loadAliases()
-			if (aliases[key]) return aliases[key]
+		const ident = _portIdentityCache.has(port) ? _portIdentityCache.get(port) : syncPortIdentity(port)
+		if (ident.keys.length) {
+			const hit = lookupAlias(ident.keys)
+			if (hit) return hit.alias
 		}
 		const mem = _sessionAliasByPort.get(port)
 		if (mem) return mem
-		return serialPortLabel(port)
+		return defaultPortDisplayName(ident.fingerprint)
 	}
 
-	/** 设置端口别名；有 identity 写 localStorage，否则写内存并提示无法持久化 */
-	function setPortAlias(port, name) {
+	/** 端口当前持久别名（无则 null；清除按钮显隐 / tooltip 用） */
+	function getPortAlias(port) {
+		if (!port) return null
+		const ident = _portIdentityCache.has(port) ? _portIdentityCache.get(port) : syncPortIdentity(port)
+		if (!ident.keys.length) return null
+		const hit = lookupAlias(ident.keys)
+		return hit ? hit.alias : null
+	}
+
+	/** 端口默认显示名（无别名时，供 tooltip 摘要） */
+	function getPortDefaultName(port) {
+		if (!port) return '未知设备'
+		const ident = _portIdentityCache.has(port) ? _portIdentityCache.get(port) : syncPortIdentity(port)
+		return defaultPortDisplayName(ident.fingerprint)
+	}
+
+	/** 设置端口别名；有持久 key 必写 localStorage（合并/删除 entry），否则仅内存别名 */
+	async function setPortAlias(port, name) {
 		const trimmed = String(name || '').trim().slice(0, 32)
-		const key = _portIdentityCache.get(port)
-		if (key) {
-			const aliases = loadAliases()
+		const ident = await resolvePortIdentity(port)
+		if (ident.keys.length) {
+			const store = loadAliases()
 			if (trimmed) {
-				aliases[key] = trimmed
+				// 合并进打分最高的 entry（仅强键命中或弱键全被覆盖时才算同一设备，避免同适配器多口互覆盖）
+				let target = null
+				let maxScore = 0
+				for (const entry of store.entries) {
+					let score = 0
+					for (const k of entry.keys) {
+						if (ident.keys.indexOf(k) !== -1 && keyScore(k) > score) score = keyScore(k)
+					}
+					if (score > maxScore) { maxScore = score; target = entry }
+				}
+				if (target && !entryIsSameDevice(target, ident.keys)) target = null
+				if (target) {
+					target.alias = trimmed
+					target.keys = Array.from(new Set(target.keys.concat(ident.keys)))
+					target.fingerprint = ident.fingerprint
+					target.updatedAt = Date.now()
+					// 清理与目标撞强键 / 被目标 keys 覆盖的其它 entry（同设备不重复存）
+					store.entries = store.entries.filter(function (entry) {
+						if (entry === target) return true
+						return !entryMatchesKeys(entry, target.keys)
+					})
+				} else {
+					store.entries.push({ id: randAliasId(), alias: trimmed, keys: ident.keys.slice(), fingerprint: ident.fingerprint, updatedAt: Date.now() })
+				}
 			} else {
-				delete aliases[key]
+				// 留空 = 删除：移除强键命中的 entry（及被完全覆盖的旧 v1 弱键 entry）
+				store.entries = store.entries.filter(function (entry) {
+					return !entryMatchesKeys(entry, ident.keys)
+				})
 			}
-			saveAliases(aliases)
+			saveAliases(store)
+			_sessionAliasByPort.delete(port)
 			return true
 		}
-		// 无 identity：仅内存别名
+		// 无任何持久 key：仅会话内存别名
 		if (trimmed) {
 			_sessionAliasByPort.set(port, trimmed)
 		} else {
@@ -2283,8 +2500,8 @@
 
 	/** 检查端口是否有持久化 key（可用于持久化重命名） */
 	function portHasIdentity(port) {
-		const key = _portIdentityCache.get(port)
-		return !!(key)
+		const ident = _portIdentityCache.get(port)
+		return !!(ident && ident.keys.length)
 	}
 
 	/** 更新端口选择按钮文案（单路：选择串口；双路：标签 · 设备名） */
@@ -2306,7 +2523,8 @@
 		const name = getPortDisplayName(port)
 		const label = SerialHub.mode === 'dual' ? (sid === 'A' ? SerialHub.getLabelA() : SerialHub.getLabelB()) : ''
 		const text = SerialHub.mode === 'dual' ? (label + ' · ' + name) : name
-		btn.title = name
+		// 有别名时 tooltip 附带默认指纹摘要
+		btn.title = getPortAlias(port) ? name + '（' + getPortDefaultName(port) + '）' : name
 		btn.innerHTML = '<i class="bi bi-usb-plug"></i> ' + HTMLEncode(text)
 	}
 
@@ -2328,6 +2546,10 @@
 	}
 	navigator.serial.addEventListener('connect', (e) => {
 		const port = serialEventPort(e)
+		if (isBluetoothSerialPort(port)) {
+			addLogErr(`不支持蓝牙串口，请选择 USB 串口`)
+			return
+		}
 		addLogErr(`设备已连接 (${getPortDisplayName(port)})`)
 		if (!port || typeof port.open !== 'function') return
 		// 按 port 匹配已有会话；若都不匹配则分配给第一个未打开会话
@@ -3529,17 +3751,25 @@
 
 	// ===== 端口别名 UI =====
 
+	/** 状态区按钮组：铅笔(重命名) + 有别名时显示清除 */
+	function renderStatusButtons(sid, port) {
+		let html = '<button class="port-rename-btn" title="重命名设备（本地保存，留空=删除）" data-port-sid="' + sid + '"><i class="bi bi-pencil"></i></button>'
+		if (getPortAlias(port)) {
+			html += '<button class="port-alias-clear-btn" title="清除别名" data-port-sid="' + sid + '"><i class="bi bi-x"></i></button>'
+		}
+		return html
+	}
+
 	/** 更新单路模式端口显示 */
 	function updateSinglePortDisplay(port) {
 		const statusEl = document.getElementById('serial-status')
-		if (!statusEl) return
-		if (!port) return
+		if (!statusEl || !port) return
 		const name = getPortDisplayName(port)
 		const indicator = statusEl.querySelector('.serial-status-indicator')
 		if (indicator) {
 			const textEl = indicator.querySelector('.serial-status-text')
 			if (textEl) {
-				textEl.innerHTML = HTMLEncode(name) + ' <button class="port-rename-btn" title="重命名设备" data-port-sid="A"><i class="bi bi-pencil"></i></button>'
+				textEl.innerHTML = HTMLEncode(name) + ' ' + renderStatusButtons('A', port)
 			}
 		}
 	}
@@ -3547,14 +3777,13 @@
 	/** 更新双路模式会话端口显示 */
 	function updateDualPortDisplay(sid, port) {
 		const statusEl = document.getElementById(sid === 'A' ? 'serial-status-a' : 'serial-status-b')
-		if (!statusEl) return
-		if (!port) return
+		if (!statusEl || !port) return
 		const name = getPortDisplayName(port)
 		const indicator = statusEl.querySelector('.serial-status-indicator')
 		if (indicator) {
 			const textEl = indicator.querySelector('.serial-status-text')
 			if (textEl) {
-				textEl.innerHTML = HTMLEncode(name) + ' <button class="port-rename-btn" title="重命名设备" data-port-sid="' + sid + '"><i class="bi bi-pencil"></i></button>'
+				textEl.innerHTML = HTMLEncode(name) + ' ' + renderStatusButtons(sid, port)
 			}
 		}
 	}
@@ -3567,13 +3796,13 @@
 		await getPortIdentityKey(port)
 		const currentName = getPortDisplayName(port)
 		const hasIdentity = portHasIdentity(port)
-		const hint = hasIdentity ? '' : '（此设备无 USB 标识，仅本次会话有效）'
+		const hint = hasIdentity ? '（将保存在本机浏览器）' : '（此设备无 USB 标识，仅本次会话有效）'
 		const label = SerialHub.mode === 'dual' ? (sid === 'A' ? SerialHub.getLabelA() : SerialHub.getLabelB()) : ''
-		const promptText = (label ? label + ' · ' : '') + '设备别名' + hint + '（留空恢复默认）'
+		const promptText = (label ? label + ' · ' : '') + '设备别名' + hint + '（留空或点清除=删除）'
 		const newName = window.prompt(promptText, currentName && currentName.indexOf('Vendor:') === -1 ? currentName : '')
 		if (newName === null) return // 取消
 		// 空名 = 删除别名
-		setPortAlias(port, (newName || '').trim() ? newName.trim().slice(0, 32) : '')
+		await setPortAlias(port, (newName || '').trim() ? newName.trim().slice(0, 32) : '')
 		refreshPortDisplayNames()
 	}
 
@@ -3587,11 +3816,25 @@
 		if (sid) startPortRename(sid)
 	})
 
+	// 事件委托：port-alias-clear-btn 点击（立即清除并恢复默认显示）
+	document.addEventListener('click', function (e) {
+		const btn = e.target.closest('.port-alias-clear-btn')
+		if (!btn) return
+		e.preventDefault()
+		e.stopPropagation()
+		const sid = btn.getAttribute('data-port-sid')
+		const port = SerialHub.getPort(sid)
+		if (!port) return
+		setPortAlias(port, '').then(function () {
+			refreshPortDisplayNames()
+		})
+	})
+
 	// status 文字每次更新后挂上重命名按钮（serialStatuChange 调用此扩展）
 	const _origSerialStatuChange = serialStatuChange
 	serialStatuChange = function (statu, sid) {
 		_origSerialStatuChange(statu, sid)
-		// 已选口就显示「设备名 + 铅笔」，无论连接与否（圆点颜色表达连接态）
+		// 已选口就显示「设备名 + 铅笔(+清除)」，无论连接与否（圆点颜色表达连接态）
 		const port = SerialHub.getPort(sid)
 		if (port) {
 			if (SerialHub.mode === 'dual') {
@@ -3602,10 +3845,11 @@
 		}
 	}
 
-	// 初始化：为已授权端口预计算 identity
+	// 初始化：为已授权端口预计算 identity（跳过蓝牙口）
 	;(function preloadPortIdentities() {
 		navigator.serial.getPorts().then(function (ports) {
 			for (var i = 0; i < ports.length; i++) {
+				if (isBluetoothSerialPort(ports[i])) continue
 				getPortIdentityKey(ports[i])
 			}
 		})
