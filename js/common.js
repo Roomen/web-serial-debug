@@ -90,7 +90,7 @@
 		getSekWaitStart(sid) { return sid === 'A' ? serialSekWaitStart : sessionB.sekWaitStart },
 		setSekWaitStart(sid, t) { if (sid === 'A') serialSekWaitStart = t; else sessionB.sekWaitStart = t },
 
-		getSessionLabel(sid) { return sid === 'A' ? (sessionB.label === 'RX' ? 'TX' : 'TX') : sessionB.label },
+		getSessionLabel(sid) { return sid === 'A' ? this.getLabelA() : this.getLabelB() },
 		getLabelA() {
 			const el = document.getElementById('serial-session-a-label')
 			return el ? el.value || 'TX' : 'TX'
@@ -1967,7 +1967,13 @@
 			await navigator.serial.requestPort().then(async (port) => {
 				await closeSerial(sid)
 				SerialHub.setPort(sid, port)
-				addLogErr(`串口已选择 (会话 ${sid})`)
+				// 计算 identity key 并刷新显示
+				const key = await getPortIdentityKey(port)
+				if (!key) {
+					addLogErr(`无法获取设备标识（非 USB 串口），重命名仅本次会话有效`)
+				}
+				refreshPortDisplayNames()
+				addLogErr(`串口已选择 (会话 ${sid}${key ? '' : '，无持久标识'})`)
 			})
 		} catch (e) {
 			const errorType = e.name || 'UnknownError'
@@ -2182,15 +2188,159 @@
 			return 'Vendor: 未知, Product: 未知'
 		}
 	}
+
+	// ===== 串口设备别名 =====
+	// port → identityKey 缓存（WeakMap 不行因为 key 需要字符串，用 port 对象引用做 Map）
+	const _portIdentityCache = new Map()
+	// port → 内存别名（无 USB identity 时仅本次会话有效）
+	const _sessionAliasByPort = new Map()
+	const ALIAS_STORE_KEY = 'serialPortAliases'
+
+	function loadAliases() {
+		try {
+			const raw = localStorage.getItem(ALIAS_STORE_KEY)
+			return raw ? JSON.parse(raw) : {}
+		} catch (e) { return {} }
+	}
+	function saveAliases(aliases) {
+		try { localStorage.setItem(ALIAS_STORE_KEY, JSON.stringify(aliases)) } catch (e) {}
+	}
+
+	/** 获取端口标识键（异步，首调用尝试 WebUSB 取 SN） */
+	async function getPortIdentityKey(port) {
+		if (!port) return null
+		if (_portIdentityCache.has(port)) return _portIdentityCache.get(port)
+		let vid = null, pid = null, sn = null
+		try {
+			const info = port.getInfo ? port.getInfo() : {}
+			if (info.usbVendorId != null) vid = info.usbVendorId.toString(16).padStart(4, '0')
+			if (info.usbProductId != null) pid = info.usbProductId.toString(16).padStart(4, '0')
+			if (info.serialNumber) sn = String(info.serialNumber).trim()
+			else if (info.usbSerialNumber) sn = String(info.usbSerialNumber).trim()
+		} catch (e) {}
+		if (!vid || !pid) {
+			_portIdentityCache.set(port, null)
+			return null
+		}
+		// WebUSB 增强：尝试匹配已授权设备的 serialNumber
+		if (!sn && navigator.usb && navigator.usb.getDevices) {
+			try {
+				const devices = await navigator.usb.getDevices()
+				for (const d of devices) {
+					if (d.vendorId === (parseInt(vid, 16)) && d.productId === (parseInt(pid, 16)) && d.serialNumber) {
+						sn = String(d.serialNumber).trim()
+						break
+					}
+				}
+			} catch (e) {}
+		}
+		let key
+		if (sn) {
+			key = `usb:${vid}:${pid}:sn:${sn}`
+		} else {
+			key = `usb:${vid}:${pid}`
+		}
+		_portIdentityCache.set(port, key)
+		return key
+	}
+
+	/** 获取端口显示名（同步：持久别名 → 会话内存别名 → 默认 VID:PID） */
+	function getPortDisplayName(port) {
+		if (!port) return '未知设备'
+		const key = _portIdentityCache.get(port)
+		if (key) {
+			const aliases = loadAliases()
+			if (aliases[key]) return aliases[key]
+		}
+		const mem = _sessionAliasByPort.get(port)
+		if (mem) return mem
+		return serialPortLabel(port)
+	}
+
+	/** 设置端口别名；有 identity 写 localStorage，否则写内存并提示无法持久化 */
+	function setPortAlias(port, name) {
+		const trimmed = String(name || '').trim().slice(0, 32)
+		const key = _portIdentityCache.get(port)
+		if (key) {
+			const aliases = loadAliases()
+			if (trimmed) {
+				aliases[key] = trimmed
+			} else {
+				delete aliases[key]
+			}
+			saveAliases(aliases)
+			return true
+		}
+		// 无 identity：仅内存别名
+		if (trimmed) {
+			_sessionAliasByPort.set(port, trimmed)
+		} else {
+			_sessionAliasByPort.delete(port)
+		}
+		showToast('设备无持久标识，别名仅本次会话有效', 2000)
+		return true
+	}
+
+	/** 检查端口是否有持久化 key（可用于持久化重命名） */
+	function portHasIdentity(port) {
+		const key = _portIdentityCache.get(port)
+		return !!(key)
+	}
+
+	/** 更新端口选择按钮文案（单路：选择串口；双路：标签 · 设备名） */
+	function updatePortButtonDisplay(sid, port) {
+		let btnId = null
+		if (SerialHub.mode === 'dual') {
+			btnId = sid === 'A' ? 'serial-select-port-a' : 'serial-select-port-b'
+		} else {
+			btnId = 'serial-select-port'
+		}
+		const btn = document.getElementById(btnId)
+		if (!btn) return
+		if (!port) {
+			const def = SerialHub.mode === 'dual' ? (sid === 'A' ? '选择A' : '选择B') : '选择串口'
+			btn.innerHTML = '<i class="bi bi-usb-plug"></i> ' + def
+			btn.title = ''
+			return
+		}
+		const name = getPortDisplayName(port)
+		const label = SerialHub.mode === 'dual' ? (sid === 'A' ? SerialHub.getLabelA() : SerialHub.getLabelB()) : ''
+		const text = SerialHub.mode === 'dual' ? (label + ' · ' + name) : name
+		btn.title = name
+		btn.innerHTML = '<i class="bi bi-usb-plug"></i> ' + HTMLEncode(text)
+	}
+
+	/** 刷新所有 UI 中的端口显示名 */
+	function refreshPortDisplayNames() {
+		// 双路状态区
+		if (SerialHub.mode === 'dual') {
+			const portA = SerialHub.getPort('A')
+			const portB = SerialHub.getPort('B')
+			updateDualPortDisplay('A', portA)
+			updateDualPortDisplay('B', portB)
+			updatePortButtonDisplay('A', portA)
+			updatePortButtonDisplay('B', portB)
+		} else {
+			// 单路状态
+			updateSinglePortDisplay(serialPort)
+			updatePortButtonDisplay('A', serialPort)
+		}
+	}
 	navigator.serial.addEventListener('connect', (e) => {
 		const port = serialEventPort(e)
-		addLogErr(`设备已连接 (${serialPortLabel(port)})`)
+		addLogErr(`设备已连接 (${getPortDisplayName(port)})`)
 		if (!port || typeof port.open !== 'function') return
 		// 按 port 匹配已有会话；若都不匹配则分配给第一个未打开会话
 		let sid = SerialHub.findSessionByPort(port)
 		if (!sid) {
 			sid = SerialHub.findClosedSession()
-			if (sid) SerialHub.setPort(sid, port)
+			if (sid) {
+				SerialHub.setPort(sid, port)
+				// 新 port 需要计算 identity
+				getPortIdentityKey(port).then(function () {
+					refreshPortDisplayNames()
+				})
+			}
 		}
 		if (!sid) return
 		//未主动关闭时，设备重插后自动重连
@@ -2200,7 +2350,7 @@
 	})
 	navigator.serial.addEventListener('disconnect', async (e) => {
 		const port = serialEventPort(e)
-		addLogErr(`设备断开连接 (${serialPortLabel(port)})`)
+		addLogErr(`设备断开连接 (${getPortDisplayName(port)})`)
 		const sid = SerialHub.findSessionByPort(port)
 		if (!sid) return
 		await closeSerial(sid)
@@ -2210,7 +2360,8 @@
 	})
 	function serialStatuChange(statu, sid) {
 		sid = sid || 'A'
-		const containerId = sid === 'A' ? 'serial-status' : 'serial-status-' + sid.toLowerCase()
+		// 双路时 A 写 #serial-status-a、B 写 #serial-status-b；单路才写 #serial-status
+		const containerId = SerialHub.mode === 'dual' ? 'serial-status-' + sid.toLowerCase() : 'serial-status'
 		var el = document.getElementById(containerId)
 		if (!el) return
 		if (statu) {
@@ -3224,6 +3375,9 @@
 		serialStatuChange(SerialHub.isOpen('B'), 'B')
 
 		updateDualLogLabels()
+
+		// 刷新端口显示名
+		refreshPortDisplayNames()
 	}
 
 	// 切换 UI 到单路模式
@@ -3255,6 +3409,7 @@
 
 		updateOpenButton('A')
 		serialStatuChange(SerialHub.isOpen('A'), 'A')
+		refreshPortDisplayNames()
 	}
 
 	// 更新双路日志面板标签
@@ -3371,4 +3526,88 @@
 
 	// 暴露 SerialHub 供命令面板等使用
 	window.SerialHub = SerialHub
+
+	// ===== 端口别名 UI =====
+
+	/** 更新单路模式端口显示 */
+	function updateSinglePortDisplay(port) {
+		const statusEl = document.getElementById('serial-status')
+		if (!statusEl) return
+		if (!port) return
+		const name = getPortDisplayName(port)
+		const indicator = statusEl.querySelector('.serial-status-indicator')
+		if (indicator) {
+			const textEl = indicator.querySelector('.serial-status-text')
+			if (textEl) {
+				textEl.innerHTML = HTMLEncode(name) + ' <button class="port-rename-btn" title="重命名设备" data-port-sid="A"><i class="bi bi-pencil"></i></button>'
+			}
+		}
+	}
+
+	/** 更新双路模式会话端口显示 */
+	function updateDualPortDisplay(sid, port) {
+		const statusEl = document.getElementById(sid === 'A' ? 'serial-status-a' : 'serial-status-b')
+		if (!statusEl) return
+		if (!port) return
+		const name = getPortDisplayName(port)
+		const indicator = statusEl.querySelector('.serial-status-indicator')
+		if (indicator) {
+			const textEl = indicator.querySelector('.serial-status-text')
+			if (textEl) {
+				textEl.innerHTML = HTMLEncode(name) + ' <button class="port-rename-btn" title="重命名设备" data-port-sid="' + sid + '"><i class="bi bi-pencil"></i></button>'
+			}
+		}
+	}
+
+	/** 启动重命名交互：port 对象和 sid */
+	async function startPortRename(sid) {
+		const port = SerialHub.getPort(sid)
+		if (!port) return
+		// 确保 identity 已计算（可能触发 WebUSB 查询）
+		await getPortIdentityKey(port)
+		const currentName = getPortDisplayName(port)
+		const hasIdentity = portHasIdentity(port)
+		const hint = hasIdentity ? '' : '（此设备无 USB 标识，仅本次会话有效）'
+		const label = SerialHub.mode === 'dual' ? (sid === 'A' ? SerialHub.getLabelA() : SerialHub.getLabelB()) : ''
+		const promptText = (label ? label + ' · ' : '') + '设备别名' + hint + '（留空恢复默认）'
+		const newName = window.prompt(promptText, currentName && currentName.indexOf('Vendor:') === -1 ? currentName : '')
+		if (newName === null) return // 取消
+		// 空名 = 删除别名
+		setPortAlias(port, (newName || '').trim() ? newName.trim().slice(0, 32) : '')
+		refreshPortDisplayNames()
+	}
+
+	// 事件委托：port-rename-btn 点击
+	document.addEventListener('click', function (e) {
+		const btn = e.target.closest('.port-rename-btn')
+		if (!btn) return
+		e.preventDefault()
+		e.stopPropagation()
+		const sid = btn.getAttribute('data-port-sid')
+		if (sid) startPortRename(sid)
+	})
+
+	// status 文字每次更新后挂上重命名按钮（serialStatuChange 调用此扩展）
+	const _origSerialStatuChange = serialStatuChange
+	serialStatuChange = function (statu, sid) {
+		_origSerialStatuChange(statu, sid)
+		// 已选口就显示「设备名 + 铅笔」，无论连接与否（圆点颜色表达连接态）
+		const port = SerialHub.getPort(sid)
+		if (port) {
+			if (SerialHub.mode === 'dual') {
+				updateDualPortDisplay(sid, port)
+			} else {
+				updateSinglePortDisplay(port)
+			}
+		}
+	}
+
+	// 初始化：为已授权端口预计算 identity
+	;(function preloadPortIdentities() {
+		navigator.serial.getPorts().then(function (ports) {
+			for (var i = 0; i < ports.length; i++) {
+				getPortIdentityKey(ports[i])
+			}
+		})
+	})()
 })()
