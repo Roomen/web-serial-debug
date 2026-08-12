@@ -310,6 +310,15 @@
 			alias: 'gonghao fenxi power blu blu100k ppk view',
 			run: function () { clickSel('.rail-item[data-view="view-blu"]') }
 		})
+		list.push({
+			group: '视图',
+			title: '打开设备指令',
+			alias: 'shebei zhiling device command cmd sheet',
+			run: function () {
+				clickSel('.rail-item[data-view="view-blu"]')
+				if (window.bluCmdSheet && !window.bluCmdSheet.isOpen()) window.bluCmdSheet.open()
+			}
+		})
 		const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
 		list.push({
 			group: '视图',
