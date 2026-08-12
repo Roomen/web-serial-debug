@@ -173,9 +173,14 @@
 			const ports = allPorts.filter(function (p) { return !isBluetoothSerialPort(p) })
 			if (ports.length === 0) return
 			if (SerialHub.mode === 'dual' && wantA && wantB && ports.length >= 2) {
+				// getPorts() 顺序不保证稳定：按授权列表前两口恢复，串台时请手动重选
 				SerialHub.setPort('A', ports[0])
 				SerialHub.setPort('B', ports[1])
 				await openSerial('A')
+				await openSerial('B')
+				addLogErr('双路已按授权顺序恢复 A/B；若设备串台请重新选择串口')
+			} else if (SerialHub.mode === 'dual' && wantB && !wantA && ports.length >= 1) {
+				SerialHub.setPort('B', ports[0])
 				await openSerial('B')
 			} else if (wantA) {
 				serialPort = ports[0]
@@ -1775,25 +1780,38 @@
 		}
 	}
 
-	//日志纯文本(复制/导出用): 从主日志容器读取
+	//日志纯文本(复制/导出用): 单路读主容器；双路合并 A/B 两栏
 	function getLogsText() {
-		const container = SerialHub.getLogContainer('A')
+		const containers = []
+		if (SerialHub.mode === 'dual') {
+			const a = document.getElementById('serial-logs-a')
+			const b = document.getElementById('serial-logs-b')
+			if (a) containers.push({ label: SerialHub.getLabelA(), el: a })
+			if (b) containers.push({ label: SerialHub.getLabelB(), el: b })
+		} else {
+			containers.push({ label: '', el: SerialHub.getLogContainer('A') })
+		}
 		let lines = []
-		for (const node of container.children) {
-			if (node.classList.contains('log-row')) {
-				const time = node.querySelector('.log-time')
-				const dir = node.querySelector('.log-dir')
-				const len = node.querySelector('.log-len')
-				const body = node.querySelector('.log-body')
-				let head = []
-				if (time && time.innerText) head.push(time.innerText)
-				if (dir && dir.innerText) head.push(dir.innerText)
-				if (len && len.innerText) head.push(len.innerText)
-				const content = body ? body.innerText : ''
-				lines.push((head.join(' ') + ' ' + content).trim())
-			} else {
-				const t = node.innerText
-				if (t) lines.push(t)
+		for (let c = 0; c < containers.length; c++) {
+			const container = containers[c].el
+			if (!container) continue
+			if (containers[c].label) lines.push('--- ' + containers[c].label + ' ---')
+			for (const node of container.children) {
+				if (node.classList.contains('log-row')) {
+					const time = node.querySelector('.log-time')
+					const dir = node.querySelector('.log-dir')
+					const len = node.querySelector('.log-len')
+					const body = node.querySelector('.log-body')
+					let head = []
+					if (time && time.innerText) head.push(time.innerText)
+					if (dir && dir.innerText) head.push(dir.innerText)
+					if (len && len.innerText) head.push(len.innerText)
+					const content = body ? body.innerText : ''
+					lines.push((head.join(' ') + ' ' + content).trim())
+				} else {
+					const t = node.innerText
+					if (t) lines.push(t)
+				}
 			}
 		}
 		return lines.join('\n')
@@ -2107,21 +2125,27 @@
 	}
 
 	// 更新打开/关闭按钮文案
+	// sid=B 永远写双路 B 按钮，避免 switchToSingle 竞态下误写单路主按钮
 	function updateOpenButton(sid) {
 		sid = sid || 'A'
 		const open = SerialHub.isOpen(sid)
 		let btnId
-		if (SerialHub.mode === 'dual') {
-			btnId = 'serial-open-or-close-' + sid.toLowerCase()
+		let dualLabel = false
+		if (sid === 'B') {
+			btnId = 'serial-open-or-close-b'
+			dualLabel = true
+		} else if (SerialHub.mode === 'dual') {
+			btnId = 'serial-open-or-close-a'
+			dualLabel = true
 		} else {
 			btnId = 'serial-open-or-close'
 		}
 		const btn = document.getElementById(btnId)
 		if (!btn) return
 		if (open) {
-			btn.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭' + (SerialHub.mode === 'dual' ? ' ' + sid : '')
+			btn.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭' + (dualLabel ? ' ' + sid : '')
 		} else {
-			btn.innerHTML = '<i class="bi bi-play-circle"></i> 打开' + (SerialHub.mode === 'dual' ? ' ' + sid : '')
+			btn.innerHTML = '<i class="bi bi-play-circle"></i> 打开' + (dualLabel ? ' ' + sid : '')
 		}
 	}
 
@@ -2612,8 +2636,12 @@
 	})
 	function serialStatuChange(statu, sid) {
 		sid = sid || 'A'
-		// 双路时 A 写 #serial-status-a、B 写 #serial-status-b；单路才写 #serial-status
-		const containerId = SerialHub.mode === 'dual' ? 'serial-status-' + sid.toLowerCase() : 'serial-status'
+		// sid=B 永远写 #serial-status-b；A 在双路写 -a、单路写 #serial-status
+		// （避免 closeSerial('B') 异步完成时 mode 已切 single 误写主状态区）
+		let containerId
+		if (sid === 'B') containerId = 'serial-status-b'
+		else if (SerialHub.mode === 'dual') containerId = 'serial-status-a'
+		else containerId = 'serial-status'
 		var el = document.getElementById(containerId)
 		if (!el) return
 		if (statu) {
@@ -3632,16 +3660,16 @@
 		refreshPortDisplayNames()
 	}
 
-	// 切换 UI 到单路模式
-	function switchToSingleUI() {
+	// 切换 UI 到单路模式（必须 await 关闭 B，否则 closeSerial 异步回调会在 mode=single 后写坏主状态区）
+	async function switchToSingleUI() {
 		// 清理会话 B 的定时器和缓冲
 		clearTimeout(SerialHub.getPackTimer('B'))
 		SerialHub.setPackTimer('B', null)
 		SerialHub.setPackBuf('B', [])
-		// 先关闭会话 B（如果打开）
-		if (sessionB.open) {
+		// 先关闭会话 B（如果打开）——在仍为 dual 时完成状态更新
+		if (sessionB.open || SerialHub.getPort('B')) {
 			sessionB.manualClose = true
-			closeSerial('B').catch(function () {})
+			try { await closeSerial('B') } catch (e) {}
 		}
 		SerialHub.mode = 'single'
 		try { sessionStorage.setItem('serialHubMode', 'single') } catch (e) {}
@@ -3677,7 +3705,7 @@
 	// 模式切换按钮
 	document.getElementById('serial-mode-single').addEventListener('click', function () {
 		if (SerialHub.mode === 'single') return
-		switchToSingleUI()
+		switchToSingleUI().catch(function () {})
 	})
 	document.getElementById('serial-mode-dual').addEventListener('click', function () {
 		if (SerialHub.mode === 'dual') return
