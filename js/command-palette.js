@@ -121,6 +121,20 @@
 			alias: 'canshu params baudrate settings',
 			run: function () { clickEl('serial-params-summary') }
 		})
+		list.push({
+			group: '串口',
+			title: '切换串口模式（单路/双路）',
+			alias: 'moshi mode dual single shuanglu danlu qiehuan',
+			detail: '当前 ' + (window.SerialHub ? window.SerialHub.mode : 'single'),
+			run: function () {
+				if (!window.SerialHub) return
+				if (window.SerialHub.mode === 'dual') {
+					clickEl('serial-mode-single')
+				} else {
+					clickEl('serial-mode-dual')
+				}
+			}
+		})
 		;[9600, 115200, 230400, 460800].forEach(function (baud) {
 			list.push({
 				group: '串口',
