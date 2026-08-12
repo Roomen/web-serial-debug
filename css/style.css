@@ -859,6 +859,66 @@ body {
   white-space: pre-wrap;
   word-break: break-all;
   overflow-wrap: anywhere;
+  /* 禁止截断单条报文（双路监控关键） */
+  text-overflow: clip;
+  overflow: visible;
+}
+
+/* 双路合流：按会话分色 */
+.log-row .log-sess {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  padding: 0 4px;
+  border-radius: 3px;
+  line-height: 1.4;
+}
+
+#serial-logs.is-dual .log-row[data-sid='A'] .log-sess,
+#serial-logs.is-dual .log-row[data-sid='A'] .log-time {
+  color: #059669;
+}
+
+#serial-logs.is-dual .log-row[data-sid='B'] .log-sess,
+#serial-logs.is-dual .log-row[data-sid='B'] .log-time {
+  color: #d97706;
+}
+
+#serial-logs.is-dual .log-row[data-sid='A'] {
+  border-left-color: #10b981;
+}
+
+#serial-logs.is-dual .log-row[data-sid='B'] {
+  border-left-color: #f59e0b;
+}
+
+#serial-logs.is-dual .log-row[data-sid='A'] .log-body {
+  color: #047857;
+}
+
+#serial-logs.is-dual .log-row[data-sid='B'] .log-body {
+  color: #b45309;
+}
+
+[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='A'] .log-body,
+[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='A'] .log-sess,
+[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='A'] .log-time {
+  color: #34d399;
+}
+
+[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='B'] .log-body,
+[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='B'] .log-sess,
+[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='B'] .log-time {
+  color: #fbbf24;
+}
+
+#serial-connect-bar {
+  overflow: visible;
+}
+
+.connect-bar-params {
+  flex: 0 0 auto;
 }
 
 .log-row[data-dir='rx'] {

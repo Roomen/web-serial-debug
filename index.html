@@ -148,16 +148,12 @@
                         </div>
                     </div>
 
-                    <!-- 单路模式控件 -->
-                    <div class="connect-bar-section connect-bar-main" id="serial-single-ctrl">
-                        <button class="btn btn-outline-secondary serial-port-btn" id="serial-select-port">
-                            <i class="bi bi-usb-plug"></i> 选择串口
-                        </button>
-
+                    <!-- 串口参数：单/双路共享（不可放在 display:none 的单路区内） -->
+                    <div class="connect-bar-section connect-bar-params">
                         <div class="dropdown" id="serial-params-dropdown">
                             <button type="button" class="serial-params-summary" id="serial-params-summary"
                                 data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false"
-                                title="串口参数">
+                                title="串口参数（单路/双路共用）">
                                 <i class="bi bi-sliders2"></i>
                                 <span id="serial-params-summary-text">115200 8-N-1</span>
                                 <i class="bi bi-chevron-down serial-params-summary-arrow"></i>
@@ -223,6 +219,13 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
+
+                    <!-- 单路模式控件 -->
+                    <div class="connect-bar-section connect-bar-main" id="serial-single-ctrl">
+                        <button class="btn btn-outline-secondary serial-port-btn" id="serial-select-port">
+                            <i class="bi bi-usb-plug"></i> 选择串口
+                        </button>
 
                         <button class="btn btn-primary serial-open-btn" id="serial-open-or-close">
                             <i class="bi bi-play-circle"></i> 打开串口
@@ -270,14 +273,8 @@
                                 </div>
                             </div>
                         </div>
-                        <!-- 共享参数 + 主发口选择 -->
+                        <!-- 主发口（参数在连接栏共享区） -->
                         <div class="dual-params-row">
-                            <button type="button" class="serial-params-summary" id="serial-params-summary-dual"
-                                title="串口参数（双路共享，点击展开）">
-                                <i class="bi bi-sliders2"></i>
-                                <span id="serial-params-summary-text-dual">115200 8-N-1</span>
-                                <i class="bi bi-chevron-down serial-params-summary-arrow"></i>
-                            </button>
                             <div class="dual-active-send">
                                 <span class="dual-active-send-label">主发:</span>
                                 <select class="form-select form-select-sm" id="serial-active-send" title="选择主发送口">
@@ -340,26 +337,8 @@
                                 </div>
                             </div>
                         </div>
+                        <!-- 单路/双路共用同一日志窗：双路用颜色区分 sid，按到达时间插入，单条不截断 -->
                         <div id="serial-logs" class="flex-grow-1 rounded mb-2"></div>
-                        <!-- 双路分栏日志 -->
-                        <div id="serial-dual-logs" class="flex-grow-1 rounded mb-2" style="display:none">
-                            <div class="dual-log-panel" id="serial-logs-a-panel">
-                                <div class="dual-log-panel-header">
-                                    <span class="dual-log-dot dual-log-dot-a"></span>
-                                    <span class="dual-log-panel-label" id="dual-log-label-a">TX</span>
-                                    <span class="dual-log-panel-stats" id="dual-log-stats-a"></span>
-                                </div>
-                                <div class="dual-log-body" id="serial-logs-a"></div>
-                            </div>
-                            <div class="dual-log-panel" id="serial-logs-b-panel">
-                                <div class="dual-log-panel-header">
-                                    <span class="dual-log-dot dual-log-dot-b"></span>
-                                    <span class="dual-log-panel-label" id="dual-log-label-b">RX</span>
-                                    <span class="dual-log-panel-stats" id="dual-log-stats-b"></span>
-                                </div>
-                                <div class="dual-log-body" id="serial-logs-b"></div>
-                            </div>
-                        </div>
                         <!--协议解析底部面板：顶缝拖高度，header 只负责折叠-->
                         <div id="serial-parse-panel">
                             <div id="serial-parse-resizer" title="拖动调整高度"></div>

@@ -119,12 +119,8 @@
 			return null
 		},
 
-		// 日志容器路由
+		// 日志容器：单路/双路共用 #serial-logs（分色 + 时间序插入）
 		getLogContainer(sid) {
-			if (this.mode === 'dual' && sid) {
-				const el = document.getElementById('serial-logs-' + sid.toLowerCase())
-				if (el) return el
-			}
 			return serialLogs
 		},
 	}
@@ -1596,9 +1592,6 @@
 		e.target.value = max
 		changeOption('maxLogRows', max)
 		trimLogRows(SerialHub.getLogContainer('A'))
-		if (SerialHub.mode === 'dual') {
-			trimLogRows(document.getElementById('serial-logs-b'))
-		}
 	})
 	// 日志类型：自定义下拉（悬停/点击展开），底层保留隐藏 select 兼容命令面板
 	;(function () {
@@ -1624,15 +1617,8 @@
 				li.setAttribute('aria-selected', on ? 'true' : 'false')
 			})
 			const isAnsi = String(val).includes('ansi')
-			const containers = [document.getElementById('serial-logs')]
-			if (SerialHub.mode === 'dual') {
-				containers.push(document.getElementById('serial-logs-a'))
-				containers.push(document.getElementById('serial-logs-b'))
-			}
-			containers.forEach(function (logsEl) {
-				if (!logsEl) return
-				logsEl.classList.toggle('ansi', isAnsi)
-			})
+			const logsEl = document.getElementById('serial-logs')
+			if (logsEl) logsEl.classList.toggle('ansi', isAnsi)
 		}
 		function openMenu() {
 			combo.classList.add('open')
@@ -1780,38 +1766,28 @@
 		}
 	}
 
-	//日志纯文本(复制/导出用): 单路读主容器；双路合并 A/B 两栏
+	//日志纯文本(复制/导出用): 单容器即含双路
 	function getLogsText() {
-		const containers = []
-		if (SerialHub.mode === 'dual') {
-			const a = document.getElementById('serial-logs-a')
-			const b = document.getElementById('serial-logs-b')
-			if (a) containers.push({ label: SerialHub.getLabelA(), el: a })
-			if (b) containers.push({ label: SerialHub.getLabelB(), el: b })
-		} else {
-			containers.push({ label: '', el: SerialHub.getLogContainer('A') })
-		}
+		const container = SerialHub.getLogContainer('A')
 		let lines = []
-		for (let c = 0; c < containers.length; c++) {
-			const container = containers[c].el
-			if (!container) continue
-			if (containers[c].label) lines.push('--- ' + containers[c].label + ' ---')
-			for (const node of container.children) {
-				if (node.classList.contains('log-row')) {
-					const time = node.querySelector('.log-time')
-					const dir = node.querySelector('.log-dir')
-					const len = node.querySelector('.log-len')
-					const body = node.querySelector('.log-body')
-					let head = []
-					if (time && time.innerText) head.push(time.innerText)
-					if (dir && dir.innerText) head.push(dir.innerText)
-					if (len && len.innerText) head.push(len.innerText)
-					const content = body ? body.innerText : ''
-					lines.push((head.join(' ') + ' ' + content).trim())
-				} else {
-					const t = node.innerText
-					if (t) lines.push(t)
-				}
+		if (!container) return ''
+		for (const node of container.children) {
+			if (node.classList.contains('log-row')) {
+				const time = node.querySelector('.log-time')
+				const dir = node.querySelector('.log-dir')
+				const sess = node.querySelector('.log-sess')
+				const len = node.querySelector('.log-len')
+				const body = node.querySelector('.log-body')
+				let head = []
+				if (time && time.innerText) head.push(time.innerText)
+				if (dir && dir.innerText) head.push(dir.innerText)
+				if (sess && sess.innerText) head.push(sess.innerText)
+				if (len && len.innerText) head.push(len.innerText)
+				const content = body ? body.innerText : ''
+				lines.push((head.join(' ') + ' ' + content).trim())
+			} else {
+				const t = node.innerText
+				if (t) lines.push(t)
 			}
 		}
 		return lines.join('\n')
@@ -1819,11 +1795,8 @@
 	//清空
 	document.getElementById('serial-clear').addEventListener('click', (e) => {
 		const container = SerialHub.getLogContainer('A')
-		container.innerHTML = ''
+		if (container) container.innerHTML = ''
 		selectedLogRow = null
-		if (SerialHub.mode === 'dual') {
-			document.getElementById('serial-logs-b').innerHTML = ''
-		}
 	})
 	//复制
 	document.getElementById('serial-copy').addEventListener('click', (e) => {
@@ -1901,53 +1874,6 @@
 	serialLogs.addEventListener('mouseover', onSkHexHover)
 	serialLogs.addEventListener('scroll', hideSkHover)
 	serialLogs.addEventListener('mouseleave', hideSkHover)
-	// 双路日志容器也绑定相同的悬停/点击事件
-	function bindDualLogEvents() {
-		const logsA = document.getElementById('serial-logs-a')
-		const logsB = document.getElementById('serial-logs-b')
-		if (logsA && !logsA._dualEventsBound) {
-			logsA._dualEventsBound = true
-			logsA.addEventListener('mouseover', onSkHexHover)
-			logsA.addEventListener('scroll', hideSkHover)
-			logsA.addEventListener('mouseleave', hideSkHover)
-			logsA.addEventListener('click', function (e) {
-				if (!e.target || !e.target.closest) return
-				const row = e.target.closest('.log-row')
-				if (!row || !logsA.contains(row)) return
-				const hex = row.getAttribute('data-hex')
-				if (!hex) return
-				const sel = window.getSelection()
-				if (sel && !sel.isCollapsed && sel.toString()) return
-				if (selectedLogRow && selectedLogRow !== row) selectedLogRow.classList.remove('selected')
-				row.classList.add('selected')
-				selectedLogRow = row
-				if (typeof window.expandParsePanel === 'function') window.expandParsePanel()
-				applyProtocolHexInput(hex)
-			})
-		}
-		if (logsB && !logsB._dualEventsBound) {
-			logsB._dualEventsBound = true
-			logsB.addEventListener('mouseover', onSkHexHover)
-			logsB.addEventListener('scroll', hideSkHover)
-			logsB.addEventListener('mouseleave', hideSkHover)
-			logsB.addEventListener('click', function (e) {
-				if (!e.target || !e.target.closest) return
-				const row = e.target.closest('.log-row')
-				if (!row || !logsB.contains(row)) return
-				const hex = row.getAttribute('data-hex')
-				if (!hex) return
-				const sel = window.getSelection()
-				if (sel && !sel.isCollapsed && sel.toString()) return
-				if (selectedLogRow && selectedLogRow !== row) selectedLogRow.classList.remove('selected')
-				row.classList.add('selected')
-				selectedLogRow = row
-				if (typeof window.expandParsePanel === 'function') window.expandParsePanel()
-				applyProtocolHexInput(hex)
-			})
-		}
-	}
-	// 延迟绑定：DOM 可能在后续创建
-	setTimeout(bindDualLogEvents, 0)
 	const protocolHexViewHover = document.getElementById('serial-protocol-hexview')
 	if (protocolHexViewHover) {
 		protocolHexViewHover.addEventListener('mouseover', onSkHexHover)
@@ -1991,10 +1917,16 @@
 				}
 				await closeSerial(sid)
 				SerialHub.setPort(sid, port)
-				// 计算 identity key 并刷新显示
+				// 多 CDC 槽位依赖 getPorts 全集：清缓存后重算
+				_portIdentityCache.clear()
 				const key = await getPortIdentityKey(port)
+				// 另一会话口也要刷新 slot
+				const other = sid === 'A' ? SerialHub.getPort('B') : SerialHub.getPort('A')
+				if (other) await getPortIdentityKey(other)
 				if (!key) {
 					addLogErr(`无法获取设备标识（非 USB 串口），重命名仅本次会话有效`)
+				} else if (key.fingerprint && key.fingerprint.siblingCount > 1) {
+					addLogErr('检测到同型号多串口(CDC)，别名按授权顺序槽位记忆；重插后顺序变化时请重命名')
 				}
 				refreshPortDisplayNames()
 				addLogErr(`串口已选择 (会话 ${sid}${key ? '' : '，无持久标识'})`)
@@ -2337,27 +2269,35 @@
 		return fp
 	}
 
-	/** 生成匹配 keys（去重；弱键 usb:vid:pid 打底；含 labels 整段以便匹配系统显示名） */
+	/** 生成匹配 keys；多 CDC 必须带 slot，禁止仅靠弱键互串 */
 	function buildPortKeys(fp) {
 		const keys = new Set()
 		const n = normalizeLabel
-		if (fp.vid && fp.pid && fp.sn) keys.add('usb:' + fp.vid + ':' + fp.pid + ':sn:' + fp.sn)
+		const slot = (fp.slot != null && fp.slot >= 0) ? fp.slot : null
+		if (fp.vid && fp.pid && slot != null) {
+			keys.add('usb:' + fp.vid + ':' + fp.pid + ':slot:' + slot)
+			if (fp.sn) keys.add('usb:' + fp.vid + ':' + fp.pid + ':sn:' + fp.sn + ':slot:' + slot)
+		}
+		if (fp.vid && fp.pid && fp.sn && slot == null) keys.add('usb:' + fp.vid + ':' + fp.pid + ':sn:' + fp.sn)
 		if (fp.path) keys.add('path:' + String(fp.path).toLowerCase())
 		if (fp.productName && fp.path) keys.add('label:' + n(fp.productName + ' (' + fp.path + ')'))
-		if (fp.productName) keys.add('prod:' + n(fp.productName))
-		if (fp.vid && fp.pid && fp.productName) keys.add('usb:' + fp.vid + ':' + fp.pid + ':prod:' + n(fp.productName))
-		if (fp.vid && fp.pid) keys.add('usb:' + fp.vid + ':' + fp.pid)
-		// getInfo / 系统风格字符串整段：如 "USB Quad_Serial (cu.usbmodem01234567891)"
+		// 弱键仅在「单口」时用于持久；多 slot 时不写弱键，避免 4 CDC 合并成一名
+		if (slot == null || fp.siblingCount === 1) {
+			if (fp.productName) keys.add('prod:' + n(fp.productName))
+			if (fp.vid && fp.pid && fp.productName) keys.add('usb:' + fp.vid + ':' + fp.pid + ':prod:' + n(fp.productName))
+			if (fp.vid && fp.pid) keys.add('usb:' + fp.vid + ':' + fp.pid)
+		}
 		const labels = fp.labels || []
 		for (let i = 0; i < labels.length; i++) {
 			const lab = n(labels[i])
-			if (lab) keys.add('label:' + lab)
+			if (lab && (slot == null || fp.siblingCount === 1)) keys.add('label:' + lab)
 		}
 		return Array.from(keys)
 	}
 
 	function keyScore(key) {
 		if (key.indexOf('path:') === 0) return 100
+		if (key.indexOf(':slot:') !== -1) return 95
 		if (key.indexOf(':sn:') !== -1) return 80
 		if (key.indexOf('label:') === 0) return 60
 		if (key.indexOf('prod:') === 0 || key.indexOf(':prod:') !== -1) return 40
@@ -2374,7 +2314,7 @@
 			return empty
 		}
 		let fp = buildPortFingerprint(port)
-		// WebUSB：仅当同 VID/PID 恰好 1 台已授权设备时取 SN，避免多设备错绑（P2-2）
+		// WebUSB：仅当同 VID/PID 恰好 1 台已授权设备时取 SN，避免多设备错绑
 		if (navigator.usb && navigator.usb.getDevices) {
 			try {
 				const devices = await navigator.usb.getDevices()
@@ -2392,7 +2332,6 @@
 					if (!fp.manufacturerName && d.manufacturerName) fp.manufacturerName = String(d.manufacturerName).trim()
 					if (fp.productName) fp.labels.push(fp.productName)
 				} else if (matches.length > 1) {
-					// 多台同型号：只取 productName（若一致），不取 SN
 					const names = {}
 					for (let i = 0; i < matches.length; i++) {
 						const pn = matches[i].productName ? String(matches[i].productName).trim() : ''
@@ -2403,6 +2342,32 @@
 						fp.productName = uniq[0]
 						fp.labels.push(uniq[0])
 					}
+				}
+			} catch (e) {}
+		}
+		// 同 VID/PID 多 CDC：按 getPorts() 顺序赋 slot（四口复合设备命名互不串）
+		fp.slot = null
+		fp.siblingCount = 1
+		if (fp.vid && fp.pid && navigator.serial && navigator.serial.getPorts) {
+			try {
+				const all = await navigator.serial.getPorts()
+				const siblings = []
+				for (let i = 0; i < all.length; i++) {
+					const p = all[i]
+					if (isBluetoothSerialPort(p)) continue
+					const ofp = buildPortFingerprint(p)
+					if (ofp.vid === fp.vid && ofp.pid === fp.pid) siblings.push(p)
+				}
+				fp.siblingCount = siblings.length || 1
+				if (siblings.length > 1) {
+					let slot = siblings.indexOf(port)
+					if (slot < 0) {
+						// 引用比较失败时按顺序扫
+						for (let i = 0; i < siblings.length; i++) {
+							if (siblings[i] === port) { slot = i; break }
+						}
+					}
+					if (slot >= 0) fp.slot = slot
 				}
 			} catch (e) {}
 		}
@@ -2423,49 +2388,70 @@
 		return ident && ident.keys.length ? ident : null
 	}
 
-	/** 按交集键打分取最高分查别名；无命中返回 null */
+	/** 按交集键打分取最高分；弱键-only 且多条同分 → 歧义不套用（防四 CDC 同名） */
 	function lookupAlias(portKeys) {
 		const entries = loadAliases().entries
 		let best = null
+		let bestCount = 0
 		for (const entry of entries) {
 			if (!entry || !entry.alias || !Array.isArray(entry.keys)) continue
 			let score = 0
 			for (const k of entry.keys) {
 				if (portKeys.indexOf(k) !== -1 && keyScore(k) > score) score = keyScore(k)
 			}
-			if (score > 0 && (!best || score > best.score)) best = { alias: entry.alias, score }
+			if (score <= 0) continue
+			if (!best || score > best.score) {
+				best = { alias: entry.alias, score: score }
+				bestCount = 1
+			} else if (score === best.score) {
+				bestCount++
+			}
 		}
+		// 仅弱键命中且多条并列：不套用
+		if (best && best.score <= 10 && bestCount > 1) return null
+		// 当前口是多 CDC 槽位：必须命中 slot/path，禁止用旧弱键套到所有口
+		const needsSlot = portKeys.some(function (k) { return k.indexOf(':slot:') !== -1 })
+		if (best && needsSlot && best.score < 90) return null
 		return best
 	}
 
-	/** entry 是否算命中端口：共享强键(≥60: path/label/sn) 或 entry 全部 keys 被覆盖（旧 v1 弱键迁移清理） */
+	function isUniquePortKey(k) {
+		return k.indexOf('path:') === 0 || k.indexOf(':slot:') !== -1
+	}
+
+	/** entry 删除/清理：必须共享 path 或 slot；弱键全覆盖仅用于清理旧 v1 弱键 entry */
 	function entryMatchesKeys(entry, portKeys) {
 		for (const k of entry.keys) {
-			if (portKeys.indexOf(k) !== -1 && keyScore(k) >= 60) return true
+			if (portKeys.indexOf(k) !== -1 && isUniquePortKey(k)) return true
 		}
-		return entry.keys.every(function (k) { return portKeys.indexOf(k) !== -1 })
+		// 旧 v1 弱键 entry：keys 全是弱键且被当前 port 键覆盖
+		const onlyWeak = entry.keys.every(function (k) { return keyScore(k) <= 40 })
+		if (onlyWeak) return entry.keys.every(function (k) { return portKeys.indexOf(k) !== -1 })
+		return false
 	}
 
-	/** 合并目标判定：共享强键才算同一设备；仅当端口自身无强键时才允许弱键全覆盖合并（防同适配器多口互覆盖） */
+	/** 合并：仅 path/slot 共享才算同一物理口；禁止 prod/label/vidpid 合并（四 CDC） */
 	function entryIsSameDevice(entry, portKeys) {
 		for (const k of entry.keys) {
-			if (portKeys.indexOf(k) !== -1 && keyScore(k) >= 60) return true
+			if (portKeys.indexOf(k) !== -1 && isUniquePortKey(k)) return true
 		}
-		for (const k of portKeys) {
-			if (keyScore(k) >= 60) return false
-		}
-		return entry.keys.every(function (k) { return portKeys.indexOf(k) !== -1 })
+		return false
 	}
 
-	/** 无别名时的默认显示名：productName (path) → productName · VID:PID → path → Vendor/Product */
+	/** 无别名时的默认显示名；多 CDC 时追加 #n */
 	function defaultPortDisplayName(fp) {
 		fp = fp || {}
 		const p = fp.productName
-		if (p && fp.path) return p + ' (' + fp.path + ')'
-		if (p && fp.vid && fp.pid) return p + ' · 0x' + fp.vid + ':0x' + fp.pid
-		if (p) return p
-		if (fp.path) return fp.path
-		return 'Vendor: ' + (fp.vid ? '0x' + fp.vid : '未知') + ', Product: ' + (fp.pid ? '0x' + fp.pid : '未知')
+		let base
+		if (p && fp.path) base = p + ' (' + fp.path + ')'
+		else if (p && fp.vid && fp.pid) base = p + ' · 0x' + fp.vid + ':0x' + fp.pid
+		else if (p) base = p
+		else if (fp.path) base = fp.path
+		else base = 'Vendor: ' + (fp.vid ? '0x' + fp.vid : '未知') + ', Product: ' + (fp.pid ? '0x' + fp.pid : '未知')
+		if (fp.siblingCount > 1 && fp.slot != null && fp.slot >= 0) {
+			base += ' #' + (fp.slot + 1)
+		}
+		return base
 	}
 
 	/** 获取端口显示名（同步：持久别名 → 会话内存别名 → 默认显示名） */
@@ -2981,10 +2967,38 @@
 			container.scrollTop = want
 		}
 	}
-	//统一的日志追加入口:裁剪 + 自动滚动
+	//统一的日志插入:按 data-ts 时间序插入(双路关键) + 裁剪整行 + 自动滚动
 	function appendLogNode(node, sid) {
 		const container = SerialHub.getLogContainer(sid)
-		container.append(node)
+		if (!container) return
+		const ts = parseInt(node.getAttribute('data-ts') || '0', 10) || 0
+		const sidOrd = (node.getAttribute('data-sid') === 'B') ? 1 : 0
+		if (ts > 0 && container.childElementCount > 0) {
+			// 从尾部向前找插入点，保持到达时间有序；同 ms 时 A 在 B 前
+			let inserted = false
+			for (let i = container.children.length - 1; i >= 0; i--) {
+				const sib = container.children[i]
+				const sts = parseInt(sib.getAttribute('data-ts') || '0', 10) || 0
+				if (sts < ts) {
+					if (sib.nextSibling) container.insertBefore(node, sib.nextSibling)
+					else container.appendChild(node)
+					inserted = true
+					break
+				}
+				if (sts === ts) {
+					const sOrd = (sib.getAttribute('data-sid') === 'B') ? 1 : 0
+					if (sidOrd >= sOrd) {
+						if (sib.nextSibling) container.insertBefore(node, sib.nextSibling)
+						else container.appendChild(node)
+						inserted = true
+						break
+					}
+				}
+			}
+			if (!inserted) container.insertBefore(node, container.firstChild)
+		} else {
+			container.appendChild(node)
+		}
 		trimLogRows(container)
 		if (toolOptions.autoScroll) {
 			container.scrollTop = container.scrollHeight - container.clientHeight
@@ -3046,15 +3060,26 @@
 		}
 		//行尾多余的换行会撑出一条空行
 		newmsg = newmsg.replace(/<br\/?>$/i, '')
-		let time = toolOptions.showTime ? formatDate(atTime || new Date()) : ''
+		const when = atTime || new Date()
+		const ts = when.getTime ? when.getTime() : Date.now()
+		let time = toolOptions.showTime ? formatDate(when) : ''
 		let row = document.createElement('div')
 		row.className = 'log-row'
 		row.setAttribute('data-dir', isReceive ? 'rx' : 'tx')
 		row.setAttribute('data-hex', dataHex.join(' '))
-		// 双路时在方向标记显示来源
-		const dirLabel = (SerialHub.mode === 'dual' && sid) ? (form + ' ' + sid) : form
+		row.setAttribute('data-ts', String(ts))
+		row.setAttribute('data-sid', sid || 'A')
+		// 双路：方向旁会话标签；整行用 data-sid 分色
+		const sess = SerialHub.mode === 'dual'
+			? (sid === 'B' ? SerialHub.getLabelB() : SerialHub.getLabelA())
+			: ''
+		const dirLabel = form
+		const sessHtml = sess
+			? '<span class="log-sess">' + HTMLEncode(sess) + '</span>'
+			: ''
 		row.innerHTML = '<span class="log-time">' + time + '</span>' +
 			'<span class="log-dir">' + dirLabel + '</span>' +
+			sessHtml +
 			'<span class="log-len">' + data.length + 'B</span>' +
 			'<span class="log-body">' + newmsg + '</span>'
 		appendLogNode(row, sid)
@@ -3115,23 +3140,19 @@
 			.replace(/"/g, '&quot;')
 			.replace(/'/g, '&#39;')
 	}
-	//系统日志
+	//系统日志（单容器）
 	function addLogErr(msg) {
-		let time = toolOptions.showTime ? formatDate(new Date()) : ''
+		const when = new Date()
+		let time = toolOptions.showTime ? formatDate(when) : ''
 		let row = document.createElement('div')
 		row.className = 'log-row'
 		row.setAttribute('data-dir', 'sys')
+		row.setAttribute('data-ts', String(when.getTime()))
+		row.setAttribute('data-sid', 'SYS')
 		row.innerHTML = '<span class="log-time">' + time + '</span>' +
 			'<span class="log-dir">!</span>' +
 			'<span class="log-body text-danger">' + msg + '</span>'
-		// 系统日志同时写入两个容器（双路时）或单容器（单路时）
-		if (SerialHub.mode === 'dual') {
-			const rowB = row.cloneNode(true)
-			appendLogNode(row, 'A')
-			appendLogNode(rowB, 'B')
-		} else {
-			appendLogNode(row, 'A')
-		}
+		appendLogNode(row, 'A')
 	}
 
 	//轻量 toast 提示(非确认框)
@@ -3601,50 +3622,17 @@
 		document.getElementById('serial-mode-single').classList.remove('active')
 		document.getElementById('serial-mode-dual').classList.add('active')
 
-		// 隐藏单路控件，显示双路控件
+		// 隐藏单路控件，显示双路控件（参数 dropdown 在共享区，始终可见）
 		const singleCtrl = document.getElementById('serial-single-ctrl')
 		const dualCtrl = document.getElementById('serial-dual-ctrl')
 		if (singleCtrl) singleCtrl.style.display = 'none'
 		if (dualCtrl) dualCtrl.style.display = ''
 
-		// 同步参数摘要文案到双路按钮
-		const srcSummary = document.getElementById('serial-params-summary-text')
-		const dstSummary = document.getElementById('serial-params-summary-text-dual')
-		if (srcSummary && dstSummary) {
-			dstSummary.textContent = srcSummary.textContent
-			// 持续同步
-			if (!SerialHub._summaryObserver) {
-				SerialHub._summaryObserver = new MutationObserver(function () {
-					dstSummary.textContent = srcSummary.textContent
-				})
-				SerialHub._summaryObserver.observe(srcSummary, { characterData: true, childList: true, subtree: true })
-			}
+		// 日志始终 #serial-logs；标记 dual 以便 CSS 强化分色
+		if (serialLogs) {
+			serialLogs.classList.add('is-dual')
+			serialLogs.style.display = ''
 		}
-		// 双路参数按钮点击：触发单路参数浮层（Bootstrap dropdown）
-		const dualParamsBtn = document.getElementById('serial-params-summary-dual')
-		if (dualParamsBtn && !dualParamsBtn._dualParamsBound) {
-			dualParamsBtn._dualParamsBound = true
-			dualParamsBtn.addEventListener('click', function () {
-				const singleToggle = document.getElementById('serial-params-summary')
-				if (singleToggle && typeof bootstrap !== 'undefined') {
-					const dd = bootstrap.Dropdown.getInstance(singleToggle)
-					if (dd) dd.toggle()
-				}
-			})
-		}
-
-		// 切换日志区
-		const singleLogs = document.getElementById('serial-logs')
-		const dualLogs = document.getElementById('serial-dual-logs')
-		if (singleLogs) singleLogs.style.display = 'none'
-		if (dualLogs) dualLogs.style.display = 'flex'
-
-		// 同步 ansi 类
-		const isAnsi = String(toolOptions.logType).includes('ansi')
-		const logsA = document.getElementById('serial-logs-a')
-		const logsB = document.getElementById('serial-logs-b')
-		if (logsA) logsA.classList.toggle('ansi', isAnsi)
-		if (logsB) logsB.classList.toggle('ansi', isAnsi)
 
 		// 更新按钮文案
 		updateOpenButton('A')
@@ -3653,8 +3641,6 @@
 		// 更新状态
 		serialStatuChange(SerialHub.isOpen('A'), 'A')
 		serialStatuChange(SerialHub.isOpen('B'), 'B')
-
-		updateDualLogLabels()
 
 		// 刷新端口显示名
 		refreshPortDisplayNames()
@@ -3682,24 +3668,18 @@
 		if (singleCtrl) singleCtrl.style.display = ''
 		if (dualCtrl) dualCtrl.style.display = 'none'
 
-		const singleLogs = document.getElementById('serial-logs')
-		const dualLogs = document.getElementById('serial-dual-logs')
-		if (singleLogs) singleLogs.style.display = ''
-		if (dualLogs) dualLogs.style.display = 'none'
+		if (serialLogs) {
+			serialLogs.classList.remove('is-dual')
+			serialLogs.style.display = ''
+		}
 
 		updateOpenButton('A')
 		serialStatuChange(SerialHub.isOpen('A'), 'A')
 		refreshPortDisplayNames()
 	}
 
-	// 更新双路日志面板标签
 	function updateDualLogLabels() {
-		const labelA = SerialHub.getLabelA()
-		const labelB = SerialHub.getLabelB()
-		const labelElA = document.getElementById('dual-log-label-a')
-		const labelElB = document.getElementById('dual-log-label-b')
-		if (labelElA) labelElA.textContent = labelA
-		if (labelElB) labelElB.textContent = labelB
+		// 合流日志无独立栏标题；保留空函数避免旧调用报错
 	}
 
 	// 模式切换按钮
