@@ -1946,8 +1946,13 @@
 		applyProtocolHexInput(hex)
 	})
 
+	function isPortMetaClick(e) {
+		return !!(e && e.target && e.target.closest && e.target.closest('.port-rename-btn, .port-alias-clear-btn'))
+	}
+
 	//选择串口（单路模式用）
-	document.getElementById('serial-select-port').addEventListener('click', async () => {
+	document.getElementById('serial-select-port').addEventListener('click', async (e) => {
+		if (isPortMetaClick(e)) return
 		await selectPortFor('A')
 	})
 
@@ -2743,7 +2748,7 @@
 		return !!(ident && ident.keys.length)
 	}
 
-	/** 更新端口选择按钮文案（单路：选择串口；双路：标签 · 设备名） */
+	/** 更新端口选择按钮：无口显示「选择」；有口显示设备名 + 改名/清除（与状态区合二为一） */
 	function updatePortButtonDisplay(sid, port) {
 		let btnId = null
 		if (SerialHub.mode === 'dual') {
@@ -2756,30 +2761,20 @@
 		if (!port) {
 			const def = SerialHub.mode === 'dual' ? '选择' : '选择串口'
 			btn.innerHTML = '<i class="bi bi-usb-plug"></i> ' + def
-			btn.title = ''
+			btn.title = '选择串口'
 			return
 		}
 		const name = getPortDisplayName(port)
-		const label = SerialHub.mode === 'dual' ? (sid === 'A' ? SerialHub.getLabelA() : SerialHub.getLabelB()) : ''
-		const text = SerialHub.mode === 'dual' ? (label + ' · ' + name) : name
-		// 有别名时 tooltip 附带默认指纹摘要
-		btn.title = getPortAlias(port) ? name + '（' + getPortDefaultName(port) + '）' : name
-		btn.innerHTML = '<i class="bi bi-usb-plug"></i> ' + HTMLEncode(text)
+		btn.title = (getPortAlias(port) ? name + '（' + getPortDefaultName(port) + '）' : name) + ' · 点击换设备，铅笔改名'
+		btn.innerHTML = '<i class="bi bi-usb-plug"></i><span class="serial-port-name">' + HTMLEncode(name) + '</span>' + renderStatusButtons(sid, port)
 	}
 
-	/** 刷新所有 UI 中的端口显示名 */
+	/** 刷新选口按钮上的设备名/别名 */
 	function refreshPortDisplayNames() {
-		// 双路状态区
 		if (SerialHub.mode === 'dual') {
-			const portA = SerialHub.getPort('A')
-			const portB = SerialHub.getPort('B')
-			updateDualPortDisplay('A', portA)
-			updateDualPortDisplay('B', portB)
-			updatePortButtonDisplay('A', portA)
-			updatePortButtonDisplay('B', portB)
+			updatePortButtonDisplay('A', SerialHub.getPort('A'))
+			updatePortButtonDisplay('B', SerialHub.getPort('B'))
 		} else {
-			// 单路状态
-			updateSinglePortDisplay(serialPort)
 			updatePortButtonDisplay('A', serialPort)
 		}
 	}
@@ -4009,7 +4004,8 @@
 	// 双路：会话 A 端口选择
 	const dualSelectPortA = document.getElementById('serial-select-port-a')
 	if (dualSelectPortA) {
-		dualSelectPortA.addEventListener('click', async function () {
+		dualSelectPortA.addEventListener('click', async function (e) {
+			if (isPortMetaClick(e)) return
 			if (SerialHub.isOpening('A')) return
 			await selectPortFor('A')
 		})
@@ -4018,7 +4014,8 @@
 	// 双路：会话 B 端口选择
 	const dualSelectPortB = document.getElementById('serial-select-port-b')
 	if (dualSelectPortB) {
-		dualSelectPortB.addEventListener('click', async function () {
+		dualSelectPortB.addEventListener('click', async function (e) {
+			if (isPortMetaClick(e)) return
 			if (SerialHub.isOpening('B')) return
 			await selectPortFor('B')
 		})
@@ -4122,41 +4119,13 @@
 
 	// ===== 端口别名 UI =====
 
-	/** 状态区按钮组：铅笔(重命名) + 有别名时显示清除 */
+	/** 选口按钮内的改名/清除（用 span 避免 button 套 button） */
 	function renderStatusButtons(sid, port) {
-		let html = '<button class="port-rename-btn" title="重命名设备（本地保存，留空=删除）" data-port-sid="' + sid + '"><i class="bi bi-pencil"></i></button>'
+		let html = '<span class="port-rename-btn" role="button" title="重命名设备（本地保存，留空=删除）" data-port-sid="' + sid + '"><i class="bi bi-pencil"></i></span>'
 		if (getPortAlias(port)) {
-			html += '<button class="port-alias-clear-btn" title="清除别名" data-port-sid="' + sid + '"><i class="bi bi-x"></i></button>'
+			html += '<span class="port-alias-clear-btn" role="button" title="清除别名" data-port-sid="' + sid + '"><i class="bi bi-x"></i></span>'
 		}
 		return html
-	}
-
-	/** 更新单路模式端口显示 */
-	function updateSinglePortDisplay(port) {
-		const statusEl = document.getElementById('serial-status')
-		if (!statusEl || !port) return
-		const name = getPortDisplayName(port)
-		const indicator = statusEl.querySelector('.serial-status-indicator')
-		if (indicator) {
-			const textEl = indicator.querySelector('.serial-status-text')
-			if (textEl) {
-				textEl.innerHTML = HTMLEncode(name) + ' ' + renderStatusButtons('A', port)
-			}
-		}
-	}
-
-	/** 更新双路模式会话端口显示 */
-	function updateDualPortDisplay(sid, port) {
-		const statusEl = document.getElementById(sid === 'A' ? 'serial-status-a' : 'serial-status-b')
-		if (!statusEl || !port) return
-		const name = getPortDisplayName(port)
-		const indicator = statusEl.querySelector('.serial-status-indicator')
-		if (indicator) {
-			const textEl = indicator.querySelector('.serial-status-text')
-			if (textEl) {
-				textEl.innerHTML = HTMLEncode(name) + ' ' + renderStatusButtons(sid, port)
-			}
-		}
 	}
 
 	/** 启动重命名交互：port 对象和 sid */
@@ -4201,20 +4170,11 @@
 		})
 	})
 
-	// status 文字每次更新后挂上重命名按钮（serialStatuChange 调用此扩展）
+	// 状态区只表达连接态；设备名/改名已合并进选口按钮
 	const _origSerialStatuChange = serialStatuChange
 	serialStatuChange = function (statu, sid) {
 		_origSerialStatuChange(statu, sid)
-		// 已选口就显示「设备名 + 铅笔(+清除)」，无论连接与否（圆点颜色表达连接态）
-		// connecting 期间保留"正在连接…"文案，不覆盖成设备名
-		const port = SerialHub.getPort(sid)
-		if (port && statu !== 'connecting') {
-			if (SerialHub.mode === 'dual') {
-				updateDualPortDisplay(sid, port)
-			} else {
-				updateSinglePortDisplay(port)
-			}
-		}
+		if (statu !== 'connecting') refreshPortDisplayNames()
 	}
 
 	// 初始化：为已授权端口预计算 identity（跳过蓝牙口）

@@ -2584,6 +2584,19 @@ hr {
   padding: 5px 12px;
 }
 
+#serial-connect-bar .serial-port-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+}
+
+#serial-connect-bar .serial-port-btn .serial-port-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 #serial-connect-bar .serial-status-indicator {
   padding: 5px 10px;
   white-space: nowrap;
@@ -5776,16 +5789,19 @@ body.blu-wave-fullscreen-open {
   white-space: nowrap;
 }
 
-/* 选中后按钮/状态会显示完整设备名，限宽省略保持单行紧凑 */
+/* 选口按钮含设备名+改名，名省略、图标不被裁切 */
 .dual-port-btn {
-  max-width: 110px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: 168px;
+  overflow: visible;
+}
+
+.dual-port-btn .serial-port-name {
+  max-width: 88px;
 }
 
 .dual-status {
-  min-width: 76px;
-  max-width: 220px;
+  min-width: 68px;
+  max-width: 96px;
 }
 
 .dual-status .serial-status-indicator {
@@ -5944,9 +5960,10 @@ body.blu-wave-fullscreen-open {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   width: 18px;
   height: 18px;
-  margin-left: 4px;
+  margin-left: 2px;
   padding: 0;
   border: none;
   border-radius: 4px;
