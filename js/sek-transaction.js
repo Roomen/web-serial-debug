@@ -242,38 +242,44 @@
 	async function sendAndWait(opts) {
 		opts = opts || {}
 		const timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 5000
-		const built = buildDown(opts.buildOpts || {})
-		const expectFunc = opts.expectFunc
-		const matchSeq = !!opts.matchSeq
-		const extra = opts.match
-		const acceptProcessing = opts.acceptProcessing !== false
+		// 事务等待周期钉扎主发口: 请求与应答落在同一设备
+		serialApi.pinSession(serialApi.getActiveSendSid())
+		try {
+			const built = buildDown(opts.buildOpts || {})
+			const expectFunc = opts.expectFunc
+			const matchSeq = !!opts.matchSeq
+			const extra = opts.match
+			const acceptProcessing = opts.acceptProcessing !== false
 
-		const matchFn = function (frame) {
-			if (frame.dir !== 'up') return false
-			const fv = funcValue(frame)
-			if (expectFunc != null && fv !== expectFunc) return false
-			if (matchSeq) {
-				const fs = frameSeq(frame)
-				if (fs != null && fs !== (built.seq & 0xffff)) return false
+			const matchFn = function (frame) {
+				if (frame.dir !== 'up') return false
+				const fv = funcValue(frame)
+				if (expectFunc != null && fv !== expectFunc) return false
+				if (matchSeq) {
+					const fs = frameSeq(frame)
+					if (fs != null && fs !== (built.seq & 0xffff)) return false
+				}
+				if (expectFunc === 0x81 || expectFunc === 0x91) {
+					const r11 = tag11Result(frame)
+					if (r11 === 0 && acceptProcessing) return false
+				}
+				if (typeof extra === 'function' && !extra(frame)) return false
+				return true
 			}
-			if (expectFunc === 0x81 || expectFunc === 0x91) {
-				const r11 = tag11Result(frame)
-				if (r11 === 0 && acceptProcessing) return false
-			}
-			if (typeof extra === 'function' && !extra(frame)) return false
-			return true
-		}
 
-		const p = waitFor(matchFn, timeoutMs)
-		await serialApi.writeData(built.frame)
-		const res = await p
-		return {
-			tx: built.frame,
-			seq: built.seq,
-			frame: res.frame,
-			raw: res.raw,
-			tag11: tag11Result(res.frame),
-			func: funcValue(res.frame)
+			const p = waitFor(matchFn, timeoutMs)
+			await serialApi.writeData(built.frame)
+			const res = await p
+			return {
+				tx: built.frame,
+				seq: built.seq,
+				frame: res.frame,
+				raw: res.raw,
+				tag11: tag11Result(res.frame),
+				func: funcValue(res.frame)
+			}
+		} finally {
+			serialApi.unpinSession()
 		}
 	}
 

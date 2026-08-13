@@ -161,6 +161,7 @@
 			return
 		}
 		window.serialApi.suppressParse = true
+		serialApi.pinSession(serialApi.getActiveSendSid())
 		try {
 			const resp = await sendAndWait(PCP.buildQueryVersionRequest(), PCPMessageCode.QUERY_VERSION, 5000)
 			const res = PCP.parseQueryVersionResponse(resp)
@@ -172,6 +173,7 @@
 		} catch (e) {
 			log('查询版本超时: ' + e.message, 'error')
 		} finally {
+			serialApi.unpinSession()
 			window.serialApi.suppressParse = false
 		}
 	})
@@ -199,6 +201,8 @@
 		running = true
 		stopFlag = false
 		window.serialApi.suppressParse = true
+		// 升级事务钉扎主发口: 期间切主发口被拦, 下发与 RX 等待稳定在同一设备
+		serialApi.pinSession(serialApi.getActiveSendSid())
 		el.start.disabled = true
 		el.stop.disabled = false
 		el.query.disabled = true
@@ -207,6 +211,7 @@
 			await runUpgrade()
 		} finally {
 			running = false
+			serialApi.unpinSession()
 			window.serialApi.suppressParse = false
 			el.start.disabled = false
 			el.stop.disabled = true

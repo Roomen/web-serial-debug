@@ -121,9 +121,15 @@
 		const timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 3000
 		if (!opts.frame) throw new Error('缺少待发送帧')
 		if (!serialApi.isOpen()) throw new Error('串口未打开')
-		const p = waitFor(opts.match, timeoutMs)
-		await serialApi.writeData(opts.frame)
-		return await p
+		// 事务等待周期钉扎主发口: 请求与应答落在同一设备
+		serialApi.pinSession(serialApi.getActiveSendSid())
+		try {
+			const p = waitFor(opts.match, timeoutMs)
+			await serialApi.writeData(opts.frame)
+			return await p
+		} finally {
+			serialApi.unpinSession()
+		}
 	}
 
 	function clearBuffer() { recvBuf = [] }

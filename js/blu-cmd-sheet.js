@@ -60,7 +60,7 @@
 							'<select id="blu-cmd-preset" class="form-select form-select-sm" title="从快捷发送列表选择">' +
 								'<option value="">-- 选择发送内容 --</option>' +
 							'</select>' +
-							'<button class="btn btn-sm btn-primary blu-cmd-send-btn" id="blu-cmd-send-btn" title="发送选中内容">下发</button>' +
+							'<button class="btn btn-sm btn-primary blu-cmd-send-btn" id="blu-cmd-send-btn" title="发送选中内容">发送</button>' +
 						'</div>' +
 						'<div class="blu-cmd-row blu-cmd-custom-row">' +
 							'<div class="blu-cmd-custom-input-wrap">' +
@@ -124,6 +124,13 @@
 				setOpen(false)
 			}
 		}, true)
+
+		// CRLF 开关写全局 addCRLF（与串口页共用同一偏好，两页联动）
+		crlfCheck.addEventListener('change', function () {
+			if (window.serialApi && typeof window.serialApi.setAddCRLF === 'function') {
+				window.serialApi.setAddCRLF(crlfCheck.checked)
+			}
+		})
 	}
 
 	function observeFullscreen() {
@@ -168,6 +175,10 @@
 		hasSerialEl.hidden = !connected
 		resultEl.innerHTML = ''
 		resultEl.className = 'blu-cmd-result'
+		// CRLF 开关绑定全局 addCRLF（与串口页共用同一偏好）
+		if (crlfCheck && window.serialApi && typeof window.serialApi.getAddCRLF === 'function') {
+			crlfCheck.checked = !!window.serialApi.getAddCRLF()
+		}
 		if (connected) populatePresets()
 	}
 
@@ -247,14 +258,7 @@
 			} else {
 				bytes = new TextEncoder().encode(content)
 			}
-			// 与串口页 writeData 一致：TEXT/HEX 转换后的字节末尾追加 0D 0A
-			if (crlfCheck && crlfCheck.checked) {
-				const withCrlf = new Uint8Array(bytes.length + 2)
-				withCrlf.set(bytes)
-				withCrlf[bytes.length] = 0x0d
-				withCrlf[bytes.length + 1] = 0x0a
-				bytes = withCrlf
-			}
+			// CRLF 不再在此追加: 串口层 writeData 统一按全局 addCRLF 追加（避免双重 0D 0A）
 			await window.serialApi.writeData(bytes)
 			showResult('发送成功', 'ok')
 		} catch (err) {
