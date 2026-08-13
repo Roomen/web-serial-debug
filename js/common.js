@@ -2047,13 +2047,37 @@
 	}
 
 	//页面销毁时释放串口句柄(关键修复: 上一 document 仍握着 OS 句柄时, 刷新后立刻 open 必报 NetworkError)
+	//先把 A/B 置未打开再 release: 同 port 双路时两边的"对方仍 open"保护才不会再跳过 close
 	//fire-and-forget, 不 await 完整关闭链; 不清 wantOpen, 刷新后仍按意图自动重连
 	function releasePortOnExit() {
+		SerialHub.setOpen('A', false)
+		SerialHub.setOpen('B', false)
 		releasePort('A')
 		releasePort('B')
 	}
 	window.addEventListener('pagehide', releasePortOnExit)
 	window.addEventListener('beforeunload', releasePortOnExit)
+
+	//bfcache 返回: pagehide 已把底层口释放, 状态/按钮与真实口状态对齐, 再按打开意图补重连
+	window.addEventListener('pageshow', function (e) {
+		if (!e.persisted) return
+		serialStatuChange(false, 'A')
+		serialStatuChange(false, 'B')
+		updateOpenButton('A')
+		updateOpenButton('B')
+		//普通刷新的 pageshow 不再开(reloadAutoReconnect 负责); 仅 bfcache 恢复时按意图补开
+		function reopenIfWanted(sid) {
+			if (sid === 'B' && SerialHub.mode !== 'dual') return
+			if (!getSerialWantOpen(sid) || SerialHub.isManualClose(sid)) return
+			if (!SerialHub.getPort(sid) || SerialHub.isOpening(sid)) return
+			SerialHub.setOpening(sid, true)
+			openSerial(sid, { reason: 'reload' }).finally(function () {
+				SerialHub.setOpening(sid, false)
+			})
+		}
+		reopenIfWanted('A')
+		reopenIfWanted('B')
+	})
 
 	//关闭串口(无论 serialOpen 标志如何都尽量释放 reader/port，避免锁泄漏导致再次打开失败)
 	async function closeSerial(sid) {
@@ -2712,8 +2736,12 @@
 		}
 		if (!sid) return
 		//未主动关闭时，设备重插后自动重连(hotplug: 失败只打日志不弹窗)
+		//不可拆事务: setOpening 必须在 openSerial 第一个 await 之前同步完成, 防两个 connect/用户点击并发 open
 		if (!SerialHub.isManualClose(sid) && !SerialHub.isOpening(sid) && SerialHub.getPort(sid)) {
-			openSerial(sid, { reason: 'hotplug' })
+			SerialHub.setOpening(sid, true)
+			openSerial(sid, { reason: 'hotplug' }).finally(function () {
+				SerialHub.setOpening(sid, false)
+			})
 		}
 	})
 	navigator.serial.addEventListener('disconnect', async (e) => {
@@ -2890,18 +2918,31 @@
 		}
 
 		if ((streamError || streamClosed) && SerialHub.isOpen(sid)) {
-			//先释放底层句柄(close 无效也调, 脏状态靠下次 open 前 releasePort 兑底)再置未连接:
-			//否则 OS 句柄泄漏, 下次 open 报 NetworkError
-			await releasePort(sid)
-			//释放期间可能被用户/热插拔重新打开(新 reader 已就位), 不得再破坏新连接
-			if (!SerialHub.isOpen(sid) || SerialHub.getReader(sid)) return
-			SerialHub.setOpen(sid, false)
-			serialStatuChange(false, sid)
-			updateOpenButton(sid)
-			if (!SerialHub.isManualClose(sid)) {
-				addLogErr(streamError
-					? '读取中断，可重新打开串口或等待设备重连'
-					: `串口读取流已关闭(${sid})，可重新打开串口`)
+			//先置未打开再释放(不再先 release 后 setOpen): isOpen 窗口期 hotplug 不再被吞, 按钮不卡在「关闭」
+			if (SerialHub.isOpening(sid)) {
+				SerialHub.setOpen(sid, false)
+				return
+			}
+			SerialHub.setOpening(sid, true)
+			try {
+				SerialHub.setOpen(sid, false)
+				serialStatuChange(false, sid)
+				updateOpenButton(sid)
+				await releasePort(sid)
+				if (!SerialHub.isManualClose(sid)) {
+					addLogErr(streamError
+						? '读取中断，可重新打开串口或等待设备重连'
+						: `串口读取流已关闭(${sid})，可重新打开串口`)
+				}
+			} finally {
+				SerialHub.setOpening(sid, false)
+			}
+			//收尾期间 connect 可能因 isOpening 被跳过；设备仍在则补一次热插拔重开
+			if (!SerialHub.isManualClose(sid) && !SerialHub.isOpen(sid) && !SerialHub.isOpening(sid) && SerialHub.getPort(sid)) {
+				SerialHub.setOpening(sid, true)
+				openSerial(sid, { reason: 'hotplug' }).finally(function () {
+					SerialHub.setOpening(sid, false)
+				})
 			}
 		}
 	}
