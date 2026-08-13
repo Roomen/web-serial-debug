@@ -2584,6 +2584,19 @@ hr {
   padding: 5px 12px;
 }
 
+#serial-connect-bar .serial-port-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+}
+
+#serial-connect-bar .serial-port-btn .serial-port-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 #serial-connect-bar .serial-status-indicator {
   padding: 5px 10px;
   white-space: nowrap;
@@ -2985,6 +2998,12 @@ hr {
   border-color: var(--border-color);
 }
 
+.serial-status-indicator.connecting {
+  background: var(--warning-light, rgba(255, 193, 7, 0.12));
+  color: var(--warning, #f0a020);
+  border-color: color-mix(in srgb, var(--warning, #f0a020) 30%, transparent);
+}
+
 .serial-status-dot {
   width: 9px;
   height: 9px;
@@ -3000,6 +3019,12 @@ hr {
 
 .serial-status-indicator.disconnected .serial-status-dot {
   background: var(--text-muted);
+}
+
+.serial-status-indicator.connecting .serial-status-dot {
+  background: var(--warning, #f0a020);
+  box-shadow: 0 0 6px rgba(240, 160, 32, 0.5);
+  animation: serial-dot-pulse 1s ease-in-out infinite;
 }
 
 @keyframes serial-dot-pulse {
@@ -3944,11 +3969,18 @@ hr {
   background: var(--bg-tooltip);
   color: var(--text-inverse);
   font-size: 0.8125rem;
-  line-height: 1.3;
+  line-height: 1.4;
+  max-width: min(560px, calc(100vw - 32px));
+  text-align: center;
   box-shadow: var(--shadow-md);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.18s ease, transform 0.18s ease, background-color var(--transition-normal), color var(--transition-normal);
+}
+
+.serial-toast.is-error {
+  background: var(--danger);
+  color: #fff;
 }
 
 .serial-toast.is-show {
@@ -5757,16 +5789,19 @@ body.blu-wave-fullscreen-open {
   white-space: nowrap;
 }
 
-/* 选中后按钮/状态会显示完整设备名，限宽省略保持单行紧凑 */
+/* 选口按钮含设备名+改名，名省略、图标不被裁切 */
 .dual-port-btn {
-  max-width: 110px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: 168px;
+  overflow: visible;
+}
+
+.dual-port-btn .serial-port-name {
+  max-width: 88px;
 }
 
 .dual-status {
-  min-width: 76px;
-  max-width: 220px;
+  min-width: 68px;
+  max-width: 96px;
 }
 
 .dual-status .serial-status-indicator {
@@ -5799,11 +5834,41 @@ body.blu-wave-fullscreen-open {
   white-space: nowrap;
 }
 
-#serial-active-send {
-  width: 56px;
-  padding: 3px 6px;
+/* 主发口 pill 组：替代原窄 select，与 .serial-mode-toggle 同款样式 */
+.dual-send-toggle {
+  display: inline-flex;
+  background: var(--bg-surface-hover);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.dual-send-btn {
+  padding: 3px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
   font-size: 0.7rem;
   font-weight: 700;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.dual-send-btn + .dual-send-btn {
+  border-left: 1px solid var(--border-color);
+}
+
+.dual-send-btn:hover {
+  color: var(--text-primary);
+  background: var(--accent-light);
+}
+
+.dual-send-btn.active {
+  color: #fff;
+  background: var(--accent);
 }
 
 /* Dual Log Panels */
@@ -5895,9 +5960,10 @@ body.blu-wave-fullscreen-open {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   width: 18px;
   height: 18px;
-  margin-left: 4px;
+  margin-left: 2px;
   padding: 0;
   border: none;
   border-radius: 4px;

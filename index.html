@@ -245,10 +245,10 @@
                         <div class="dual-session-row">
                             <input class="dual-session-label" id="serial-session-a-label" value="TX" maxlength="8" title="会话 A 标签（可编辑）">
                             <button class="btn btn-outline-secondary serial-port-btn dual-port-btn" id="serial-select-port-a">
-                                <i class="bi bi-usb-plug"></i> 选择A
+                                <i class="bi bi-usb-plug"></i> 选择
                             </button>
                             <button class="btn btn-primary serial-open-btn dual-open-btn" id="serial-open-or-close-a">
-                                <i class="bi bi-play-circle"></i> 打开A
+                                <i class="bi bi-plug"></i> 连接
                             </button>
                             <div class="dual-status" id="serial-status-a">
                                 <div class="serial-status-indicator disconnected">
@@ -261,10 +261,10 @@
                         <div class="dual-session-row">
                             <input class="dual-session-label" id="serial-session-b-label" value="RX" maxlength="8" title="会话 B 标签（可编辑）">
                             <button class="btn btn-outline-secondary serial-port-btn dual-port-btn" id="serial-select-port-b">
-                                <i class="bi bi-usb-plug"></i> 选择B
+                                <i class="bi bi-usb-plug"></i> 选择
                             </button>
                             <button class="btn btn-primary serial-open-btn dual-open-btn" id="serial-open-or-close-b">
-                                <i class="bi bi-play-circle"></i> 打开B
+                                <i class="bi bi-plug"></i> 连接
                             </button>
                             <div class="dual-status" id="serial-status-b">
                                 <div class="serial-status-indicator disconnected">
@@ -276,10 +276,10 @@
                         <!-- 主发口（与 A/B 同行靠右） -->
                         <div class="dual-active-send">
                             <span class="dual-active-send-label">主发:</span>
-                            <select class="form-select form-select-sm" id="serial-active-send" title="选择主发送口">
-                                <option value="A" selected>A</option>
-                                <option value="B">B</option>
-                            </select>
+                            <div class="dual-send-toggle" id="serial-active-send" role="group" aria-label="选择主发送口">
+                                <button type="button" class="dual-send-btn active" data-sid="A">A</button>
+                                <button type="button" class="dual-send-btn" data-sid="B">B</button>
+                            </div>
                         </div>
                     </div>
                     <input type="file" id="serial-import-file" style="display: none;" accept="application/json" />
