@@ -794,10 +794,9 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
 }
 
-.serial-log-pane {
+.serial-log-mode {
   flex: 1 1 0;
   min-height: 0;
   display: flex;
@@ -808,56 +807,11 @@ body {
   border-radius: var(--radius-md);
   overflow: hidden;
   box-shadow: var(--shadow-sm) inset;
-  transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
+  transition: background-color var(--transition-normal), color var(--transition-normal);
 }
 
-#serial-log-pane-a {
-  border-top: 3px solid #10b981;
-}
-
-#serial-log-pane-b {
-  border-top: 3px solid #f59e0b;
-}
-
-.serial-log-pane.is-focused {
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-
-.serial-log-pane-bar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-body);
-}
-
-.serial-log-pane-label {
-  flex: 0 0 auto;
-  font-size: 0.72rem;
-  font-weight: 700;
-  font-family: var(--font-mono);
-  min-width: 1.6em;
-}
-
-#serial-log-pane-a .serial-log-pane-label { color: #059669; }
-#serial-log-pane-b .serial-log-pane-label { color: #d97706; }
-[data-theme='dark'] #serial-log-pane-a .serial-log-pane-label { color: #34d399; }
-[data-theme='dark'] #serial-log-pane-b .serial-log-pane-label { color: #fbbf24; }
-
-.serial-log-pane-type {
-  width: auto;
-  max-width: 120px;
-  font-size: 0.72rem;
-  padding-top: 2px;
-  padding-bottom: 2px;
-}
-
-.serial-log-pane-clear {
-  margin-left: auto;
-  padding: 2px 8px;
-  font-size: 0.72rem;
+.serial-log-mode[hidden] {
+  display: none !important;
 }
 
 .serial-logs {
@@ -951,6 +905,7 @@ body {
   overflow: visible;
 }
 
+/* 双路合流：按会话分色 */
 .log-row .log-sess {
   flex: 0 0 auto;
   font-size: 0.68rem;
@@ -959,6 +914,70 @@ body {
   padding: 0 4px;
   border-radius: 3px;
   line-height: 1.4;
+}
+
+.serial-logs.is-dual .log-row[data-sid='A'] .log-sess,
+.serial-logs.is-dual .log-row[data-sid='A'] .log-time {
+  color: #059669;
+}
+
+.serial-logs.is-dual .log-row[data-sid='B'] .log-sess,
+.serial-logs.is-dual .log-row[data-sid='B'] .log-time {
+  color: #d97706;
+}
+
+.serial-logs.is-dual .log-row[data-sid='A'] {
+  border-left-color: #10b981;
+}
+
+.serial-logs.is-dual .log-row[data-sid='B'] {
+  border-left-color: #f59e0b;
+}
+
+.serial-logs.is-dual .log-row[data-sid='A'] .log-body {
+  color: #047857;
+}
+
+.serial-logs.is-dual .log-row[data-sid='B'] .log-body {
+  color: #b45309;
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='A'] .log-body,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='A'] .log-sess,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='A'] .log-time {
+  color: #34d399;
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='B'] .log-body,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='B'] .log-sess,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='B'] .log-time {
+  color: #fbbf24;
+}
+
+.serial-logs.is-dual .log-row[data-sid='A'] {
+  background-color: color-mix(in srgb, #10b981 7%, transparent);
+}
+
+.serial-logs.is-dual .log-row[data-sid='B'] {
+  background-color: color-mix(in srgb, #f59e0b 7%, transparent);
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='A'] {
+  background-color: color-mix(in srgb, #34d399 7%, transparent);
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='B'] {
+  background-color: color-mix(in srgb, #fbbf24 7%, transparent);
+}
+
+.serial-logs.is-dual .log-row[data-sid='A']:hover,
+.serial-logs.is-dual .log-row[data-sid='B']:hover {
+  background-color: var(--bg-surface-hover);
+}
+
+.serial-logs.is-dual .log-row[data-sid].selected {
+  background-color: var(--accent-light);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 #serial-connect-bar {
@@ -5521,14 +5540,11 @@ body.blu-wave-fullscreen-open {
     background-color: var(--bg-body);
   }
 
-  #serial-log-panes {
+  #serial-log-panes,
+  .serial-log-mode {
     flex: 0 0 auto;
     height: auto;
     min-height: 200px;
-  }
-
-  .serial-log-pane {
-    min-height: 180px;
   }
 
   .serial-logs,

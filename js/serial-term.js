@@ -140,8 +140,8 @@
 		}
 	}
 
-	function recOf(sid) {
-		return terms[sid === 'B' ? 'B' : 'A'] || null
+	function recOf(id) {
+		return id ? terms[id] || null : null
 	}
 
 	function fit(sid) {
@@ -153,8 +153,7 @@
 
 	function setTheme(sid) {
 		if (sid == null) {
-			setTheme('A')
-			setTheme('B')
+			Object.keys(terms).forEach(function (k) { setTheme(k) })
 			return
 		}
 		const rec = recOf(sid)
@@ -174,8 +173,7 @@
 	}
 
 	function openTerm(sid, hostEl, opts) {
-		sid = sid === 'B' ? 'B' : 'A'
-		if (!hasTerminal() || !hostEl) return null
+		if (!sid || !hasTerminal() || !hostEl) return null
 		const existing = recOf(sid)
 		if (existing && existing.term) {
 			if (opts) {
@@ -236,7 +234,7 @@
 	}
 
 	function ensure(sid, hostEl, opts) {
-		sid = sid === 'B' ? 'B' : 'A'
+		if (!sid) return Promise.resolve(null)
 		if (hasTerminal()) return Promise.resolve(openTerm(sid, hostEl, opts))
 		return ensureLib().then(function (ok) {
 			if (!ok) return null
@@ -283,11 +281,10 @@
 			delete terms[id]
 		}
 		if (sid == null) {
-			drop('A')
-			drop('B')
+			Object.keys(terms).forEach(drop)
 			return
 		}
-		drop(sid === 'B' ? 'B' : 'A')
+		drop(sid)
 	}
 
 	window.SerialTerm = {
@@ -304,7 +301,6 @@
 		dispose()
 	})
 	window.addEventListener('resize', function () {
-		fit('A')
-		fit('B')
+		Object.keys(terms).forEach(fit)
 	})
 })()

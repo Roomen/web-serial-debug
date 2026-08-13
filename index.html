@@ -338,37 +338,15 @@
                                 </div>
                             </div>
                         </div>
-                        <!-- 双路两个独立日志窗；单路隐藏 B 但保留 DOM / xterm -->
+                        <!-- 单路/双路各一套日志，同时只显示当前模式；双路仍是一个合流窗（分色） -->
                         <div id="serial-log-panes">
-                            <div id="serial-log-pane-a" class="serial-log-pane is-focused" data-sid="A">
-                                <div class="serial-log-pane-bar">
-                                    <span class="serial-log-pane-label" id="serial-log-pane-label-a">A</span>
-                                    <select id="serial-log-type-a" class="form-select form-select-sm serial-log-pane-type" title="本窗日志类型">
-                                        <option value="hex&text">Hex和Text</option>
-                                        <option value="hex">Hex</option>
-                                        <option value="text">Text</option>
-                                        <option value="ansi">彩色Ansi</option>
-                                        <option value="term">终端</option>
-                                    </select>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary serial-log-pane-clear" id="serial-clear-a" title="清空本窗">清空</button>
-                                </div>
-                                <div id="serial-logs-a" class="serial-logs flex-grow-1"></div>
-                                <div id="serial-term-a" class="serial-term-host" hidden></div>
+                            <div id="serial-log-mode-single" class="serial-log-mode">
+                                <div id="serial-logs-single" class="serial-logs"></div>
+                                <div id="serial-term-single" class="serial-term-host" hidden></div>
                             </div>
-                            <div id="serial-log-pane-b" class="serial-log-pane" data-sid="B" hidden>
-                                <div class="serial-log-pane-bar">
-                                    <span class="serial-log-pane-label" id="serial-log-pane-label-b">B</span>
-                                    <select id="serial-log-type-b" class="form-select form-select-sm serial-log-pane-type" title="本窗日志类型">
-                                        <option value="hex&text">Hex和Text</option>
-                                        <option value="hex">Hex</option>
-                                        <option value="text">Text</option>
-                                        <option value="ansi">彩色Ansi</option>
-                                        <option value="term">终端</option>
-                                    </select>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary serial-log-pane-clear" id="serial-clear-b" title="清空本窗">清空</button>
-                                </div>
-                                <div id="serial-logs-b" class="serial-logs flex-grow-1"></div>
-                                <div id="serial-term-b" class="serial-term-host" hidden></div>
+                            <div id="serial-log-mode-dual" class="serial-log-mode" hidden>
+                                <div id="serial-logs-dual" class="serial-logs is-dual"></div>
+                                <div id="serial-term-dual" class="serial-term-host" hidden></div>
                             </div>
                         </div>
                         <!--协议解析底部面板：顶缝拖高度，header 只负责折叠-->

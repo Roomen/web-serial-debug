@@ -128,9 +128,12 @@
 			return null
 		},
 
-		// 日志容器：A/B 各一窗；旧 #serial-logs 已拆成 #serial-logs-a / #serial-logs-b
-		getLogContainer(sid) {
-			return document.getElementById(sid === 'B' ? 'serial-logs-b' : 'serial-logs-a')
+		// 日志容器：按单路/双路模式隔离；双路 A/B 写入同一合流窗
+		getLogContainer() {
+			return document.getElementById(this.mode === 'dual' ? 'serial-logs-dual' : 'serial-logs-single')
+		},
+		getLogContainerFor(mode) {
+			return document.getElementById(mode === 'dual' ? 'serial-logs-dual' : 'serial-logs-single')
 		},
 	}
 
@@ -397,26 +400,21 @@
 	}
 	let logOptionsSingle = pickLogOptions(toolOptions)
 	let logOptionsDual = pickLogOptions(toolOptions)
-	let logFocusSid = 'A'
-	const selectedLogRows = { A: null, B: null }
+	const selectedLogRows = { single: null, dual: null }
 	function activeLogOptions() {
 		return SerialHub.mode === 'dual' ? logOptionsDual : logOptionsSingle
 	}
-	function getLogType(sid) {
-		if (SerialHub.mode === 'dual' && sid === 'B') {
-			return logOptionsDual.logTypeB || logOptionsDual.logType || 'hex'
-		}
-		if (SerialHub.mode === 'dual') return logOptionsDual.logType || 'hex'
-		return logOptionsSingle.logType || 'hex'
+	function logModeKey() {
+		return SerialHub.mode === 'dual' ? 'dual' : 'single'
+	}
+	function getLogType() {
+		return activeLogOptions().logType || 'hex'
 	}
 	function isRowLogType(t) {
 		return t === 'hex' || t === 'text' || t === 'hex&text' || t === 'ansi'
 	}
-	function getTermHost(sid) {
-		return document.getElementById(sid === 'B' ? 'serial-term-b' : 'serial-term-a')
-	}
-	function getLogPane(sid) {
-		return document.getElementById(sid === 'B' ? 'serial-log-pane-b' : 'serial-log-pane-a')
+	function getTermHost() {
+		return document.getElementById(logModeKey() === 'dual' ? 'serial-term-dual' : 'serial-term-single')
 	}
 	function persistLogOptionsBag(mode) {
 		try {
@@ -440,88 +438,51 @@
 		if (t) t.value = opts.timeOut
 		const m = document.getElementById('serial-max-rows')
 		if (m) m.value = opts.maxLogRows
-		const focusType = getLogType(SerialHub.mode === 'dual' ? logFocusSid : 'A')
-		toolOptions.logType = focusType
-		applyLogTypeUi(focusType)
-		syncPaneTypeSelects()
-		applyPaneView('A')
-		applyPaneView('B')
+		toolOptions.logType = opts.logType
+		applyLogTypeUi(opts.logType)
+		applyLogView()
 		const a = document.getElementById('serial-auto-scroll')
 		if (a) a.innerText = opts.autoScroll ? '自动滚动' : '暂停滚动'
 	}
 
-	function syncPaneTypeSelects() {
-		const a = document.getElementById('serial-log-type-a')
-		const b = document.getElementById('serial-log-type-b')
-		if (a) a.value = getLogType('A')
-		if (b) b.value = getLogType('B')
-	}
-
-	function setSessionLogType(sid, val) {
-		sid = sid === 'B' ? 'B' : 'A'
-		if (!val) return
-		if (SerialHub.mode === 'dual') {
-			if (sid === 'B') logOptionsDual.logTypeB = val
-			else logOptionsDual.logType = val
-			persistLogOptionsBag('dual')
-		} else {
-			logOptionsSingle.logType = val
-			persistLogOptionsBag('single')
-		}
-		if (sid === logFocusSid || SerialHub.mode === 'single') {
-			toolOptions.logType = val
-			applyLogTypeUi(val)
-		}
-		syncPaneTypeSelects()
-		applyPaneView(sid)
-	}
-
-	function setLogFocus(sid) {
-		if (SerialHub.mode !== 'dual') sid = 'A'
-		else if (sid !== 'A' && sid !== 'B') sid = 'A'
-		logFocusSid = sid
-		const paneA = document.getElementById('serial-log-pane-a')
-		const paneB = document.getElementById('serial-log-pane-b')
-		if (paneA) paneA.classList.toggle('is-focused', sid === 'A')
-		if (paneB) paneB.classList.toggle('is-focused', sid === 'B')
-		const t = getLogType(sid)
-		toolOptions.logType = t
-		applyLogTypeUi(t)
-	}
-
-	function applyPaneView(sid) {
-		sid = sid === 'B' ? 'B' : 'A'
-		const logs = SerialHub.getLogContainer(sid)
-		const termHost = getTermHost(sid)
-		const isTerm = getLogType(sid) === 'term'
+	function applyLogView() {
+		const mode = logModeKey()
+		const singleWrap = document.getElementById('serial-log-mode-single')
+		const dualWrap = document.getElementById('serial-log-mode-dual')
+		if (singleWrap) singleWrap.hidden = mode !== 'single'
+		if (dualWrap) dualWrap.hidden = mode !== 'dual'
+		const logs = SerialHub.getLogContainer()
+		const termHost = getTermHost()
+		const type = getLogType()
+		const isTerm = type === 'term'
 		if (logs) {
 			logs.hidden = isTerm
-			logs.classList.toggle('ansi', getLogType(sid) === 'ansi')
+			logs.classList.toggle('ansi', type === 'ansi')
+			logs.classList.toggle('is-dual', mode === 'dual')
 		}
 		if (termHost) {
 			termHost.hidden = !isTerm
 			if (isTerm && window.SerialTerm) {
-				const done = window.SerialTerm.ensure(sid, termHost, {
-					onSend: function (bytes) { writeTermBytes(sid, bytes) },
-					onFocus: function () { setLogFocus(sid) },
+				const done = window.SerialTerm.ensure(mode, termHost, {
+					onSend: function (bytes) { writeTermBytes(SerialHub.activeSendSid(), bytes) },
 				})
 				if (done && typeof done.then === 'function') {
-					done.then(function () { window.SerialTerm.fit(sid) })
+					done.then(function () { window.SerialTerm.fit(mode) })
 				} else {
-					window.SerialTerm.fit(sid)
+					window.SerialTerm.fit(mode)
 				}
 			}
 		}
 	}
 
-	function clearLogPane(sid) {
-		sid = sid === 'B' ? 'B' : 'A'
-		const container = SerialHub.getLogContainer(sid)
+	function clearCurrentLogs() {
+		const mode = logModeKey()
+		const container = SerialHub.getLogContainer()
 		if (container) container.innerHTML = ''
-		if (window.SerialTerm) window.SerialTerm.clear(sid)
-		if (selectedLogRows[sid]) {
-			try { selectedLogRows[sid].classList.remove('selected') } catch (e) {}
-			selectedLogRows[sid] = null
+		if (window.SerialTerm) window.SerialTerm.clear(mode)
+		if (selectedLogRows[mode]) {
+			try { selectedLogRows[mode].classList.remove('selected') } catch (e) {}
+			selectedLogRows[mode] = null
 		}
 	}
 
@@ -1780,8 +1741,8 @@
 		}
 		e.target.value = max
 		changeOption('maxLogRows', max)
-		trimLogRows(SerialHub.getLogContainer('A'))
-		trimLogRows(SerialHub.getLogContainer('B'))
+		trimLogRows(SerialHub.getLogContainerFor('single'))
+		trimLogRows(SerialHub.getLogContainerFor('dual'))
 	})
 	// 日志类型：自定义下拉（悬停/点击展开），底层保留隐藏 select 兼容命令面板
 	;(function () {
@@ -1818,8 +1779,8 @@
 		function topBarSetType(val) {
 			if (select.value !== val) select.value = val
 			syncUi(val)
-			const sid = SerialHub.mode === 'dual' ? logFocusSid : 'A'
-			setSessionLogType(sid, val)
+			changeOption('logType', val)
+			applyLogView()
 		}
 
 		applyLogTypeUi = function (val) {
@@ -1871,19 +1832,6 @@
 			}
 		})
 
-		const paneTypeA = document.getElementById('serial-log-type-a')
-		const paneTypeB = document.getElementById('serial-log-type-b')
-		if (paneTypeA) {
-			paneTypeA.addEventListener('change', function () {
-				setSessionLogType('A', paneTypeA.value)
-			})
-		}
-		if (paneTypeB) {
-			paneTypeB.addEventListener('change', function () {
-				setSessionLogType('B', paneTypeB.value)
-			})
-		}
-		syncPaneTypeSelects()
 	})()
 	document.getElementById('serial-auto-scroll').addEventListener('click', function (e) {
 		let autoScroll = this.innerText != '自动滚动'
@@ -1977,13 +1925,13 @@
 		}
 	}
 
-	//日志纯文本(复制/导出用): 焦点窗
-	function getLogsText(sid) {
-		sid = sid || (SerialHub.mode === 'dual' ? logFocusSid : 'A')
-		if (getLogType(sid) === 'term' && window.SerialTerm && typeof window.SerialTerm.getText === 'function') {
-			return window.SerialTerm.getText(sid) || ''
+	//日志纯文本(复制/导出用): 当前模式那一套
+	function getLogsText() {
+		const mode = logModeKey()
+		if (getLogType() === 'term' && window.SerialTerm && typeof window.SerialTerm.getText === 'function') {
+			return window.SerialTerm.getText(mode) || ''
 		}
-		const container = SerialHub.getLogContainer(sid)
+		const container = SerialHub.getLogContainer()
 		let lines = []
 		if (!container) return ''
 		for (const node of container.children) {
@@ -2008,23 +1956,16 @@
 		return lines.join('\n')
 	}
 	function exportLogsText() {
-		const sid = SerialHub.mode === 'dual' ? logFocusSid : 'A'
-		let text = getLogsText(sid)
+		let text = getLogsText()
 		if (!text) return ''
 		if (SerialHub.mode === 'dual') {
-			const label = SerialHub.getSessionLabel(sid)
-			text = '=== 会话 ' + sid + ': ' + label + ' ===\n' + text
+			text = '=== 双路 ' + SerialHub.getLabelA() + ' / ' + SerialHub.getLabelB() + ' ===\n' + text
 		}
 		return text
 	}
-	//清空（顶栏：焦点窗）
 	document.getElementById('serial-clear').addEventListener('click', (e) => {
-		clearLogPane(SerialHub.mode === 'dual' ? logFocusSid : 'A')
+		clearCurrentLogs()
 	})
-	const clearABtn = document.getElementById('serial-clear-a')
-	if (clearABtn) clearABtn.addEventListener('click', function () { clearLogPane('A') })
-	const clearBBtn = document.getElementById('serial-clear-b')
-	if (clearBBtn) clearBBtn.addEventListener('click', function () { clearLogPane('B') })
 	//复制
 	document.getElementById('serial-copy').addEventListener('click', (e) => {
 		let text = getLogsText()
@@ -2045,9 +1986,9 @@
 	})
 
 	const serialToggle = document.getElementById('serial-open-or-close')
-	const serialLogsA = document.getElementById('serial-logs-a')
-	const serialLogsB = document.getElementById('serial-logs-b')
-	const serialLogs = serialLogsA // 兼容别名：指向 A 窗
+	const serialLogsSingle = document.getElementById('serial-logs-single')
+	const serialLogsDual = document.getElementById('serial-logs-dual')
+	const serialLogs = serialLogsSingle
 
 	//静默解析悬停提示浮层
 	const skHoverTip = document.createElement('div')
@@ -2100,7 +2041,7 @@
 		clearSkHoverActive()
 		skHoverTip.style.display = 'none'
 	}
-	function bindLogContainerEvents(el, sid) {
+	function bindLogContainerEvents(el, mode) {
 		if (!el) return
 		el.addEventListener('mouseover', onSkHexHover)
 		el.addEventListener('scroll', hideSkHover)
@@ -2113,29 +2054,19 @@
 			if (!hex) return
 			const sel = window.getSelection()
 			if (sel && !sel.isCollapsed && sel.toString()) return
-			if (selectedLogRows[sid] && selectedLogRows[sid] !== row) {
-				selectedLogRows[sid].classList.remove('selected')
+			if (selectedLogRows[mode] && selectedLogRows[mode] !== row) {
+				selectedLogRows[mode].classList.remove('selected')
 			}
 			row.classList.add('selected')
-			selectedLogRows[sid] = row
-			setLogFocus(sid)
+			selectedLogRows[mode] = row
 			if (typeof window.expandParsePanel === 'function') {
 				window.expandParsePanel()
 			}
 			applyProtocolHexInput(hex)
 		})
 	}
-	bindLogContainerEvents(serialLogsA, 'A')
-	bindLogContainerEvents(serialLogsB, 'B')
-	function bindPaneFocus(sid) {
-		const pane = getLogPane(sid)
-		if (!pane) return
-		pane.addEventListener('mousedown', function () {
-			setLogFocus(sid)
-		})
-	}
-	bindPaneFocus('A')
-	bindPaneFocus('B')
+	bindLogContainerEvents(serialLogsSingle, 'single')
+	bindLogContainerEvents(serialLogsDual, 'dual')
 	const protocolHexViewHover = document.getElementById('serial-protocol-hexview')
 	if (protocolHexViewHover) {
 		protocolHexViewHover.addEventListener('mouseover', onSkHexHover)
@@ -3278,7 +3209,7 @@
 		sid = sid || 'A'
 		SerialHub.setSekWaitStart(sid, null)
 		if (!buf || !buf.length) return
-		if (isRowLogType(getLogType(sid))) addLog(buf, true, startTime, sid)
+		if (isRowLogType(getLogType())) addLog(buf, true, startTime, sid)
 		addParseLog(buf.slice ? buf.slice() : [...buf], true, startTime, sid)
 	}
 
@@ -3311,8 +3242,8 @@
 				api._onReceive(data)
 			}
 		}
-		if (getLogType(sid) === 'term' && window.SerialTerm) {
-			window.SerialTerm.write(sid, data)
+		if (getLogType() === 'term' && window.SerialTerm) {
+			window.SerialTerm.write(logModeKey(), data)
 		}
 		const packBuf = SerialHub.getPackBuf(sid)
 		//新的合并包开始:记下第一个字节到达的时间,日志显示要用这个而不是flush时间
@@ -3496,7 +3427,7 @@
 	}
 	//统一的日志插入: 按 (data-ts, data-seq) 全局单调序插入 + 裁剪整行 + 自动滚动
 	function appendLogNode(node, sid) {
-		const container = SerialHub.getLogContainer(sid)
+		const container = SerialHub.getLogContainer()
 		if (!container) return
 		const ts = parseInt(node.getAttribute('data-ts') || '0', 10) || 0
 		const seq = parseInt(node.getAttribute('data-seq') || '0', 10) || 0
@@ -3526,7 +3457,7 @@
 	//添加日志
 	function addLog(data, isReceive = true, atTime = null, sid = null) {
 		sid = sid || 'A'
-		const logType = getLogType(sid)
+		const logType = getLogType()
 		// term 模式不走行日志；TX 也不写进 xterm（设备自己 echo）
 		if (logType === 'term') return
 		let form = isReceive ? '←' : '→'
@@ -3592,9 +3523,16 @@
 		row.setAttribute('data-ts', String(ts))
 		row.setAttribute('data-seq', String(++logSeq))
 		row.setAttribute('data-sid', sid || 'A')
+		const sess = SerialHub.mode === 'dual'
+			? (sid === 'B' ? SerialHub.getLabelB() : SerialHub.getLabelA())
+			: ''
 		const dirLabel = form
+		const sessHtml = sess
+			? '<span class="log-sess">' + HTMLEncode(sess) + '</span>'
+			: ''
 		row.innerHTML = '<span class="log-time">' + time + '</span>' +
 			'<span class="log-dir">' + dirLabel + '</span>' +
+			sessHtml +
 			'<span class="log-len">' + data.length + 'B</span>' +
 			'<span class="log-body">' + newmsg + '</span>'
 		appendLogNode(row, sid)
@@ -3629,7 +3567,7 @@
 		const when = atTime || new Date()
 		tempNode.setAttribute('data-ts', String(when.getTime ? when.getTime() : Date.now()))
 		tempNode.setAttribute('data-seq', String(++logSeq))
-		if (getLogType(sid) === 'term') {
+		if (getLogType() === 'term') {
 			const out = document.getElementById('serial-protocol-output')
 			if (out) {
 				while (tempNode.firstChild) out.appendChild(tempNode.firstChild)
@@ -3670,38 +3608,21 @@
 			.replace(/"/g, '&quot;')
 			.replace(/'/g, '&#39;')
 	}
-	//系统日志：有 sid 只写该窗；无 sid 时双路各写一条独立节点
+	//系统日志：写入当前模式那一套，不污染另一模式
 	function addLogErr(msg, sid) {
-		function makeRow(targetSid) {
-			const when = new Date()
-			let row = document.createElement('div')
-			row.className = 'log-row'
-			row.setAttribute('data-dir', 'sys')
-			row.setAttribute('data-ts', String(when.getTime()))
-			row.setAttribute('data-seq', String(++logSeq))
-			row.setAttribute('data-sid', targetSid)
-			row.innerHTML = '<span class="log-time">' + timeOf(when) + '</span>' +
-				'<span class="log-dir">!</span>' +
-				'<span class="log-body text-danger">' + msg + '</span>'
-			return row
-		}
-		function timeOf(when) {
-			return toolOptions.showTime ? formatDate(when) : ''
-		}
-		function writeOne(targetSid) {
-			appendLogNode(makeRow(targetSid), targetSid)
-			if (getLogType(targetSid) === 'term') showToast(msg, null, 'error')
-		}
-		if (sid === 'A' || sid === 'B') {
-			writeOne(sid)
-			return
-		}
-		if (SerialHub.mode === 'dual') {
-			writeOne('A')
-			writeOne('B')
-			return
-		}
-		writeOne('A')
+		const when = new Date()
+		let time = toolOptions.showTime ? formatDate(when) : ''
+		let row = document.createElement('div')
+		row.className = 'log-row'
+		row.setAttribute('data-dir', 'sys')
+		row.setAttribute('data-ts', String(when.getTime()))
+		row.setAttribute('data-seq', String(++logSeq))
+		row.setAttribute('data-sid', sid === 'B' ? 'B' : (sid === 'A' ? 'A' : 'SYS'))
+		row.innerHTML = '<span class="log-time">' + time + '</span>' +
+			'<span class="log-dir">!</span>' +
+			'<span class="log-body text-danger">' + msg + '</span>'
+		appendLogNode(row, sid === 'B' ? 'B' : 'A')
+		if (getLogType() === 'term') showToast(msg, null, 'error')
 	}
 
 	//轻量顶部气泡(非确认框)。kind='error' 用红色、停留更久
@@ -4193,14 +4114,7 @@
 			if (singleCtrl) singleCtrl.style.display = 'none'
 			if (dualCtrl) dualCtrl.style.display = ''
 
-			const panes = document.getElementById('serial-log-panes')
-			if (panes) panes.classList.add('is-dual')
-			const paneB = document.getElementById('serial-log-pane-b')
-			if (paneB) paneB.hidden = false
-			updateDualLogLabels()
-			applyPaneView('A')
-			applyPaneView('B')
-			setLogFocus(logFocusSid === 'B' ? 'B' : 'A')
+			applyLogView()
 
 			// 更新按钮文案
 			updateOpenButton('A')
@@ -4243,12 +4157,7 @@
 			if (singleCtrl) singleCtrl.style.display = ''
 			if (dualCtrl) dualCtrl.style.display = 'none'
 
-			const panes = document.getElementById('serial-log-panes')
-			if (panes) panes.classList.remove('is-dual')
-			const paneB = document.getElementById('serial-log-pane-b')
-			if (paneB) paneB.hidden = true
-			setLogFocus('A')
-			applyPaneView('A')
+			applyLogView()
 
 			updateOpenButton('A')
 			serialStatuChange(SerialHub.isOpen('A'), 'A')
@@ -4259,10 +4168,7 @@
 	}
 
 	function updateDualLogLabels() {
-		const a = document.getElementById('serial-log-pane-label-a')
-		const b = document.getElementById('serial-log-pane-label-b')
-		if (a) a.textContent = SerialHub.getLabelA()
-		if (b) b.textContent = SerialHub.getLabelB()
+		// 合流窗按行写入时取当前标签；已有行不重刷
 	}
 
 	// 模式切换按钮
