@@ -68,6 +68,11 @@
 	// ---- 串口 / 设备状态 ----
 	let bluPort = null
 	let bluKnownPorts = [] // getPorts() 检测到的 BLU 端口
+	window.bluApi = {
+		ownsPort: function (port) { return !!(port && bluPort === port) },
+		isOpen: function () { return !!bluOpen },
+		getPort: function () { return bluPort },
+	}
 	// SerialPort → SN（WebUSB / metadata / getInfo 扩展字段）；不再展示无意义的 VID:PID
 	const bluPortSn = typeof WeakMap !== 'undefined' ? new WeakMap() : null
 	const BLU_SN_STORE_KEY = 'blu-device-sn-list'
@@ -1753,6 +1758,13 @@
 
 	async function bluOpenPort() {
 		if (!bluPort || bluOpen || bluOpening) return
+		if (window.SerialHub && typeof window.SerialHub.findSessionByPort === 'function') {
+			const owner = window.SerialHub.findSessionByPort(bluPort)
+			if (owner) {
+				bluLog('该口已被串口调试占用，请换一个设备或先在串口页关闭', 'error')
+				return
+			}
+		}
 		bluOpening = true
 		bluManualClose = false
 		try {
@@ -5270,6 +5282,11 @@
 		return vid === 0x15A2 && pid === 0x300A
 	}
 
+	function serialOwnsPort(port) {
+		if (!port || !window.SerialHub || typeof window.SerialHub.findSessionByPort !== 'function') return false
+		return !!window.SerialHub.findSessionByPort(port)
+	}
+
 	function normalizeSn(sn) {
 		if (sn == null) return ''
 		return String(sn).trim().toUpperCase()
@@ -5436,12 +5453,13 @@
 			const unknown = []
 			for (let i = 0; i < ports.length; i++) {
 				const p = ports[i]
+				if (serialOwnsPort(p)) continue
 				let info = {}
 				try { info = p.getInfo ? p.getInfo() : {} } catch (e) {}
 				if (isBluUsbInfo(info)) matched.push(p)
 				else if (info.usbVendorId == null && info.usbProductId == null) unknown.push(p)
 			}
-			// 优先严格 VID/PID；部分环境 getInfo 为空时退回全部已授权口
+			// 优先严格 VID/PID；部分环境 getInfo 为空时才退回未知口（已排除串口调试占用的）
 			bluKnownPorts = matched.length ? matched : unknown
 			const usbSns = await fetchBluUsbSerials()
 			assignSnsToPorts(bluKnownPorts, usbSns)
@@ -5515,6 +5533,10 @@
 					const port = await navigator.serial.requestPort({
 						filters: PROTO.USB_FILTERS,
 					})
+					if (serialOwnsPort(port)) {
+						bluLog('该口已被串口调试占用，请先在串口页关闭', 'error')
+						return
+					}
 					if (bluOpen) await bluClosePort({ manual: true })
 					await refreshBluPorts({ log: false })
 					const idx = bluKnownPorts.indexOf(port)
