@@ -17,6 +17,7 @@
     <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.2.3/js/bootstrap.bundle.min.js"></script>
 
     <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
     <link rel="icon" href="imgs/logo.svg" type="image/svg+xml">
     <link rel="mask-icon" href="imgs/logo.svg" color="#007aff">
     <script>
@@ -317,12 +318,14 @@
                                             <li role="option" data-value="hex">Hex</li>
                                             <li role="option" data-value="text">Text</li>
                                             <li role="option" data-value="ansi">彩色Ansi</li>
+                                            <li role="option" data-value="term">终端</li>
                                         </ul>
                                         <select id="serial-log-type" class="serial-log-type-native" tabindex="-1" aria-hidden="true">
                                             <option value="hex&text">Hex和Text</option>
                                             <option value="hex">Hex</option>
                                             <option value="text">Text</option>
                                             <option value="ansi">彩色Ansi</option>
+                                            <option value="term">终端</option>
                                         </select>
                                     </div>
                                 </div>
@@ -335,8 +338,17 @@
                                 </div>
                             </div>
                         </div>
-                        <!-- 单路/双路共用同一日志窗：双路用颜色区分 sid，按到达时间插入，单条不截断 -->
-                        <div id="serial-logs" class="flex-grow-1 rounded mb-2"></div>
+                        <!-- 单路/双路各一套日志，同时只显示当前模式；双路仍是一个合流窗（分色） -->
+                        <div id="serial-log-panes">
+                            <div id="serial-log-mode-single" class="serial-log-mode">
+                                <div id="serial-logs-single" class="serial-logs"></div>
+                                <div id="serial-term-single" class="serial-term-host" hidden></div>
+                            </div>
+                            <div id="serial-log-mode-dual" class="serial-log-mode" hidden>
+                                <div id="serial-logs-dual" class="serial-logs is-dual"></div>
+                                <div id="serial-term-dual" class="serial-term-host" hidden></div>
+                            </div>
+                        </div>
                         <!--协议解析底部面板：顶缝拖高度，header 只负责折叠-->
                         <div id="serial-parse-panel">
                             <div id="serial-parse-resizer" title="拖动调整高度"></div>
@@ -1552,6 +1564,9 @@
     <script src="js/protocol-crypto.js"></script>
     <script src="js/protocol.js"></script>
     <script src="js/protocol-presets.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+    <script src="js/serial-term.js"></script>
     <script src="js/common.js"></script>
     <script src="js/wmbus-protocol.js"></script>
     <script src="js/wmbus-transaction.js"></script>

@@ -789,32 +789,73 @@ body {
 }
 
 /* ========== Log Area ========== */
-#serial-logs {
+#serial-log-panes {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.serial-log-mode {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm) inset;
+  transition: background-color var(--transition-normal), color var(--transition-normal);
+}
+
+.serial-log-mode[hidden] {
+  display: none !important;
+}
+
+.serial-logs {
   flex: 1 1 0;
   min-height: 0;
   overflow-y: scroll;
   white-space: pre-wrap;
   word-break: break-all;
-  background-color: var(--bg-surface);
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
   padding: 12px;
   font-family: var(--font-mono);
   font-size: 0.75rem;
   line-height: 1.6;
-  box-shadow: var(--shadow-sm) inset;
   transition: background-color var(--transition-normal), color var(--transition-normal);
 }
 
-#serial-logs .text-primary { color: var(--accent) !important; }
-#serial-logs .text-success { color: var(--success) !important; }
-#serial-logs .text-danger { color: var(--danger) !important; }
-#serial-logs .text-muted { color: var(--text-muted) !important; }
+.serial-logs .text-primary { color: var(--accent) !important; }
+.serial-logs .text-success { color: var(--success) !important; }
+.serial-logs .text-danger { color: var(--danger) !important; }
+.serial-logs .text-muted { color: var(--text-muted) !important; }
 
-#serial-logs.ansi {
+.serial-logs.ansi {
   background-color: #1c1c1e;
   color: #f5f5f7;
+}
+
+.serial-term-host {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 4px 6px;
+  background-color: var(--bg-surface);
+}
+
+[data-theme='dark'] .serial-term-host {
+  background-color: #1c1c1e;
+}
+
+.serial-term-host .xterm {
+  height: 100%;
+  width: 100%;
+}
+
+.serial-term-host .xterm-viewport {
+  overflow-y: auto !important;
 }
 
 /* ========== Log Row ========== */
@@ -875,68 +916,66 @@ body {
   line-height: 1.4;
 }
 
-#serial-logs.is-dual .log-row[data-sid='A'] .log-sess,
-#serial-logs.is-dual .log-row[data-sid='A'] .log-time {
+.serial-logs.is-dual .log-row[data-sid='A'] .log-sess,
+.serial-logs.is-dual .log-row[data-sid='A'] .log-time {
   color: #059669;
 }
 
-#serial-logs.is-dual .log-row[data-sid='B'] .log-sess,
-#serial-logs.is-dual .log-row[data-sid='B'] .log-time {
+.serial-logs.is-dual .log-row[data-sid='B'] .log-sess,
+.serial-logs.is-dual .log-row[data-sid='B'] .log-time {
   color: #d97706;
 }
 
-#serial-logs.is-dual .log-row[data-sid='A'] {
+.serial-logs.is-dual .log-row[data-sid='A'] {
   border-left-color: #10b981;
 }
 
-#serial-logs.is-dual .log-row[data-sid='B'] {
+.serial-logs.is-dual .log-row[data-sid='B'] {
   border-left-color: #f59e0b;
 }
 
-#serial-logs.is-dual .log-row[data-sid='A'] .log-body {
+.serial-logs.is-dual .log-row[data-sid='A'] .log-body {
   color: #047857;
 }
 
-#serial-logs.is-dual .log-row[data-sid='B'] .log-body {
+.serial-logs.is-dual .log-row[data-sid='B'] .log-body {
   color: #b45309;
 }
 
-[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='A'] .log-body,
-[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='A'] .log-sess,
-[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='A'] .log-time {
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='A'] .log-body,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='A'] .log-sess,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='A'] .log-time {
   color: #34d399;
 }
 
-[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='B'] .log-body,
-[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='B'] .log-sess,
-[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='B'] .log-time {
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='B'] .log-body,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='B'] .log-sess,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='B'] .log-time {
   color: #fbbf24;
 }
 
-/* 双路日志行淡色背景：A 淡绿 / B 淡橙（SYS 行无底色） */
-#serial-logs.is-dual .log-row[data-sid='A'] {
+.serial-logs.is-dual .log-row[data-sid='A'] {
   background-color: color-mix(in srgb, #10b981 7%, transparent);
 }
 
-#serial-logs.is-dual .log-row[data-sid='B'] {
+.serial-logs.is-dual .log-row[data-sid='B'] {
   background-color: color-mix(in srgb, #f59e0b 7%, transparent);
 }
 
-[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='A'] {
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='A'] {
   background-color: color-mix(in srgb, #34d399 7%, transparent);
 }
 
-[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='B'] {
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='B'] {
   background-color: color-mix(in srgb, #fbbf24 7%, transparent);
 }
 
-/* hover / selected 时保持原有反馈（覆盖淡色底，避免与现有交互样式打架） */
-#serial-logs.is-dual .log-row[data-sid='A']:hover,
-#serial-logs.is-dual .log-row[data-sid='B']:hover {
+.serial-logs.is-dual .log-row[data-sid='A']:hover,
+.serial-logs.is-dual .log-row[data-sid='B']:hover {
   background-color: var(--bg-surface-hover);
 }
 
-#serial-logs.is-dual .log-row[data-sid].selected {
+.serial-logs.is-dual .log-row[data-sid].selected {
   background-color: var(--accent-light);
   box-shadow: inset 0 0 0 1px var(--accent);
 }
@@ -993,9 +1032,9 @@ body {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
-#serial-logs.ansi .log-row[data-dir='rx'],
-#serial-logs.ansi .log-row[data-dir='tx'],
-#serial-logs.ansi .log-row:hover {
+.serial-logs.ansi .log-row[data-dir='rx'],
+.serial-logs.ansi .log-row[data-dir='tx'],
+.serial-logs.ansi .log-row:hover {
   background-color: rgba(255, 255, 255, 0.06);
 }
 
@@ -2502,7 +2541,7 @@ hr {
   cursor: row-resize;
 }
 
-#log-main.parse-dragging #serial-logs,
+#log-main.parse-dragging #serial-log-panes,
 #log-main.parse-dragging #serial-parse-body {
   pointer-events: none;
 }
@@ -5501,10 +5540,18 @@ body.blu-wave-fullscreen-open {
     background-color: var(--bg-body);
   }
 
-  #serial-logs {
+  #serial-log-panes,
+  .serial-log-mode {
     flex: 0 0 auto;
-    height: 55vh;
+    height: auto;
     min-height: 200px;
+  }
+
+  .serial-logs,
+  .serial-term-host {
+    flex: 0 0 auto;
+    height: 40vh;
+    min-height: 160px;
   }
 
   #serial-parse-resizer {
@@ -6224,40 +6271,46 @@ body.blu-wave-fullscreen-open {
 }
 
 .blu-cmd-custom-row {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
-.blu-cmd-custom-input-wrap {
-  flex: 1 1 0;
+.blu-cmd-custom-row #blu-cmd-custom {
+  flex: 1 1 auto;
   min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
-.blu-cmd-custom-input-wrap input {
-  flex: 1 1 0;
-  min-width: 80px;
+.blu-cmd-pill {
+  flex: 0 0 auto;
+  height: 31px;
+  min-width: 44px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
 }
 
-.blu-cmd-hex-switch {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  margin: 0;
-  padding: 0;
-  flex-shrink: 0;
-  white-space: nowrap;
+.blu-cmd-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
-.blu-cmd-hex-switch .form-check-input {
-  margin: 0;
-  width: 2em;
-  height: 1.1em;
+.blu-cmd-pill.is-on {
+  background: var(--accent-light);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
-.blu-cmd-hex-switch .form-check-label {
-  font-size: 0.7rem;
+.blu-cmd-custom-row .blu-cmd-send-custom,
+#blu-cmd-send-custom {
+  flex: 0 0 auto;
+  padding: 4px 10px;
 }
 
 /* 结果提示 */
@@ -6286,16 +6339,7 @@ body.blu-wave-fullscreen-open {
   min-width: 0;
 }
 
-/* 紧凑开关：HEX / 回车换行 等宽同字号，与输入框同行靠右 */
-.blu-cmd-compact-switch {
-  width: 84px;
-  justify-content: flex-start;
-}
 
-.blu-cmd-compact-switch .form-check-label {
-  font-size: 0.68rem;
-  white-space: nowrap;
-}
 
 /* 标题栏自动收起开关 */
 .blu-cmd-auto-close-switch {
