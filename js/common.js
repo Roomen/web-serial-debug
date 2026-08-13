@@ -128,9 +128,9 @@
 			return null
 		},
 
-		// 日志容器：单路/双路共用 #serial-logs（分色 + 时间序插入）
+		// 日志容器：A/B 各一窗；旧 #serial-logs 已拆成 #serial-logs-a / #serial-logs-b
 		getLogContainer(sid) {
-			return serialLogs
+			return document.getElementById(sid === 'B' ? 'serial-logs-b' : 'serial-logs-a')
 		},
 	}
 
@@ -391,13 +391,32 @@
 		const m = parseInt(src.maxLogRows, 10)
 		if (!isNaN(m) && m >= 100) out.maxLogRows = m
 		if (typeof src.logType === 'string' && src.logType) out.logType = src.logType
+		if (typeof src.logTypeB === 'string' && src.logTypeB) out.logTypeB = src.logTypeB
 		if (typeof src.autoScroll === 'boolean') out.autoScroll = src.autoScroll
 		return out
 	}
 	let logOptionsSingle = pickLogOptions(toolOptions)
 	let logOptionsDual = pickLogOptions(toolOptions)
+	let logFocusSid = 'A'
+	const selectedLogRows = { A: null, B: null }
 	function activeLogOptions() {
 		return SerialHub.mode === 'dual' ? logOptionsDual : logOptionsSingle
+	}
+	function getLogType(sid) {
+		if (SerialHub.mode === 'dual' && sid === 'B') {
+			return logOptionsDual.logTypeB || logOptionsDual.logType || 'hex'
+		}
+		if (SerialHub.mode === 'dual') return logOptionsDual.logType || 'hex'
+		return logOptionsSingle.logType || 'hex'
+	}
+	function isRowLogType(t) {
+		return t === 'hex' || t === 'text' || t === 'hex&text' || t === 'ansi'
+	}
+	function getTermHost(sid) {
+		return document.getElementById(sid === 'B' ? 'serial-term-b' : 'serial-term-a')
+	}
+	function getLogPane(sid) {
+		return document.getElementById(sid === 'B' ? 'serial-log-pane-b' : 'serial-log-pane-a')
 	}
 	function persistLogOptionsBag(mode) {
 		try {
@@ -421,9 +440,89 @@
 		if (t) t.value = opts.timeOut
 		const m = document.getElementById('serial-max-rows')
 		if (m) m.value = opts.maxLogRows
-		applyLogTypeUi(opts.logType)
+		const focusType = getLogType(SerialHub.mode === 'dual' ? logFocusSid : 'A')
+		toolOptions.logType = focusType
+		applyLogTypeUi(focusType)
+		syncPaneTypeSelects()
+		applyPaneView('A')
+		applyPaneView('B')
 		const a = document.getElementById('serial-auto-scroll')
 		if (a) a.innerText = opts.autoScroll ? '自动滚动' : '暂停滚动'
+	}
+
+	function syncPaneTypeSelects() {
+		const a = document.getElementById('serial-log-type-a')
+		const b = document.getElementById('serial-log-type-b')
+		if (a) a.value = getLogType('A')
+		if (b) b.value = getLogType('B')
+	}
+
+	function setSessionLogType(sid, val) {
+		sid = sid === 'B' ? 'B' : 'A'
+		if (!val) return
+		if (SerialHub.mode === 'dual') {
+			if (sid === 'B') logOptionsDual.logTypeB = val
+			else logOptionsDual.logType = val
+			persistLogOptionsBag('dual')
+		} else {
+			logOptionsSingle.logType = val
+			persistLogOptionsBag('single')
+		}
+		if (sid === logFocusSid || SerialHub.mode === 'single') {
+			toolOptions.logType = val
+			applyLogTypeUi(val)
+		}
+		syncPaneTypeSelects()
+		applyPaneView(sid)
+	}
+
+	function setLogFocus(sid) {
+		if (SerialHub.mode !== 'dual') sid = 'A'
+		else if (sid !== 'A' && sid !== 'B') sid = 'A'
+		logFocusSid = sid
+		const paneA = document.getElementById('serial-log-pane-a')
+		const paneB = document.getElementById('serial-log-pane-b')
+		if (paneA) paneA.classList.toggle('is-focused', sid === 'A')
+		if (paneB) paneB.classList.toggle('is-focused', sid === 'B')
+		const t = getLogType(sid)
+		toolOptions.logType = t
+		applyLogTypeUi(t)
+	}
+
+	function applyPaneView(sid) {
+		sid = sid === 'B' ? 'B' : 'A'
+		const logs = SerialHub.getLogContainer(sid)
+		const termHost = getTermHost(sid)
+		const isTerm = getLogType(sid) === 'term'
+		if (logs) {
+			logs.hidden = isTerm
+			logs.classList.toggle('ansi', getLogType(sid) === 'ansi')
+		}
+		if (termHost) {
+			termHost.hidden = !isTerm
+			if (isTerm && window.SerialTerm) {
+				const done = window.SerialTerm.ensure(sid, termHost, {
+					onSend: function (bytes) { writeTermBytes(sid, bytes) },
+					onFocus: function () { setLogFocus(sid) },
+				})
+				if (done && typeof done.then === 'function') {
+					done.then(function () { window.SerialTerm.fit(sid) })
+				} else {
+					window.SerialTerm.fit(sid)
+				}
+			}
+		}
+	}
+
+	function clearLogPane(sid) {
+		sid = sid === 'B' ? 'B' : 'A'
+		const container = SerialHub.getLogContainer(sid)
+		if (container) container.innerHTML = ''
+		if (window.SerialTerm) window.SerialTerm.clear(sid)
+		if (selectedLogRows[sid]) {
+			try { selectedLogRows[sid].classList.remove('selected') } catch (e) {}
+			selectedLogRows[sid] = null
+		}
 	}
 
 	// ---- 协议注册表 ----
@@ -1682,6 +1781,7 @@
 		e.target.value = max
 		changeOption('maxLogRows', max)
 		trimLogRows(SerialHub.getLogContainer('A'))
+		trimLogRows(SerialHub.getLogContainer('B'))
 	})
 	// 日志类型：自定义下拉（悬停/点击展开），底层保留隐藏 select 兼容命令面板
 	;(function () {
@@ -1706,9 +1806,6 @@
 				li.classList.toggle('active', on)
 				li.setAttribute('aria-selected', on ? 'true' : 'false')
 			})
-			const isAnsi = String(val).includes('ansi')
-			const logsEl = document.getElementById('serial-logs')
-			if (logsEl) logsEl.classList.toggle('ansi', isAnsi)
 		}
 		function openMenu() {
 			combo.classList.add('open')
@@ -1718,10 +1815,11 @@
 			combo.classList.remove('open')
 			btn.setAttribute('aria-expanded', 'false')
 		}
-		function setLogType(val) {
+		function topBarSetType(val) {
 			if (select.value !== val) select.value = val
 			syncUi(val)
-			changeOption('logType', val)
+			const sid = SerialHub.mode === 'dual' ? logFocusSid : 'A'
+			setSessionLogType(sid, val)
 		}
 
 		applyLogTypeUi = function (val) {
@@ -1732,8 +1830,7 @@
 		syncUi(select.value || toolOptions.logType || 'hex')
 
 		select.addEventListener('change', function (e) {
-			syncUi(e.target.value)
-			changeOption('logType', e.target.value)
+			topBarSetType(e.target.value)
 		})
 
 		btn.addEventListener('click', function (e) {
@@ -1747,7 +1844,7 @@
 			if (!li) return
 			e.preventDefault()
 			e.stopPropagation()
-			setLogType(li.getAttribute('data-value'))
+			topBarSetType(li.getAttribute('data-value'))
 			closeMenu()
 		})
 
@@ -1773,6 +1870,20 @@
 				openMenu()
 			}
 		})
+
+		const paneTypeA = document.getElementById('serial-log-type-a')
+		const paneTypeB = document.getElementById('serial-log-type-b')
+		if (paneTypeA) {
+			paneTypeA.addEventListener('change', function () {
+				setSessionLogType('A', paneTypeA.value)
+			})
+		}
+		if (paneTypeB) {
+			paneTypeB.addEventListener('change', function () {
+				setSessionLogType('B', paneTypeB.value)
+			})
+		}
+		syncPaneTypeSelects()
 	})()
 	document.getElementById('serial-auto-scroll').addEventListener('click', function (e) {
 		let autoScroll = this.innerText != '自动滚动'
@@ -1866,9 +1977,13 @@
 		}
 	}
 
-	//日志纯文本(复制/导出用): 单容器即含双路
-	function getLogsText() {
-		const container = SerialHub.getLogContainer('A')
+	//日志纯文本(复制/导出用): 焦点窗
+	function getLogsText(sid) {
+		sid = sid || (SerialHub.mode === 'dual' ? logFocusSid : 'A')
+		if (getLogType(sid) === 'term' && window.SerialTerm && typeof window.SerialTerm.getText === 'function') {
+			return window.SerialTerm.getText(sid) || ''
+		}
+		const container = SerialHub.getLogContainer(sid)
 		let lines = []
 		if (!container) return ''
 		for (const node of container.children) {
@@ -1892,12 +2007,24 @@
 		}
 		return lines.join('\n')
 	}
-	//清空
+	function exportLogsText() {
+		const sid = SerialHub.mode === 'dual' ? logFocusSid : 'A'
+		let text = getLogsText(sid)
+		if (!text) return ''
+		if (SerialHub.mode === 'dual') {
+			const label = SerialHub.getSessionLabel(sid)
+			text = '=== 会话 ' + sid + ': ' + label + ' ===\n' + text
+		}
+		return text
+	}
+	//清空（顶栏：焦点窗）
 	document.getElementById('serial-clear').addEventListener('click', (e) => {
-		const container = SerialHub.getLogContainer('A')
-		if (container) container.innerHTML = ''
-		selectedLogRow = null
+		clearLogPane(SerialHub.mode === 'dual' ? logFocusSid : 'A')
 	})
+	const clearABtn = document.getElementById('serial-clear-a')
+	if (clearABtn) clearABtn.addEventListener('click', function () { clearLogPane('A') })
+	const clearBBtn = document.getElementById('serial-clear-b')
+	if (clearBBtn) clearBBtn.addEventListener('click', function () { clearLogPane('B') })
 	//复制
 	document.getElementById('serial-copy').addEventListener('click', (e) => {
 		let text = getLogsText()
@@ -1907,7 +2034,7 @@
 	})
 	//保存
 	document.getElementById('serial-save').addEventListener('click', (e) => {
-		let text = getLogsText()
+		let text = exportLogsText()
 		if (text) {
 			saveText(text)
 		}
@@ -1918,7 +2045,9 @@
 	})
 
 	const serialToggle = document.getElementById('serial-open-or-close')
-	const serialLogs = document.getElementById('serial-logs')
+	const serialLogsA = document.getElementById('serial-logs-a')
+	const serialLogsB = document.getElementById('serial-logs-b')
+	const serialLogs = serialLogsA // 兼容别名：指向 A 窗
 
 	//静默解析悬停提示浮层
 	const skHoverTip = document.createElement('div')
@@ -1971,37 +2100,48 @@
 		clearSkHoverActive()
 		skHoverTip.style.display = 'none'
 	}
-	serialLogs.addEventListener('mouseover', onSkHexHover)
-	serialLogs.addEventListener('scroll', hideSkHover)
-	serialLogs.addEventListener('mouseleave', hideSkHover)
+	function bindLogContainerEvents(el, sid) {
+		if (!el) return
+		el.addEventListener('mouseover', onSkHexHover)
+		el.addEventListener('scroll', hideSkHover)
+		el.addEventListener('mouseleave', hideSkHover)
+		el.addEventListener('click', function (e) {
+			if (!e.target || !e.target.closest) return
+			const row = e.target.closest('.log-row')
+			if (!row || !el.contains(row)) return
+			const hex = row.getAttribute('data-hex')
+			if (!hex) return
+			const sel = window.getSelection()
+			if (sel && !sel.isCollapsed && sel.toString()) return
+			if (selectedLogRows[sid] && selectedLogRows[sid] !== row) {
+				selectedLogRows[sid].classList.remove('selected')
+			}
+			row.classList.add('selected')
+			selectedLogRows[sid] = row
+			setLogFocus(sid)
+			if (typeof window.expandParsePanel === 'function') {
+				window.expandParsePanel()
+			}
+			applyProtocolHexInput(hex)
+		})
+	}
+	bindLogContainerEvents(serialLogsA, 'A')
+	bindLogContainerEvents(serialLogsB, 'B')
+	function bindPaneFocus(sid) {
+		const pane = getLogPane(sid)
+		if (!pane) return
+		pane.addEventListener('mousedown', function () {
+			setLogFocus(sid)
+		})
+	}
+	bindPaneFocus('A')
+	bindPaneFocus('B')
 	const protocolHexViewHover = document.getElementById('serial-protocol-hexview')
 	if (protocolHexViewHover) {
 		protocolHexViewHover.addEventListener('mouseover', onSkHexHover)
 		protocolHexViewHover.addEventListener('scroll', hideSkHover)
 		protocolHexViewHover.addEventListener('mouseleave', hideSkHover)
 	}
-
-	//点击日志行:把该行的原始HEX灌进底部解析面板并解析(事件委托,不影响悬停提示)
-	let selectedLogRow = null
-	serialLogs.addEventListener('click', (e) => {
-		if (!e.target || !e.target.closest) return
-		const row = e.target.closest('.log-row')
-		if (!row || !serialLogs.contains(row)) return
-		const hex = row.getAttribute('data-hex')
-		if (!hex) return
-		//选中文本时不触发解析,避免影响复制
-		const sel = window.getSelection()
-		if (sel && !sel.isCollapsed && sel.toString()) return
-		if (selectedLogRow && selectedLogRow !== row) {
-			selectedLogRow.classList.remove('selected')
-		}
-		row.classList.add('selected')
-		selectedLogRow = row
-		if (typeof window.expandParsePanel === 'function') {
-			window.expandParsePanel()
-		}
-		applyProtocolHexInput(hex)
-	})
 
 	function isPortMetaClick(e) {
 		return !!(e && e.target && e.target.closest && e.target.closest('.port-rename-btn, .port-alias-clear-btn'))
@@ -2230,7 +2370,7 @@
 			serialStatuChange(false, sid)
 			updateOpenButton(sid)
 
-			addLogErr(`打开串口失败(${sid}): ${errorType} - ${errorMsg}`)
+			addLogErr(`打开串口失败(${sid}): ${errorType} - ${errorMsg}`, sid)
 
 			if (errorType === 'SecurityError') {
 				addLogErr('权限错误：请检查浏览器串口权限设置')
@@ -2328,7 +2468,7 @@
 			const otherSid = sid === 'A' ? 'B' : 'A'
 			const otherPort = SerialHub.getPort(otherSid)
 			if (otherPort && otherPort === port) {
-				addLogErr(`会话 ${sid} 与 ${otherSid} 选择了同一串口，请为两路选择不同设备`)
+				addLogErr(`会话 ${sid} 与 ${otherSid} 选择了同一串口，请为两路选择不同设备`, sid)
 				return
 			}
 		}
@@ -2370,7 +2510,7 @@
 			const otherPort = SerialHub.getPort(otherSid)
 			const port = SerialHub.getPort(sid)
 			if (otherPort && otherPort === port) {
-				addLogErr(`会话 ${sid} 与 ${otherSid} 选择了同一串口，请为两路选择不同设备`)
+				addLogErr(`会话 ${sid} 与 ${otherSid} 选择了同一串口，请为两路选择不同设备`, sid)
 				return
 			}
 		}
@@ -2882,7 +3022,7 @@
 		if (!sid) return
 		await closeSerial(sid)
 		if (!SerialHub.isManualClose(sid)) {
-			addLogErr(`会话 ${sid} 设备已断开，重新插入后将自动重连`)
+			addLogErr(`会话 ${sid} 设备已断开，重新插入后将自动重连`, sid)
 		}
 	})
 	function serialStatuChange(statu, sid) {
@@ -2952,11 +3092,11 @@
 		sid = sid || SerialHub.activeSendSid()
 		const port = SerialHub.getPort(sid)
 		if (!port || !port.writable) {
-			addLogErr('请先打开串口再发送数据')
+			addLogErr('请先打开串口再发送数据', sid)
 			return
 		}
 		if (!SerialHub.isOpen(sid)) {
-			addLogErr('请先打开串口再发送数据')
+			addLogErr('请先打开串口再发送数据', sid)
 			return
 		}
 		let writer
@@ -2968,11 +3108,35 @@
 			const sendTime = new Date()
 			await writer.write(data)
 			addLog(data, false, sendTime, sid)
-			addParseLog([...data], false, sendTime)
+			addParseLog([...data], false, sendTime, sid)
 		} catch (error) {
 			const errorType = error.name || 'UnknownError'
 			const errorMsg = error.message || '未知错误'
-			addLogErr(`串口写入失败(${sid}): ${errorType} - ${errorMsg}`)
+			addLogErr(`串口写入失败(${sid}): ${errorType} - ${errorMsg}`, sid)
+		} finally {
+			if (writer) {
+				try { writer.releaseLock() } catch (e) {}
+			}
+		}
+	}
+
+	// 终端键盘直写：不走 HEX 开关、不加 CRLF、不记 TX 行（设备自己 echo）
+	async function writeTermBytes(sid, bytes) {
+		sid = sid || SerialHub.activeSendSid()
+		const port = SerialHub.getPort(sid)
+		if (!port || !port.writable || !SerialHub.isOpen(sid)) {
+			addLogErr('请先打开串口再发送数据', sid)
+			return
+		}
+		let writer
+		try {
+			writer = port.writable.getWriter()
+			const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+			await writer.write(u8)
+		} catch (error) {
+			const errorType = error.name || 'UnknownError'
+			const errorMsg = error.message || '未知错误'
+			addLogErr(`串口写入失败(${sid}): ${errorType} - ${errorMsg}`, sid)
 		} finally {
 			if (writer) {
 				try { writer.releaseLock() } catch (e) {}
@@ -3022,18 +3186,18 @@
 						}
 						recoverCount++
 						if (recoverCount > READ_RECOVER_MAX) {
-							addLogErr(`串口读取错误(${sid}): ${errorType} - ${errorMsg}`)
-							addLogErr('短时间内错误过多，已停止自动恢复，请检查波特率/接线/缓冲区大小')
+							addLogErr(`串口读取错误(${sid}): ${errorType} - ${errorMsg}`, sid)
+							addLogErr('短时间内错误过多，已停止自动恢复，请检查波特率/接线/缓冲区大小', sid)
 							streamError = true
 						} else {
-							addLogErr(`串口读取错误(${sid}): ${errorType} - ${errorMsg}，已自动恢复继续接收`)
+							addLogErr(`串口读取错误(${sid}): ${errorType} - ${errorMsg}，已自动恢复继续接收`, sid)
 						}
 					} else {
-						addLogErr(`串口读取错误(${sid}): ${errorType} - ${errorMsg}`)
+						addLogErr(`串口读取错误(${sid}): ${errorType} - ${errorMsg}`, sid)
 						if (errorType === 'NetworkError' || errorType === 'DeviceLostError') {
-							addLogErr('设备可能已断开连接')
+							addLogErr('设备可能已断开连接', sid)
 						} else if (errorType === 'SecurityError') {
-							addLogErr('串口权限错误，请重新授权')
+							addLogErr('串口权限错误，请重新授权', sid)
 						}
 						streamError = true
 					}
@@ -3114,8 +3278,8 @@
 		sid = sid || 'A'
 		SerialHub.setSekWaitStart(sid, null)
 		if (!buf || !buf.length) return
-		addLog(buf, true, startTime, sid)
-		addParseLog(buf.slice ? buf.slice() : [...buf], true, startTime)
+		if (isRowLogType(getLogType(sid))) addLog(buf, true, startTime, sid)
+		addParseLog(buf.slice ? buf.slice() : [...buf], true, startTime, sid)
 	}
 
 	//串口分包合并
@@ -3146,6 +3310,9 @@
 			} else if (api._onReceive) {
 				api._onReceive(data)
 			}
+		}
+		if (getLogType(sid) === 'term' && window.SerialTerm) {
+			window.SerialTerm.write(sid, data)
 		}
 		const packBuf = SerialHub.getPackBuf(sid)
 		//新的合并包开始:记下第一个字节到达的时间,日志显示要用这个而不是flush时间
@@ -3359,6 +3526,9 @@
 	//添加日志
 	function addLog(data, isReceive = true, atTime = null, sid = null) {
 		sid = sid || 'A'
+		const logType = getLogType(sid)
+		// term 模式不走行日志；TX 也不写进 xterm（设备自己 echo）
+		if (logType === 'term') return
 		let form = isReceive ? '←' : '→'
 		//无论当前 logType 是什么都算出 HEX,点击行解析要用
 		let dataHex = []
@@ -3367,8 +3537,8 @@
 			dataHex.push(('0' + d.toString(16).toLocaleUpperCase()).slice(-2))
 		}
 		newmsg = ''
-		if (toolOptions.logType.includes('hex')) {
-			if (toolOptions.logType.includes('&')) {
+		if (logType.includes('hex')) {
+			if (logType.includes('&')) {
 				newmsg += 'HEX:'
 			}
 			if (toolOptions.skHoverEnable && typeof skByteMap === 'function') {
@@ -3397,15 +3567,15 @@
 				newmsg += dataHex.join(' ') + '<br/>'
 			}
 		}
-		if (toolOptions.logType.includes('text')) {
+		if (logType.includes('text')) {
 			let dataText = textdecoder.decode(Uint8Array.from(data))
-			if (toolOptions.logType.includes('&')) {
+			if (logType.includes('&')) {
 				newmsg += 'TEXT:'
 			}
 			//转义HTML标签,防止内容被当作标签渲染
 			newmsg += HTMLEncode(dataText)
 		}
-		if (toolOptions.logType.includes('ansi')) {
+		if (logType.includes('ansi')) {
 			const dataText = textdecoder.decode(Uint8Array.from(data))
 			const html = ansi_up.ansi_to_html(dataText)
 			newmsg += html
@@ -3422,29 +3592,22 @@
 		row.setAttribute('data-ts', String(ts))
 		row.setAttribute('data-seq', String(++logSeq))
 		row.setAttribute('data-sid', sid || 'A')
-		// 双路：方向旁会话标签；整行用 data-sid 分色
-		const sess = SerialHub.mode === 'dual'
-			? (sid === 'B' ? SerialHub.getLabelB() : SerialHub.getLabelA())
-			: ''
 		const dirLabel = form
-		const sessHtml = sess
-			? '<span class="log-sess">' + HTMLEncode(sess) + '</span>'
-			: ''
 		row.innerHTML = '<span class="log-time">' + time + '</span>' +
 			'<span class="log-dir">' + dirLabel + '</span>' +
-			sessHtml +
 			'<span class="log-len">' + data.length + 'B</span>' +
 			'<span class="log-body">' + newmsg + '</span>'
 		appendLogNode(row, sid)
 	}
 	//第三方协议解析日志
-	function addParseLog(data, isReceive, atTime = null) {
+	function addParseLog(data, isReceive, atTime = null, sid) {
 		if (!toolOptions.skParseEnable) {
 			return
 		}
 		if (window.serialApi && window.serialApi.suppressParse) {
 			return
 		}
+		sid = sid || 'A'
 		let html
 		try {
 			const r = skParseFrame(data, {
@@ -3466,8 +3629,18 @@
 		const when = atTime || new Date()
 		tempNode.setAttribute('data-ts', String(when.getTime ? when.getTime() : Date.now()))
 		tempNode.setAttribute('data-seq', String(++logSeq))
-		// 解析日志始终跟 activeSend
-		appendLogNode(tempNode, SerialHub.activeSendSid())
+		if (getLogType(sid) === 'term') {
+			const out = document.getElementById('serial-protocol-output')
+			if (out) {
+				while (tempNode.firstChild) out.appendChild(tempNode.firstChild)
+				if (toolOptions.autoScroll) out.scrollTop = out.scrollHeight - out.clientHeight
+			}
+			if (typeof skBindSeriesCharts === 'function') {
+				try { skBindSeriesCharts(out) } catch (e) { /* ignore */ }
+			}
+			return
+		}
+		appendLogNode(tempNode, sid)
 		if (typeof skBindSeriesCharts === 'function') {
 			try { skBindSeriesCharts(tempNode) } catch (e) { /* ignore */ }
 		}
@@ -3497,20 +3670,38 @@
 			.replace(/"/g, '&quot;')
 			.replace(/'/g, '&#39;')
 	}
-	//系统日志（单容器）
-	function addLogErr(msg) {
-		const when = new Date()
-		let time = toolOptions.showTime ? formatDate(when) : ''
-		let row = document.createElement('div')
-		row.className = 'log-row'
-		row.setAttribute('data-dir', 'sys')
-		row.setAttribute('data-ts', String(when.getTime()))
-		row.setAttribute('data-seq', String(++logSeq))
-		row.setAttribute('data-sid', 'SYS')
-		row.innerHTML = '<span class="log-time">' + time + '</span>' +
-			'<span class="log-dir">!</span>' +
-			'<span class="log-body text-danger">' + msg + '</span>'
-		appendLogNode(row, 'A')
+	//系统日志：有 sid 只写该窗；无 sid 时双路各写一条独立节点
+	function addLogErr(msg, sid) {
+		function makeRow(targetSid) {
+			const when = new Date()
+			let row = document.createElement('div')
+			row.className = 'log-row'
+			row.setAttribute('data-dir', 'sys')
+			row.setAttribute('data-ts', String(when.getTime()))
+			row.setAttribute('data-seq', String(++logSeq))
+			row.setAttribute('data-sid', targetSid)
+			row.innerHTML = '<span class="log-time">' + timeOf(when) + '</span>' +
+				'<span class="log-dir">!</span>' +
+				'<span class="log-body text-danger">' + msg + '</span>'
+			return row
+		}
+		function timeOf(when) {
+			return toolOptions.showTime ? formatDate(when) : ''
+		}
+		function writeOne(targetSid) {
+			appendLogNode(makeRow(targetSid), targetSid)
+			if (getLogType(targetSid) === 'term') showToast(msg, null, 'error')
+		}
+		if (sid === 'A' || sid === 'B') {
+			writeOne(sid)
+			return
+		}
+		if (SerialHub.mode === 'dual') {
+			writeOne('A')
+			writeOne('B')
+			return
+		}
+		writeOne('A')
 	}
 
 	//轻量顶部气泡(非确认框)。kind='error' 用红色、停留更久
@@ -3817,7 +4008,7 @@
 			return panel.classList.contains('collapsed')
 		}
 		function maxHeight() {
-			const logs = document.getElementById('serial-logs')
+			const logs = document.getElementById('serial-log-panes')
 			const cur = panel.getBoundingClientRect().height
 			const logH = logs ? logs.getBoundingClientRect().height : 0
 			//面板+日志的总可用高度是固定的，面板多吃多少日志就少多少
@@ -4002,11 +4193,14 @@
 			if (singleCtrl) singleCtrl.style.display = 'none'
 			if (dualCtrl) dualCtrl.style.display = ''
 
-			// 日志始终 #serial-logs；标记 dual 以便 CSS 强化分色
-			if (serialLogs) {
-				serialLogs.classList.add('is-dual')
-				serialLogs.style.display = ''
-			}
+			const panes = document.getElementById('serial-log-panes')
+			if (panes) panes.classList.add('is-dual')
+			const paneB = document.getElementById('serial-log-pane-b')
+			if (paneB) paneB.hidden = false
+			updateDualLogLabels()
+			applyPaneView('A')
+			applyPaneView('B')
+			setLogFocus(logFocusSid === 'B' ? 'B' : 'A')
 
 			// 更新按钮文案
 			updateOpenButton('A')
@@ -4049,10 +4243,12 @@
 			if (singleCtrl) singleCtrl.style.display = ''
 			if (dualCtrl) dualCtrl.style.display = 'none'
 
-			if (serialLogs) {
-				serialLogs.classList.remove('is-dual')
-				serialLogs.style.display = ''
-			}
+			const panes = document.getElementById('serial-log-panes')
+			if (panes) panes.classList.remove('is-dual')
+			const paneB = document.getElementById('serial-log-pane-b')
+			if (paneB) paneB.hidden = true
+			setLogFocus('A')
+			applyPaneView('A')
 
 			updateOpenButton('A')
 			serialStatuChange(SerialHub.isOpen('A'), 'A')
@@ -4063,7 +4259,10 @@
 	}
 
 	function updateDualLogLabels() {
-		// 合流日志无独立栏标题；保留空函数避免旧调用报错
+		const a = document.getElementById('serial-log-pane-label-a')
+		const b = document.getElementById('serial-log-pane-label-b')
+		if (a) a.textContent = SerialHub.getLabelA()
+		if (b) b.textContent = SerialHub.getLabelB()
 	}
 
 	// 模式切换按钮
@@ -4323,8 +4522,8 @@
 			if (!planB && !bIdKey) planB = findPortByPos(wantA && planA ? 1 : 0)
 		}
 		// 有身份 key 但匹配不到：不自动打开、不回落位置绑定，提示重新选择
-		if (wantA && !planA) addLogErr('A 未找到原设备，请重新选择串口')
-		if (SerialHub.mode === 'dual' && wantB && !planB) addLogErr('B 未找到原设备，请重新选择串口')
+		if (wantA && !planA) addLogErr('A 未找到原设备，请重新选择串口', 'A')
+		if (SerialHub.mode === 'dual' && wantB && !planB) addLogErr('B 未找到原设备，请重新选择串口', 'B')
 		if (planA) {
 			// 走 SerialHub.setPort 而不是直接写 serialPort; 开前后维护 opening 锁防并发
 			SerialHub.setPort('A', planA)

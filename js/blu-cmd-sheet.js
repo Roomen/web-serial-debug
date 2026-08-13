@@ -74,17 +74,9 @@
 							'<button class="btn btn-sm btn-primary blu-cmd-send-btn" id="blu-cmd-send-btn" title="发送选中内容">发送</button>' +
 						'</div>' +
 						'<div class="blu-cmd-row blu-cmd-custom-row">' +
-							'<div class="blu-cmd-custom-input-wrap">' +
-								'<input type="text" id="blu-cmd-custom" class="form-control form-control-sm" placeholder="或输入 HEX / 文本…" autocomplete="off" spellcheck="false">' +
-								'<div class="form-check form-switch blu-cmd-hex-switch blu-cmd-compact-switch">' +
-									'<input class="form-check-input" type="checkbox" id="blu-cmd-hex-mode" checked>' +
-									'<label class="form-check-label" for="blu-cmd-hex-mode">HEX</label>' +
-								'</div>' +
-								'<div class="form-check form-switch blu-cmd-hex-switch blu-cmd-compact-switch">' +
-									'<input class="form-check-input" type="checkbox" id="blu-cmd-add-crlf">' +
-									'<label class="form-check-label" for="blu-cmd-add-crlf" title="末尾加回车换行">回车换行</label>' +
-								'</div>' +
-							'</div>' +
+							'<input type="text" id="blu-cmd-custom" class="form-control form-control-sm" placeholder="或输入 HEX / 文本…" autocomplete="off" spellcheck="false">' +
+							'<button type="button" class="blu-cmd-pill is-on" id="blu-cmd-hex-mode" aria-pressed="true" title="HEX 发送">HEX</button>' +
+							'<button type="button" class="blu-cmd-pill" id="blu-cmd-add-crlf" aria-pressed="false" title="末尾加回车换行">CRLF</button>' +
 							'<button class="btn btn-sm btn-outline-secondary" id="blu-cmd-send-custom" title="发送自定义内容">发送</button>' +
 						'</div>' +
 						'<div class="blu-cmd-result" id="blu-cmd-result"></div>' +
@@ -143,17 +135,30 @@
 			}
 		}, true)
 
+		function pillOn(el) {
+			return !!(el && el.getAttribute('aria-pressed') === 'true')
+		}
+		function setPill(el, on) {
+			if (!el) return
+			el.setAttribute('aria-pressed', on ? 'true' : 'false')
+			el.classList.toggle('is-on', !!on)
+		}
+
 		// CRLF 开关写全局 addCRLF（与串口页共用同一偏好，两页联动）
-		crlfCheck.addEventListener('change', function () {
+		crlfCheck.addEventListener('click', function () {
+			const next = !pillOn(crlfCheck)
+			setPill(crlfCheck, next)
 			if (window.serialApi && typeof window.serialApi.setAddCRLF === 'function') {
-				window.serialApi.setAddCRLF(crlfCheck.checked)
+				window.serialApi.setAddCRLF(next)
 			}
 		})
 
 		// HEX 开关绑定全局 hexSend（与串口页 #serial-hex-send 联动；预设发送不受影响）
-		hexCheck.addEventListener('change', function () {
+		hexCheck.addEventListener('click', function () {
+			const next = !pillOn(hexCheck)
+			setPill(hexCheck, next)
 			if (window.serialApi && typeof window.serialApi.setHexSend === 'function') {
-				window.serialApi.setHexSend(hexCheck.checked)
+				window.serialApi.setHexSend(next)
 			}
 		})
 
@@ -210,13 +215,18 @@
 		hasSerialEl.hidden = !connected
 		resultEl.innerHTML = ''
 		resultEl.className = 'blu-cmd-result'
+		function setPill(el, on) {
+			if (!el) return
+			el.setAttribute('aria-pressed', on ? 'true' : 'false')
+			el.classList.toggle('is-on', !!on)
+		}
 		// CRLF 开关绑定全局 addCRLF（与串口页共用同一偏好）
 		if (crlfCheck && window.serialApi && typeof window.serialApi.getAddCRLF === 'function') {
-			crlfCheck.checked = !!window.serialApi.getAddCRLF()
+			setPill(crlfCheck, !!window.serialApi.getAddCRLF())
 		}
 		// HEX 开关绑定全局 hexSend（与串口页 #serial-hex-send 联动）
 		if (hexCheck && window.serialApi && typeof window.serialApi.getHexSend === 'function') {
-			hexCheck.checked = !!window.serialApi.getHexSend()
+			setPill(hexCheck, !!window.serialApi.getHexSend())
 		}
 		// 自动收起开关状态（localStorage 持久化，默认开）
 		if (autoCloseCheck) autoCloseCheck.checked = getAutoClose()
@@ -293,7 +303,10 @@
 			return
 		}
 		// 自定义发送跟随全局 hexSend（预设发送不受该开关影响）
-		await doSend(text, !!(window.serialApi && typeof window.serialApi.getHexSend === 'function' ? window.serialApi.getHexSend() : hexCheck.checked))
+		const hexOn = !!(window.serialApi && typeof window.serialApi.getHexSend === 'function'
+			? window.serialApi.getHexSend()
+			: hexCheck && hexCheck.getAttribute('aria-pressed') === 'true')
+		await doSend(text, hexOn)
 	}
 
 	async function doSend(content, hexMode) {
