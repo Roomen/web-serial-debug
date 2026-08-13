@@ -312,8 +312,8 @@
 		})
 		list.push({
 			group: '视图',
-			title: '打开设备指令',
-			alias: 'shebei zhiling device command cmd sheet',
+			title: '打开串口发送',
+			alias: 'chuankou fasong serial send sheet',
 			run: function () {
 				clickSel('.rail-item[data-view="view-blu"]')
 				if (window.bluCmdSheet && !window.bluCmdSheet.isOpen()) window.bluCmdSheet.open()
