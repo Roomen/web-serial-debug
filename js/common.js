@@ -134,6 +134,56 @@
 		},
 	}
 
+	// ===== 串口参数配置：单路/双路各自独立 =====
+	// 单路沿用 localStorage 'serialOptions'（打开成功时写入，路径不变）；
+	// 双路用独立键 'serialOptionsDual'，默认结构 = 单路默认结构，不从单路配置拷贝
+	const SERIAL_OPTIONS_KEY = 'serialOptions'
+	const SERIAL_OPTIONS_DUAL_KEY = 'serialOptionsDual'
+	const DEFAULT_SERIAL_OPTIONS = {
+		baudRate: 115200,
+		dataBits: 8,
+		stopBits: 1,
+		parity: 'none',
+		bufferSize: 1024,
+		flowControl: 'none',
+	}
+	function readSerialOptions(key) {
+		try {
+			const raw = localStorage.getItem(key)
+			if (raw) {
+				const obj = JSON.parse(raw)
+				if (obj && typeof obj === 'object') return Object.assign({}, DEFAULT_SERIAL_OPTIONS, obj)
+			}
+		} catch (e) {}
+		return Object.assign({}, DEFAULT_SERIAL_OPTIONS)
+	}
+	// 双路独立配置（内存态；dropdown 变更 / 打开成功时同步到 serialOptionsDual）
+	let SerialOptionsDual = readSerialOptions(SERIAL_OPTIONS_DUAL_KEY)
+	// 参数摘要刷新函数（由下方 summary 组件初始化时注入，注入前为 null）
+	let updateSerialParamsSummary = null
+	// 从当前 dropdown 值收集串口参数
+	function collectSerialParamsFromUI() {
+		return {
+			baudRate: parseInt(get('serial-baud')),
+			dataBits: parseInt(get('serial-data-bits')),
+			stopBits: parseInt(get('serial-stop-bits')),
+			parity: get('serial-parity'),
+			bufferSize: parseInt(get('serial-buffer-size')),
+			flowControl: get('serial-flow-control'),
+		}
+	}
+	// 按当前模式把对应配置刷进参数 dropdown（只设值不派发事件，避免触发重连）
+	function applySerialParamsToUI() {
+		const opts = SerialHub.mode === 'dual' ? SerialOptionsDual : readSerialOptions(SERIAL_OPTIONS_KEY)
+		set('serial-baud', opts.baudRate)
+		set('serial-data-bits', opts.dataBits)
+		set('serial-stop-bits', opts.stopBits)
+		set('serial-parity', opts.parity)
+		set('serial-buffer-size', opts.bufferSize)
+		set('serial-flow-control', opts.flowControl)
+		if (updateSerialParamsSummary) updateSerialParamsSummary()
+	}
+
 	const SERIAL_WANT_OPEN_KEY = 'serialWantOpen'
 	const SERIAL_WANT_OPEN_KEY_B = 'serialWantOpenB'
 	function setSerialWantOpen(want, sid) {
@@ -686,6 +736,7 @@
 			return
 		}
 		localStorage.removeItem('serialOptions')
+		localStorage.removeItem(SERIAL_OPTIONS_DUAL_KEY)
 		localStorage.removeItem('toolOptions')
 		localStorage.removeItem('quickSendList')
 		location.reload()
@@ -694,6 +745,7 @@
 	document.getElementById('serial-export').addEventListener('click', (e) => {
 		let data = {
 			serialOptions: localStorage.getItem('serialOptions'),
+			serialOptionsDual: localStorage.getItem(SERIAL_OPTIONS_DUAL_KEY),
 			toolOptions: localStorage.getItem('toolOptions'),
 			quickSendList: localStorage.getItem('quickSendList'),
 		}
@@ -720,6 +772,7 @@
 			try {
 				let obj = JSON.parse(data)
 				setParam('serialOptions', obj.serialOptions)
+				setParam(SERIAL_OPTIONS_DUAL_KEY, obj.serialOptionsDual)
 				setParam('toolOptions', obj.toolOptions)
 				setParam('quickSendList', obj.quickSendList)
 				location.reload()
@@ -1434,18 +1487,9 @@
 		})
 		if (presetSel.value) presetSel.dispatchEvent(new Event('change'))
 	}
-	//读取参数
-	let options = localStorage.getItem('serialOptions')
-	if (options) {
-		let serialOptions = JSON.parse(options)
-		set('serial-baud', serialOptions.baudRate)
-		set('serial-data-bits', serialOptions.dataBits)
-		set('serial-stop-bits', serialOptions.stopBits)
-		set('serial-parity', serialOptions.parity)
-		set('serial-buffer-size', serialOptions.bufferSize)
-		set('serial-flow-control', serialOptions.flowControl)
-	}
-	options = localStorage.getItem('toolOptions')
+	//读取参数：单路/双路各自独立的串口参数，按当前模式刷新 dropdown
+	applySerialParamsToUI()
+	let options = localStorage.getItem('toolOptions')
 	if (options) {
 		toolOptions = JSON.parse(options)
 	}
@@ -1793,6 +1837,11 @@
 
 	document.querySelectorAll('#serial-params-popover .serial-field input,#serial-params-popover .serial-field select').forEach((item) => {
 		item.addEventListener('change', async (e) => {
+			// 双路：变更写入独立配置并持久化，不污染单路 serialOptions
+			if (SerialHub.mode === 'dual') {
+				SerialOptionsDual = collectSerialParamsFromUI()
+				localStorage.setItem(SERIAL_OPTIONS_DUAL_KEY, JSON.stringify(SerialOptionsDual))
+			}
 			// 当任一会话打开时，关闭再重新打开以应用新参数
 			const aOpen = SerialHub.isOpen('A') && !SerialHub.isOpening('A')
 			const bOpen = SerialHub.mode === 'dual' && SerialHub.isOpen('B') && !SerialHub.isOpening('B')
@@ -2086,13 +2135,12 @@
 			addLogErr(`不支持蓝牙串口，请选择 USB 串口`)
 			return
 		}
-		let SerialOptions = {
-			baudRate: parseInt(get('serial-baud')),
-			dataBits: parseInt(get('serial-data-bits')),
-			stopBits: parseInt(get('serial-stop-bits')),
-			parity: get('serial-parity'),
-			bufferSize: parseInt(get('serial-buffer-size')),
-			flowControl: get('serial-flow-control'),
+		let SerialOptions
+		if (SerialHub.mode === 'dual') {
+			// 双路：A/B 统一使用独立的双路配置
+			SerialOptions = Object.assign({}, SerialOptionsDual)
+		} else {
+			SerialOptions = collectSerialParamsFromUI()
 		}
 		try {
 			//端口可能处于"已打开但本地状态丢失"的脏状态，先尝试 close 再 open
@@ -2117,7 +2165,7 @@
 				setSerialWantPortKey(sid, ident.keys)
 			})
 			serialStatuChange(true, sid)
-			localStorage.setItem('serialOptions', JSON.stringify(SerialOptions))
+			localStorage.setItem(SerialHub.mode === 'dual' ? SERIAL_OPTIONS_DUAL_KEY : SERIAL_OPTIONS_KEY, JSON.stringify(SerialOptions))
 			requestWakeLock(sid)
 			readData(sid)
 		} catch (e) {
@@ -3398,6 +3446,8 @@
 			const parity = PARITY_ABBR[get('serial-parity')] || 'N'
 			summaryText.textContent = `${baud} ${dataBits}-${parity}-${stopBits}`
 		}
+		// 供 applySerialParamsToUI（模式切换刷新）调用
+		updateSerialParamsSummary = updateSummary
 
 		FIELDS.forEach(function (id) {
 			const el = document.getElementById(id)
@@ -3773,6 +3823,9 @@
 			SerialHub.mode = 'dual'
 			try { sessionStorage.setItem('serialHubMode', 'dual') } catch (e) {}
 
+			// 参数下拉框显示双路独立配置（reload 恢复路径在 serialLogs 初始化前也会走到这里）
+			applySerialParamsToUI()
+
 			// 切换按钮状态
 			document.getElementById('serial-mode-single').classList.remove('active')
 			document.getElementById('serial-mode-dual').classList.add('active')
@@ -3817,6 +3870,9 @@
 			}
 			SerialHub.mode = 'single'
 			try { sessionStorage.setItem('serialHubMode', 'single') } catch (e) {}
+
+			// 参数下拉框恢复单路配置
+			applySerialParamsToUI()
 
 			document.getElementById('serial-mode-single').classList.add('active')
 			document.getElementById('serial-mode-dual').classList.remove('active')
