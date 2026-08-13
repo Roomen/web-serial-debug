@@ -1,6 +1,6 @@
 /**
- * BLU 设备指令覆盖面板
- * 在功耗分析页底部以 overlay 形式提供设备指令下发能力
+ * BLU 串口发送覆盖面板
+ * 在功耗分析页底部以 overlay 形式提供串口发送能力
  * 走 DUT 串口（window.serialApi），不走 BLU 分析仪口
  */
 
@@ -12,7 +12,7 @@
 
 	// DOM refs
 	let wrap, tab, backdrop, sheet, statusEl, noSerialEl, hasSerialEl
-	let presetSel, sendBtn, customInput, hexCheck, sendCustomBtn, resultEl, closeBtn
+	let presetSel, sendBtn, customInput, hexCheck, crlfCheck, sendCustomBtn, resultEl, closeBtn
 
 	function E(id) { return document.getElementById(id) }
 
@@ -35,14 +35,14 @@
 
 		const html =
 		'<div class="blu-cmd-sheet-wrap" id="blu-cmd-sheet-wrap">' +
-			'<button class="blu-cmd-tab" id="blu-cmd-tab" title="设备指令">' +
+			'<button class="blu-cmd-tab" id="blu-cmd-tab" title="串口发送">' +
 				'<span class="blu-cmd-tab-caret">^</span>' +
-				'<span class="blu-cmd-tab-text">指令</span>' +
+				'<span class="blu-cmd-tab-text">串口发送</span>' +
 			'</button>' +
 			'<div class="blu-cmd-backdrop" id="blu-cmd-backdrop" hidden></div>' +
 			'<div class="blu-cmd-sheet" id="blu-cmd-sheet" hidden>' +
 				'<div class="blu-cmd-sheet-bar">' +
-					'<span class="blu-cmd-sheet-title"><i class="bi bi-terminal"></i> 设备指令</span>' +
+					'<span class="blu-cmd-sheet-title"><i class="bi bi-terminal"></i> 串口发送</span>' +
 					'<div class="blu-cmd-sheet-actions">' +
 						'<span class="blu-cmd-status" id="blu-cmd-status">--</span>' +
 						'<button class="blu-cmd-sheet-close" id="blu-cmd-close" title="收起 (Esc)">∨</button>' +
@@ -50,7 +50,7 @@
 				'</div>' +
 				'<div class="blu-cmd-sheet-body">' +
 					'<div id="blu-cmd-no-serial" hidden>' +
-						'<div class="blu-cmd-hint">串口未打开，无法下发设备指令</div>' +
+						'<div class="blu-cmd-hint">串口未打开，无法发送</div>' +
 						'<button class="btn btn-sm btn-outline-secondary" id="blu-cmd-goto-serial">' +
 							'<i class="bi bi-box-arrow-up-right"></i> 打开串口调试' +
 						'</button>' +
@@ -58,9 +58,9 @@
 					'<div id="blu-cmd-has-serial" hidden>' +
 						'<div class="blu-cmd-row">' +
 							'<select id="blu-cmd-preset" class="form-select form-select-sm" title="从快捷发送列表选择">' +
-								'<option value="">-- 选择指令 --</option>' +
+								'<option value="">-- 选择发送内容 --</option>' +
 							'</select>' +
-							'<button class="btn btn-sm btn-primary blu-cmd-send-btn" id="blu-cmd-send-btn" title="下发选中指令">下发</button>' +
+							'<button class="btn btn-sm btn-primary blu-cmd-send-btn" id="blu-cmd-send-btn" title="发送选中内容">下发</button>' +
 						'</div>' +
 						'<div class="blu-cmd-row blu-cmd-custom-row">' +
 							'<div class="blu-cmd-custom-input-wrap">' +
@@ -68,6 +68,10 @@
 								'<div class="form-check form-switch blu-cmd-hex-switch">' +
 									'<input class="form-check-input" type="checkbox" id="blu-cmd-hex-mode" checked>' +
 									'<label class="form-check-label" for="blu-cmd-hex-mode">HEX</label>' +
+								'</div>' +
+								'<div class="form-check form-switch blu-cmd-hex-switch">' +
+									'<input class="form-check-input" type="checkbox" id="blu-cmd-add-crlf">' +
+									'<label class="form-check-label" for="blu-cmd-add-crlf">末尾加回车换行</label>' +
 								'</div>' +
 							'</div>' +
 							'<button class="btn btn-sm btn-outline-secondary" id="blu-cmd-send-custom" title="发送自定义内容">发送</button>' +
@@ -91,6 +95,7 @@
 		sendBtn = E('blu-cmd-send-btn')
 		customInput = E('blu-cmd-custom')
 		hexCheck = E('blu-cmd-hex-mode')
+		crlfCheck = E('blu-cmd-add-crlf')
 		sendCustomBtn = E('blu-cmd-send-custom')
 		resultEl = E('blu-cmd-result')
 		closeBtn = E('blu-cmd-close')
@@ -168,7 +173,7 @@
 
 	function populatePresets() {
 		const keep = presetSel.value
-		presetSel.innerHTML = '<option value="">-- 选择指令 --</option>'
+		presetSel.innerHTML = '<option value="">-- 选择发送内容 --</option>'
 		let groups = []
 		try {
 			const raw = localStorage.getItem('quickSendList')
@@ -197,16 +202,16 @@
 	async function sendPreset() {
 		const val = presetSel.value
 		if (!val) {
-			showResult('请先选择一条指令', 'error')
+			showResult('请先选择发送内容', 'error')
 			return
 		}
 		let parsed
 		try { parsed = JSON.parse(val) } catch (e) {
-			showResult('指令数据解析失败', 'error')
+			showResult('发送内容解析失败', 'error')
 			return
 		}
 		if (!parsed.c) {
-			showResult('指令内容为空', 'error')
+			showResult('发送内容为空', 'error')
 			return
 		}
 		await doSend(parsed.c, parsed.h)
@@ -228,23 +233,32 @@
 			return
 		}
 		try {
+			let bytes
 			if (hexMode) {
 				const cleaned = content.replace(/\s+/g, '')
 				if (!/^[0-9A-Fa-f]+$/.test(cleaned) || cleaned.length % 2 !== 0) {
 					showResult('HEX 格式错误', 'error')
 					return
 				}
-				const bytes = []
+				const arr = []
 				for (let i = 0; i < cleaned.length; i += 2)
-					bytes.push(parseInt(cleaned.substring(i, i + 2), 16))
-				await window.serialApi.writeData(new Uint8Array(bytes))
+					arr.push(parseInt(cleaned.substring(i, i + 2), 16))
+				bytes = new Uint8Array(arr)
 			} else {
-				const encoder = new TextEncoder()
-				await window.serialApi.writeData(encoder.encode(content))
+				bytes = new TextEncoder().encode(content)
 			}
-			showResult('下发成功', 'ok')
+			// 与串口页 writeData 一致：TEXT/HEX 转换后的字节末尾追加 0D 0A
+			if (crlfCheck && crlfCheck.checked) {
+				const withCrlf = new Uint8Array(bytes.length + 2)
+				withCrlf.set(bytes)
+				withCrlf[bytes.length] = 0x0d
+				withCrlf[bytes.length + 1] = 0x0a
+				bytes = withCrlf
+			}
+			await window.serialApi.writeData(bytes)
+			showResult('发送成功', 'ok')
 		} catch (err) {
-			showResult('下发失败: ' + (err.message || err), 'error')
+			showResult('发送失败: ' + (err.message || err), 'error')
 		}
 	}
 
