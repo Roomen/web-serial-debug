@@ -40,6 +40,10 @@
 
 同一提交含多种改动时取最高级别（feat+fix → MINOR）。版本与 commit 同批提交，commit message 仍用 Conventional Commit，无需把版本写进 message。
 
+### 功能分支内的版本策略
+
+功能分支未合入 main 前，分支内多个 commit 不逐次 bump；以 main 为基准、按分支整体最高改动级别只 bump 一次（通常在准备提 PR 时）。PR 合入后 main 上再按逐 commit 规则执行。
+
 ## 分支与工作流
 
 **先开分支再改代码**，不要在 `main` 或无关分支上直接改。流程：`git checkout main && git pull` → `git checkout -b feat/xxx` 或 `fix/xxx` → 修改 → commit → push → PR。合入并删除远端分支后，本地切回 `main` 并 `git pull`，删掉本地功能分支。

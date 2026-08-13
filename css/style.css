@@ -859,6 +859,94 @@ body {
   white-space: pre-wrap;
   word-break: break-all;
   overflow-wrap: anywhere;
+  /* 禁止截断单条报文（双路监控关键） */
+  text-overflow: clip;
+  overflow: visible;
+}
+
+/* 双路合流：按会话分色 */
+.log-row .log-sess {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  padding: 0 4px;
+  border-radius: 3px;
+  line-height: 1.4;
+}
+
+#serial-logs.is-dual .log-row[data-sid='A'] .log-sess,
+#serial-logs.is-dual .log-row[data-sid='A'] .log-time {
+  color: #059669;
+}
+
+#serial-logs.is-dual .log-row[data-sid='B'] .log-sess,
+#serial-logs.is-dual .log-row[data-sid='B'] .log-time {
+  color: #d97706;
+}
+
+#serial-logs.is-dual .log-row[data-sid='A'] {
+  border-left-color: #10b981;
+}
+
+#serial-logs.is-dual .log-row[data-sid='B'] {
+  border-left-color: #f59e0b;
+}
+
+#serial-logs.is-dual .log-row[data-sid='A'] .log-body {
+  color: #047857;
+}
+
+#serial-logs.is-dual .log-row[data-sid='B'] .log-body {
+  color: #b45309;
+}
+
+[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='A'] .log-body,
+[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='A'] .log-sess,
+[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='A'] .log-time {
+  color: #34d399;
+}
+
+[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='B'] .log-body,
+[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='B'] .log-sess,
+[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='B'] .log-time {
+  color: #fbbf24;
+}
+
+/* 双路日志行淡色背景：A 淡绿 / B 淡橙（SYS 行无底色） */
+#serial-logs.is-dual .log-row[data-sid='A'] {
+  background-color: color-mix(in srgb, #10b981 7%, transparent);
+}
+
+#serial-logs.is-dual .log-row[data-sid='B'] {
+  background-color: color-mix(in srgb, #f59e0b 7%, transparent);
+}
+
+[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='A'] {
+  background-color: color-mix(in srgb, #34d399 7%, transparent);
+}
+
+[data-theme='dark'] #serial-logs.is-dual .log-row[data-sid='B'] {
+  background-color: color-mix(in srgb, #fbbf24 7%, transparent);
+}
+
+/* hover / selected 时保持原有反馈（覆盖淡色底，避免与现有交互样式打架） */
+#serial-logs.is-dual .log-row[data-sid='A']:hover,
+#serial-logs.is-dual .log-row[data-sid='B']:hover {
+  background-color: var(--bg-surface-hover);
+}
+
+#serial-logs.is-dual .log-row[data-sid].selected {
+  background-color: var(--accent-light);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+#serial-connect-bar {
+  overflow: visible;
+}
+
+.connect-bar-params {
+  flex: 0 0 auto;
 }
 
 .log-row[data-dir='rx'] {
@@ -2467,13 +2555,15 @@ hr {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 44px;
+  min-height: 44px;
+  height: auto;
   padding: 0 10px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-color);
   transition: background-color var(--transition-normal), border-color var(--transition-normal);
   position: relative;
   z-index: 30;
+  flex-wrap: wrap;
 }
 
 .connect-bar-section {
@@ -3869,6 +3959,7 @@ hr {
 /* ========== BLU 100k Power Analysis ========== */
 #view-blu {
   min-height: 0;
+  position: relative;
 }
 
 .blu-wrapper {
@@ -5567,5 +5658,598 @@ body.blu-wave-fullscreen-open {
 
 #view-blu.blu-wave-fullscreen .blu-wave-wrap {
   min-height: calc(100vh - 24px);
+}
+
+/* ========== Dual Serial Monitor ========== */
+
+/* Mode Toggle */
+.serial-mode-toggle {
+  display: inline-flex;
+  background: var(--bg-surface-hover);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.serial-mode-btn {
+  padding: 5px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.serial-mode-btn + .serial-mode-btn {
+  border-left: 1px solid var(--border-color);
+}
+
+.serial-mode-btn:hover {
+  color: var(--text-primary);
+  background: var(--accent-light);
+}
+
+.serial-mode-btn.active {
+  color: #fff;
+  background: var(--accent);
+}
+
+/* Connect bar: single/dual toggling */
+#serial-connect-bar #serial-single-ctrl.serial-hidden,
+#serial-connect-bar #serial-dual-ctrl.serial-hidden {
+  display: none !important;
+}
+
+/* Dual Session Rows: A/B 单行并排 + 主发口靠右（窄屏自然换行） */
+.connect-bar-dual {
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.dual-session-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dual-session-label {
+  width: 48px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-align: center;
+  font-family: var(--font-mono);
+  transition: all var(--transition-fast);
+}
+
+.dual-session-label:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-light);
+  outline: none;
+}
+
+.dual-session-label[data-session="A"] {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.dual-session-label[data-session="B"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dual-port-btn,
+.dual-open-btn {
+  font-size: 0.7rem !important;
+  padding: 5px 10px !important;
+  white-space: nowrap;
+}
+
+/* 选中后按钮/状态会显示完整设备名，限宽省略保持单行紧凑 */
+.dual-port-btn {
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dual-status {
+  min-width: 76px;
+  max-width: 220px;
+}
+
+.dual-status .serial-status-indicator {
+  padding: 4px 8px;
+  font-size: 0.7rem;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.dual-status .serial-status-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 主发口选择器与 A/B 同行靠右（原 .dual-params-row 分隔行已并入单行布局） */
+.dual-active-send {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.dual-active-send-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+#serial-active-send {
+  width: 56px;
+  padding: 3px 6px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+/* Dual Log Panels */
+#serial-dual-logs {
+  display: flex;
+  gap: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dual-log-panel {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm) inset;
+}
+
+.dual-log-panel + .dual-log-panel {
+  margin-left: 6px;
+}
+
+.dual-log-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-surface-hover);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.dual-log-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dual-log-dot-a {
+  background: var(--success);
+  box-shadow: 0 0 4px rgba(52, 199, 89, 0.5);
+}
+
+.dual-log-dot-b {
+  background: var(--accent);
+  box-shadow: 0 0 4px rgba(0, 122, 255, 0.5);
+}
+
+.dual-log-panel-label {
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.dual-log-panel-stats {
+  margin-left: auto;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dual-log-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-primary);
+}
+
+.dual-log-body.ansi {
+  background-color: #1c1c1e;
+  color: #f5f5f7;
+}
+
+/* ========== Port Rename ========== */
+.port-rename-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: all var(--transition-fast);
+}
+
+.port-rename-btn:hover {
+  color: var(--accent);
+  background: var(--accent-light);
+}
+
+.port-alias-clear-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: all var(--transition-fast);
+}
+
+.port-alias-clear-btn:hover {
+  color: var(--danger);
+  background: var(--danger-light);
+}
+
+/* ---- BLU 设备指令覆盖面板 ---- */
+.blu-cmd-sheet-wrap {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  pointer-events: none;
+}
+
+.blu-cmd-sheet-wrap > * {
+  pointer-events: auto;
+}
+
+/* 收起态：底部居中 ^ 指令 标签 */
+.blu-cmd-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  margin: 0 auto;
+  padding: 3px 14px 4px;
+  border: 1px solid var(--border-color);
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-family: var(--font-sans);
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  transition: all var(--transition-fast);
+}
+
+.blu-cmd-tab:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-color));
+  background: color-mix(in srgb, var(--bg-surface) 95%, transparent);
+}
+
+.blu-cmd-tab-caret {
+  font-size: 1rem;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.blu-cmd-tab-text {
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+
+/* 打开态隐藏标签 */
+.blu-cmd-sheet-wrap.is-open .blu-cmd-tab {
+  display: none;
+}
+
+/* 遮罩：覆盖非 canvas 底部区域；canvas 在上层不受影响 */
+.blu-cmd-backdrop {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 260px;
+  background: linear-gradient(to top, rgba(0,0,0,0.08), transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  cursor: pointer;
+}
+
+[data-theme="dark"] .blu-cmd-backdrop {
+  background: linear-gradient(to top, rgba(0,0,0,0.25), transparent);
+}
+
+/* 底部 sheet 面板 */
+.blu-cmd-sheet {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-bottom: none;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  overflow: hidden;
+  animation: bluCmdSlideUp 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+@keyframes bluCmdSlideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+/* Sheet 标题栏 */
+.blu-cmd-sheet-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 10px;
+  background: var(--bg-surface-hover);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.blu-cmd-sheet-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.blu-cmd-sheet-title i {
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.blu-cmd-sheet-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.blu-cmd-status {
+  font-size: 0.68rem;
+  font-weight: 500;
+  padding: 1px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.blu-cmd-status.is-connected {
+  color: var(--success);
+  background: var(--success-light);
+}
+
+.blu-cmd-status.is-disconnected {
+  color: var(--danger);
+  background: var(--danger-light);
+}
+
+.blu-cmd-sheet-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  transition: all var(--transition-fast);
+}
+
+.blu-cmd-sheet-close:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+/* Sheet 内容区 */
+.blu-cmd-sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 未连接态 */
+#blu-cmd-no-serial {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+  text-align: center;
+}
+
+.blu-cmd-hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+/* 已连接：指令行 */
+.blu-cmd-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.blu-cmd-row select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.blu-cmd-send-btn {
+  flex-shrink: 0;
+  padding: 4px 14px;
+}
+
+.blu-cmd-custom-row {
+  flex-wrap: wrap;
+}
+
+.blu-cmd-custom-input-wrap {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.blu-cmd-custom-input-wrap input {
+  flex: 1 1 0;
+  min-width: 80px;
+}
+
+.blu-cmd-hex-switch {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.blu-cmd-hex-switch .form-check-input {
+  margin: 0;
+  width: 2em;
+  height: 1.1em;
+}
+
+.blu-cmd-hex-switch .form-check-label {
+  font-size: 0.7rem;
+}
+
+/* 结果提示 */
+.blu-cmd-result {
+  font-size: 0.68rem;
+  min-height: 1.3em;
+  line-height: 1.3;
+  transition: color var(--transition-fast);
+}
+
+.blu-cmd-result.is-ok {
+  color: var(--success);
+}
+
+.blu-cmd-result.is-error {
+  color: var(--danger);
+}
+
+/* 预设两级选择：分组固定宽 + 条目自适应 */
+#blu-cmd-group {
+  flex: 0 0 96px;
+}
+
+#blu-cmd-preset {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 紧凑开关：HEX / 回车换行 等宽同字号，与输入框同行靠右 */
+.blu-cmd-compact-switch {
+  width: 84px;
+  justify-content: flex-start;
+}
+
+.blu-cmd-compact-switch .form-check-label {
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+/* 标题栏自动收起开关 */
+.blu-cmd-auto-close-switch {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.blu-cmd-auto-close-switch .form-check-input {
+  margin: 0;
+  width: 2em;
+  height: 1.1em;
+}
+
+.blu-cmd-auto-close-switch .form-check-label {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
 }
 

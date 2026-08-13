@@ -394,15 +394,17 @@
 	}
 
 	// ===== 密钥 =====
-	// 不再内置任何默认密钥: 未输入时一律回落到全 0 密钥(16 字节 \0),
-	// 这样任何人打开页面都能直接用(与设备未注入密钥时的全 0 兜底一致)。
+	// 公开读(role 0)固定使用内置默认密钥,不然无人知道该填什么、公开读将无法使用。
+	// 操作员/管理员(role 1/2)不内置默认密钥: 未输入时回落全 0 密钥,与设备未注入密钥时的全 0 兜底一致。
+	const BUILTIN_KEY_BASE = new Uint8Array([0x53, 0x45, 0x43, 0x4B, 0x2D, 0x4D, 0x49, 0x44, 0x2D, 0x54, 0x45, 0x4D, 0x50, 0x4B, 0x45, 0x59])
 	function defaultKey(role) {
+		if (role === 0) return BUILTIN_KEY_BASE
 		return new Uint8Array(16)
 	}
 	// 三个角色各有独立密钥(公开读/操作员/管理员互不相同), 因此不能像 SK 那样用单一密钥字段覆盖全部角色。
-	// 公开读(role 0)不接受用户输入(下发面板不显示其密钥框), 固定使用全 0 密钥。
+	// 公开读(role 0)按协议固定使用内置默认密钥,不接受用户输入(下发面板不显示其密钥框)。
 	// 操作员/管理员取值优先级: 显式传入的 opt.roleKeys[role] > localStorage 中该角色的 HEX 输入 > ASCII 输入(UTF-8 取前16字节,不足补0)
-	// > 全 0 密钥(未输入时的兜底)。
+	// > 全 0 密钥(未输入时的兜底,不内置默认)。
 	// 密钥存于 localStorage 而非直接读 DOM: 下发面板同一时刻只显示当前选中角色的密钥框(见 initDownUi),
 	// 但上行报文解析可能遇到任意角色, resolveRoleKey 需要能取到未在框中显示的角色的已保存密钥。
 	const ROLE_KEY_STORAGE_ID = { 1: 'wmbusKeyRole1', 2: 'wmbusKeyRole2' }
@@ -713,7 +715,7 @@
 		meterIdEl.value = localStorage.getItem('wmbusDownMeterId') || ''
 		mcntEl.value = localStorage.getItem('wmbusDownMcnt') || '1'
 
-		// 密钥角色0(公开读)固定用全0密钥,不展示密钥框;1/2 展示对应角色已保存的 ASCII/HEX 密钥
+		// 密钥角色0(公开读)固定用内置默认密钥,不展示密钥框;1/2 展示对应角色已保存的 ASCII/HEX 密钥
 		function updateKeyUi() {
 			const role = parseInt(keyIdSel.value, 10)
 			if (role === 0) { keyGroup.style.display = 'none'; return }
@@ -963,7 +965,7 @@
 			const mcnt = parseInt(mcntEl.value, 10)
 			if (!mcnt || mcnt < 1) { showErr('计数器MCNT需为正整数,且需大于设备当前已接受值'); return null }
 			try {
-				// 密钥按 keyId 对应角色, 从上方「密钥」框读取(角色0固定全0, 未输入时也回落全0, 见 resolveRoleKey)
+				// 密钥按 keyId 对应角色, 从上方「密钥」框读取(角色0固定内置默认密钥, 操作员/管理员未输入时回落全0, 见 resolveRoleKey)
 				const frame = W.wmbusBuildDownFrame({
 					addr,
 					keyId: parseInt(keyIdSel.value, 10),

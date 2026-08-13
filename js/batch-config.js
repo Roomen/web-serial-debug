@@ -557,6 +557,8 @@
 		setBusyUi(true)
 		clearLog()
 		setStatus('写入第 ' + (current + 1) + ' 台…', 'run')
+		// 单台操作钉扎主发口: 写入与回读落在同一设备
+		window.serialApi.pinSession(window.serialApi.getActiveSendSid())
 		try {
 			const result = await writeOne(current)
 			renderResult(result)
@@ -580,6 +582,7 @@
 			logLine('异常: ' + (e.message || e), 'fail')
 			setStatus('异常: ' + (e.message || e), 'err')
 		} finally {
+			window.serialApi.unpinSession()
 			setBusyUi(false)
 		}
 	}

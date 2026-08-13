@@ -526,146 +526,152 @@
 		running = true
 		stopFlag = false
 		clearLog()
-		el.start.disabled = true
-		el.stop.disabled = false
-		setStatus('测试中…', 'run')
-
-		const stepsN = Math.max(5, parseInt(el.steps.value, 10) || 40)
-		const gapMs = Math.max(0, parseInt(el.gap.value, 10) || DEFAULT_GAP_MS)
-		const timeoutMs = Math.max(1000, parseInt(el.timeout.value, 10) || DEFAULT_STEP_TIMEOUT)
-		let seed = parseInt(el.seed.value, 10)
-		if (isNaN(seed)) {
-			seed = (Date.now() ^ (Math.random() * 0x7fffffff)) >>> 0
-			el.seed.value = String(seed)
-		}
-		const continueOnFail = !!(el.continueOnFail && el.continueOnFail.checked)
-		const doRestore = !(el.restore && !el.restore.checked)
-		const rng = mulberry32(seed)
-		const protoName = getActiveProtoName()
-		const catalog = SEK_CASES
-
-		const plan = buildRandomPlan(rng, catalog, stepsN)
-		const total = plan.length
-		let done = 0
-
-		const lists = {
-			fail: [],
-			skip: [],
-			unsupported: [],
-			restoreFail: [],
-			passCount: 0
-		}
-		const ctx = {
-			rng: rng,
-			timeoutMs: timeoutMs,
-			gapMs: gapMs,
-			originals: {},
-			lastWrite: {}
-		}
-
-		logLine('开始随机测试 协议=' + protoName + ' seed=' + seed + ' 步数=' + total +
-			' 恢复原值=' + (doRestore ? '是' : '否'), 'info')
-		logLine('seed=伪随机种子, 相同 seed 会生成相同指令序列, 便于复现问题', 'info')
-		logLine('指令模式: 查询/读字段/写字段(可连写1~3次)/校验 随机交错', 'info')
-		logLine('红外保活阈值 ' + (IR_IDLE_MS / 1000) + 's · 不含开猫/复位/表号/IP/时间/密钥', 'info')
-
-		window.sekTx.clearBuffer()
-		clearTagCache()
-		lastCommAt = Date.now()
-
-		// 先做一次连通查询
+		// 整轮测试钉扎主发口: 期间切主发口被拦, 恢复字段不会写到另一台设备
+		window.serialApi.pinSession(window.serialApi.getActiveSendSid())
 		try {
-			await doQuery(1, 1, timeoutMs)
-			logLine('连通检查 OK', 'pass')
-		} catch (e) {
-			logLine('连通检查失败: ' + e.message, 'fail')
-			lists.fail.push('连通检查: ' + e.message)
-			printReport(lists, seed, true)
-			finishRun(true, lists, seed, 0, total)
-			return
-		}
-
-		for (let i = 0; i < plan.length; i++) {
-			if (stopFlag) {
-				logLine('用户停止', 'warn')
-				break
+			el.start.disabled = true
+			el.stop.disabled = false
+			setStatus('测试中…', 'run')
+	
+			const stepsN = Math.max(5, parseInt(el.steps.value, 10) || 40)
+			const gapMs = Math.max(0, parseInt(el.gap.value, 10) || DEFAULT_GAP_MS)
+			const timeoutMs = Math.max(1000, parseInt(el.timeout.value, 10) || DEFAULT_STEP_TIMEOUT)
+			let seed = parseInt(el.seed.value, 10)
+			if (isNaN(seed)) {
+				seed = (Date.now() ^ (Math.random() * 0x7fffffff)) >>> 0
+				el.seed.value = String(seed)
 			}
-			if (!window.serialApi || !window.serialApi.isOpen()) {
-				logLine('串口已关闭, 测试中止', 'warn')
-				stopFlag = true
-				break
+			const continueOnFail = !!(el.continueOnFail && el.continueOnFail.checked)
+			const doRestore = !(el.restore && !el.restore.checked)
+			const rng = mulberry32(seed)
+			const protoName = getActiveProtoName()
+			const catalog = SEK_CASES
+	
+			const plan = buildRandomPlan(rng, catalog, stepsN)
+			const total = plan.length
+			let done = 0
+	
+			const lists = {
+				fail: [],
+				skip: [],
+				unsupported: [],
+				restoreFail: [],
+				passCount: 0
 			}
-
-			const step = plan[i]
-			const opName = step.op + (step.q ? ':' + step.q.name : '') +
-				(step.field ? ':' + step.field.name : '')
-			const label = '[' + (i + 1) + '/' + total + '] ' + opName
-			setStatus(label, 'run')
-			let result
-			const t0 = Date.now()
+			const ctx = {
+				rng: rng,
+				timeoutMs: timeoutMs,
+				gapMs: gapMs,
+				originals: {},
+				lastWrite: {}
+			}
+	
+			logLine('开始随机测试 协议=' + protoName + ' seed=' + seed + ' 步数=' + total +
+				' 恢复原值=' + (doRestore ? '是' : '否'), 'info')
+			logLine('seed=伪随机种子, 相同 seed 会生成相同指令序列, 便于复现问题', 'info')
+			logLine('指令模式: 查询/读字段/写字段(可连写1~3次)/校验 随机交错', 'info')
+			logLine('红外保活阈值 ' + (IR_IDLE_MS / 1000) + 's · 不含开猫/复位/表号/IP/时间/密钥', 'info')
+	
+			window.sekTx.clearBuffer()
+			clearTagCache()
+			lastCommAt = Date.now()
+	
+			// 先做一次连通查询
 			try {
-				result = await runStep(step, ctx)
+				await doQuery(1, 1, timeoutMs)
+				logLine('连通检查 OK', 'pass')
 			} catch (e) {
-				result = { status: 'fail', detail: e.message || String(e), fatal: !!(e && e.fatal) }
-				if (stopFlag || result.fatal ||
-					/串口未打开|测试已停止|保活失败/.test(result.detail || '')) {
-					lists.fail.push(label + ' — ' + result.detail)
-					logLine('✗ ' + label + ' ' + result.detail, 'fail')
-					logLine('致命错误, 测试中止', 'warn')
+				logLine('连通检查失败: ' + e.message, 'fail')
+				lists.fail.push('连通检查: ' + e.message)
+				printReport(lists, seed, true)
+				finishRun(true, lists, seed, 0, total)
+				return
+			}
+	
+			for (let i = 0; i < plan.length; i++) {
+				if (stopFlag) {
+					logLine('用户停止', 'warn')
+					break
+				}
+				if (!window.serialApi || !window.serialApi.isOpen()) {
+					logLine('串口已关闭, 测试中止', 'warn')
 					stopFlag = true
 					break
 				}
-			}
-			const ms = Date.now() - t0
-			done++
-			setProgress(done, total)
-
-			const line = label + ' (' + ms + 'ms) ' + (result.detail || '')
-			if (result.status === 'pass') {
-				lists.passCount++
-				logLine('✓ ' + line, 'pass')
-			} else if (result.status === 'unsupported') {
-				lists.unsupported.push(line)
-				logLine('⊘ ' + line, 'skip')
-			} else if (result.status === 'skip') {
-				lists.skip.push(line)
-				logLine('○ ' + line, 'skip')
-			} else {
-				lists.fail.push(line)
-				logLine('✗ ' + line, 'fail')
-				if (!continueOnFail) {
-					logLine('遇失败已停止', 'warn')
-					break
+	
+				const step = plan[i]
+				const opName = step.op + (step.q ? ':' + step.q.name : '') +
+					(step.field ? ':' + step.field.name : '')
+				const label = '[' + (i + 1) + '/' + total + '] ' + opName
+				setStatus(label, 'run')
+				let result
+				const t0 = Date.now()
+				try {
+					result = await runStep(step, ctx)
+				} catch (e) {
+					result = { status: 'fail', detail: e.message || String(e), fatal: !!(e && e.fatal) }
+					if (stopFlag || result.fatal ||
+						/串口未打开|测试已停止|保活失败/.test(result.detail || '')) {
+						lists.fail.push(label + ' — ' + result.detail)
+						logLine('✗ ' + label + ' ' + result.detail, 'fail')
+						logLine('致命错误, 测试中止', 'warn')
+						stopFlag = true
+						break
+					}
 				}
+				const ms = Date.now() - t0
+				done++
+				setProgress(done, total)
+	
+				const line = label + ' (' + ms + 'ms) ' + (result.detail || '')
+				if (result.status === 'pass') {
+					lists.passCount++
+					logLine('✓ ' + line, 'pass')
+				} else if (result.status === 'unsupported') {
+					lists.unsupported.push(line)
+					logLine('⊘ ' + line, 'skip')
+				} else if (result.status === 'skip') {
+					lists.skip.push(line)
+					logLine('○ ' + line, 'skip')
+				} else {
+					lists.fail.push(line)
+					logLine('✗ ' + line, 'fail')
+					if (!continueOnFail) {
+						logLine('遇失败已停止', 'warn')
+						break
+					}
+				}
+	
+				if (gapMs > 0) await sleep(gapMs)
 			}
-
-			if (gapMs > 0) await sleep(gapMs)
-		}
-
-		// 恢复所有改动过的字段
-		if (doRestore && Object.keys(ctx.originals).length &&
-			window.serialApi && window.serialApi.isOpen() && !stopFlag) {
-			logLine('恢复已改写字段 (' + Object.keys(ctx.originals).length + ' 项)…', 'info')
-			const rr = await restoreAll(ctx.originals, timeoutMs)
-			if (rr.oks.length) logLine('已恢复: ' + rr.oks.join(', '), 'pass')
-			rr.fails.forEach(function (s) {
-				lists.restoreFail.push(s)
-				logLine('⚠ 恢复失败: ' + s, 'fail')
-			})
-		} else if (doRestore && stopFlag && Object.keys(ctx.originals).length) {
-			logLine('已停止, 仍尝试恢复已改写字段…', 'warn')
-			if (window.serialApi && window.serialApi.isOpen()) {
+	
+			// 恢复所有改动过的字段
+			if (doRestore && Object.keys(ctx.originals).length &&
+				window.serialApi && window.serialApi.isOpen() && !stopFlag) {
+				logLine('恢复已改写字段 (' + Object.keys(ctx.originals).length + ' 项)…', 'info')
 				const rr = await restoreAll(ctx.originals, timeoutMs)
+				if (rr.oks.length) logLine('已恢复: ' + rr.oks.join(', '), 'pass')
 				rr.fails.forEach(function (s) {
 					lists.restoreFail.push(s)
 					logLine('⚠ 恢复失败: ' + s, 'fail')
 				})
-				if (rr.oks.length) logLine('已恢复: ' + rr.oks.join(', '), 'pass')
+			} else if (doRestore && stopFlag && Object.keys(ctx.originals).length) {
+				logLine('已停止, 仍尝试恢复已改写字段…', 'warn')
+				if (window.serialApi && window.serialApi.isOpen()) {
+					const rr = await restoreAll(ctx.originals, timeoutMs)
+					rr.fails.forEach(function (s) {
+						lists.restoreFail.push(s)
+						logLine('⚠ 恢复失败: ' + s, 'fail')
+					})
+					if (rr.oks.length) logLine('已恢复: ' + rr.oks.join(', '), 'pass')
+				}
 			}
+	
+			printReport(lists, seed, stopFlag)
+			finishRun(stopFlag, lists, seed, done, total)
+		} finally {
+			window.serialApi.unpinSession()
 		}
-
-		printReport(lists, seed, stopFlag)
-		finishRun(stopFlag, lists, seed, done, total)
 	}
 
 	function finishRun(stopped, lists, seed, done, total) {
