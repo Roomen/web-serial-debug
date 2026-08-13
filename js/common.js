@@ -1952,6 +1952,8 @@
 	})
 
 	async function selectPortFor(sid) {
+		if (SerialHub.isOpening(sid)) return
+		SerialHub.setOpening(sid, true)
 		try {
 		await navigator.serial.requestPort().then(async (port) => {
 				if (isBluetoothSerialPort(port)) {
@@ -1985,13 +1987,9 @@
 				refreshPortDisplayNames()
 				updateOpenButton(sid)
 				addLogErr(`串口已选择 (会话 ${sid}${key ? '' : '，无持久标识'})`)
+				// 锁由本函数持有到结束，这里不要再套一层 setOpening
 				if (wasOpen) {
-					SerialHub.setOpening(sid, true)
-					try {
-						await openSerial(sid, { reason: 'user' })
-					} finally {
-						SerialHub.setOpening(sid, false)
-					}
+					await openSerial(sid, { reason: 'user' })
 				}
 			})
 		} catch (e) {
@@ -2004,6 +2002,8 @@
 			} else {
 				addLogErr(`获取串口权限出错: ${errorType} - ${errorMsg}`)
 			}
+		} finally {
+			SerialHub.setOpening(sid, false)
 		}
 	}
 
@@ -2298,12 +2298,8 @@
 			return
 		}
 		if (!SerialHub.getPort(sid)) {
-			SerialHub.setOpening(sid, true)
-			try {
-				await selectPortFor(sid)
-			} finally {
-				SerialHub.setOpening(sid, false)
-			}
+			// selectPortFor 自己持 opening 锁（含系统选口对话框期间）
+			await selectPortFor(sid)
 			if (!SerialHub.getPort(sid)) return // 用户取消系统选口对话框：不 toast，selectPortFor 已只打日志
 		}
 		// 双路模式下检查端口冲突（selectPortFor 已在选口时拦截同口，这里是双重保险）
