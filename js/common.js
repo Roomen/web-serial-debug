@@ -1983,6 +1983,7 @@
 					addLogErr('检测到同型号多串口(CDC)，别名按授权顺序槽位记忆；重插后顺序变化时请重命名')
 				}
 				refreshPortDisplayNames()
+				updateOpenButton(sid)
 				addLogErr(`串口已选择 (会话 ${sid}${key ? '' : '，无持久标识'})`)
 				if (wasOpen) {
 					SerialHub.setOpening(sid, true)
@@ -2297,7 +2298,12 @@
 			return
 		}
 		if (!SerialHub.getPort(sid)) {
-			await selectPortFor(sid)
+			SerialHub.setOpening(sid, true)
+			try {
+				await selectPortFor(sid)
+			} finally {
+				SerialHub.setOpening(sid, false)
+			}
 			if (!SerialHub.getPort(sid)) return // 用户取消系统选口对话框：不 toast，selectPortFor 已只打日志
 		}
 		// 双路模式下检查端口冲突（selectPortFor 已在选口时拦截同口，这里是双重保险）
@@ -4008,6 +4014,7 @@
 	const dualSelectPortA = document.getElementById('serial-select-port-a')
 	if (dualSelectPortA) {
 		dualSelectPortA.addEventListener('click', async function () {
+			if (SerialHub.isOpening('A')) return
 			await selectPortFor('A')
 		})
 	}
@@ -4016,6 +4023,7 @@
 	const dualSelectPortB = document.getElementById('serial-select-port-b')
 	if (dualSelectPortB) {
 		dualSelectPortB.addEventListener('click', async function () {
+			if (SerialHub.isOpening('B')) return
 			await selectPortFor('B')
 		})
 	}
