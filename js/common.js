@@ -3086,6 +3086,14 @@
 			const cb = document.getElementById('serial-add-crlf')
 			if (cb) cb.checked = !!v
 		},
+		getHexSend() {
+			return !!toolOptions.hexSend
+		},
+		setHexSend(v) {
+			changeOption('hexSend', !!v)
+			const cb = document.getElementById('serial-hex-send')
+			if (cb) cb.checked = !!v
+		},
 		listSessions() {
 			const list = [{ id: 'A', label: SerialHub.getLabelA(), open: SerialHub.isOpen('A') }]
 			if (SerialHub.mode === 'dual') {

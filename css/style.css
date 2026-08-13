@@ -6210,3 +6210,46 @@ body.blu-wave-fullscreen-open {
   color: var(--danger);
 }
 
+/* 预设两级选择：分组固定宽 + 条目自适应 */
+#blu-cmd-group {
+  flex: 0 0 96px;
+}
+
+#blu-cmd-preset {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 紧凑开关：HEX / 回车换行 等宽同字号，与输入框同行靠右 */
+.blu-cmd-compact-switch {
+  width: 84px;
+  justify-content: flex-start;
+}
+
+.blu-cmd-compact-switch .form-check-label {
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+/* 标题栏自动收起开关 */
+.blu-cmd-auto-close-switch {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.blu-cmd-auto-close-switch .form-check-input {
+  margin: 0;
+  width: 2em;
+  height: 1.1em;
+}
+
+.blu-cmd-auto-close-switch .form-check-label {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+}
+

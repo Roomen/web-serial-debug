@@ -8,11 +8,15 @@
 	'use strict'
 
 	const STORAGE_KEY = 'bluCmdSheetOpen'
+	const AUTO_CLOSE_KEY = 'bluCmdSheetAutoClose'
+	const AUTO_CLOSE_DELAY = 1800
 	let isOpen = false
+	let presetGroups = []
+	let autoCloseTimer = null
 
 	// DOM refs
 	let wrap, tab, backdrop, sheet, statusEl, noSerialEl, hasSerialEl
-	let presetSel, sendBtn, customInput, hexCheck, crlfCheck, sendCustomBtn, resultEl, closeBtn
+	let groupSel, presetSel, sendBtn, customInput, hexCheck, crlfCheck, sendCustomBtn, resultEl, closeBtn, autoCloseCheck
 
 	function E(id) { return document.getElementById(id) }
 
@@ -45,6 +49,10 @@
 					'<span class="blu-cmd-sheet-title"><i class="bi bi-terminal"></i> 串口发送</span>' +
 					'<div class="blu-cmd-sheet-actions">' +
 						'<span class="blu-cmd-status" id="blu-cmd-status">--</span>' +
+						'<div class="form-check form-switch blu-cmd-auto-close-switch" title="发送成功后自动收起面板">' +
+							'<input class="form-check-input" type="checkbox" id="blu-cmd-auto-close">' +
+							'<label class="form-check-label" for="blu-cmd-auto-close">自动收起</label>' +
+						'</div>' +
 						'<button class="blu-cmd-sheet-close" id="blu-cmd-close" title="收起 (Esc)">∨</button>' +
 					'</div>' +
 				'</div>' +
@@ -56,7 +64,10 @@
 						'</button>' +
 					'</div>' +
 					'<div id="blu-cmd-has-serial" hidden>' +
-						'<div class="blu-cmd-row">' +
+						'<div class="blu-cmd-row blu-cmd-preset-row">' +
+							'<select id="blu-cmd-group" class="form-select form-select-sm" title="选择快捷发送分组">' +
+								'<option value="">-- 选择分组 --</option>' +
+							'</select>' +
 							'<select id="blu-cmd-preset" class="form-select form-select-sm" title="从快捷发送列表选择">' +
 								'<option value="">-- 选择发送内容 --</option>' +
 							'</select>' +
@@ -65,13 +76,13 @@
 						'<div class="blu-cmd-row blu-cmd-custom-row">' +
 							'<div class="blu-cmd-custom-input-wrap">' +
 								'<input type="text" id="blu-cmd-custom" class="form-control form-control-sm" placeholder="或输入 HEX / 文本…" autocomplete="off" spellcheck="false">' +
-								'<div class="form-check form-switch blu-cmd-hex-switch">' +
+								'<div class="form-check form-switch blu-cmd-hex-switch blu-cmd-compact-switch">' +
 									'<input class="form-check-input" type="checkbox" id="blu-cmd-hex-mode" checked>' +
 									'<label class="form-check-label" for="blu-cmd-hex-mode">HEX</label>' +
 								'</div>' +
-								'<div class="form-check form-switch blu-cmd-hex-switch">' +
+								'<div class="form-check form-switch blu-cmd-hex-switch blu-cmd-compact-switch">' +
 									'<input class="form-check-input" type="checkbox" id="blu-cmd-add-crlf">' +
-									'<label class="form-check-label" for="blu-cmd-add-crlf">末尾加回车换行</label>' +
+									'<label class="form-check-label" for="blu-cmd-add-crlf" title="末尾加回车换行">回车换行</label>' +
 								'</div>' +
 							'</div>' +
 							'<button class="btn btn-sm btn-outline-secondary" id="blu-cmd-send-custom" title="发送自定义内容">发送</button>' +
@@ -91,6 +102,7 @@
 		statusEl = E('blu-cmd-status')
 		noSerialEl = E('blu-cmd-no-serial')
 		hasSerialEl = E('blu-cmd-has-serial')
+		groupSel = E('blu-cmd-group')
 		presetSel = E('blu-cmd-preset')
 		sendBtn = E('blu-cmd-send-btn')
 		customInput = E('blu-cmd-custom')
@@ -99,6 +111,7 @@
 		sendCustomBtn = E('blu-cmd-send-custom')
 		resultEl = E('blu-cmd-result')
 		closeBtn = E('blu-cmd-close')
+		autoCloseCheck = E('blu-cmd-auto-close')
 	}
 
 	function bindEvents() {
@@ -118,6 +131,11 @@
 			if (e.key === 'Enter') sendCustom()
 		})
 
+		// 分组切换 → 重建条目下拉
+		groupSel.addEventListener('change', function () {
+			populatePresetItems()
+		})
+
 		// Esc 关闭（不干扰全屏 Esc；先于全屏 handler 是因为 capture:true 且 sheet 先关）
 		document.addEventListener('keydown', function (e) {
 			if (e.key === 'Escape' && isOpen) {
@@ -131,6 +149,23 @@
 				window.serialApi.setAddCRLF(crlfCheck.checked)
 			}
 		})
+
+		// HEX 开关绑定全局 hexSend（与串口页 #serial-hex-send 联动；预设发送不受影响）
+		hexCheck.addEventListener('change', function () {
+			if (window.serialApi && typeof window.serialApi.setHexSend === 'function') {
+				window.serialApi.setHexSend(hexCheck.checked)
+			}
+		})
+
+		// 自动收起开关持久化
+		autoCloseCheck.addEventListener('change', function () {
+			setAutoClose(autoCloseCheck.checked)
+		})
+
+		// 倒计时内用户与面板交互 → 取消自动收起
+		sheet.addEventListener('pointerdown', cancelAutoClose, true)
+		sheet.addEventListener('keydown', cancelAutoClose, true)
+		sheet.addEventListener('focusin', cancelAutoClose, true)
 	}
 
 	function observeFullscreen() {
@@ -179,35 +214,58 @@
 		if (crlfCheck && window.serialApi && typeof window.serialApi.getAddCRLF === 'function') {
 			crlfCheck.checked = !!window.serialApi.getAddCRLF()
 		}
+		// HEX 开关绑定全局 hexSend（与串口页 #serial-hex-send 联动）
+		if (hexCheck && window.serialApi && typeof window.serialApi.getHexSend === 'function') {
+			hexCheck.checked = !!window.serialApi.getHexSend()
+		}
+		// 自动收起开关状态（localStorage 持久化，默认开）
+		if (autoCloseCheck) autoCloseCheck.checked = getAutoClose()
 		if (connected) populatePresets()
 	}
 
 	function populatePresets() {
-		const keep = presetSel.value
-		presetSel.innerHTML = '<option value="">-- 选择发送内容 --</option>'
 		let groups = []
 		try {
 			const raw = localStorage.getItem('quickSendList')
 			if (raw) groups = JSON.parse(raw)
 		} catch (e) {}
-		if (!Array.isArray(groups) || !groups.length) {
+		presetGroups = Array.isArray(groups) ? groups.filter(function (g) { return g && g.list && g.list.length }) : []
+		if (!presetGroups.length) {
+			groupSel.innerHTML = '<option value="">无快捷发送数据</option>'
 			presetSel.innerHTML = '<option value="">无快捷发送数据</option>'
 			return
 		}
-		for (const grp of groups) {
-			if (!grp.list || !grp.list.length) continue
-			const og = document.createElement('optgroup')
-			og.label = grp.name || '未命名分组'
-			for (const item of grp.list) {
-				const opt = document.createElement('option')
-				opt.value = JSON.stringify({ c: item.content, h: !!item.hex })
-				const label = (item.name || item.content || '未命名').slice(0, 40)
-				opt.textContent = label
-				og.appendChild(opt)
-			}
-			presetSel.appendChild(og)
+		// 分组下拉（localStorage quickSendList 的组名）
+		const keepGroup = groupSel.value
+		groupSel.innerHTML = ''
+		for (let i = 0; i < presetGroups.length; i++) {
+			const opt = document.createElement('option')
+			opt.value = String(i)
+			opt.textContent = (presetGroups[i].name || '未命名分组').slice(0, 20)
+			groupSel.appendChild(opt)
 		}
-		if (keep) presetSel.value = keep
+		if (keepGroup !== '' && parseInt(keepGroup, 10) < presetGroups.length) groupSel.value = keepGroup
+		populatePresetItems()
+	}
+
+	function populatePresetItems() {
+		if (!presetGroups.length) return
+		const idx = parseInt(groupSel.value, 10)
+		const grp = presetGroups[idx >= 0 ? idx : 0] || presetGroups[0]
+		const keep = presetSel.value
+		presetSel.innerHTML = '<option value="">-- 选择发送内容 --</option>'
+		for (const item of grp.list) {
+			const opt = document.createElement('option')
+			opt.value = JSON.stringify({ c: item.content, h: !!item.hex })
+			const label = (item.name || item.content || '未命名').slice(0, 40)
+			// 标注格式（来自快捷发送条目自身的 hex 字段）
+			opt.textContent = label + (item.hex ? ' (HEX)' : ' (TEXT)')
+			presetSel.appendChild(opt)
+		}
+		if (keep) {
+			presetSel.value = keep
+			if (presetSel.value !== keep) presetSel.value = ''
+		}
 	}
 
 	async function sendPreset() {
@@ -234,7 +292,8 @@
 			showResult('请输入内容', 'error')
 			return
 		}
-		await doSend(text, hexCheck.checked)
+		// 自定义发送跟随全局 hexSend（预设发送不受该开关影响）
+		await doSend(text, !!(window.serialApi && typeof window.serialApi.getHexSend === 'function' ? window.serialApi.getHexSend() : hexCheck.checked))
 	}
 
 	async function doSend(content, hexMode) {
@@ -261,9 +320,35 @@
 			// CRLF 不再在此追加: 串口层 writeData 统一按全局 addCRLF 追加（避免双重 0D 0A）
 			await window.serialApi.writeData(bytes)
 			showResult('发送成功', 'ok')
+			armAutoClose()
 		} catch (err) {
 			showResult('发送失败: ' + (err.message || err), 'error')
 		}
+	}
+
+	function getAutoClose() {
+		try { return localStorage.getItem(AUTO_CLOSE_KEY) !== '0' } catch (e) { return true }
+	}
+
+	function setAutoClose(v) {
+		try { localStorage.setItem(AUTO_CLOSE_KEY, v ? '1' : '0') } catch (e) {}
+		if (!v) cancelAutoClose()
+	}
+
+	function cancelAutoClose() {
+		if (autoCloseTimer) {
+			clearTimeout(autoCloseTimer)
+			autoCloseTimer = null
+		}
+	}
+
+	function armAutoClose() {
+		cancelAutoClose()
+		if (!autoCloseCheck || !autoCloseCheck.checked) return
+		autoCloseTimer = setTimeout(function () {
+			autoCloseTimer = null
+			setOpen(false)
+		}, AUTO_CLOSE_DELAY)
 	}
 
 	function showResult(msg, type) {
