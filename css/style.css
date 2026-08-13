@@ -5818,11 +5818,41 @@ body.blu-wave-fullscreen-open {
   white-space: nowrap;
 }
 
-#serial-active-send {
-  width: 56px;
-  padding: 3px 6px;
+/* 主发口 pill 组：替代原窄 select，与 .serial-mode-toggle 同款样式 */
+.dual-send-toggle {
+  display: inline-flex;
+  background: var(--bg-surface-hover);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.dual-send-btn {
+  padding: 3px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
   font-size: 0.7rem;
   font-weight: 700;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.dual-send-btn + .dual-send-btn {
+  border-left: 1px solid var(--border-color);
+}
+
+.dual-send-btn:hover {
+  color: var(--text-primary);
+  background: var(--accent-light);
+}
+
+.dual-send-btn.active {
+  color: #fff;
+  background: var(--accent);
 }
 
 /* Dual Log Panels */

@@ -1958,6 +1958,17 @@
 					addLogErr('不支持蓝牙串口，请选择 USB 串口')
 					return
 				}
+				// 双路：与另一会话选中同一串口对象时拒绝，避免两路争用同一底层口（单路 mode !== 'dual'，不受影响）
+				if (SerialHub.mode === 'dual') {
+					const otherSid = sid === 'A' ? 'B' : 'A'
+					const otherPort = SerialHub.getPort(otherSid)
+					if (otherPort && otherPort === port) {
+						showMsg('两路不能使用同一串口')
+						return
+					}
+				}
+				// 换口前该会话是打开的：换上新口后自动重开，一步完成"换设备"；未打开时只换口不自动开
+				const wasOpen = SerialHub.isOpen(sid)
 				await closeSerial(sid)
 				SerialHub.setPort(sid, port)
 				// 多 CDC 槽位依赖 getPorts 全集：清缓存后重算
@@ -1973,6 +1984,14 @@
 				}
 				refreshPortDisplayNames()
 				addLogErr(`串口已选择 (会话 ${sid}${key ? '' : '，无持久标识'})`)
+				if (wasOpen) {
+					SerialHub.setOpening(sid, true)
+					try {
+						await openSerial(sid, { reason: 'user' })
+					} finally {
+						SerialHub.setOpening(sid, false)
+					}
+				}
 			})
 		} catch (e) {
 			const errorType = e.name || 'UnknownError'
@@ -2204,10 +2223,21 @@
 		}
 		const btn = document.getElementById(btnId)
 		if (!btn) return
+		// 双路：无口「连接」（选口+打开一步到位）、有口未开「打开」、已开「关闭」；行上已有 TX/RX 标签，不再重复 A/B
+		if (dualLabel) {
+			if (open) {
+				btn.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭'
+			} else if (SerialHub.getPort(sid)) {
+				btn.innerHTML = '<i class="bi bi-play-circle"></i> 打开'
+			} else {
+				btn.innerHTML = '<i class="bi bi-plug"></i> 连接'
+			}
+			return
+		}
 		if (open) {
-			btn.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭' + (dualLabel ? ' ' + sid : '')
+			btn.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭'
 		} else {
-			btn.innerHTML = '<i class="bi bi-play-circle"></i> 打开' + (dualLabel ? ' ' + sid : '')
+			btn.innerHTML = '<i class="bi bi-play-circle"></i> 打开'
 		}
 	}
 
@@ -2251,6 +2281,43 @@
 	serialToggle.addEventListener('click', async () => {
 		await handleToggleClick('A')
 	})
+
+	//双路主按钮：让这路在线（无口先选口再开，一步到位；有口未开则打开；已开则关闭）
+	//单路仍走 handleToggleClick（未选口点打开仍 toast 提示），不复用本函数
+	async function handleConnectClick(sid) {
+		if (SerialHub.isOpening(sid)) return
+		if (SerialHub.isOpen(sid)) {
+			SerialHub.setManualClose(sid, true)
+			SerialHub.setOpening(sid, true)
+			try {
+				await closeSerial(sid)
+			} finally {
+				SerialHub.setOpening(sid, false)
+			}
+			return
+		}
+		if (!SerialHub.getPort(sid)) {
+			await selectPortFor(sid)
+			if (!SerialHub.getPort(sid)) return // 用户取消系统选口对话框：不 toast，selectPortFor 已只打日志
+		}
+		// 双路模式下检查端口冲突（selectPortFor 已在选口时拦截同口，这里是双重保险）
+		if (SerialHub.mode === 'dual') {
+			const otherSid = sid === 'A' ? 'B' : 'A'
+			const otherPort = SerialHub.getPort(otherSid)
+			const port = SerialHub.getPort(sid)
+			if (otherPort && otherPort === port) {
+				addLogErr(`会话 ${sid} 与 ${otherSid} 选择了同一串口，请为两路选择不同设备`)
+				return
+			}
+		}
+		SerialHub.setOpening(sid, true)
+		SerialHub.setManualClose(sid, false)
+		try {
+			await openSerial(sid)
+		} finally {
+			SerialHub.setOpening(sid, false)
+		}
+	}
 
 	//设置读取元素
 	function get(id) {
@@ -2685,7 +2752,7 @@
 		const btn = document.getElementById(btnId)
 		if (!btn) return
 		if (!port) {
-			const def = SerialHub.mode === 'dual' ? (sid === 'A' ? '选择A' : '选择B') : '选择串口'
+			const def = SerialHub.mode === 'dual' ? '选择' : '选择串口'
 			btn.innerHTML = '<i class="bi bi-usb-plug"></i> ' + def
 			btn.title = ''
 			return
@@ -3957,7 +4024,7 @@
 	const dualOpenA = document.getElementById('serial-open-or-close-a')
 	if (dualOpenA) {
 		dualOpenA.addEventListener('click', async function () {
-			await handleToggleClick('A')
+			await handleConnectClick('A')
 		})
 	}
 
@@ -3965,7 +4032,7 @@
 	const dualOpenB = document.getElementById('serial-open-or-close-b')
 	if (dualOpenB) {
 		dualOpenB.addEventListener('click', async function () {
-			await handleToggleClick('B')
+			await handleConnectClick('B')
 		})
 	}
 
@@ -3992,18 +4059,29 @@
 		})
 	}
 
-	// 双路：主发口选择
-	const activeSendSel = document.getElementById('serial-active-send')
-	if (activeSendSel) {
-		activeSendSel.addEventListener('change', function () {
+	// 双路：主发口选择（pill 按钮，替代原窄 select）
+	const activeSendGroup = document.getElementById('serial-active-send')
+	function setActiveSendUI(sid) {
+		if (!activeSendGroup) return
+		const btns = activeSendGroup.querySelectorAll('.dual-send-btn')
+		for (let i = 0; i < btns.length; i++) {
+			btns[i].classList.toggle('active', btns[i].getAttribute('data-sid') === sid)
+		}
+	}
+	if (activeSendGroup) {
+		activeSendGroup.addEventListener('click', function (e) {
+			const btn = e.target.closest('.dual-send-btn')
+			if (!btn) return
+			const sid = btn.getAttribute('data-sid')
+			if (sid === SerialHub.activeSendId) return
 			// 事务钉扎期间禁止切换主发口，避免把事务后续帧发到另一台设备
 			if (window.serialApi && window.serialApi.isPinned()) {
-				activeSendSel.value = SerialHub.activeSendId
 				showToast('事务进行中，暂不能切换主发口', 2000)
 				return
 			}
-			SerialHub.activeSendId = this.value
-			try { sessionStorage.setItem('serialActiveSendId', this.value) } catch (e) {}
+			SerialHub.activeSendId = sid
+			setActiveSendUI(sid)
+			try { sessionStorage.setItem('serialActiveSendId', sid) } catch (e) {}
 		})
 	}
 
@@ -4018,9 +4096,9 @@
 				if (labelBInput) labelBInput.value = savedLabelB
 			}
 			const savedActiveSend = sessionStorage.getItem('serialActiveSendId')
-			if (savedActiveSend && activeSendSel) {
+			if (savedActiveSend && activeSendGroup) {
 				SerialHub.activeSendId = savedActiveSend
-				activeSendSel.value = savedActiveSend
+				setActiveSendUI(savedActiveSend)
 			}
 		} catch (e) {}
 	})()
