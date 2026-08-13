@@ -1988,7 +1988,13 @@
 			try { r.releaseLock() } catch (e) {}
 		}
 		if (port) {
-			try { await port.close() } catch (e) {}
+			// 同一 port 对象可能被另一会话持有（如两会话选了同一设备），
+			// 跳过 close 以免关掉对方会话正在用的连接
+			const otherSid = sid === 'A' ? 'B' : 'A'
+			const otherPort = SerialHub.getPort(otherSid)
+			if (!(otherPort === port && SerialHub.isOpen(otherSid))) {
+				try { await port.close() } catch (e) {}
+			}
 		}
 		//仅手动关闭时清掉"想打开"标记；异常断开保留，刷新后仍可重连
 		if (SerialHub.isManualClose(sid)) setSerialWantOpen(false, sid)
@@ -2717,6 +2723,7 @@
 	async function readData(sid) {
 		sid = sid || 'A'
 		let streamError = false
+		let streamClosed = false
 		let recoverCount = 0
 		let recoverWindowTs = 0
 		const port = SerialHub.getPort(sid)
@@ -2727,7 +2734,10 @@
 			try {
 				while (true) {
 					const { value, done } = await r.read()
-					if (done) break
+					if (done) {
+						streamClosed = true
+						break
+					}
 					dataReceived(value, sid)
 				}
 			} catch (error) {
@@ -2767,16 +2777,18 @@
 					r.releaseLock()
 				} catch (e) {}
 			}
-			//流异常时退出循环，由 disconnect/connect 或用户手动处理重连
-			if (streamError || !SerialHub.isOpen(sid)) break
+			//流异常/已结束时退出循环，由 disconnect/connect 或用户手动处理重连
+			if (streamError || streamClosed || !SerialHub.isOpen(sid)) break
 		}
 
-		if (streamError && SerialHub.isOpen(sid)) {
+		if ((streamError || streamClosed) && SerialHub.isOpen(sid)) {
 			SerialHub.setOpen(sid, false)
 			serialStatuChange(false, sid)
 			updateOpenButton(sid)
 			if (!SerialHub.isManualClose(sid)) {
-				addLogErr('读取中断，可重新打开串口或等待设备重连')
+				addLogErr(streamError
+					? '读取中断，可重新打开串口或等待设备重连'
+					: `串口读取流已关闭(${sid})，可重新打开串口`)
 			}
 		}
 	}
