@@ -3382,23 +3382,28 @@
 		appendLogNode(row, 'A')
 	}
 
-	//轻量 toast 提示(非确认框)
+	//轻量顶部气泡(非确认框)。kind='error' 用红色、停留更久
 	let _toastTimer = null
-	function showToast(msg, ms) {
+	function showToast(msg, ms, kind) {
+		kind = kind || 'info'
+		if (ms == null) ms = kind === 'error' ? 3600 : 1400
 		let tip = document.getElementById('serial-toast')
 		if (!tip) {
 			tip = document.createElement('div')
 			tip.id = 'serial-toast'
-			tip.className = 'serial-toast'
 			tip.setAttribute('role', 'status')
 			document.body.appendChild(tip)
 		}
+		tip.className = 'serial-toast' + (kind === 'error' ? ' is-error' : '')
 		tip.textContent = msg
+		// 下一帧再加 is-show, 保证从隐藏切到同文案时动画仍会播
+		tip.classList.remove('is-show')
+		void tip.offsetWidth
 		tip.classList.add('is-show')
 		clearTimeout(_toastTimer)
 		_toastTimer = setTimeout(function () {
 			tip.classList.remove('is-show')
-		}, ms != null ? ms : 1400)
+		}, ms)
 	}
 
 	//复制文本 — 成功后 toast 提示, 不弹确认框
@@ -3440,13 +3445,9 @@
 		}
 	}
 
-	//弹窗
-	const modalTip = new bootstrap.Modal('#model-tip')
-	function showMsg(msg, title = 'Web Serial') {
-		//alert(msg)
-		document.getElementById('modal-title').innerHTML = title
-		document.getElementById('modal-message').innerHTML = msg
-		modalTip.show()
+	//错误提示走顶部气泡, 不再弹确认框
+	function showMsg(msg) {
+		showToast(msg, null, 'error')
 	}
 
 	//当前时间 精确到毫秒

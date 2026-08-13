@@ -3956,11 +3956,18 @@ hr {
   background: var(--bg-tooltip);
   color: var(--text-inverse);
   font-size: 0.8125rem;
-  line-height: 1.3;
+  line-height: 1.4;
+  max-width: min(560px, calc(100vw - 32px));
+  text-align: center;
   box-shadow: var(--shadow-md);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.18s ease, transform 0.18s ease, background-color var(--transition-normal), color var(--transition-normal);
+}
+
+.serial-toast.is-error {
+  background: var(--danger);
+  color: #fff;
 }
 
 .serial-toast.is-show {
