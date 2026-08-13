@@ -226,79 +226,8 @@
 			return null
 		}
 	}
-	// 仅刷新(reload)且刷新前串口处于打开意图时自动重连；新开/跳转不连
-	;(function () {
-		let navType = 'navigate'
-		try {
-			const nav = performance.getEntriesByType && performance.getEntriesByType('navigation')[0]
-			if (nav && nav.type) navType = nav.type
-			else if (performance.navigation) navType = performance.navigation.type === 1 ? 'reload' : 'navigate'
-		} catch (e) {}
-		if (navType !== 'reload') return
-		const wantA = getSerialWantOpen('A')
-		const wantB = getSerialWantOpen('B')
-		if (!wantA && !wantB) return
-		// 恢复模式
-		try {
-			const savedMode = sessionStorage.getItem('serialHubMode')
-			if (savedMode === 'dual') {
-				SerialHub.mode = 'dual'
-				switchToDualUI()
-			}
-		} catch (e) {}
-		navigator.serial.getPorts().then(async (allPorts) => {
-			// 自动重连跳过蓝牙串口
-			const ports = allPorts.filter(function (p) { return !isBluetoothSerialPort(p) })
-			if (ports.length === 0) return
-			// 预计算候选口的身份 keys（reload 后缓存为空，直接解析即可）
-			const identKeys = []
-			for (let i = 0; i < ports.length; i++) {
-				const ident = await getPortIdentityKey(ports[i])
-				identKeys.push(ident ? ident.keys : [])
-			}
-			// 按已存身份 key 匹配对应口；无身份 key（旧 sessionStorage 用户）按位置一次性兼容
-			function findPortByKey(sid) {
-				const want = getSerialWantPortKey(sid)
-				if (!want || !want.length) return null
-				for (let i = 0; i < ports.length; i++) {
-					for (let j = 0; j < identKeys[i].length; j++) {
-						if (want.indexOf(identKeys[i][j]) !== -1) return ports[i]
-					}
-				}
-				return null
-			}
-			function findPortByPos(pos) {
-				return pos < ports.length ? ports[pos] : null
-			}
-			const aIdKey = getSerialWantPortKey('A')
-			const bIdKey = getSerialWantPortKey('B')
-			let planA = null
-			let planB = null
-			if (wantA) {
-				planA = findPortByKey('A')
-				if (!planA && !aIdKey) planA = findPortByPos(0)
-			}
-			if (SerialHub.mode === 'dual' && wantB) {
-				planB = findPortByKey('B')
-				if (!planB && !bIdKey) planB = findPortByPos(wantA && planA ? 1 : 0)
-			}
-			// 有身份 key 但匹配不到：不自动打开、不回落位置绑定，提示重新选择
-			if (wantA && !planA) addLogErr('A 未找到原设备，请重新选择串口')
-			if (SerialHub.mode === 'dual' && wantB && !planB) addLogErr('B 未找到原设备，请重新选择串口')
-			if (planA) {
-				serialPort = planA
-				await openSerial('A')
-			}
-			if (planB) {
-				SerialHub.setPort('B', planB)
-				await openSerial('B')
-			}
-			if (SerialHub.mode === 'dual' && wantA && wantB && planA && planB) {
-				if (aIdKey && bIdKey) addLogErr('双路已按设备身份恢复 A/B 连接')
-				else addLogErr('双路已按授权顺序恢复 A/B；若设备串台请重新选择串口')
-			}
-		})
-	})()
+	// reload 自动重连已整体移到本文件末尾的 reloadAutoReconnect IIFE：
+	// 它要调 switchToDualUI，而 serialLogs 等 const 在后面才初始化，这里同步执行会踩 TDZ
 	let reader
 	//串口目前是打开状态
 	let serialOpen = false
@@ -2058,7 +1987,6 @@
 		}
 	}
 
-	//关闭串口(无论 serialOpen 标志如何都尽量释放 reader/port，避免锁泄漏导致再次打开失败)
 	//屏幕唤醒锁：息屏后系统会挂起 USB 导致设备掉线，长时间挂测必须按住
 	let wakeLockSentinel = null
 	async function requestWakeLock(sid) {
@@ -2090,13 +2018,13 @@
 		}
 	})
 
-	async function closeSerial(sid) {
+	//释放串口底层资源: 取消并释放 reader、close port(另一会话占用同一 port 对象则跳过)、清分包缓冲/定时器
+	//所有释放路径(手动关闭/读流死/打开前清理/页面销毁)统一走这里, 避免 OS 句柄泄漏导致下次 open 报 NetworkError
+	async function releasePort(sid) {
 		sid = sid || 'A'
 		const port = SerialHub.getPort(sid)
 		const r = SerialHub.getReader(sid)
-		SerialHub.setOpen(sid, false)
 		SerialHub.setReader(sid, null)
-		releaseWakeLock(sid)
 		// 清理该会话的分包缓冲与合并时钟：关闭后旧口残包不得迟到入日志或与新口数据合并
 		clearTimeout(SerialHub.getPackTimer(sid))
 		SerialHub.setPackTimer(sid, null)
@@ -2116,6 +2044,24 @@
 				try { await port.close() } catch (e) {}
 			}
 		}
+	}
+
+	//页面销毁时释放串口句柄(关键修复: 上一 document 仍握着 OS 句柄时, 刷新后立刻 open 必报 NetworkError)
+	//fire-and-forget, 不 await 完整关闭链; 不清 wantOpen, 刷新后仍按意图自动重连
+	function releasePortOnExit() {
+		releasePort('A')
+		releasePort('B')
+	}
+	window.addEventListener('pagehide', releasePortOnExit)
+	window.addEventListener('beforeunload', releasePortOnExit)
+
+	//关闭串口(无论 serialOpen 标志如何都尽量释放 reader/port，避免锁泄漏导致再次打开失败)
+	async function closeSerial(sid) {
+		sid = sid || 'A'
+		// 先置未打开再释放: readData 被 cancel 的异常不会当成断线噪声
+		SerialHub.setOpen(sid, false)
+		await releasePort(sid)
+		releaseWakeLock(sid)
 		//仅手动关闭时清掉"想打开"标记；异常断开保留，刷新后仍可重连
 		if (SerialHub.isManualClose(sid)) {
 			setSerialWantOpen(false, sid)
@@ -2126,8 +2072,16 @@
 	}
 
 	//打开串口
-	async function openSerial(sid) {
+	//opts.reason: 'user'(默认, 失败弹简短提示) | 'reload'(刷新自动重连) | 'hotplug'(设备重插自动重连), 后两者失败只打日志不弹窗
+	//NetworkError/InvalidStateError 是占用/未释放/已拔出类瞬时错误, 按 200/400/800ms 退避重试(1 次首次 + 最多 3 次重试)
+	const OPEN_RETRY_ERRORS = ['NetworkError', 'InvalidStateError']
+	const OPEN_RETRY_DELAYS = [200, 400, 800]
+	//文案不把 NetworkError 说成"网络错误": Web Serial 里它表示设备被占用/已拔出/句柄未释放
+	const SERIAL_OPEN_FAIL_MSG = '无法打开串口：设备可能已被占用、已拔出，或上一页尚未释放。请稍后重试或重新插拔设备。'
+	async function openSerial(sid, opts) {
 		sid = sid || 'A'
+		opts = opts || {}
+		const reason = opts.reason || 'user'
 		const port = SerialHub.getPort(sid)
 		if (SerialHub.isOpen(sid)) return
 		if (!port) return
@@ -2142,35 +2096,30 @@
 		} else {
 			SerialOptions = collectSerialParamsFromUI()
 		}
+		//打开前先释放本会话残留句柄(读流死/异常断开的脏状态), 忽略 close 失败
+		await releasePort(sid)
+		serialStatuChange('connecting', sid)
+		let openError = null
 		try {
-			//端口可能处于"已打开但本地状态丢失"的脏状态，先尝试 close 再 open
-			try {
-				await port.close()
-			} catch (e) {}
-			await port.open(SerialOptions)
-			SerialHub.setOpen(sid, true)
-			SerialHub.setManualClose(sid, false)
-			updateOpenButton(sid)
-			// 新连接: 清空 SEK 会话基准水量, 避免串到上一块表
-			if (sid === 'A' && window.skSession) {
+			//端口可能处于"已打开但本地状态丢失"的脏状态: releasePort 已尽量 close; 占用类错误退避重试
+			for (let attempt = 0; ; attempt++) {
 				try {
-					window.skSession.resetBase()
-					window.skSession.deviceUid = null
-				} catch (e) { /* */ }
+					await port.open(SerialOptions)
+					openError = null
+					break
+				} catch (e) {
+					openError = e
+					const retryable = OPEN_RETRY_ERRORS.indexOf(e.name || '') !== -1
+					if (!retryable || attempt >= OPEN_RETRY_DELAYS.length) throw e
+					await new Promise(function (resolve) { setTimeout(resolve, OPEN_RETRY_DELAYS[attempt]) })
+				}
 			}
-			setSerialWantOpen(true, sid)
-			// 记录设备身份 keys，reload 后按身份匹配恢复（不依赖 getPorts 顺序）
-			getPortIdentityKey(port).then(function (ident) {
-				if (!ident) return
-				setSerialWantPortKey(sid, ident.keys)
-			})
-			serialStatuChange(true, sid)
-			localStorage.setItem(SerialHub.mode === 'dual' ? SERIAL_OPTIONS_DUAL_KEY : SERIAL_OPTIONS_KEY, JSON.stringify(SerialOptions))
-			requestWakeLock(sid)
-			readData(sid)
 		} catch (e) {
-			const errorType = e.name || 'UnknownError'
-			const errorMsg = e.message || '未知错误'
+			openError = e
+		}
+		if (openError) {
+			const errorType = openError.name || 'UnknownError'
+			const errorMsg = openError.message || '未知错误'
 			SerialHub.setOpen(sid, false)
 			serialStatuChange(false, sid)
 			updateOpenButton(sid)
@@ -2182,11 +2131,35 @@
 			} else if (errorType === 'InvalidStateError') {
 				addLogErr('串口状态错误：设备可能已被占用')
 			} else if (errorType === 'NetworkError') {
-				addLogErr('网络错误：设备可能已断开连接')
+				addLogErr(SERIAL_OPEN_FAIL_MSG)
 			}
 
-			showMsg('打开串口失败:' + e.toString())
+			//自动重连(刷新/重插)失败禁止弹窗只打日志; 手动打开失败给简短友好提示, 不甩原始错误
+			if (reason === 'user') {
+				showMsg(SERIAL_OPEN_FAIL_MSG)
+			}
+			return
 		}
+		SerialHub.setOpen(sid, true)
+		SerialHub.setManualClose(sid, false)
+		updateOpenButton(sid)
+		// 新连接: 清空 SEK 会话基准水量, 避免串到上一块表
+		if (sid === 'A' && window.skSession) {
+			try {
+				window.skSession.resetBase()
+				window.skSession.deviceUid = null
+			} catch (e) { /* */ }
+		}
+		setSerialWantOpen(true, sid)
+		// 记录设备身份 keys，reload 后按身份匹配恢复（不依赖 getPorts 顺序）
+		getPortIdentityKey(port).then(function (ident) {
+			if (!ident) return
+			setSerialWantPortKey(sid, ident.keys)
+		})
+		serialStatuChange(true, sid)
+		localStorage.setItem(SerialHub.mode === 'dual' ? SERIAL_OPTIONS_DUAL_KEY : SERIAL_OPTIONS_KEY, JSON.stringify(SerialOptions))
+		requestWakeLock(sid)
+		readData(sid)
 	}
 
 	// 更新打开/关闭按钮文案
@@ -2738,9 +2711,9 @@
 			}
 		}
 		if (!sid) return
-		//未主动关闭时，设备重插后自动重连
+		//未主动关闭时，设备重插后自动重连(hotplug: 失败只打日志不弹窗)
 		if (!SerialHub.isManualClose(sid) && !SerialHub.isOpening(sid) && SerialHub.getPort(sid)) {
-			openSerial(sid)
+			openSerial(sid, { reason: 'hotplug' })
 		}
 	})
 	navigator.serial.addEventListener('disconnect', async (e) => {
@@ -2763,11 +2736,19 @@
 		else containerId = 'serial-status'
 		var el = document.getElementById(containerId)
 		if (!el) return
-		if (statu) {
-			el.innerHTML = '<div class="serial-status-indicator connected"><span class="serial-status-dot"></span><span class="serial-status-text">已连接</span></div>'
+		// 三态: true=已连接 / 'connecting'=正在连接… / false=未连接
+		let stateClass, stateText
+		if (statu === 'connecting') {
+			stateClass = 'connecting'
+			stateText = '正在连接…'
+		} else if (statu) {
+			stateClass = 'connected'
+			stateText = '已连接'
 		} else {
-			el.innerHTML = '<div class="serial-status-indicator disconnected"><span class="serial-status-dot"></span><span class="serial-status-text">未连接</span></div>'
+			stateClass = 'disconnected'
+			stateText = '未连接'
 		}
+		el.innerHTML = '<div class="serial-status-indicator ' + stateClass + '"><span class="serial-status-dot"></span><span class="serial-status-text">' + stateText + '</span></div>'
 		// 更新双路日志面板标题的标签
 		if (SerialHub.mode === 'dual') {
 			updateDualLogLabels()
@@ -2909,6 +2890,11 @@
 		}
 
 		if ((streamError || streamClosed) && SerialHub.isOpen(sid)) {
+			//先释放底层句柄(close 无效也调, 脏状态靠下次 open 前 releasePort 兑底)再置未连接:
+			//否则 OS 句柄泄漏, 下次 open 报 NetworkError
+			await releasePort(sid)
+			//释放期间可能被用户/热插拔重新打开(新 reader 已就位), 不得再破坏新连接
+			if (!SerialHub.isOpen(sid) || SerialHub.getReader(sid)) return
 			SerialHub.setOpen(sid, false)
 			serialStatuChange(false, sid)
 			updateOpenButton(sid)
@@ -4096,8 +4082,9 @@
 	serialStatuChange = function (statu, sid) {
 		_origSerialStatuChange(statu, sid)
 		// 已选口就显示「设备名 + 铅笔(+清除)」，无论连接与否（圆点颜色表达连接态）
+		// connecting 期间保留"正在连接…"文案，不覆盖成设备名
 		const port = SerialHub.getPort(sid)
-		if (port) {
+		if (port && statu !== 'connecting') {
 			if (SerialHub.mode === 'dual') {
 				updateDualPortDisplay(sid, port)
 			} else {
@@ -4115,4 +4102,92 @@
 			}
 		})
 	})()
+
+	// ===== reload 自动重连 =====
+	// 必须放在本 IIFE 末尾: dual 恢复要调 switchToDualUI, 而 serialLogs 等 const 在后面才初始化(前面执行会踩 TDZ)
+	// 仅刷新(reload)且刷新前串口处于打开意图时自动重连；新开/跳转不连
+	;(async function reloadAutoReconnect() {
+		let navType = 'navigate'
+		try {
+			const nav = performance.getEntriesByType && performance.getEntriesByType('navigation')[0]
+			if (nav && nav.type) navType = nav.type
+			else if (performance.navigation) navType = performance.navigation.type === 1 ? 'reload' : 'navigate'
+		} catch (e) {}
+		if (navType !== 'reload') return
+		const wantA = getSerialWantOpen('A')
+		const wantB = getSerialWantOpen('B')
+		if (!wantA && !wantB) return
+		// 恢复模式（此时所有 const/函数已初始化，无 TDZ 风险）
+		try {
+			const savedMode = sessionStorage.getItem('serialHubMode')
+			if (savedMode === 'dual') {
+				SerialHub.mode = 'dual'
+				switchToDualUI()
+			}
+		} catch (e) {}
+		// 给上一 document 的 pagehide 释放 OS 句柄留一点时间；真正的等待靠 openSerial 的退避重试
+		await new Promise(function (resolve) { setTimeout(resolve, 150) })
+		const allPorts = await navigator.serial.getPorts()
+		// 自动重连跳过蓝牙串口
+		const ports = allPorts.filter(function (p) { return !isBluetoothSerialPort(p) })
+		if (ports.length === 0) return
+		// 预计算候选口的身份 keys（reload 后缓存为空，直接解析即可）
+		const identKeys = []
+		for (let i = 0; i < ports.length; i++) {
+			const ident = await getPortIdentityKey(ports[i])
+			identKeys.push(ident ? ident.keys : [])
+		}
+		// 按已存身份 key 匹配对应口；无身份 key（旧 sessionStorage 用户）按位置一次性兼容
+		function findPortByKey(sid) {
+			const want = getSerialWantPortKey(sid)
+			if (!want || !want.length) return null
+			for (let i = 0; i < ports.length; i++) {
+				for (let j = 0; j < identKeys[i].length; j++) {
+					if (want.indexOf(identKeys[i][j]) !== -1) return ports[i]
+				}
+			}
+			return null
+		}
+		function findPortByPos(pos) {
+			return pos < ports.length ? ports[pos] : null
+		}
+		const aIdKey = getSerialWantPortKey('A')
+		const bIdKey = getSerialWantPortKey('B')
+		let planA = null
+		let planB = null
+		if (wantA) {
+			planA = findPortByKey('A')
+			if (!planA && !aIdKey) planA = findPortByPos(0)
+		}
+		if (SerialHub.mode === 'dual' && wantB) {
+			planB = findPortByKey('B')
+			if (!planB && !bIdKey) planB = findPortByPos(wantA && planA ? 1 : 0)
+		}
+		// 有身份 key 但匹配不到：不自动打开、不回落位置绑定，提示重新选择
+		if (wantA && !planA) addLogErr('A 未找到原设备，请重新选择串口')
+		if (SerialHub.mode === 'dual' && wantB && !planB) addLogErr('B 未找到原设备，请重新选择串口')
+		if (planA) {
+			// 走 SerialHub.setPort 而不是直接写 serialPort; 开前后维护 opening 锁防并发
+			SerialHub.setPort('A', planA)
+			SerialHub.setOpening('A', true)
+			try {
+				await openSerial('A', { reason: 'reload' })
+			} finally {
+				SerialHub.setOpening('A', false)
+			}
+		}
+		if (planB) {
+			SerialHub.setPort('B', planB)
+			SerialHub.setOpening('B', true)
+			try {
+				await openSerial('B', { reason: 'reload' })
+			} finally {
+				SerialHub.setOpening('B', false)
+			}
+		}
+		if (SerialHub.mode === 'dual' && wantA && wantB && planA && planB) {
+			if (aIdKey && bIdKey) addLogErr('双路已按设备身份恢复 A/B 连接')
+			else addLogErr('双路已按授权顺序恢复 A/B；若设备串台请重新选择串口')
+		}
+	})().catch(function () {})
 })()

@@ -2985,6 +2985,12 @@ hr {
   border-color: var(--border-color);
 }
 
+.serial-status-indicator.connecting {
+  background: var(--warning-light, rgba(255, 193, 7, 0.12));
+  color: var(--warning, #f0a020);
+  border-color: color-mix(in srgb, var(--warning, #f0a020) 30%, transparent);
+}
+
 .serial-status-dot {
   width: 9px;
   height: 9px;
@@ -3000,6 +3006,12 @@ hr {
 
 .serial-status-indicator.disconnected .serial-status-dot {
   background: var(--text-muted);
+}
+
+.serial-status-indicator.connecting .serial-status-dot {
+  background: var(--warning, #f0a020);
+  box-shadow: 0 0 6px rgba(240, 160, 32, 0.5);
+  animation: serial-dot-pulse 1s ease-in-out infinite;
 }
 
 @keyframes serial-dot-pulse {
