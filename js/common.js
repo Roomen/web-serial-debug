@@ -380,6 +380,51 @@
 		//当前协议
 		skProtocol: 'sek',
 	}
+	// 日志条（分包超时 / 最大行数 / 日志类型 / 自动滚动）单双路独立，与 serialOptions 同一策略
+	const TOOL_OPTIONS_DUAL_KEY = 'toolOptionsDual'
+	const LOG_OPTION_KEYS = ['timeOut', 'maxLogRows', 'logType', 'autoScroll']
+	function pickLogOptions(src) {
+		const out = { timeOut: 200, maxLogRows: 5000, logType: 'hex', autoScroll: true }
+		if (!src || typeof src !== 'object') return out
+		const t = parseInt(src.timeOut, 10)
+		if (!isNaN(t) && t >= 0) out.timeOut = t
+		const m = parseInt(src.maxLogRows, 10)
+		if (!isNaN(m) && m >= 100) out.maxLogRows = m
+		if (typeof src.logType === 'string' && src.logType) out.logType = src.logType
+		if (typeof src.autoScroll === 'boolean') out.autoScroll = src.autoScroll
+		return out
+	}
+	let logOptionsSingle = pickLogOptions(toolOptions)
+	let logOptionsDual = pickLogOptions(toolOptions)
+	function activeLogOptions() {
+		return SerialHub.mode === 'dual' ? logOptionsDual : logOptionsSingle
+	}
+	function persistLogOptionsBag(mode) {
+		try {
+			if (mode === 'dual') {
+				localStorage.setItem(TOOL_OPTIONS_DUAL_KEY, JSON.stringify(logOptionsDual))
+			} else {
+				LOG_OPTION_KEYS.forEach(function (k) { toolOptions[k] = logOptionsSingle[k] })
+				localStorage.setItem('toolOptions', JSON.stringify(toolOptions))
+			}
+		} catch (e) {}
+	}
+	// 日志类型下拉的 UI 同步（combo 初始化后替换为带菜单高亮的实现）
+	let applyLogTypeUi = function (val) {
+		const select = document.getElementById('serial-log-type')
+		if (select) select.value = val
+	}
+	function applyLogOptionsToUI() {
+		const opts = activeLogOptions()
+		LOG_OPTION_KEYS.forEach(function (k) { toolOptions[k] = opts[k] })
+		const t = document.getElementById('serial-timer-out')
+		if (t) t.value = opts.timeOut
+		const m = document.getElementById('serial-max-rows')
+		if (m) m.value = opts.maxLogRows
+		applyLogTypeUi(opts.logType)
+		const a = document.getElementById('serial-auto-scroll')
+		if (a) a.innerText = opts.autoScroll ? '自动滚动' : '暂停滚动'
+	}
 
 	// ---- 协议注册表 ----
 	window._protocols = {}
@@ -667,6 +712,7 @@
 		localStorage.removeItem('serialOptions')
 		localStorage.removeItem(SERIAL_OPTIONS_DUAL_KEY)
 		localStorage.removeItem('toolOptions')
+		localStorage.removeItem(TOOL_OPTIONS_DUAL_KEY)
 		localStorage.removeItem('quickSendList')
 		location.reload()
 	})
@@ -676,6 +722,7 @@
 			serialOptions: localStorage.getItem('serialOptions'),
 			serialOptionsDual: localStorage.getItem(SERIAL_OPTIONS_DUAL_KEY),
 			toolOptions: localStorage.getItem('toolOptions'),
+			toolOptionsDual: localStorage.getItem(TOOL_OPTIONS_DUAL_KEY),
 			quickSendList: localStorage.getItem('quickSendList'),
 		}
 		let blob = new Blob([JSON.stringify(data)], { type: 'text/plain' })
@@ -703,6 +750,7 @@
 				setParam('serialOptions', obj.serialOptions)
 				setParam(SERIAL_OPTIONS_DUAL_KEY, obj.serialOptionsDual)
 				setParam('toolOptions', obj.toolOptions)
+				setParam(TOOL_OPTIONS_DUAL_KEY, obj.toolOptionsDual)
 				setParam('quickSendList', obj.quickSendList)
 				location.reload()
 			} catch (e) {
@@ -1422,7 +1470,6 @@
 	if (options) {
 		toolOptions = JSON.parse(options)
 	}
-	document.getElementById('serial-timer-out').value = toolOptions.timeOut
 	//老配置里没有该字段时回落到默认值
 	if (!toolOptions.maxLogRows) {
 		toolOptions.maxLogRows = 5000
@@ -1430,9 +1477,14 @@
 	if (toolOptions.skDownEncrypt == null) {
 		toolOptions.skDownEncrypt = false
 	}
-	document.getElementById('serial-max-rows').value = toolOptions.maxLogRows
-	document.getElementById('serial-log-type').value = toolOptions.logType
-	document.getElementById('serial-auto-scroll').innerText = toolOptions.autoScroll ? '自动滚动' : '暂停滚动'
+	logOptionsSingle = pickLogOptions(toolOptions)
+	try {
+		const rawDual = localStorage.getItem(TOOL_OPTIONS_DUAL_KEY)
+		logOptionsDual = rawDual ? pickLogOptions(JSON.parse(rawDual)) : pickLogOptions(null)
+	} catch (e) {
+		logOptionsDual = pickLogOptions(null)
+	}
+	applyLogOptionsToUI()
 	document.getElementById('serial-add-crlf').checked = toolOptions.addCRLF
 	document.getElementById('serial-hex-send').checked = toolOptions.hexSend
 	document.getElementById('serial-loop-send').checked = toolOptions.loopSend
@@ -1670,6 +1722,11 @@
 			if (select.value !== val) select.value = val
 			syncUi(val)
 			changeOption('logType', val)
+		}
+
+		applyLogTypeUi = function (val) {
+			if (select.value !== val) select.value = val
+			syncUi(val)
 		}
 
 		syncUi(select.value || toolOptions.logType || 'hex')
@@ -2334,10 +2391,20 @@
 		return (document.getElementById(id).value = value)
 	}
 
-	//修改参数并保存
+	//修改参数并保存（日志条四项写入当前模式的袋子，其它项仍进 toolOptions；双路时不污染单路日志配置）
 	function changeOption(key, value) {
+		if (LOG_OPTION_KEYS.indexOf(key) !== -1) {
+			activeLogOptions()[key] = value
+			toolOptions[key] = value
+			persistLogOptionsBag(SerialHub.mode)
+			return
+		}
 		toolOptions[key] = value
-		localStorage.setItem('toolOptions', JSON.stringify(toolOptions))
+		try {
+			const snapshot = Object.assign({}, toolOptions)
+			LOG_OPTION_KEYS.forEach(function (k) { snapshot[k] = logOptionsSingle[k] })
+			localStorage.setItem('toolOptions', JSON.stringify(snapshot))
+		} catch (e) {}
 	}
 
 	//串口事件监听(Web Serial: 事件目标是 navigator.serial，端口在 e.port)
@@ -3917,6 +3984,13 @@
 
 			// 参数下拉框显示双路独立配置（reload 恢复路径在 serialLogs 初始化前也会走到这里）
 			applySerialParamsToUI()
+			try {
+				if (!localStorage.getItem(TOOL_OPTIONS_DUAL_KEY)) {
+					logOptionsDual = pickLogOptions(logOptionsSingle)
+					persistLogOptionsBag('dual')
+				}
+			} catch (e) {}
+			applyLogOptionsToUI()
 
 			// 切换按钮状态
 			document.getElementById('serial-mode-single').classList.remove('active')
@@ -3965,6 +4039,7 @@
 
 			// 参数下拉框恢复单路配置
 			applySerialParamsToUI()
+			applyLogOptionsToUI()
 
 			document.getElementById('serial-mode-single').classList.add('active')
 			document.getElementById('serial-mode-dual').classList.remove('active')
