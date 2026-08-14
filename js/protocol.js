@@ -833,7 +833,7 @@
 		}
 	}
 
-	function seriesPanelHtml(it, tip) {
+	function seriesPanelHtml(it, tip, hover) {
 		const label = 'ID' + it.id + ' ' + escHtml(it.name || '')
 		const serRows = it.seriesRows || []
 		const chartable = it.seriesChartable !== false && serRows.length >= 2
@@ -845,7 +845,7 @@
 			summary: it.seriesSummary || '',
 			baseLabel: W.skSession.hasBase() ? W.skSession.baseLabel : null
 		}
-		let h = '<div class="sk-series-panel' + (it.seriesDaily ? ' is-daily' : '') + '" title="' + tip + '">'
+		let h = '<div class="sk-series-panel sk-parse-hotspot' + (it.seriesDaily ? ' is-daily' : '') + '"' + hoverAttr(hover) + ' title="' + tip + '">'
 		h += '<div class="sk-series-head"><span class="sk-series-title">' + label + '</span>'
 		h += '<span class="sk-parse-series-sum">' + escHtml(it.seriesSummary || '') + '</span></div>'
 		if (it.seriesStats) {
@@ -907,13 +907,14 @@
 		}
 		let j = 0
 		while (j < payload.length) {
+			const idOff = j
 			const id = payload[j++]
 			const def = idMap[id]
 			// 应答帧: ID(1B) + 结果码(1B), 不按参数类型取长度
 			if (resultMode) {
 				const name = def ? def.name : ('ID' + id)
 				if (j >= payload.length) {
-					items.push({ id, name, raw: [], decoded: '(缺结果码)', resultCode: null })
+					items.push({ id, name, raw: [], decoded: '(缺结果码)', resultCode: null, off: idOff, span: 1 })
 					break
 				}
 				const code = payload[j++] & 0xff
@@ -922,7 +923,9 @@
 					name,
 					raw: [code],
 					decoded: resultCodeName(code),
-					resultCode: code
+					resultCode: code,
+					off: idOff,
+					span: 2
 				})
 				continue
 			}
@@ -941,7 +944,9 @@
 					id,
 					name: def.name || ('ID' + id),
 					raw: Array.from(raw),
-					decoded: renderBusMeters(raw, rec)
+					decoded: renderBusMeters(raw, rec),
+					off: idOff,
+					span: 1 + raw.length
 				})
 				continue
 			}
@@ -953,7 +958,7 @@
 				if (remain < hdr) {
 					const raw = payload.subarray(j)
 					j = payload.length
-					items.push({ id, name: def.name, raw: Array.from(raw), decoded: hexbytes(raw) + ' (不完整)', partial: true })
+					items.push({ id, name: def.name, raw: Array.from(raw), decoded: hexbytes(raw) + ' (不完整)', partial: true, off: idOff, span: 1 + raw.length })
 					break
 				}
 				const plen = u16leRead(payload, j + 2)
@@ -972,7 +977,9 @@
 					name: def.name,
 					raw: Array.from(raw),
 					decoded: decoded,
-					partial: need < hdr + plen
+					partial: need < hdr + plen,
+					off: idOff,
+					span: 1 + raw.length
 				})
 				continue
 			}
@@ -984,7 +991,7 @@
 				if (vlen <= 0) vlen = 1
 				const raw = payload.subarray(j, j + vlen)
 				j = k
-				items.push({ id, name: def ? def.name : ('ID' + id + '(未知)'), raw: Array.from(raw), decoded: hexbytes(raw) })
+				items.push({ id, name: def ? def.name : ('ID' + id + '(未知)'), raw: Array.from(raw), decoded: hexbytes(raw), off: idOff, span: 1 + raw.length })
 				continue
 			}
 			// NULL: 无 Value,仅 ID(信息查询码等)
@@ -993,7 +1000,9 @@
 					id,
 					name: def.name || ('ID' + id),
 					raw: [],
-					decoded: '(无参数)'
+					decoded: '(无参数)',
+					off: idOff,
+					span: 1
 				})
 				continue
 			}
@@ -1004,7 +1013,9 @@
 					id,
 					name: def ? def.name : ('ID' + id),
 					raw: Array.from(raw),
-					decoded: '嵌套TLV: ' + nestedTlvText(raw)
+					decoded: '嵌套TLV: ' + nestedTlvText(raw),
+					off: idOff,
+					span: 1 + raw.length
 				})
 				j = payload.length
 				break
@@ -1034,7 +1045,9 @@
 					seriesDaily: ser ? !!ser.daily : false,
 					seriesStats: ser ? ser.stats : null,
 					seriesChartable: ser ? !!ser.chartable : false,
-					seriesBase: ser ? !!ser.base : false
+					seriesBase: ser ? !!ser.base : false,
+					off: idOff,
+					span: 1 + raw.length
 				})
 				// 截断尾渣: 不足一条记录或下一固定字段时丢弃, 避免伪 ID
 				if (j < payload.length) {
@@ -1057,7 +1070,9 @@
 					name: def ? def.name : ('ID' + id),
 					raw: Array.from(raw),
 					decoded: (renderValue(def, raw) || hexbytes(raw)) + ' (不完整)',
-					partial: true
+					partial: true,
+					off: idOff,
+					span: 1 + raw.length
 				})
 				break
 			}
@@ -1077,7 +1092,9 @@
 				id,
 				name: def ? def.name : ('ID' + id),
 				raw: Array.from(raw),
-				decoded
+				decoded,
+				off: idOff,
+				span: 1 + raw.length
 			})
 			updateSeriesMeta(tag, id, raw, seriesMeta)
 		}
@@ -1103,19 +1120,23 @@
 					items: parseTagItems(tag, payload, opt),
 					error: 'truncated',
 					len,
-					actualLen: payload.length
+					actualLen: payload.length,
+					off: i,
+					span: 3 + payload.length
 				})
 				break
 			}
 			const payload = data.subarray(i + 3, i + 3 + len)
-			i += 3 + len
 			tlv.push({
 				tag,
 				name: W.SK_TAG_NAME[tag] || ('Tag' + tag),
 				payloadBytes: Array.from(payload),
 				items: parseTagItems(tag, payload, opt),
-				len
+				len,
+				off: i,
+				span: 3 + len
 			})
+			i += 3 + len
 		}
 		return tlv
 	}
@@ -1126,14 +1147,14 @@
 			if (2 + plainLen <= pt.length) {
 				const region = pt.subarray(2, 2 + plainLen)
 				const tags = parseTlv(region, opt)
-				if (tags.length) return tags
+				if (tags.length) return { tags, prefix: 2 }
 			} else if (plainLen > 0 && pt.length > 2) {
 				// 明文长度超出实际数据(截断帧):仍按去掉 2B 前缀解析
 				const tags = parseTlv(pt.subarray(2), opt)
-				if (tags.length) return tags
+				if (tags.length) return { tags, prefix: 2 }
 			}
 		}
-		return parseTlv(pt, opt)
+		return { tags: parseTlv(pt, opt), prefix: 0 }
 	}
 
 	//把嵌套 TLV 区域压缩成简短文本(供 NULL 容器字段展示)
@@ -1255,6 +1276,7 @@
 		}
 		const fc = b[20]
 		const tlvOpt = isResultValueFunc(fc) ? { resultMode: true } : null
+		const extracted = extractTlv(tlvBytes, tlvOpt)
 		const fields = {
 			帧序号: u16leRead(b, 2),
 			协议版本号: { value: b[4], name: W.SK_PROTOCOL_VERSION[b[4]] || '保留' },
@@ -1284,7 +1306,8 @@
 			decryptOk: dec.ok,
 			needKey,
 			fields,
-			tlv: extractTlv(tlvBytes, tlvOpt),
+			tlv: extracted.tags,
+			tlvPrefix: extracted.prefix,
 			dataBytes: Array.from(dataBytes),
 			plainBytes: plainBytesArr
 		}
@@ -1311,6 +1334,7 @@
 		const timeBytes = b.subarray(5, 12)
 		const fc = b[12]
 		const tlvOpt = isResultValueFunc(fc) ? { resultMode: true } : null
+		const extracted = extractTlv(tlvBytes, tlvOpt)
 		const fields = {
 			帧序号: u16leRead(b, 2),
 			协议版本号: { value: b[4], name: W.SK_PROTOCOL_VERSION[b[4]] || '保留' },
@@ -1334,7 +1358,8 @@
 			decryptOk: dec.ok,
 			needKey,
 			fields,
-			tlv: extractTlv(tlvBytes, tlvOpt),
+			tlv: extracted.tags,
+			tlvPrefix: extracted.prefix,
 			dataBytes: Array.from(dataBytes),
 			plainBytes: plainBytesArr
 		}
@@ -1408,6 +1433,7 @@
 		result.actualDataLen = chosen.actualDataLen
 		result.fields = chosen.fields
 		result.tlv = chosen.tlv
+		result.tlvPrefix = chosen.tlvPrefix || 0
 		result.dataBytes = chosen.dataBytes || []
 		result.plainBytes = chosen.plainBytes || []
 		result.ok = chosen.crcOk && chosen.endOk && !chosen.truncated
@@ -1555,40 +1581,103 @@
 		}
 	}
 
+	function hoverAttr(span) {
+		if (!span || span.off == null || !(span.len > 0)) return ''
+		let s = ' data-off="' + span.off + '" data-len="' + span.len + '"'
+		if (span.enc) s += ' data-enc="1"'
+		return s
+	}
+	function dataRegionSpan(p) {
+		const dataOffset = p.dir === 'up' ? 24 : p.dir === 'down' ? 16 : 0
+		const dataLen = (p.fields && p.fields['数据域字节数']) || 0
+		const n = (p.raw && p.raw.length) || 0
+		const dataEnd = Math.min(dataOffset + dataLen, n)
+		return { off: dataOffset, len: Math.max(0, dataEnd - dataOffset) }
+	}
+	function fieldHoverSpan(p, name) {
+		const down = {
+			帧序号: [2, 2],
+			协议版本号: [4, 1],
+			平台时间: [5, 7],
+			功能码: [12, 1],
+			控制码: [13, 1],
+			数据域字节数: [14, 2]
+		}
+		const up = {
+			帧序号: [2, 2],
+			协议版本号: [4, 1],
+			厂家编号: [5, 1],
+			设备类型: [6, 1],
+			设备唯一编码: [7, 7],
+			信号强度RSRP: [14, 2],
+			信噪比SNR: [16, 2],
+			覆盖等级ECL: [18, 1],
+			信号质量CSQ: [19, 1],
+			功能码: [20, 1],
+			控制码: [21, 1],
+			数据域字节数: [22, 2]
+		}
+		const m = p.dir === 'up' ? up : p.dir === 'down' ? down : null
+		if (!m || !m[name]) return null
+		return { off: m[name][0], len: m[name][1] }
+	}
+	function tlvHoverSpan(p, tagObj, item) {
+		const region = dataRegionSpan(p)
+		// 加密数据域是 AES-ECB 整块混淆, 密文无法对应到单个 TLV 字段
+		if (p.encrypted) {
+			return region.len > 0 ? { off: region.off, len: region.len, enc: true } : null
+		}
+		if (tagObj == null || tagObj.off == null) {
+			return region.len > 0 ? region : null
+		}
+		const base = region.off + (p.tlvPrefix || 0)
+		if (!item) {
+			const len = tagObj.span || 3
+			return { off: base + tagObj.off, len: len }
+		}
+		if (item.off == null) return { off: base + tagObj.off, len: tagObj.span || 3 }
+		return { off: base + tagObj.off + 3 + item.off, len: item.span || 1 }
+	}
+	function itemTip(it, hover) {
+		let tip = 'raw:' + escHtml(hexbytes(it.raw))
+		if (hover && hover.enc) tip += ' · 加密数据域(密文无法对应到单字段，高亮整段)'
+		return tip
+	}
+
 	// 单个字段芯片(与原有内联渲染保持一致的 HTML)
-	function renderParseItemChip(it) {
-		const tip = 'raw:' + escHtml(hexbytes(it.raw))
+	function renderParseItemChip(it, hover) {
+		const tip = itemTip(it, hover)
 		const label = 'ID' + it.id + ' ' + escHtml(it.name || '') + ' = '
 		const body = escHtml(it.decoded || hexbytes(it.raw))
 		const cls = /大口径/.test(it.name || '') ? 'sk-parse-item is-large' : 'sk-parse-item'
-		return '<span class="' + cls + '" title="' + tip + '">' + label + body + '</span>'
+		return '<span class="' + cls + ' sk-parse-hotspot"' + hoverAttr(hover) + ' title="' + tip + '">' + label + body + '</span>'
 	}
-	function renderParseSeriesItem(it) {
-		const tip = 'raw:' + escHtml(hexbytes(it.raw))
+	function renderParseSeriesItem(it, hover) {
+		const tip = itemTip(it, hover)
 		const label = 'ID' + it.id + ' ' + escHtml(it.name || '') + ' = '
-		if (it.seriesRows && it.seriesRows.length) return seriesPanelHtml(it, tip)
+		if (it.seriesRows && it.seriesRows.length) return seriesPanelHtml(it, tip, hover)
 		const body = escHtml(it.decoded || hexbytes(it.raw))
-		return '<div class="sk-parse-series" title="' + tip + '">' + label + body + '</div>'
+		return '<div class="sk-parse-series sk-parse-hotspot"' + hoverAttr(hover) + ' title="' + tip + '">' + label + body + '</div>'
 	}
 	// 仅对 window.SK_TAG_GROUPS 声明了分组的 Tag(目前只有 Tag2)生效; 其它 Tag 走原单桶渲染不受影响
-	function renderGroupedTagItems(groups, items) {
+	function renderGroupedTagItems(groups, items, hoverOf) {
 		let h = ''
 		const seriesItems = items.filter(function (it) { return it.series })
 		const regularItems = items.filter(function (it) { return !it.series })
-		for (const it of seriesItems) h += renderParseSeriesItem(it)
+		for (const it of seriesItems) h += renderParseSeriesItem(it, hoverOf(it))
 		const used = new Set()
 		for (const g of groups) {
 			const groupItems = regularItems.filter(function (it) { return g.ids.indexOf(it.id) >= 0 })
 			if (!groupItems.length) continue
 			groupItems.forEach(function (it) { used.add(it.id) })
 			h += '<div class="sk-parse-group"><div class="sk-parse-series-head">' + escHtml(g.title) + '</div><div class="sk-parse-items">'
-			for (const it of groupItems) h += renderParseItemChip(it)
+			for (const it of groupItems) h += renderParseItemChip(it, hoverOf(it))
 			h += '</div></div>'
 		}
 		const rest = regularItems.filter(function (it) { return !used.has(it.id) })
 		if (rest.length) {
 			h += '<div class="sk-parse-group"><div class="sk-parse-series-head">其它</div><div class="sk-parse-items">'
-			for (const it of rest) h += renderParseItemChip(it)
+			for (const it of rest) h += renderParseItemChip(it, hoverOf(it))
 			h += '</div></div>'
 		}
 		return h
@@ -1637,7 +1726,7 @@
 					val = parts.join(', ')
 				}
 			} else val = escHtml(String(v))
-			cells.push({ name: k, value: val })
+			cells.push({ name: k, value: val, hover: fieldHoverSpan(p, k) })
 		}
 		if (cells.length) {
 			const COLS = 4
@@ -1646,12 +1735,14 @@
 				h += '<tr>'
 				for (let j = 0; j < COLS; j++) {
 					const c = cells[i + j]
-					h += '<td class="sk-parse-hdr">' + (c ? escHtml(c.name) : '') + '</td>'
+					const hs = c && c.hover
+					h += '<td class="sk-parse-hdr' + (hs ? ' sk-parse-hotspot' : '') + '"' + hoverAttr(hs) + '>' + (c ? escHtml(c.name) : '') + '</td>'
 				}
 				h += '</tr><tr>'
 				for (let j = 0; j < COLS; j++) {
 					const c = cells[i + j]
-					h += '<td>' + (c ? c.value : '') + '</td>'
+					const hs = c && c.hover
+					h += '<td' + (hs ? ' class="sk-parse-hotspot"' : '') + hoverAttr(hs) + '>' + (c ? c.value : '') + '</td>'
 				}
 				h += '</tr>'
 			}
@@ -1660,25 +1751,28 @@
 		if (p.tlv && p.tlv.length) {
 			h += '<div class="sk-parse-tlvs">'
 			for (const t of p.tlv) {
-				h += '<details class="sk-parse-tag" open><summary>Tag' + t.tag + ' ' + escHtml(t.name || '') + '</summary>'
+				const tagHover = tlvHoverSpan(p, t, null)
+				h += '<details class="sk-parse-tag" open><summary class="sk-parse-hotspot"' + hoverAttr(tagHover) + '>Tag' + t.tag + ' ' + escHtml(t.name || '') + '</summary>'
 				if (t.error) h += ' <span class="sk-parse-bad">' + escHtml(t.error) + '</span>'
 				if (t.items && t.items.length) {
+					const hoverOf = function (it) { return tlvHoverSpan(p, t, it) }
 					const groups = W.SK_TAG_GROUPS && W.SK_TAG_GROUPS[String(t.tag)]
 					if (groups) {
-						h += renderGroupedTagItems(groups, t.items)
+						h += renderGroupedTagItems(groups, t.items, hoverOf)
 					} else {
 						h += '<div class="sk-parse-items">'
 						for (const it of t.items) {
-							const tip = 'raw:' + escHtml(hexbytes(it.raw))
+							const hover = hoverOf(it)
+							const tip = itemTip(it, hover)
 							const label = 'ID' + it.id + ' ' + escHtml(it.name || '') + ' = '
 							if (it.series && it.seriesRows && it.seriesRows.length) {
-								h += seriesPanelHtml(it, tip)
+								h += seriesPanelHtml(it, tip, hover)
 							} else if (it.series) {
 								const body = escHtml(it.decoded || hexbytes(it.raw))
-								h += '<div class="sk-parse-series" title="' + tip + '">' + label + body + '</div>'
+								h += '<div class="sk-parse-series sk-parse-hotspot"' + hoverAttr(hover) + ' title="' + tip + '">' + label + body + '</div>'
 							} else {
 								const body = escHtml(it.decoded || hexbytes(it.raw))
-								h += '<span class="sk-parse-item" title="' + tip + '">' + label + body + '</span>'
+								h += '<span class="sk-parse-item sk-parse-hotspot" title="' + tip + '"' + hoverAttr(hover) + '>' + label + body + '</span>'
 							}
 						}
 						h += '</div>'

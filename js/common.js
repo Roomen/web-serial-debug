@@ -1038,10 +1038,10 @@
 				const hb = ('0' + bytes[idx].toString(16).toUpperCase()).slice(-2)
 				const cell = bm && bm[idx]
 				if (cell && cell.tip) {
-					h += '<span class="sk-hex-byte" data-grp="' + attrEscape(cell.grp) +
+					h += '<span class="sk-hex-byte" data-i="' + idx + '" data-grp="' + attrEscape(cell.grp) +
 						'" data-tip="' + attrEscape(cell.tip) + '">' + hb + '</span>'
 				} else {
-					h += '<span class="sk-hex-byte">' + hb + '</span>'
+					h += '<span class="sk-hex-byte" data-i="' + idx + '">' + hb + '</span>'
 				}
 			}
 			h += '</span></div>'
@@ -2148,6 +2148,44 @@
 		protocolHexViewHover.addEventListener('mouseover', onSkHexHover)
 		protocolHexViewHover.addEventListener('scroll', hideSkHover)
 		protocolHexViewHover.addEventListener('mouseleave', hideSkHover)
+	}
+
+	function highlightHexRange(off, len) {
+		clearSkHoverActive()
+		const view = document.getElementById('serial-protocol-hexview')
+		if (!view || off == null || !(len > 0)) return
+		const start = off | 0
+		const end = start + (len | 0)
+		const bytes = view.querySelectorAll('.sk-hex-byte[data-i]')
+		let first = null
+		for (let i = 0; i < bytes.length; i++) {
+			const idx = parseInt(bytes[i].getAttribute('data-i'), 10)
+			if (idx >= start && idx < end) {
+				bytes[i].classList.add('sk-hex-byte-active')
+				if (!first) first = bytes[i]
+			}
+		}
+		if (first && first.scrollIntoView) {
+			first.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+		}
+	}
+	function onParseResultHover(e) {
+		if (!e.target || !e.target.closest) return
+		const el = e.target.closest('[data-off]')
+		const root = e.currentTarget
+		if (el && root.contains(el)) {
+			const off = parseInt(el.getAttribute('data-off'), 10)
+			const len = parseInt(el.getAttribute('data-len'), 10)
+			if (!isNaN(off) && !isNaN(len) && len > 0) highlightHexRange(off, len)
+			else clearSkHoverActive()
+		} else {
+			clearSkHoverActive()
+		}
+	}
+	const protocolOutputHover = document.getElementById('serial-protocol-output')
+	if (protocolOutputHover) {
+		protocolOutputHover.addEventListener('mouseover', onParseResultHover)
+		protocolOutputHover.addEventListener('mouseleave', hideSkHover)
 	}
 
 	function isPortMetaClick(e) {

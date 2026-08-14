@@ -538,6 +538,27 @@
 		const status = (r.macOk ? '✓' : '✗') + ' 🔒'
 		let h = '<div class="sk-parse">'
 		h += '<div class="sk-parse-bar">' + dirArrow + ' ' + status + '</div>'
+		const rawN = (r.raw && r.raw.length) || 0
+		const plainLen = (r.fields && r.fields['明文长度LEN']) || 0
+		const encLen = (plainLen + 15) & ~15
+		const encOff = 15
+		const encSpan = Math.max(0, Math.min(encLen, Math.max(0, rawN - encOff)))
+		const macOff = 15 + encLen
+		const fieldSpan = {
+			方向: [0, 1],
+			设备地址ADDR: [1, 8],
+			密钥角色KeyID: [9, 1],
+			消息计数器MCNT: [10, 4],
+			明文长度LEN: [14, 1],
+			CMAC校验: macOff < rawN ? [macOff, Math.min(8, rawN - macOff)] : null,
+			// 命令/结果码在明文里, 密文区无法对应到单字节
+			命令CMD: encSpan > 0 ? [encOff, encSpan] : null,
+			结果码: encSpan > 0 ? [encOff, encSpan] : null
+		}
+		function hoverAttr(span) {
+			if (!span || !(span[1] > 0)) return ''
+			return ' data-off="' + span[0] + '" data-len="' + span[1] + '"'
+		}
 		const f = r.fields || {}
 		const cells = []
 		for (const k in f) {
@@ -546,23 +567,33 @@
 			if (v == null) val = ''
 			else if (typeof v === 'object' && v.name !== undefined) val = v.value + ' (' + escHtml(v.name) + ')'
 			else val = escHtml(String(v))
-			cells.push({ name: k, value: val })
+			cells.push({ name: k, value: val, hover: fieldSpan[k] || null })
 		}
 		if (cells.length) {
 			const COLS = 3
 			h += '<table class="sk-parse-grid"><tbody>'
 			for (let i = 0; i < cells.length; i += COLS) {
 				h += '<tr>'
-				for (let j = 0; j < COLS; j++) { const c = cells[i + j]; h += '<td class="sk-parse-hdr">' + (c ? escHtml(c.name) : '') + '</td>' }
+				for (let j = 0; j < COLS; j++) {
+					const c = cells[i + j]
+					const hs = c && c.hover
+					h += '<td class="sk-parse-hdr' + (hs ? ' sk-parse-hotspot' : '') + '"' + hoverAttr(hs) + '>' + (c ? escHtml(c.name) : '') + '</td>'
+				}
 				h += '</tr><tr>'
-				for (let j = 0; j < COLS; j++) { const c = cells[i + j]; h += '<td>' + (c ? c.value : '') + '</td>' }
+				for (let j = 0; j < COLS; j++) {
+					const c = cells[i + j]
+					const hs = c && c.hover
+					h += '<td' + (hs ? ' class="sk-parse-hotspot"' : '') + hoverAttr(hs) + '>' + (c ? c.value : '') + '</td>'
+				}
 				h += '</tr>'
 			}
 			h += '</tbody></table>'
 		}
 		if (r.decoded) {
-			h += '<div class="sk-parse-tlvs"><details class="sk-parse-tag" open><summary>数据域解析</summary>' +
-				'<div class="sk-parse-items"><pre style="white-space:pre-wrap;margin:0;">' + escHtml(r.decoded) + '</pre></div></details></div>'
+			const encHover = encSpan > 0 ? [encOff, encSpan] : null
+			h += '<div class="sk-parse-tlvs"><details class="sk-parse-tag" open><summary class="sk-parse-hotspot"' + hoverAttr(encHover) + '>数据域解析</summary>' +
+				'<div class="sk-parse-items"><pre class="sk-parse-hotspot" style="white-space:pre-wrap;margin:0;"' + hoverAttr(encHover) +
+				' title="加密区(AES-128-CBC)，高亮整段密文">' + escHtml(r.decoded) + '</pre></div></details></div>'
 		}
 		if (r.errors && r.errors.length) {
 			h += '<div class="sk-parse-errors">'
