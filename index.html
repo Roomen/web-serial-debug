@@ -290,43 +290,49 @@
                     <div id="log-main">
                         <div
                             class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
-                            <h1 class="h4 serial-log-title"><i class="bi bi-journal-text"></i> 串口日志</h1>
+                            <h1 class="h4 serial-log-title">
+                                <i class="bi bi-journal-text"></i> 串口日志
+                                <span class="serial-log-legend" id="serial-log-legend" aria-hidden="true">
+                                    <span class="serial-log-legend-item" data-leg="left" id="serial-log-legend-left">TX</span>
+                                    <span class="serial-log-legend-item" data-leg="right" id="serial-log-legend-right">RX</span>
+                                </span>
+                            </h1>
 
                             <div class="btn-toolbar">
-                                <div class="input-group input-group-sm me-2">
-                                    <span class="input-group-text">分包超时</span>
-                                    <input type="number" id="serial-timer-out" class="form-control" placeholder="0不分包" value="200"
-                                        style="width: 90px;" />
-                                </div>
-
-                                <div class="input-group input-group-sm me-2">
-                                    <span class="input-group-text">最大行数</span>
-                                    <input type="number" id="serial-max-rows" class="form-control" min="100" step="100"
-                                        title="日志超过该行数后从顶部裁剪" value="5000" style="width: 90px;" />
-                                </div>
-
-                                <div class="serial-log-type-wrap me-2">
-                                    <span class="serial-log-type-label-text">日志类型</span>
-                                    <div class="serial-log-type-combo" id="log-type-combo">
-                                        <button type="button" class="serial-log-type-btn" id="serial-log-type-btn"
-                                            aria-haspopup="listbox" aria-expanded="false">
-                                            <span id="serial-log-type-text">Hex</span>
-                                            <i class="bi bi-chevron-down serial-log-type-arrow"></i>
-                                        </button>
-                                        <ul class="serial-log-type-menu" id="serial-log-type-menu" role="listbox">
-                                            <li role="option" data-value="hex&text">Hex和Text</li>
-                                            <li role="option" data-value="hex">Hex</li>
-                                            <li role="option" data-value="text">Text</li>
-                                            <li role="option" data-value="ansi">彩色Ansi</li>
-                                            <li role="option" data-value="term">终端</li>
-                                        </ul>
-                                        <select id="serial-log-type" class="serial-log-type-native" tabindex="-1" aria-hidden="true">
-                                            <option value="hex&text">Hex和Text</option>
-                                            <option value="hex">Hex</option>
-                                            <option value="text">Text</option>
-                                            <option value="ansi">彩色Ansi</option>
-                                            <option value="term">终端</option>
-                                        </select>
+                                <div class="dropdown me-2" id="serial-log-settings">
+                                    <button type="button" class="serial-log-settings-summary" id="serial-log-settings-btn"
+                                        data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false"
+                                        title="日志设置（类型 / 分包 / 行数）">
+                                        <i class="bi bi-sliders2"></i>
+                                        <span id="serial-log-settings-text">Hex · 200ms · 5000行</span>
+                                        <i class="bi bi-chevron-down serial-log-settings-arrow"></i>
+                                    </button>
+                                    <div class="dropdown-menu" id="serial-log-settings-popover">
+                                        <div class="serial-settings-card">
+                                            <div class="serial-settings-title">
+                                                <i class="bi bi-journal-text"></i> 日志设置
+                                            </div>
+                                            <div class="serial-field">
+                                                <label class="serial-field-label" for="serial-log-type">类型</label>
+                                                <select id="serial-log-type" class="form-select serial-field-input">
+                                                    <option value="hex&text">Hex和Text</option>
+                                                    <option value="hex" selected>Hex</option>
+                                                    <option value="text">Text</option>
+                                                    <option value="ansi">彩色Ansi</option>
+                                                    <option value="term">终端</option>
+                                                </select>
+                                            </div>
+                                            <div class="serial-field">
+                                                <label class="serial-field-label" for="serial-timer-out">分包</label>
+                                                <input type="number" id="serial-timer-out" class="form-control serial-field-input"
+                                                    placeholder="0不分包" value="200" min="0" title="分包超时(ms)，0 表示不分包">
+                                            </div>
+                                            <div class="serial-field">
+                                                <label class="serial-field-label" for="serial-max-rows">行数</label>
+                                                <input type="number" id="serial-max-rows" class="form-control serial-field-input"
+                                                    min="100" step="100" value="5000" title="日志超过该行数后从顶部裁剪">
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
 
@@ -350,11 +356,11 @@
                             </div>
                         </div>
                         <!--协议解析底部面板：顶缝拖高度，header 只负责折叠-->
-                        <div id="serial-parse-panel">
+                        <div id="serial-parse-panel" class="is-empty collapsed">
                             <div id="serial-parse-resizer" title="拖动调整高度"></div>
                             <div id="serial-parse-header" title="点击折叠/展开">
                                 <span class="serial-parse-title">
-                                    <i class="bi bi-chevron-down serial-parse-chevron"></i>
+                                    <i class="bi bi-chevron-right serial-parse-chevron"></i>
                                     <i class="bi bi-diagram-3"></i> 协议解析
                                 </span>
                                 <span class="serial-parse-actions">
