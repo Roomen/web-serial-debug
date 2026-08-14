@@ -1302,8 +1302,18 @@ body {
   cursor: help;
 }
 
-.sk-parse-item:hover {
+.sk-parse-item:hover,
+.sk-parse-hotspot:hover {
   background: var(--accent-light);
+}
+
+.sk-parse-grid td.sk-parse-hotspot {
+  cursor: help;
+}
+
+.sk-parse-grid td.sk-parse-hotspot:hover {
+  background: var(--accent-light);
+  color: var(--text-primary);
 }
 
 .sk-parse-series {
