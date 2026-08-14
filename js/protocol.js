@@ -284,6 +284,18 @@
 		for (let i = 0; i < n; i++) v |= BigInt(raw[start + i]) << BigInt(8 * i)
 		return Number(v)
 	}
+	// 小端多字节有符号读取: 先在 BigInt 域内做符号扩展, 最后才落到 Number
+	// (不要先用 uNle 取无符号大数再 -2^bits, 那样在落到 Number 之前精度已丢失)
+	function signedNle(raw, start, len) {
+		let v = 0n
+		const max = raw.length - start
+		if (max <= 0) return 0
+		const n = Math.min(len, max)
+		for (let i = 0; i < n; i++) v |= BigInt(raw[start + i]) << BigInt(8 * i)
+		const bits = BigInt(n * 8)
+		if (v & (1n << (bits - 1n))) v -= (1n << bits)
+		return Number(v)
+	}
 	function numUnit(desc) {
 		if (!desc) return { scale: 1, unit: '' }
 		// 优先「系数+单位」: 0.01V / 0.1℃ / 0.1pH / 0.1NTU（勿先匹配裸 V/L）
@@ -365,10 +377,12 @@
 		const medTxt = medMap[medium] || ('未知' + medium)
 		return (flag ? '报警' : '不报警') + ' 异常对象' + objTxt + '异常介质' + medTxt + ' ' + bcdTimeOrEmpty(raw.subarray(2, 9))
 	}
-	function renderFlowLarge(raw) {
+	function renderFlowLarge(raw, desc) {
 		const abnormal = raw[0] & 0x01
-		const v = uNle(raw, 1, 7)
-		return fmtNum(v / 1000, '吨') + ' 状态:' + (abnormal ? '异常' : '数据正常')
+		const signed = /有符号/.test(desc || '')
+		const v = signed ? signedNle(raw, 1, 7) : uNle(raw, 1, 7)
+		// 单位同基准水量(Tag2/3-ID29), 不是固定吨/÷1000; HEX 悬停也走这里, 必须与解析页正常态一致
+		return formatFlowWithBase(v) + ' 状态:' + (abnormal ? '异常' : '数据正常')
 	}
 	function renderUtc(raw) {
 		if (!raw || raw.length < 4) return ''
@@ -449,7 +463,7 @@
 				case 'alarmTime': return renderAlarmTime(raw)
 				case 'alarmObjTime': return renderAlarmObjTime(raw)
 				case 'alarmTimeVal': { const nu = numUnit(desc); return renderAlarmTimeVal(raw, nu.scale, nu.unit) }
-				case 'flowLarge': return renderFlowLarge(raw)
+				case 'flowLarge': return renderFlowLarge(raw, desc)
 				case 'utc': return renderUtc(raw)
 				case 'resetRec': return '复位类型:' + (dec.map && dec.map[raw[0]] != null ? dec.map[raw[0]] : raw[0]) + ' 最近一次复位时间戳:' + renderUtc(raw.subarray(1, 5))
 				case 'resetInfo': return '累计复位' + u16leRead(raw, 0) + ' 看门狗复位' + u16leRead(raw, 2) + ' 低电压复位' + u16leRead(raw, 4)
@@ -486,14 +500,22 @@
 		if ((sm = type.match(/^BYTE\[1\+7\+2\]$/))) { const nu = numUnit(desc); return renderAlarmTimeVal(raw, nu.scale, nu.unit) }
 		if ((sm = type.match(/^BYTE\[1\+1\+7\]$/))) return renderAlarmObjTime(raw)
 		if ((sm = type.match(/^BYTE\[1\+7\]$/))) {
-			if (/大口径/.test(blob)) return renderFlowLarge(raw)
+			if (/大口径/.test(blob)) return renderFlowLarge(raw, desc)
 			if (/时间/.test(blob)) return renderAlarmTime(raw)
 			const v = uNle(raw, 1, Math.min(7, raw.length - 1))
 			return (raw[0] & 0x01 ? '异常 ' : '') + fmtNum(v, numUnit(desc).unit)
 		}
 		if ((sm = type.match(/^BYTE\[1\+3\]$/))) {
 			const status = raw[0] & 0x01 ? '异常' : '正常'
-			const v = signed16(raw.subarray(1, 4))
+			// 24bit 有符号(不是 16bit): 只用 signed16 会丢第 3 数据字节
+			const v = signedNle(raw, 1, 3)
+			if (/大口径/.test(blob) && /单位同.*基准水量/.test(desc)) {
+				const hasBase = W.skSession.hasBase()
+				const rate = v * W.skSession.baseLiters
+				const note = hasBase ? '' : '·估'
+				const label = hasBase ? W.skSession.baseLabel : '1L默认'
+				return status + ' ' + fmtNum(rate, 'L/h') + note + ' (×' + label + ')'
+			}
 			return status + ' ' + fmtNum(v, numUnit(desc).unit)
 		}
 		if ((sm = type.match(/^BYTE\[1\+1\]$/))) {
@@ -680,6 +702,9 @@
 		if (raw.length === 1) return raw[0]
 		if (/BYTE\[1\+7\]/.test(type) && raw.length >= 8) {
 			if (raw[0] & 1) return null
+			const blob = desc + ' ' + (def && def.name ? def.name : '')
+			// 净累积/正逆累积等有符号族: 逆流为负是合法值, 不能一律当无符号读
+			if (/有符号/.test(blob)) return signedNle(raw, 1, 7)
 			return uNle(raw, 1, 7)
 		}
 		return null
@@ -1530,6 +1555,45 @@
 		}
 	}
 
+	// 单个字段芯片(与原有内联渲染保持一致的 HTML)
+	function renderParseItemChip(it) {
+		const tip = 'raw:' + escHtml(hexbytes(it.raw))
+		const label = 'ID' + it.id + ' ' + escHtml(it.name || '') + ' = '
+		const body = escHtml(it.decoded || hexbytes(it.raw))
+		const cls = /大口径/.test(it.name || '') ? 'sk-parse-item is-large' : 'sk-parse-item'
+		return '<span class="' + cls + '" title="' + tip + '">' + label + body + '</span>'
+	}
+	function renderParseSeriesItem(it) {
+		const tip = 'raw:' + escHtml(hexbytes(it.raw))
+		const label = 'ID' + it.id + ' ' + escHtml(it.name || '') + ' = '
+		if (it.seriesRows && it.seriesRows.length) return seriesPanelHtml(it, tip)
+		const body = escHtml(it.decoded || hexbytes(it.raw))
+		return '<div class="sk-parse-series" title="' + tip + '">' + label + body + '</div>'
+	}
+	// 仅对 window.SK_TAG_GROUPS 声明了分组的 Tag(目前只有 Tag2)生效; 其它 Tag 走原单桶渲染不受影响
+	function renderGroupedTagItems(groups, items) {
+		let h = ''
+		const seriesItems = items.filter(function (it) { return it.series })
+		const regularItems = items.filter(function (it) { return !it.series })
+		for (const it of seriesItems) h += renderParseSeriesItem(it)
+		const used = new Set()
+		for (const g of groups) {
+			const groupItems = regularItems.filter(function (it) { return g.ids.indexOf(it.id) >= 0 })
+			if (!groupItems.length) continue
+			groupItems.forEach(function (it) { used.add(it.id) })
+			h += '<div class="sk-parse-group"><div class="sk-parse-series-head">' + escHtml(g.title) + '</div><div class="sk-parse-items">'
+			for (const it of groupItems) h += renderParseItemChip(it)
+			h += '</div></div>'
+		}
+		const rest = regularItems.filter(function (it) { return !used.has(it.id) })
+		if (rest.length) {
+			h += '<div class="sk-parse-group"><div class="sk-parse-series-head">其它</div><div class="sk-parse-items">'
+			for (const it of rest) h += renderParseItemChip(it)
+			h += '</div></div>'
+		}
+		return h
+	}
+
 	W.skFormatFrame = function (p) {
 		const dirArrow = p.dir === 'up' ? '↑' : p.dir === 'down' ? '↓' : '?'
 		const status = (p.crcOk ? '✓' : '✗') + (p.encrypted ? ' 🔒' : '') + (p.truncated || p.missingTail ? ' ⚠截断' : '')
@@ -1599,21 +1663,26 @@
 				h += '<details class="sk-parse-tag" open><summary>Tag' + t.tag + ' ' + escHtml(t.name || '') + '</summary>'
 				if (t.error) h += ' <span class="sk-parse-bad">' + escHtml(t.error) + '</span>'
 				if (t.items && t.items.length) {
-					h += '<div class="sk-parse-items">'
-					for (const it of t.items) {
-						const tip = 'raw:' + escHtml(hexbytes(it.raw))
-						const label = 'ID' + it.id + ' ' + escHtml(it.name || '') + ' = '
-						if (it.series && it.seriesRows && it.seriesRows.length) {
-							h += seriesPanelHtml(it, tip)
-						} else if (it.series) {
-							const body = escHtml(it.decoded || hexbytes(it.raw))
-							h += '<div class="sk-parse-series" title="' + tip + '">' + label + body + '</div>'
-						} else {
-							const body = escHtml(it.decoded || hexbytes(it.raw))
-							h += '<span class="sk-parse-item" title="' + tip + '">' + label + body + '</span>'
+					const groups = W.SK_TAG_GROUPS && W.SK_TAG_GROUPS[String(t.tag)]
+					if (groups) {
+						h += renderGroupedTagItems(groups, t.items)
+					} else {
+						h += '<div class="sk-parse-items">'
+						for (const it of t.items) {
+							const tip = 'raw:' + escHtml(hexbytes(it.raw))
+							const label = 'ID' + it.id + ' ' + escHtml(it.name || '') + ' = '
+							if (it.series && it.seriesRows && it.seriesRows.length) {
+								h += seriesPanelHtml(it, tip)
+							} else if (it.series) {
+								const body = escHtml(it.decoded || hexbytes(it.raw))
+								h += '<div class="sk-parse-series" title="' + tip + '">' + label + body + '</div>'
+							} else {
+								const body = escHtml(it.decoded || hexbytes(it.raw))
+								h += '<span class="sk-parse-item" title="' + tip + '">' + label + body + '</span>'
+							}
 						}
+						h += '</div>'
 					}
-					h += '</div>'
 				}
 				h += '</details>'
 			}

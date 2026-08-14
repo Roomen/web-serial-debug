@@ -1336,6 +1336,14 @@ body {
   white-space: normal;
 }
 
+.sk-parse-group {
+  margin: 2px 0 4px;
+}
+
+.sk-parse-item.is-large {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
 .sk-parse-series-sum {
   font-weight: 500;
   color: var(--text-secondary);

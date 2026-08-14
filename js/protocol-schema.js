@@ -75,11 +75,11 @@ window.SK_TAGS = {
 		{ id: 6, name: '日最高流量时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
 		{ id: 7, name: '日最高水压', type: 'BYTE[2]', desc: 'kPa' },
 		{ id: 8, name: '日最高水压时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
-		{ id: 9, name: '当前实时累计流量', type: 'BYTE[4]', desc: 'Uint32 LE 时间对应Tag1-ID6 全FF异常' },
+		{ id: 9, name: '当前实时累计流量', type: 'BYTE[4]', desc: 'Uint32 LE 单位同基准水量 时间对应Tag1-ID6 全FF异常' },
 		{ id: 10, name: '通信电池电压', type: 'BYTE[2]', desc: '0.01V' },
 		{ id: 11, name: '工作电流', type: 'BYTE[2]', desc: 'uA' },
 		{ id: 12, name: '阀门状态', type: 'BYTE', desc: '0关 1开 2半开 3异常未知 4未检测到' },
-		{ id: 13, name: '结算日累计流量', type: 'BYTE[4]', desc: 'Uint32 LE 结算日累计水量' },
+		{ id: 13, name: '结算日累计流量', type: 'BYTE[4]', desc: 'Uint32 LE 单位同基准水量 结算日累计水量' },
 		{ id: 14, name: '结算日时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
 		{ id: 15, name: '计量电池电压', type: 'BYTE[2]', desc: '0.01V' },
 		{ id: 16, name: '应用平台数据实际上报时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss' },
@@ -92,7 +92,7 @@ window.SK_TAGS = {
 		{ id: 23, name: '冻结净累积流量（大口径）', type: 'BYTE[1+7]', desc: 'BYTE0状态bit0异常 BYTE1-7有符号LE 单位同基准水量' },
 		{ id: 24, name: '冻结正累积流量（大口径）', type: 'BYTE[1+7]', desc: 'BYTE0状态bit0异常 BYTE1-7无符号LE 单位同基准水量' },
 		{ id: 25, name: '冻结逆累积流量（大口径）', type: 'BYTE[1+7]', desc: 'BYTE0状态bit0异常 BYTE1-7无符号LE 单位同基准水量' },
-		{ id: 26, name: '日最高瞬时流量（大口径）', type: 'BYTE[1+3]', desc: 'BYTE0状态bit0异常 BYTE1-3有符号LE L/h' },
+		{ id: 26, name: '日最高瞬时流量（大口径）', type: 'BYTE[1+3]', desc: 'BYTE0状态bit0异常 BYTE1-3有符号LE 单位同基准水量(假设基准1L则L/h)' },
 		{ id: 27, name: '当前实时净累积流量（大口径）', type: 'BYTE[1+7]', desc: 'BYTE0状态bit0异常 BYTE1-7有符号LE 单位同基准水量' },
 		{ id: 28, name: '结算日净累积流量（大口径）', type: 'BYTE[1+7]', desc: 'BYTE0状态bit0异常 BYTE1-7有符号LE 单位同基准水量' },
 		{ id: 29, name: '基准水量', type: 'BYTE', desc: '0=1000L 1=100L 2=10L 3=1L 4=100mL 5=10mL 6=1mL 每圈', dec: { t: 'enum', map: { 0: '1000L每圈', 1: '100L每圈', 2: '10L每圈', 3: '1L每圈', 4: '100mL每圈', 5: '10mL每圈', 6: '1mL每圈' } } },
@@ -324,7 +324,8 @@ window.SK_TAGS = {
 	'39': [
 		{ id: 1, name: '突发大用水告警参数', type: 'BYTE[8]', desc: '使能1B+正流持续时间2B(M)+正流阈值4B(L)+连续判断阈值1B(L)' },
 		{ id: 2, name: '分时段低流量告警参数', type: 'BYTE[33]', desc: '使能1B+4分段(起止各2B m+分段流量4B L)' },
-		{ id: 3, name: '持续小流量告警参数', type: 'BYTE[4]', desc: '持续时间2B(min)+流量阈值2B(L)' }
+		{ id: 3, name: '持续小流量告警参数', type: 'BYTE[4]', desc: '持续时间2B(min)+流量阈值2B(L)' },
+		{ id: 4, name: '逆流阶段预警阈值参数', type: 'BYTE[1+4+4+4]', desc: '使能1B(0关1开默认1)+一级逆流预警阈值4B(L,默认10)+二级逆流预警阈值4B(L,默认50)+三级逆流预警阈值4B(L,默认100)' }
 	],
 	'4': [
 		{ id: 0, name: '通讯电池低电压报警', type: 'BYTE[1+7]', desc: 'BYTE1报警/0 BYTE2-8时间YYYYMMDDhhmmss' },
@@ -373,9 +374,9 @@ window.SK_TAGS = {
 		{ id: 11, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 余氯0.1mg/L' },
 		{ id: 12, name: '记录值', type: 'BYTE[4]', desc: 'int32 LE signed 瞬时流量L/h' },
 		{ id: 13, name: '记录值', type: 'BYTE[4]', desc: 'int32 LE signed 周期流量(大口径) 单位同基准水量' },
-		{ id: 14, name: '记录值', type: 'BYTE[1+7]', desc: 'BYTE0状态bit0未抄到 BYTE1-7有符号LE 总累积(大口径)' },
-		{ id: 15, name: '记录值', type: 'BYTE[1+7]', desc: 'BYTE0状态bit0未抄到 BYTE1-7无符号LE 正累积(大口径)' },
-		{ id: 16, name: '记录值', type: 'BYTE[1+7]', desc: 'BYTE0状态bit0未抄到 BYTE1-7无符号LE 逆累积(大口径)' },
+		{ id: 14, name: '记录值', type: 'BYTE[1+7]', desc: 'BYTE0状态bit0未抄到 BYTE1-7有符号LE 总累积(大口径) 单位同基准水量' },
+		{ id: 15, name: '记录值', type: 'BYTE[1+7]', desc: 'BYTE0状态bit0未抄到 BYTE1-7无符号LE 正累积(大口径) 单位同基准水量' },
+		{ id: 16, name: '记录值', type: 'BYTE[1+7]', desc: 'BYTE0状态bit0未抄到 BYTE1-7无符号LE 逆累积(大口径) 单位同基准水量' },
 		{ id: 17, name: '记录值', type: 'BYTE[1+3]', desc: 'BYTE0状态bit0未抄到 BYTE1-3有符号LE 瞬时流量(大口径)' },
 		{ id: 18, name: '起始时间', type: 'BYTE[7]+BYTE[8]', desc: '周期历史数据(外贸): BCD起始时间+UTC时间戳8B+数据格式+起始值8B+记录个数2B+增量值' },
 		{ id: 19, name: '记录值', type: 'BYTE[20]', desc: '用水量: 起始hhmmss3B+持续s2B+起始累计7B+用水量4B+最小瞬时2B+最大瞬时2B' }
@@ -619,15 +620,27 @@ window.SK_TAGS = {
 		{ id: 15, name: '记录值', type: 'BYTE[2]', desc: 'int16 LE signed 0.1mg/L 余氯' },
 		{ id: 16, name: '记录值', type: 'BYTE[4]', desc: 'int32 LE signed L/h 最大瞬时流量' },
 		{ id: 17, name: '记录值', type: 'BYTE[4]', desc: 'int32 LE signed 周期累积流量(大口径) 单位同基准水量' },
-		{ id: 18, name: '记录值', type: 'BYTE[1+7]', desc: '总累积大口径 BYTE0状态bit0未抄到 BYTE1-7有符号LE' },
-		{ id: 19, name: '记录值', type: 'BYTE[1+7]', desc: '正累积大口径 BYTE0状态 bit0未抄到 BYTE1-7无符号LE' },
-		{ id: 20, name: '记录值', type: 'BYTE[1+7]', desc: '逆累积大口径 BYTE0状态 bit0未抄到 BYTE1-7无符号LE' },
+		{ id: 18, name: '记录值', type: 'BYTE[1+7]', desc: '总累积大口径 BYTE0状态bit0未抄到 BYTE1-7有符号LE 单位同基准水量' },
+		{ id: 19, name: '记录值', type: 'BYTE[1+7]', desc: '正累积大口径 BYTE0状态 bit0未抄到 BYTE1-7无符号LE 单位同基准水量' },
+		{ id: 20, name: '记录值', type: 'BYTE[1+7]', desc: '逆累积大口径 BYTE0状态 bit0未抄到 BYTE1-7无符号LE 单位同基准水量' },
 		{ id: 21, name: '记录值', type: 'BYTE[1+3]', desc: '最大瞬时大口径 BYTE0状态 BYTE1-3有符号' },
 		{ id: 22, name: '总线表电池电量', type: 'BYTE', desc: '0-100%' }
 	],
 	'254': [
 		{ id: 0, name: '错误记录总条数N', type: 'BYTE[2]', desc: '低字节在前' },
 		{ id: 1, name: '错误记录日志', type: 'BYTE[32]*N', desc: '每条32B: ID(2B低位在前)+时间(6B BCD年月日时分秒)+错误代码(2B BCD见异常代码表)+自定义22B; ID范围0-65535; 红外最多4条/平台14条' }
+	]
+}
+
+// 解析页分组(仅 skFormatFrame 渲染用, 不影响解码/取长): 组内按帧内出现顺序排列,
+// 未入组的 ID 落到「其它」桶。目前只声明了 Tag2, 未声明分组的 Tag 保持原单桶渲染。
+window.SK_TAG_GROUPS = {
+	'2': [
+		{ title: '小口径流量', ids: [0, 1, 2, 5, 9, 13] },
+		{ title: '大口径流量', ids: [23, 24, 25, 26, 27, 28] },
+		{ title: '水质', ids: [3, 17, 18, 19, 20, 21] },
+		{ title: '电池/阀控', ids: [10, 11, 12, 15, 22, 30, 31, 32, 33] },
+		{ title: '时间/基准', ids: [4, 6, 8, 14, 16, 29] }
 	]
 }
 
