@@ -167,6 +167,12 @@
 			alias: 'daochu export save log',
 			run: function () { clickEl('serial-save') }
 		})
+		list.push({
+			group: '日志',
+			title: '打开日志设置',
+			alias: 'rizhi shezhi log settings type timeout rows',
+			run: function () { clickEl('serial-log-settings-btn') }
+		})
 		const typeSel = el('serial-log-type')
 		if (typeSel) {
 			Array.prototype.forEach.call(typeSel.options, function (opt) {

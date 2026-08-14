@@ -470,6 +470,10 @@
 	let logOptionsSingle = pickLogOptions(toolOptions)
 	let logOptionsDual = pickLogOptions(toolOptions)
 	const selectedLogRows = { single: null, dual: null }
+	const LOG_CACHE_KEY = 'serialLogCache'
+	const LOG_CACHE_VER = 1
+	let pendingTermRestore = null
+	let persistLogsTimer = 0
 	function activeLogOptions() {
 		return SerialHub.mode === 'dual' ? logOptionsDual : logOptionsSingle
 	}
@@ -501,10 +505,41 @@
 			}
 		} catch (e) {}
 	}
-	// 日志类型下拉的 UI 同步（combo 初始化后替换为带菜单高亮的实现）
+	function updateLogSettingsSummary() {
+		const text = document.getElementById('serial-log-settings-text')
+		const typeSel = document.getElementById('serial-log-type')
+		const timeoutEl = document.getElementById('serial-timer-out')
+		const rowsEl = document.getElementById('serial-max-rows')
+		if (!text) return
+		const typeLabel = typeSel && typeSel.selectedIndex >= 0
+			? typeSel.options[typeSel.selectedIndex].textContent
+			: 'Hex'
+		const timeout = timeoutEl ? parseInt(timeoutEl.value, 10) : 0
+		const timeoutTxt = !timeout ? '不分包' : timeout + 'ms'
+		let rows = rowsEl ? parseInt(rowsEl.value, 10) : 5000
+		if (isNaN(rows)) rows = 5000
+		text.textContent = typeLabel + ' · ' + timeoutTxt + ' · ' + rows + '行'
+	}
+	function updateLogLegend() {
+		const legend = document.getElementById('serial-log-legend')
+		const left = document.getElementById('serial-log-legend-left')
+		const right = document.getElementById('serial-log-legend-right')
+		if (!legend || !left || !right) return
+		const dual = logModeKey() === 'dual'
+		legend.classList.toggle('is-dual', dual)
+		if (dual) {
+			left.textContent = SerialHub.getLabelA() || 'A'
+			right.textContent = SerialHub.getLabelB() || 'B'
+		} else {
+			left.textContent = 'TX'
+			right.textContent = 'RX'
+		}
+	}
+	// 日志类型下拉的 UI 同步
 	let applyLogTypeUi = function (val) {
 		const select = document.getElementById('serial-log-type')
 		if (select) select.value = val
+		updateLogSettingsSummary()
 	}
 	function applyLogOptionsToUI() {
 		const opts = activeLogOptions()
@@ -515,6 +550,7 @@
 		if (m) m.value = opts.maxLogRows
 		toolOptions.logType = opts.logType
 		applyLogTypeUi(opts.logType)
+		updateLogSettingsSummary()
 		applyLogView()
 		const a = document.getElementById('serial-auto-scroll')
 		if (a) a.innerText = opts.autoScroll ? '自动滚动' : '暂停滚动'
@@ -535,16 +571,21 @@
 			logs.classList.toggle('ansi', type === 'ansi')
 			logs.classList.toggle('is-dual', mode === 'dual')
 		}
+		updateLogLegend()
 		if (termHost) {
 			termHost.hidden = !isTerm
 			if (isTerm && window.SerialTerm) {
 				const done = window.SerialTerm.ensure(mode, termHost, {
 					onSend: function (bytes) { writeTermBytes(SerialHub.activeSendPhys(), bytes) },
 				})
-				if (done && typeof done.then === 'function') {
-					done.then(function () { window.SerialTerm.fit(mode) })
-				} else {
+				function afterTermReady() {
 					window.SerialTerm.fit(mode)
+					applyPendingTerm(mode)
+				}
+				if (done && typeof done.then === 'function') {
+					done.then(afterTermReady)
+				} else {
+					afterTermReady()
 				}
 			}
 		}
@@ -559,6 +600,7 @@
 			try { selectedLogRows[mode].classList.remove('selected') } catch (e) {}
 			selectedLogRows[mode] = null
 		}
+		persistLogsNow()
 	}
 
 	// ---- 协议注册表 ----
@@ -1014,6 +1056,7 @@
 			view.innerHTML = buildHexEmptyHtml()
 			view.classList.add('is-empty')
 			_hexDumpState.cols = 0
+			syncParsePanelEmpty()
 			return
 		}
 		view.classList.remove('is-empty')
@@ -1047,11 +1090,22 @@
 			h += '</span></div>'
 		}
 		view.innerHTML = h
+		syncParsePanelEmpty()
+	}
+	function syncParsePanelEmpty() {
+		const panel = document.getElementById('serial-parse-panel')
+		const view = document.getElementById('serial-protocol-hexview')
+		const out = document.getElementById('serial-protocol-output')
+		if (!panel) return
+		const hexEmpty = !view || view.classList.contains('is-empty')
+		const outEmpty = !out || !out.innerHTML.trim()
+		panel.classList.toggle('is-empty', hexEmpty && outEmpty)
 	}
 	function parseProtocolBytes(bytes, note) {
 		if (!bytes || !bytes.length) {
 			renderProtocolHexDump(null)
 			document.getElementById('serial-protocol-output').innerHTML = ''
+			syncParsePanelEmpty()
 			return
 		}
 		renderProtocolHexDump(bytes)
@@ -1073,6 +1127,7 @@
 		} catch (err) {
 			document.getElementById('serial-protocol-output').innerHTML = '<div class="sk-parse-err">解析异常:' + HTMLEncode(String(err)) + '</div>'
 		}
+		syncParsePanelEmpty()
 	}
 	// opts.requireValid: 仅在扫到 CRC+EOF 有效帧时填充（点击剪贴板用，失败不覆盖已有内容）
 	function applyProtocolHexInput(raw, opts) {
@@ -1601,6 +1656,7 @@
 	}
 	//读取参数：单路/双路各自独立的串口参数，按当前模式刷新 dropdown
 	applySerialParamsToUI()
+	window.addEventListener('pagehide', persistLogsNow)
 	let options = localStorage.getItem('toolOptions')
 	if (options) {
 		toolOptions = JSON.parse(options)
@@ -1619,6 +1675,7 @@
 	} catch (e) {
 		logOptionsDual = pickLogOptions(null)
 	}
+	restoreLogsFromCache()
 	applyLogOptionsToUI()
 	document.getElementById('serial-add-crlf').checked = toolOptions.addCRLF
 	document.getElementById('serial-hex-send').checked = toolOptions.hexSend
@@ -1808,6 +1865,7 @@
 	//实时修改选项
 	document.getElementById('serial-timer-out').addEventListener('change', (e) => {
 		changeOption('timeOut', parseInt(e.target.value))
+		updateLogSettingsSummary()
 	})
 	document.getElementById('serial-max-rows').addEventListener('change', (e) => {
 		let max = parseInt(e.target.value)
@@ -1818,95 +1876,35 @@
 		changeOption('maxLogRows', max)
 		trimLogRows(SerialHub.getLogContainerFor('single'))
 		trimLogRows(SerialHub.getLogContainerFor('dual'))
+		updateLogSettingsSummary()
 	})
-	// 日志类型：自定义下拉（悬停/点击展开），底层保留隐藏 select 兼容命令面板
+	document.getElementById('serial-log-type').addEventListener('change', function (e) {
+		changeOption('logType', e.target.value)
+		updateLogSettingsSummary()
+		applyLogView()
+	})
+	updateLogSettingsSummary()
 	;(function () {
-		const wrap = document.querySelector('.serial-log-type-wrap')
-		const combo = document.getElementById('log-type-combo')
-		const btn = document.getElementById('serial-log-type-btn')
-		const menu = document.getElementById('serial-log-type-menu')
-		const label = document.getElementById('serial-log-type-text')
-		const select = document.getElementById('serial-log-type')
-		if (!wrap || !combo || !btn || !menu || !label || !select) return
-
-		function labelOf(val) {
-			for (let i = 0; i < select.options.length; i++) {
-				if (select.options[i].value === val) return select.options[i].textContent
-			}
-			return val
-		}
-		function syncUi(val) {
-			label.textContent = labelOf(val)
-			menu.querySelectorAll('li').forEach(function (li) {
-				const on = li.getAttribute('data-value') === val
-				li.classList.toggle('active', on)
-				li.setAttribute('aria-selected', on ? 'true' : 'false')
+		const popover = document.getElementById('serial-log-settings-popover')
+		if (popover) {
+			popover.addEventListener('keydown', function (e) {
+				if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.stopPropagation()
 			})
 		}
-		function openMenu() {
-			combo.classList.add('open')
-			btn.setAttribute('aria-expanded', 'true')
+		const ddRoot = document.getElementById('serial-log-settings')
+		const ddToggle = document.getElementById('serial-log-settings-btn')
+		if (ddRoot && ddToggle && typeof bootstrap !== 'undefined' && bootstrap.Dropdown) {
+			const dd = bootstrap.Dropdown.getOrCreateInstance(ddToggle, { autoClose: 'outside' })
+			let leaveT = 0
+			ddRoot.addEventListener('mouseenter', function () {
+				clearTimeout(leaveT)
+				leaveT = setTimeout(function () { dd.show() }, 80)
+			})
+			ddRoot.addEventListener('mouseleave', function () {
+				clearTimeout(leaveT)
+				leaveT = setTimeout(function () { dd.hide() }, 180)
+			})
 		}
-		function closeMenu() {
-			combo.classList.remove('open')
-			btn.setAttribute('aria-expanded', 'false')
-		}
-		function topBarSetType(val) {
-			if (select.value !== val) select.value = val
-			syncUi(val)
-			changeOption('logType', val)
-			applyLogView()
-		}
-
-		applyLogTypeUi = function (val) {
-			if (select.value !== val) select.value = val
-			syncUi(val)
-		}
-
-		syncUi(select.value || toolOptions.logType || 'hex')
-
-		select.addEventListener('change', function (e) {
-			topBarSetType(e.target.value)
-		})
-
-		btn.addEventListener('click', function (e) {
-			e.preventDefault()
-			e.stopPropagation()
-			if (combo.classList.contains('open')) closeMenu()
-			else openMenu()
-		})
-		menu.addEventListener('mousedown', function (e) {
-			const li = e.target.closest('li[data-value]')
-			if (!li) return
-			e.preventDefault()
-			e.stopPropagation()
-			topBarSetType(li.getAttribute('data-value'))
-			closeMenu()
-		})
-
-		let hoverT = 0
-		wrap.addEventListener('mouseenter', function () {
-			clearTimeout(hoverT)
-			hoverT = setTimeout(openMenu, 80)
-		})
-		wrap.addEventListener('mouseleave', function () {
-			clearTimeout(hoverT)
-			hoverT = setTimeout(closeMenu, 160)
-		})
-		document.addEventListener('click', function (e) {
-			if (!wrap.contains(e.target)) closeMenu()
-		})
-		btn.addEventListener('keydown', function (e) {
-			if (e.key === 'Escape') {
-				closeMenu()
-				return
-			}
-			if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
-				e.preventDefault()
-				openMenu()
-			}
-		})
-
 	})()
 	document.getElementById('serial-auto-scroll').addEventListener('click', function (e) {
 		let autoScroll = this.innerText != '自动滚动'
@@ -3415,6 +3413,7 @@
 		const sidLogType = getLogTypeForSid(sid)
 		if (sidLogType === 'term' && window.SerialTerm) {
 			window.SerialTerm.write(SerialHub.logModeOf(sid), data)
+			schedulePersistLogs()
 		}
 		const packBuf = SerialHub.getPackBuf(sid)
 		const sidOpts = logOptionsForSid(sid)
@@ -3602,6 +3601,111 @@
 			container.scrollTop = want
 		}
 	}
+	function isPageReload() {
+		try {
+			const nav = performance.getEntriesByType && performance.getEntriesByType('navigation')
+			if (nav && nav[0] && nav[0].type) return nav[0].type === 'reload'
+		} catch (e) {}
+		try {
+			return performance.navigation && performance.navigation.type === 1
+		} catch (e) {}
+		return false
+	}
+	function paneHtml(id, maxRows) {
+		const el = document.getElementById(id)
+		if (!el) return ''
+		if (maxRows == null || el.childElementCount <= maxRows) return el.innerHTML
+		let html = ''
+		for (let i = el.childElementCount - maxRows; i < el.childElementCount; i++) {
+			html += el.children[i].outerHTML
+		}
+		return html
+	}
+	function collectLogCache(maxRows) {
+		const payload = {
+			v: LOG_CACHE_VER,
+			seq: logSeq,
+			single: paneHtml('serial-logs-single', maxRows),
+			dual: paneHtml('serial-logs-dual', maxRows),
+		}
+		if (window.SerialTerm && typeof window.SerialTerm.getText === 'function') {
+			payload.termSingle = window.SerialTerm.getText('single') || ''
+			payload.termDual = window.SerialTerm.getText('dual') || ''
+		}
+		return payload
+	}
+	function persistLogsNow() {
+		try {
+			sessionStorage.setItem(LOG_CACHE_KEY, JSON.stringify(collectLogCache()))
+			return
+		} catch (e) {}
+		try {
+			sessionStorage.setItem(LOG_CACHE_KEY, JSON.stringify(collectLogCache(400)))
+		} catch (e2) {
+			try { sessionStorage.removeItem(LOG_CACHE_KEY) } catch (e3) {}
+		}
+	}
+	function schedulePersistLogs() {
+		clearTimeout(persistLogsTimer)
+		persistLogsTimer = setTimeout(persistLogsNow, 250)
+	}
+	function applyPendingTerm(mode) {
+		if (!pendingTermRestore || !window.SerialTerm) return
+		const key = mode === 'dual' ? 'dual' : 'single'
+		const text = pendingTermRestore[key]
+		if (!text) return
+		pendingTermRestore[key] = ''
+		try {
+			window.SerialTerm.write(mode, new TextEncoder().encode(text))
+		} catch (e) {}
+	}
+	function restoreLogsFromCache() {
+		if (!isPageReload()) {
+			try { sessionStorage.removeItem(LOG_CACHE_KEY) } catch (e) {}
+			return
+		}
+		let raw
+		try { raw = sessionStorage.getItem(LOG_CACHE_KEY) } catch (e) { return }
+		if (!raw) return
+		let data
+		try { data = JSON.parse(raw) } catch (e) {
+			try { sessionStorage.removeItem(LOG_CACHE_KEY) } catch (e2) {}
+			return
+		}
+		if (!data || data.v !== LOG_CACHE_VER) {
+			try { sessionStorage.removeItem(LOG_CACHE_KEY) } catch (e) {}
+			return
+		}
+		const single = document.getElementById('serial-logs-single')
+		const dual = document.getElementById('serial-logs-dual')
+		if (single && data.single) single.innerHTML = data.single
+		if (dual && data.dual) dual.innerHTML = data.dual
+		const seq = parseInt(data.seq, 10)
+		if (seq > 0) logSeq = seq
+		if (single) {
+			const sel = single.querySelector('.log-row.selected')
+			if (sel) selectedLogRows.single = sel
+		}
+		if (dual) {
+			const sel = dual.querySelector('.log-row.selected')
+			if (sel) selectedLogRows.dual = sel
+		}
+		if (typeof skBindSeriesCharts === 'function') {
+			try { if (single) skBindSeriesCharts(single) } catch (e) {}
+			try { if (dual) skBindSeriesCharts(dual) } catch (e) {}
+		}
+		pendingTermRestore = {
+			single: data.termSingle || '',
+			dual: data.termDual || '',
+		}
+		;['single', 'dual'].forEach(function (mode) {
+			const box = SerialHub.getLogContainerFor(mode)
+			const opts = mode === 'dual' ? logOptionsDual : logOptionsSingle
+			if (box && opts && opts.autoScroll) {
+				box.scrollTop = box.scrollHeight - box.clientHeight
+			}
+		})
+	}
 	//统一的日志插入: 按 (data-ts, data-seq) 全局单调序插入 + 裁剪整行 + 自动滚动
 	function appendLogNode(node, sid) {
 		const mode = (sid === 'S' || sid === 'A' || sid === 'B') ? SerialHub.logModeOf(sid) : logModeKey()
@@ -3632,6 +3736,7 @@
 		if (opts.autoScroll) {
 			container.scrollTop = container.scrollHeight - container.clientHeight
 		}
+		schedulePersistLogs()
 	}
 	//添加日志
 	function addLog(data, isReceive = true, atTime = null, sid = null) {
@@ -3639,7 +3744,7 @@
 		const logType = getLogTypeForSid(sid)
 		// term 模式不走行日志；TX 也不写进 xterm（设备自己 echo）
 		if (logType === 'term') return
-		let form = isReceive ? '←' : '→'
+		let form = isReceive ? 'RX' : 'TX'
 		//无论当前 logType 是什么都算出 HEX,点击行解析要用
 		let dataHex = []
 		for (const d of data) {
@@ -3734,7 +3839,7 @@
 				keyHex: toolOptions.skKeyHex || undefined,
 				decryptMode: toolOptions.skDecryptMode,
 			})
-			const form = isReceive ? '←' : '→'
+			const form = isReceive ? 'RX' : 'TX'
 			const dirCls = isReceive ? 'sk-parse-up' : 'sk-parse-down'
 			const time = toolOptions.showTime ? formatDate(atTime || new Date()) + '&nbsp;' : ''
 			const prompt = r.needKey ? '<div class="sk-parse-err">⚠ 加密报文,请在右侧「第三方协议」中的「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>' : ''
@@ -4185,18 +4290,20 @@
 				e.stopPropagation()
 				document.getElementById('serial-protocol-output').innerHTML = ''
 				if (typeof renderProtocolHexDump === 'function') renderProtocolHexDump(null)
+				syncParsePanelEmpty()
 			})
 		}
 
-		//恢复上次的高度与折叠状态；窄屏默认折叠
+		//恢复上次的高度与折叠状态；无记录时默认折叠，把空间留给日志
 		let saved = {}
 		try { saved = JSON.parse(localStorage.getItem(STATE_KEY) || '{}') } catch (e) {}
 		if (saved.height) applyHeight(saved.height)
 		if (typeof saved.collapsed === 'boolean') {
 			setCollapsed(saved.collapsed)
 		} else {
-			setCollapsed(isNarrow())
+			setCollapsed(true)
 		}
+		syncParsePanelEmpty()
 	})()
 
 	// 串口发送面板：点击标题栏折叠/展开（对齐协议解析面板）
@@ -4349,6 +4456,7 @@
 
 	function updateDualLogLabels() {
 		// 合流窗按行写入时取当前标签；已有行不重刷
+		updateLogLegend()
 	}
 
 	// 模式切换按钮

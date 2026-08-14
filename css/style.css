@@ -881,9 +881,14 @@ body {
 
 .log-row .log-dir {
   flex: 0 0 auto;
-  width: 1em;
+  min-width: 1.8em;
+  padding: 0 4px;
+  border-radius: 3px;
   text-align: center;
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 0.65rem;
+  line-height: 1.45;
+  letter-spacing: 0.03em;
 }
 
 .log-row .log-len {
@@ -970,14 +975,40 @@ body {
   background-color: color-mix(in srgb, #fbbf24 7%, transparent);
 }
 
-.serial-logs.is-dual .log-row[data-sid='A']:hover,
-.serial-logs.is-dual .log-row[data-sid='B']:hover {
-  background-color: var(--bg-surface-hover);
+.serial-logs.is-dual .log-row[data-sid='A']:hover {
+  background-color: color-mix(in srgb, #10b981 14%, transparent);
 }
 
-.serial-logs.is-dual .log-row[data-sid].selected {
-  background-color: var(--accent-light);
-  box-shadow: inset 0 0 0 1px var(--accent);
+.serial-logs.is-dual .log-row[data-sid='B']:hover {
+  background-color: color-mix(in srgb, #f59e0b 14%, transparent);
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='A']:hover {
+  background-color: color-mix(in srgb, #34d399 16%, transparent);
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='B']:hover {
+  background-color: color-mix(in srgb, #fbbf24 16%, transparent);
+}
+
+.serial-logs.is-dual .log-row[data-sid='A'].selected {
+  background-color: color-mix(in srgb, #10b981 22%, transparent);
+  box-shadow: inset 0 0 0 1.5px #10b981;
+}
+
+.serial-logs.is-dual .log-row[data-sid='B'].selected {
+  background-color: color-mix(in srgb, #f59e0b 22%, transparent);
+  box-shadow: inset 0 0 0 1.5px #f59e0b;
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='A'].selected {
+  background-color: color-mix(in srgb, #34d399 24%, transparent);
+  box-shadow: inset 0 0 0 1.5px #34d399;
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='B'].selected {
+  background-color: color-mix(in srgb, #fbbf24 24%, transparent);
+  box-shadow: inset 0 0 0 1.5px #fbbf24;
 }
 
 #serial-connect-bar {
@@ -995,6 +1026,7 @@ body {
 
 .log-row[data-dir='rx'] .log-dir {
   color: var(--success);
+  background-color: color-mix(in srgb, var(--success) 16%, transparent);
 }
 
 .log-row[data-dir='tx'] {
@@ -1004,6 +1036,7 @@ body {
 
 .log-row[data-dir='tx'] .log-dir {
   color: var(--accent);
+  background-color: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .log-row[data-dir='sys'] {
@@ -1020,22 +1053,91 @@ body {
 }
 
 .log-row[data-dir='rx']:hover {
-  background-color: rgba(52, 199, 89, 0.12);
+  background-color: color-mix(in srgb, var(--success) 16%, transparent);
 }
 
 .log-row[data-dir='tx']:hover {
-  background-color: rgba(0, 122, 255, 0.12);
+  background-color: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
-.log-row.selected {
-  background-color: var(--accent-light);
-  box-shadow: inset 0 0 0 1px var(--accent);
+/* 选中行保留 TX/RX 色相，避免和 TX 浅蓝底撞色 */
+.log-row[data-dir='rx'].selected,
+.log-row[data-dir='rx'].selected:hover {
+  background-color: color-mix(in srgb, var(--success) 24%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--success);
+}
+
+.log-row[data-dir='tx'].selected,
+.log-row[data-dir='tx'].selected:hover {
+  background-color: color-mix(in srgb, var(--accent) 24%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.log-row[data-dir='sys'].selected,
+.log-row[data-dir='sys'].selected:hover {
+  background-color: color-mix(in srgb, var(--danger) 16%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--danger);
+}
+
+/* 拖选文本也按方向分色，避免 RX 选中后变成和 TX 一样的蓝 */
+.serial-logs .log-row[data-dir='rx']::selection,
+.serial-logs .log-row[data-dir='rx'] *::selection {
+  background: var(--success);
+  color: #fff;
+}
+
+.serial-logs .log-row[data-dir='tx']::selection,
+.serial-logs .log-row[data-dir='tx'] *::selection {
+  background: var(--accent);
+  color: #fff;
+}
+
+.serial-logs .log-row[data-dir='sys']::selection,
+.serial-logs .log-row[data-dir='sys'] *::selection {
+  background: var(--danger);
+  color: #fff;
+}
+
+.serial-logs.is-dual .log-row[data-sid='A']::selection,
+.serial-logs.is-dual .log-row[data-sid='A'] *::selection {
+  background: #10b981;
+  color: #fff;
+}
+
+.serial-logs.is-dual .log-row[data-sid='B']::selection,
+.serial-logs.is-dual .log-row[data-sid='B'] *::selection {
+  background: #f59e0b;
+  color: #fff;
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='A']::selection,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='A'] *::selection {
+  background: #34d399;
+  color: #1c1c1e;
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='B']::selection,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='B'] *::selection {
+  background: #fbbf24;
+  color: #1c1c1e;
 }
 
 .serial-logs.ansi .log-row[data-dir='rx'],
 .serial-logs.ansi .log-row[data-dir='tx'],
 .serial-logs.ansi .log-row:hover {
   background-color: rgba(255, 255, 255, 0.06);
+}
+
+.serial-logs.ansi .log-row[data-dir='rx'].selected,
+.serial-logs.ansi .log-row[data-dir='rx'].selected:hover {
+  background-color: color-mix(in srgb, var(--success) 28%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--success);
+}
+
+.serial-logs.ansi .log-row[data-dir='tx'].selected,
+.serial-logs.ansi .log-row[data-dir='tx'].selected:hover {
+  background-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
 }
 
 /* ========== Alert / Status ========== */
@@ -2328,7 +2430,37 @@ hr {
   background: var(--accent);
 }
 
-#serial-parse-panel.collapsed #serial-parse-resizer {
+#serial-parse-panel.collapsed #serial-parse-resizer,
+#serial-parse-panel.is-empty #serial-parse-resizer {
+  display: none;
+}
+
+#serial-parse-panel.is-empty:not(.collapsed) {
+  height: auto;
+}
+
+#serial-parse-panel.is-empty:not(.collapsed) #serial-parse-body {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+#serial-parse-panel.is-empty #serial-protocol-output {
+  display: none;
+}
+
+#serial-parse-panel.is-empty .sk-hex-dump.is-empty {
+  min-height: 0;
+  padding: 6px 8px;
+}
+
+#serial-parse-panel.is-empty .sk-hex-empty {
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 8px;
+}
+
+#serial-parse-panel.is-empty .sk-hex-empty-sub {
   display: none;
 }
 
@@ -2874,128 +3006,125 @@ hr {
   font-weight: 600;
 }
 
-/* Log type dropdown */
-.serial-log-type-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: stretch;
-  height: 31px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-surface);
-  overflow: visible;
-  vertical-align: middle;
-  z-index: 40;
-}
-
-.serial-log-type-label-text {
-  display: inline-flex;
+/* Log settings popover (type / timeout / max rows) */
+.serial-log-settings-summary {
+  display: flex;
   align-items: center;
-  padding: 0 10px;
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--text-secondary);
-  background: var(--bg-code);
-  border-right: 1px solid var(--border-color);
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-  white-space: nowrap;
-  user-select: none;
-}
-
-.serial-log-type-combo {
-  position: relative;
-  min-width: 118px;
-}
-
-.serial-log-type-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: space-between;
   gap: 6px;
-  width: 100%;
-  height: 100%;
-  min-height: 29px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: transparent;
+  max-width: 100%;
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-family: var(--font-sans);
   color: var(--text-primary);
-  font-size: 0.75rem;
-  font-weight: 500;
-  line-height: 1.2;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: all var(--transition-fast);
 }
 
-.serial-log-type-btn:hover,
-.serial-log-type-combo.open .serial-log-type-btn {
-  background: var(--bg-surface-hover);
+.serial-log-settings-summary:hover,
+.serial-log-settings-summary[aria-expanded='true'] {
+  border-color: var(--accent);
   color: var(--accent);
 }
 
-.serial-log-type-arrow {
-  font-size: 0.68rem;
+.serial-log-settings-summary > i {
+  font-size: 0.75rem;
   color: var(--text-muted);
-  transition: transform var(--transition-fast), color var(--transition-fast);
 }
 
-.serial-log-type-combo.open .serial-log-type-arrow {
-  transform: rotate(180deg);
+.serial-log-settings-summary:hover > i,
+.serial-log-settings-summary[aria-expanded='true'] > i {
   color: var(--accent);
 }
 
-.serial-log-type-menu {
-  display: none;
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 200;
-  margin: 0;
-  padding: 4px;
-  list-style: none;
+#serial-log-settings-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.serial-log-settings-arrow {
+  font-size: 0.68rem;
+  transition: transform var(--transition-fast);
+}
+
+.serial-log-settings-summary[aria-expanded='true'] .serial-log-settings-arrow {
+  transform: rotate(180deg);
+}
+
+#serial-log-settings-popover.dropdown-menu {
+  width: 280px;
+  max-width: calc(100vw - 40px);
+  padding: 10px;
+  margin-top: 6px;
+  color: var(--text-primary);
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
-  min-width: 100%;
-  width: max-content;
+  z-index: 60;
 }
 
-.serial-log-type-combo.open .serial-log-type-menu {
-  display: block;
-}
-
-.serial-log-type-menu li {
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  font-size: 0.75rem;
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.serial-log-type-menu li:hover {
-  background: var(--accent-light);
-  color: var(--accent);
-}
-
-.serial-log-type-menu li.active {
-  background: var(--accent-light);
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.serial-log-type-native {
-  position: absolute;
-  width: 1px;
-  height: 1px;
+#serial-log-settings-popover .serial-settings-card {
+  background: transparent;
+  border: none;
+  box-shadow: none;
   padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-  pointer-events: none;
+  margin-bottom: 0;
+}
+
+/* TX / RX (or dual A/B) color legend next to the log title */
+.serial-log-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 2px;
+  user-select: none;
+}
+
+.serial-log-legend-item {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1.4;
+}
+
+.serial-log-legend:not(.is-dual) [data-leg='left'] {
+  color: var(--accent);
+  background: var(--accent-light);
+}
+
+.serial-log-legend:not(.is-dual) [data-leg='right'] {
+  color: var(--success);
+  background: var(--success-light);
+}
+
+.serial-log-legend.is-dual [data-leg='left'] {
+  color: #059669;
+  background: color-mix(in srgb, #10b981 14%, transparent);
+}
+
+.serial-log-legend.is-dual [data-leg='right'] {
+  color: #d97706;
+  background: color-mix(in srgb, #f59e0b 14%, transparent);
+}
+
+[data-theme='dark'] .serial-log-legend.is-dual [data-leg='left'] {
+  color: #34d399;
+  background: color-mix(in srgb, #34d399 16%, transparent);
+}
+
+[data-theme='dark'] .serial-log-legend.is-dual [data-leg='right'] {
+  color: #fbbf24;
+  background: color-mix(in srgb, #fbbf24 16%, transparent);
 }
 
 /* Port Select & Open Buttons */
@@ -5619,14 +5748,18 @@ body.blu-wave-fullscreen-open {
     flex-wrap: wrap;
   }
 
-  #serial-timer-out,
   #serial-loop-send-time {
     width: auto !important;
   }
 
-  .serial-log-type-wrap {
-    width: auto;
+  #serial-log-settings {
     max-width: 100%;
+  }
+
+  #serial-log-settings-popover.dropdown-menu {
+    width: auto;
+    min-width: 240px;
+    max-width: calc(100vw - 80px);
   }
 
   #serial-send {
