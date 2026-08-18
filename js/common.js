@@ -741,10 +741,10 @@
 		if (sendBtn) {
 			const item = currQuickSend.list[index]
 			if (item.hex) {
-				sendHex(item.content)
+				sendHex(item.content, item.name)
 				return
 			}
-			sendText(item.content)
+			sendText(item.content, item.name)
 		}
 	})
 	//快捷列表双击内容输入框改名
@@ -780,6 +780,28 @@
 	})
 	function saveQuickList() {
 		localStorage.setItem('quickSendList', JSON.stringify(quickSendList))
+	}
+	function lookupQuickSendName(content) {
+		const raw = String(content == null ? '' : content)
+		if (!raw || !currQuickSend || !Array.isArray(currQuickSend.list)) return ''
+		const compact = raw.replace(/\s+/g, '').toLowerCase()
+		if (!compact) return ''
+		let exactName = ''
+		let compactName = ''
+		let compactHits = 0
+		for (let i = 0; i < currQuickSend.list.length; i++) {
+			const item = currQuickSend.list[i]
+			const c = String((item && item.content) || '')
+			if (!c) continue
+			if (!exactName && c === raw) exactName = item.name || ''
+			if (c.replace(/\s+/g, '').toLowerCase() === compact) {
+				compactHits++
+				compactName = item.name || ''
+			}
+		}
+		if (exactName) return exactName
+		if (compactHits === 1) return compactName
+		return ''
 	}
 	//快捷发送列表拖拽排序
 	document.getElementById('serial-quick-send-content').addEventListener('dragstart', (e) => {
@@ -1166,7 +1188,7 @@
 		const outEmpty = !out || !out.innerHTML.trim()
 		panel.classList.toggle('is-empty', hexEmpty && outEmpty)
 	}
-	function parseProtocolBytes(bytes, note) {
+	function parseProtocolBytes(bytes, note, dir) {
 		if (!bytes || !bytes.length) {
 			renderProtocolHexDump(null)
 			document.getElementById('serial-protocol-output').innerHTML = ''
@@ -1185,7 +1207,10 @@
 			if (note) head += '<div class="sk-parse-note">' + HTMLEncode(note) + '</div>'
 			if (r.needKey) head += '<div class="sk-parse-err">⚠ 加密报文,请在右侧「第三方协议」中的「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>'
 			const outEl = document.getElementById('serial-protocol-output')
-			outEl.innerHTML = head + skFormatFrame(r)
+			const dirCls = dir === 'tx' ? 'sk-parse-down' : dir === 'rx' ? 'sk-parse-up' : ''
+			const wrapOpen = dirCls ? '<div class="sk-parse-block ' + dirCls + '" data-dir="' + dir + '">' : ''
+			const wrapClose = dirCls ? '</div>' : ''
+			outEl.innerHTML = wrapOpen + head + skFormatFrame(r) + wrapClose
 			if (typeof skBindSeriesCharts === 'function') {
 				try { skBindSeriesCharts(outEl) } catch (e) { /* ignore chart bind */ }
 			}
@@ -1215,7 +1240,7 @@
 		} else if (opts.requireValid) {
 			return false
 		}
-		parseProtocolBytes(frameBytes, note)
+		parseProtocolBytes(frameBytes, note, opts.dir)
 		return true
 	}
 	//HEX 转储区：点击读剪贴板 / 粘贴即格式化并解析；宽度变化时在 16/32 列间切换
@@ -2201,7 +2226,7 @@
 			if (typeof window.expandParsePanel === 'function') {
 				window.expandParsePanel()
 			}
-			applyProtocolHexInput(hex)
+			applyProtocolHexInput(hex, { dir: row.getAttribute('data-dir') || '' })
 		})
 	}
 	bindLogContainerEvents(serialLogsSingle, 'single')
@@ -3224,35 +3249,36 @@
 			addLogErr('发送内容为空')
 			return
 		}
+		const sendName = lookupQuickSendName(content)
 		if (toolOptions.hexSend) {
-			await sendHex(content)
+			await sendHex(content, sendName)
 		} else {
-			await sendText(content)
+			await sendText(content, sendName)
 		}
 	}
 
 	//发送HEX到串口（使用主发口）
-	async function sendHex(hex) {
+	async function sendHex(hex, sendName) {
 		const value = hex.replace(/\s+/g, '')
 		if (/^[0-9A-Fa-f]+$/.test(value) && value.length % 2 === 0) {
 			let data = []
 			for (let i = 0; i < value.length; i = i + 2) {
 				data.push(parseInt(value.substring(i, i + 2), 16))
 			}
-			await writeData(Uint8Array.from(data))
+			await writeData(Uint8Array.from(data), null, sendName || lookupQuickSendName(hex))
 		} else {
 			addLogErr('HEX格式错误:' + hex)
 		}
 	}
 
 	//发送文本到串口（使用主发口）
-	async function sendText(text) {
+	async function sendText(text, sendName) {
 		const encoder = new TextEncoder()
-		await writeData(encoder.encode(text))
+		await writeData(encoder.encode(text), null, sendName || lookupQuickSendName(text))
 	}
 
 	//写串口数据（走主发口 activeSendPhys）
-	async function writeData(data, sid) {
+	async function writeData(data, sid, sendName) {
 		sid = sid || SerialHub.activeSendPhys()
 		const port = SerialHub.getPort(sid)
 		if (!port || !port.writable) {
@@ -3272,7 +3298,7 @@
 			const sendTime = new Date()
 			await writer.write(data)
 			addLog(data, false, sendTime, sid)
-			addParseLog([...data], false, sendTime, sid)
+			addParseLog([...data], false, sendTime, sid, sendName)
 		} catch (error) {
 			const errorType = error.name || 'UnknownError'
 			const errorMsg = error.message || '未知错误'
@@ -3887,7 +3913,7 @@
 		appendLogNode(row, sid)
 	}
 	//第三方协议解析日志
-	function addParseLog(data, isReceive, atTime = null, sid) {
+	function addParseLog(data, isReceive, atTime = null, sid, sendName) {
 		if (!toolOptions.skParseEnable) {
 			return
 		}
@@ -3905,15 +3931,35 @@
 				decryptMode: toolOptions.skDecryptMode,
 			})
 			const form = isReceive ? 'RX' : 'TX'
+			const dir = isReceive ? 'rx' : 'tx'
 			const dirCls = isReceive ? 'sk-parse-up' : 'sk-parse-down'
-			const time = toolOptions.showTime ? formatDate(atTime || new Date()) + '&nbsp;' : ''
+			const time = toolOptions.showTime ? formatDate(atTime || new Date()) : ''
 			const prompt = r.needKey ? '<div class="sk-parse-err">⚠ 加密报文,请在右侧「第三方协议」中的「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>' : ''
-			html = '<div class="sk-parse-block ' + dirCls + '"><span class="text-muted small">' + time + form + ' 解析</span>' + prompt + skFormatFrame(r) + '</div>'
+			const nameHtml = (!isReceive && sendName)
+				? '<span class="sk-parse-send-name">' + HTMLEncode(sendName) + '</span>'
+				: ''
+			const timeHtml = time ? '<span class="log-time">' + time + '</span>' : ''
+			const label = '<span class="sk-parse-label">' + timeHtml +
+				'<span class="log-dir">' + form + '</span>' +
+				'<span class="sk-parse-kind">解析</span>' + nameHtml + '</span>'
+			const body = prompt + skFormatFrame(r)
+			if (isReceive) {
+				html = '<div class="sk-parse-block ' + dirCls + '" data-dir="' + dir + '">' + label + body + '</div>'
+			} else {
+				html = '<div class="sk-parse-block ' + dirCls + '" data-dir="' + dir + '">' +
+					'<details class="sk-parse-fold">' +
+					'<summary>' + label + '</summary>' +
+					body +
+					'</details></div>'
+			}
 		} catch (err) {
 			html = '<div class="sk-parse-block sk-parse-error"><span class="text-danger small">第三方协议解析异常:' + HTMLEncode(String(err)) + '</span></div>'
 		}
 		let tempNode = document.createElement('div')
 		tempNode.innerHTML = html
+		tempNode.className = 'sk-parse-log'
+		tempNode.setAttribute('data-dir', isReceive ? 'rx' : 'tx')
+		tempNode.setAttribute('data-sid', sid === 'B' ? 'B' : (sid === 'S' ? 'S' : 'A'))
 		// 解析日志同样参与 (ts, seq) 全序排序
 		const when = atTime || new Date()
 		tempNode.setAttribute('data-ts', String(when.getTime ? when.getTime() : Date.now()))
