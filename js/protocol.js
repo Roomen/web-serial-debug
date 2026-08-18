@@ -434,6 +434,11 @@
 		for (let i = 15; i >= 0; i--) if (map[i]) out.push('bit' + i + ':' + map[i])
 		return out.length ? out.join(' ') : hexbytes(raw)
 	}
+	function renderSensorParam(raw) {
+		if (!raw || raw.length < 6) return hexbytes(raw || [])
+		return 'BADJ1=' + raw[0] + ' BADJ2=' + raw[1] + ' 采样周期(HIGH SAMPLE)=' + raw[2] + ' 预留=' + raw[3] + ' 测量时长(CHC TIM)=' + u16leRead(raw, 4)
+	}
+
 	function renderValue(def, raw) {
 		if (!raw || raw.length === 0) return ''
 		const dec = def && def.dec
@@ -486,6 +491,7 @@
 					return '最近一次上行异常发生时间:' + bcdTimeOrEmpty(raw.subarray(0, 6)) + ' 最近一次异常发生时的CSQ:' + raw[6] + ' 异常发生的环节:' + (linkMap[raw[7]] != null ? linkMap[raw[7]] : raw[7])
 				}
 				case 'magSignal': return 'CH0=' + raw[0] + ' CH1=' + raw[1]
+				case 'sensorParam': return renderSensorParam(raw)
 				case 'busMeters': return renderBusMeters(raw, dec.rec || 14)
 				case 'imgPack': return renderImgPack(raw)
 			}

@@ -719,8 +719,13 @@
 		quickSend.appendChild(option)
 	})
 
+	//快捷发送拖拽排序状态
+	let dragSrcRow = null
+	let dragHappened = false
+
 	//快捷发送列表被单击
 	document.getElementById('serial-quick-send-content').addEventListener('click', (e) => {
+		if (dragHappened) return
 		const removeBtn = e.target.closest('.quick-remove')
 		const sendBtn = e.target.closest('.quick-send')
 		const row = e.target.closest('.quick-item')
@@ -751,7 +756,9 @@
 		if (index < 0) return
 		changeName((name) => {
 			currQuickSend.list[index].name = name
-			row.outerHTML = getQuickItemHtml(currQuickSend.list[index])
+			row.insertAdjacentHTML('afterend', getQuickItemHtml(currQuickSend.list[index]))
+			row.nextElementSibling._quickItem = currQuickSend.list[index]
+			row.remove()
 			saveQuickList()
 		}, currQuickSend.list[index].name)
 	})
@@ -774,18 +781,74 @@
 	function saveQuickList() {
 		localStorage.setItem('quickSendList', JSON.stringify(quickSendList))
 	}
+	//快捷发送列表拖拽排序
+	document.getElementById('serial-quick-send-content').addEventListener('dragstart', (e) => {
+		const handle = e.target.closest('.quick-drag-handle')
+		const row = e.target.closest('.quick-item')
+		if (!handle || !row) {
+			e.preventDefault()
+			return
+		}
+		dragSrcRow = row
+		dragHappened = true
+		row.classList.add('dragging')
+		e.dataTransfer.effectAllowed = 'move'
+		try {
+			e.dataTransfer.setData('text/plain', '')
+		} catch (err) {}
+	})
+	document.getElementById('serial-quick-send-content').addEventListener('dragover', (e) => {
+		if (!dragSrcRow) return
+		e.preventDefault()
+		const row = e.target.closest('.quick-item')
+		if (!row || row === dragSrcRow || !row.parentNode) return
+		const rect = row.getBoundingClientRect()
+		const before = (e.clientY - rect.top) < rect.height / 2
+		row.parentNode.insertBefore(dragSrcRow, before ? row : row.nextSibling)
+	})
+	document.getElementById('serial-quick-send-content').addEventListener('drop', (e) => {
+		if (dragSrcRow) e.preventDefault()
+	})
+	document.getElementById('serial-quick-send-content').addEventListener('dragend', (e) => {
+		if (!dragSrcRow) return
+		dragSrcRow.classList.remove('dragging')
+		dragSrcRow = null
+		//落地前把 DOM 里未触发 change 的编辑（未失焦的 input/checkbox）写回对应 list 项，避免丢失
+		syncQuickItemsFromDom()
+		currQuickSend.list = Array.from(quickSendContent.children).map((row) => row._quickItem)
+		saveQuickList()
+		//避免拖拽结束后残留的 click 误触发发送/删除
+		setTimeout(() => { dragHappened = false }, 0)
+	})
+	function syncQuickItemsFromDom() {
+		Array.from(quickSendContent.children).forEach((row) => {
+			const item = row._quickItem
+			if (!item) return
+			const contentInput = row.querySelector('.quick-content')
+			const hexInput = row.querySelector('.quick-hex input')
+			if (contentInput) item.content = contentInput.value
+			if (hexInput) item.hex = hexInput.checked
+		})
+	}
 
 	const quickSendContent = document.getElementById('serial-quick-send-content')
 	//快捷发送列表更换选项
 	quickSend.addEventListener('change', (e) => {
 		let index = e.target.value
 		if (index != -1) {
+			//切换分组会重建 DOM，若正在拖拽先清掉状态，避免 source index 串到新分组
+			if (dragSrcRow) {
+				dragSrcRow.classList.remove('dragging')
+				dragSrcRow = null
+			}
+			dragHappened = false
 			changeOption('quickSendIndex', index)
 			currQuickSend = quickSendList[index]
 			//
 			quickSendContent.innerHTML = ''
 			currQuickSend.list.forEach((item) => {
-				quickSendContent.innerHTML += getQuickItemHtml(item)
+				quickSendContent.insertAdjacentHTML('beforeend', getQuickItemHtml(item))
+				quickSendContent.lastElementChild._quickItem = item
 			})
 		}
 	})
@@ -797,7 +860,8 @@
 			hex: false,
 		}
 		currQuickSend.list.push(item)
-		quickSendContent.innerHTML += getQuickItemHtml(item)
+		quickSendContent.insertAdjacentHTML('beforeend', getQuickItemHtml(item))
+		quickSendContent.lastElementChild._quickItem = item
 		saveQuickList()
 	})
 	function getQuickItemHtml(item) {
@@ -806,12 +870,12 @@
 		const nameAttr = attrEscape(rawName)
 		const content = attrEscape(item.content || '')
 		return `<div class="quick-item">
+			<span class="quick-drag-handle" draggable="true" title="拖拽排序"><i class="bi bi-grip-vertical"></i></span>
 			<button type="button" title="移除" class="btn quick-remove" aria-label="移除"><i class="bi bi-x-lg"></i></button>
 			<input class="form-control form-control-sm quick-content" placeholder="发送内容" value="${content}">
 			<button type="button" class="btn btn-sm quick-send" title="发送: ${nameAttr}">${name}</button>
 			<label class="quick-hex" title="HEX 模式">
-				<input type="checkbox" ${item.hex ? 'checked' : ''}>
-				<span>HEX</span>
+				<input type="checkbox" aria-label="HEX 模式" ${item.hex ? 'checked' : ''}>
 			</label>
 		</div>`
 	}
@@ -872,7 +936,8 @@
 				let list = JSON.parse(data)
 				currQuickSend.list.push(...list)
 				list.forEach((item) => {
-					quickSendContent.innerHTML += getQuickItemHtml(item)
+					quickSendContent.insertAdjacentHTML('beforeend', getQuickItemHtml(item))
+					quickSendContent.lastElementChild._quickItem = item
 				})
 				saveQuickList()
 			} catch (e) {
