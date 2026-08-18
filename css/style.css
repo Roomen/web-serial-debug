@@ -1200,7 +1200,7 @@ body {
 /* ========== Quick Send Items ========== */
 .quick-item {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+  grid-template-columns: 18px 28px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 6px;
   padding: 6px 8px !important;
@@ -1219,6 +1219,30 @@ body {
   background: var(--bg-surface-hover);
   border-color: var(--border-color) !important;
   box-shadow: var(--shadow-sm);
+}
+
+.quick-item.dragging {
+  opacity: 0.5;
+}
+
+.quick-item .quick-drag-handle {
+  width: 18px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 0.4;
+  cursor: grab;
+  touch-action: none;
+}
+
+.quick-item .quick-drag-handle:hover {
+  opacity: 0.9;
+}
+
+.quick-item .quick-drag-handle i {
+  font-size: 0.75rem;
 }
 
 .quick-item .quick-content {
@@ -1283,24 +1307,22 @@ body {
 .quick-item .quick-hex {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
   margin: 0;
-  padding: 3px 8px;
-  border-radius: 999px;
-  font-size: 0.6rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  padding: 0;
+  border-radius: var(--radius-sm);
   color: var(--text-muted);
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   cursor: pointer;
   user-select: none;
-  white-space: nowrap;
 }
 
 .quick-item .quick-hex input {
-  width: 0.85em;
-  height: 0.85em;
+  width: 0.9em;
+  height: 0.9em;
   margin: 0;
   cursor: pointer;
 }
@@ -1962,7 +1984,7 @@ select option {
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 6px;
-  padding: 2px 8px 2px 42px;
+  padding: 2px 8px 2px 66px;
   margin-bottom: 6px;
   font-size: 0.65rem;
   font-weight: 600;
@@ -1978,7 +2000,7 @@ select option {
   text-align: center;
 }
 .quick-send-head .col-hex {
-  min-width: 48px;
+  min-width: 22px;
   text-align: center;
 }
 

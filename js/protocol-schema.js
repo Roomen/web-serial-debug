@@ -277,7 +277,7 @@ window.SK_TAGS = {
 	'34': [
 		{ id: 1, name: '无磁传感器信号值（只读）', type: 'BYTE[2]', desc: 'BYTE1第一路 BYTE2第二路信号值', dec: { t: 'magSignal' } },
 		{ id: 2, name: '计量过滤模式', type: 'BYTE', desc: '0常规 1开猫16ms滤波 2开猫32ms滤波 3开猫不计量' },
-		{ id: 3, name: 'SENSOR参数', type: 'BYTES[6]', desc: 'EC200/EC1000: BADJ1 BADJ2 采样周期 预留 测量时长2B' },
+		{ id: 3, name: 'SENSOR参数', type: 'BYTES[6]', desc: 'EC200/EC1000: BADJ1 BADJ2 采样周期(HIGH SAMPLE) 预留 测量时长(CHC TIM)2B', dec: { t: 'sensorParam' } },
 		{ id: 4, name: '模组型号（只读）', type: 'BYTE', desc: '0其他 1NV40 2JY20 3MS17' },
 		{ id: 5, name: '采样距离', type: 'BYTE', desc: 'mm' },
 		{ id: 6, name: '采样频率', type: 'BYTE', desc: 'ms' }
