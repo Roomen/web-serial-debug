@@ -2559,6 +2559,10 @@
 		serialStatuChange(true, sid)
 		localStorage.setItem(sid === 'S' ? SERIAL_OPTIONS_KEY : SERIAL_OPTIONS_DUAL_KEY, JSON.stringify(SerialOptions))
 		requestWakeLock(sid)
+		const w = rxWatch(sid)
+		w.openedAt = Date.now()
+		if (opts.rxRecover) w.suspect = true
+		if (reason === 'user') reopenAttemptBySid[sid] = 0
 		readData(sid).catch(function (e) {
 			addLogErr('串口读取循环异常退出(' + sid + '): ' + (e && e.message ? e.message : e), sid)
 			if (SerialHub.isOpen(sid) && !SerialHub.isManualClose(sid)) {
@@ -3357,9 +3361,11 @@
 	// overrun 等线路错误刚「恢复」后 USB IN 经常其实已死,可以更快确认
 	const RX_STALL_SUSPECT_MS = 2000
 	const RX_LONG_IDLE_MS = 30000
+	const REOPEN_DELAYS = [300, 1000, 3000]
+	const reopenAttemptBySid = { S: 0, A: 0, B: 0 }
 
 	function makeRxWatch() {
-		return { lastRxAt: 0, kick: false, suspect: false, kickTried: false, timer: null }
+		return { lastRxAt: 0, openedAt: 0, kick: false, suspect: false, kickTried: false, timer: null }
 	}
 	const rxWatchBySid = { S: makeRxWatch(), A: makeRxWatch(), B: makeRxWatch() }
 	function rxWatch(sid) {
@@ -3373,6 +3379,7 @@
 		clearTimeout(w.timer)
 		w.timer = null
 		w.lastRxAt = 0
+		w.openedAt = 0
 		w.kick = false
 		w.suspect = false
 		w.kickTried = false
@@ -3382,6 +3389,7 @@
 		w.lastRxAt = Date.now()
 		w.suspect = false
 		w.kickTried = false
+		reopenAttemptBySid[sid] = 0
 		clearTimeout(w.timer)
 		w.timer = null
 	}
@@ -3389,15 +3397,17 @@
 		if (rxWatchSuppressed()) return
 		if (!SerialHub.isOpen(sid)) return
 		const w = rxWatch(sid)
-		if (!w.lastRxAt) return
-		const idle = Date.now() - w.lastRxAt
+		const base = w.lastRxAt || w.openedAt
+		if (!base) return
+		const idle = Date.now() - base
 		if (!w.suspect && idle < RX_LONG_IDLE_MS) return
 		const wait = w.suspect ? RX_STALL_SUSPECT_MS : RX_STALL_MS
 		clearTimeout(w.timer)
 		w.timer = setTimeout(function () {
 			w.timer = null
 			if (!SerialHub.isOpen(sid) || rxWatchSuppressed()) return
-			if (Date.now() - w.lastRxAt < wait) return
+			const last = w.lastRxAt || w.openedAt
+			if (last && Date.now() - last < wait) return
 			recoverStalledReader(sid)
 		}, wait)
 	}
@@ -3424,10 +3434,7 @@
 	async function recoverDeadReadLoop(sid, reasonMsg) {
 		if (!SerialHub.getPort(sid)) return
 		if (SerialHub.isManualClose(sid)) return
-		if (SerialHub.isOpening(sid)) {
-			SerialHub.setOpen(sid, false)
-			return
-		}
+		if (SerialHub.isOpening(sid)) return
 		SerialHub.setOpening(sid, true)
 		try {
 			SerialHub.setOpen(sid, false)
@@ -3439,16 +3446,29 @@
 			SerialHub.setOpening(sid, false)
 		}
 		if (!SerialHub.isManualClose(sid) && !SerialHub.isOpen(sid) && !SerialHub.isOpening(sid) && SerialHub.getPort(sid)) {
+			const n = reopenAttemptBySid[sid] || 0
+			if (n >= REOPEN_DELAYS.length) {
+				addLogErr('自动重开串口失败次数过多，已停止重试，请手动关闭后重新打开', sid)
+				return
+			}
+			reopenAttemptBySid[sid] = n + 1
 			SerialHub.setOpening(sid, true)
-			openSerial(sid, { reason: 'hotplug' }).finally(function () {
-				SerialHub.setOpening(sid, false)
-			})
+			setTimeout(function () {
+				if (SerialHub.isManualClose(sid) || SerialHub.isOpen(sid)) {
+					SerialHub.setOpening(sid, false)
+					return
+				}
+				openSerial(sid, { reason: 'hotplug', rxRecover: true }).finally(function () {
+					SerialHub.setOpening(sid, false)
+				})
+			}, REOPEN_DELAYS[n])
 		}
 	}
 	function kickReaderOnForeground(sid) {
 		if (!SerialHub.isOpen(sid) || rxWatchSuppressed()) return
 		const w = rxWatch(sid)
-		if (w.lastRxAt && Date.now() - w.lastRxAt < 5000) return
+		const lastActive = w.lastRxAt || w.openedAt
+		if (lastActive && Date.now() - lastActive < 5000) return
 		const r = SerialHub.getReader(sid)
 		if (!r) {
 			// 刚 setOpen 时 readData 可能还没取到 reader,延迟确认后再判定循环已死
