@@ -2472,20 +2472,20 @@
 		opts = opts || {}
 		const reason = opts.reason || 'user'
 		const port = SerialHub.getPort(sid)
-		if (SerialHub.isOpen(sid)) return
-		if (!port) return
+		if (SerialHub.isOpen(sid)) return true
+		if (!port) return false
 		if (isBluetoothSerialPort(port)) {
 			addLogErr('不支持蓝牙串口，请选择 USB 串口', sid)
-			return
+			return false
 		}
 		if (isBluAnalyzerPort(port)) {
 			addLogErr('这是功耗分析仪口，请到「功耗分析」页使用', sid)
-			return
+			return false
 		}
 		const taken = findPortConflict(port, sid)
 		if (taken) {
 			addLogErr(portConflictMsg(taken), sid)
-			return
+			return false
 		}
 		// 按会话所属模式取配置：后台重开隐藏模式时不要读当前 dropdown
 		let SerialOptions
@@ -2538,7 +2538,7 @@
 			if (reason === 'user') {
 				showMsg(SERIAL_OPEN_FAIL_MSG)
 			}
-			return
+			return false
 		}
 		SerialHub.setOpen(sid, true)
 		SerialHub.setManualClose(sid, false)
@@ -2569,6 +2569,7 @@
 				recoverDeadReadLoop(sid, '读取循环异常退出，正在尝试重新打开')
 			}
 		})
+		return true
 	}
 
 	// 更新打开/关闭按钮文案
@@ -3422,7 +3423,9 @@
 			const r = SerialHub.getReader(sid)
 			if (r) {
 				w.kick = true
+				w.suspect = true
 				try { await r.cancel() } catch (e) {}
+				armRxStallWatch(sid)
 				return
 			}
 			await recoverDeadReadLoop(sid, '读取循环已停止，正在重新打开串口')
@@ -3458,8 +3461,17 @@
 					SerialHub.setOpening(sid, false)
 					return
 				}
-				openSerial(sid, { reason: 'hotplug', rxRecover: true }).finally(function () {
+				openSerial(sid, { reason: 'hotplug', rxRecover: true }).then(function (ok) {
 					SerialHub.setOpening(sid, false)
+					// 打开失败时 readData 不会启动,继续下一档退避;成功则由读循环自己负责后续恢复
+					if (!ok && !SerialHub.isManualClose(sid) && SerialHub.getPort(sid)) {
+						recoverDeadReadLoop(sid, null)
+					}
+				}, function () {
+					SerialHub.setOpening(sid, false)
+					if (!SerialHub.isManualClose(sid) && SerialHub.getPort(sid)) {
+						recoverDeadReadLoop(sid, null)
+					}
 				})
 			}, REOPEN_DELAYS[n])
 		}
