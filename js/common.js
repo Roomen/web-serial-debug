@@ -2564,9 +2564,9 @@
 		if (opts.rxRecover) w.suspect = true
 		if (reason === 'user') reopenAttemptBySid[sid] = 0
 		readData(sid).catch(function (e) {
-			addLogErr('串口读取循环异常退出(' + sid + '): ' + (e && e.message ? e.message : e), sid)
+			addLogErrSafe('串口读取循环异常退出(' + sid + '): ' + (e && e.message ? e.message : e), sid)
 			if (SerialHub.isOpen(sid) && !SerialHub.isManualClose(sid)) {
-				recoverDeadReadLoop(sid, '读取循环异常退出，正在尝试重新打开')
+				recoverDeadReadLoop(sid, '读取循环异常退出，正在尝试重新打开').catch(function () {})
 			}
 		})
 		return true
@@ -3366,7 +3366,26 @@
 	const reopenAttemptBySid = { S: 0, A: 0, B: 0 }
 
 	function makeRxWatch() {
-		return { lastRxAt: 0, openedAt: 0, kick: false, suspect: false, kickTried: false, timer: null }
+		return { lastRxAt: 0, openedAt: 0, kick: false, suspect: false, kickTried: false, timer: null, deferTimer: null }
+	}
+	function addLogErrSafe(msg, sid) {
+		try { addLogErr(msg, sid) } catch (e) {}
+	}
+	function scheduleDeferredRecover(sid, reasonMsg) {
+		const w = rxWatch(sid)
+		if (w.deferTimer) return
+		w.deferTimer = setInterval(function () {
+			if (SerialHub.isManualClose(sid) || !SerialHub.getPort(sid)) {
+				clearInterval(w.deferTimer)
+				w.deferTimer = null
+				return
+			}
+			if (rxWatchSuppressed()) return
+			clearInterval(w.deferTimer)
+			w.deferTimer = null
+			if (SerialHub.isOpen(sid) && SerialHub.getReader(sid)) return
+			recoverDeadReadLoop(sid, reasonMsg)
+		}, 400)
 	}
 	const rxWatchBySid = { S: makeRxWatch(), A: makeRxWatch(), B: makeRxWatch() }
 	function rxWatch(sid) {
@@ -3384,6 +3403,10 @@
 		w.kick = false
 		w.suspect = false
 		w.kickTried = false
+		if (w.deferTimer) {
+			clearInterval(w.deferTimer)
+			w.deferTimer = null
+		}
 	}
 	function noteSerialRx(sid) {
 		const w = rxWatch(sid)
@@ -3413,6 +3436,7 @@
 		}, wait)
 	}
 	async function recoverStalledReader(sid) {
+		if (rxWatchSuppressed()) return
 		if (!SerialHub.isOpen(sid) || SerialHub.isOpening(sid) || SerialHub.isManualClose(sid)) return
 		const w = rxWatch(sid)
 		const port = SerialHub.getPort(sid)
@@ -3438,6 +3462,10 @@
 		if (!SerialHub.getPort(sid)) return
 		if (SerialHub.isManualClose(sid)) return
 		if (SerialHub.isOpening(sid)) return
+		if (rxWatchSuppressed()) {
+			scheduleDeferredRecover(sid, reasonMsg)
+			return
+		}
 		SerialHub.setOpening(sid, true)
 		try {
 			SerialHub.setOpen(sid, false)
@@ -3536,7 +3564,7 @@
 					try {
 						dataReceived(value, sid)
 					} catch (e) {
-						addLogErr('处理接收数据出错(' + sid + '): ' + (e && e.message ? e.message : e), sid)
+						addLogErrSafe('处理接收数据出错(' + sid + '): ' + (e && e.message ? e.message : e), sid)
 					}
 				}
 			} catch (error) {
@@ -3561,6 +3589,7 @@
 						} else {
 							addLogErr('串口读取错误(' + sid + '): ' + errorType + ' - ' + errorMsg + '，已自动恢复继续接收', sid)
 							w.suspect = true
+							armRxStallWatch(sid)
 						}
 					} else {
 						addLogErr('串口读取错误(' + sid + '): ' + errorType + ' - ' + errorMsg, sid)
