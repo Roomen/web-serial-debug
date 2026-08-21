@@ -3313,7 +3313,6 @@
 			}
 			const sendTime = new Date()
 			await writer.write(data)
-			armRxStallWatch(sid)
 			addLog(data, false, sendTime, sid)
 			addParseLog([...data], false, sendTime, sid, sendName)
 		} catch (error) {
@@ -3340,7 +3339,6 @@
 			writer = port.writable.getWriter()
 			const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
 			await writer.write(u8)
-			armRxStallWatch(sid)
 		} catch (error) {
 			const errorType = error.name || 'UnknownError'
 			const errorMsg = error.message || '未知错误'
@@ -3357,11 +3355,10 @@
 	const RECOVERABLE_READ_ERRORS = ['BufferOverrunError', 'BreakError', 'FramingError', 'ParityError']
 	const READ_RECOVER_WINDOW_MS = 10000
 	const READ_RECOVER_MAX = 20
-	// 发送后完全无 RX 才判定卡住。要比协议默认等待(5s)略长,避免慢设备误关开(DTR 会复位 MCU)
+	// 卡死检测回退超时:仅当 armRxStallWatch 在非 suspect 状态下被调用时生效(当前所有调用方均先置 suspect=true,实际走 RX_STALL_SUSPECT_MS)
 	const RX_STALL_MS = 8000
-	// overrun 等线路错误刚「恢复」后 USB IN 经常其实已死,可以更快确认
+	// 可疑状态(刚发生过线路错误)下的卡死检测超时,可更快确认
 	const RX_STALL_SUSPECT_MS = 2000
-	const RX_LONG_IDLE_MS = 30000
 	const REOPEN_DELAYS = [300, 1000, 3000]
 	const reopenAttemptBySid = { S: 0, A: 0, B: 0 }
 
@@ -3423,8 +3420,6 @@
 		const w = rxWatch(sid)
 		const base = w.lastRxAt || w.openedAt
 		if (!base) return
-		const idle = Date.now() - base
-		if (!w.suspect && idle < RX_LONG_IDLE_MS) return
 		const wait = w.suspect ? RX_STALL_SUSPECT_MS : RX_STALL_MS
 		clearTimeout(w.timer)
 		w.timer = setTimeout(function () {
@@ -3443,7 +3438,7 @@
 		if (!port) return
 		if (!w.kickTried) {
 			w.kickTried = true
-			addLogErr('发送后未收到数据，正在尝试恢复接收', sid)
+			addLogErr('接收已停止，正在尝试恢复读取', sid)
 			const r = SerialHub.getReader(sid)
 			if (r) {
 				w.kick = true
