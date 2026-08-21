@@ -2561,7 +2561,7 @@
 		requestWakeLock(sid)
 		const w = rxWatch(sid)
 		w.openedAt = Date.now()
-		if (opts.rxRecover) w.suspect = true
+		// rxRecover 仅表示自动重开后继续监控,不再驱动 stall 计时
 		if (reason === 'user') reopenAttemptBySid[sid] = 0
 		readData(sid).catch(function (e) {
 			addLogErrSafe('串口读取循环异常退出(' + sid + '): ' + (e && e.message ? e.message : e), sid)
@@ -3355,15 +3355,13 @@
 	const RECOVERABLE_READ_ERRORS = ['BufferOverrunError', 'BreakError', 'FramingError', 'ParityError']
 	const READ_RECOVER_WINDOW_MS = 10000
 	const READ_RECOVER_MAX = 20
-	// 卡死检测回退超时:仅当 armRxStallWatch 在非 suspect 状态下被调用时生效(当前所有调用方均先置 suspect=true,实际走 RX_STALL_SUSPECT_MS)
-	const RX_STALL_MS = 8000
-	// 可疑状态(刚发生过线路错误)下的卡死检测超时,可更快确认
-	const RX_STALL_SUSPECT_MS = 2000
+	// 卡死检测超时:读循环异常退出或线路错误后,等待此长时间仍无数据则判定 USB IN 卡死
+	const RX_STALL_MS = 2000
 	const REOPEN_DELAYS = [300, 1000, 3000]
 	const reopenAttemptBySid = { S: 0, A: 0, B: 0 }
 
 	function makeRxWatch() {
-		return { lastRxAt: 0, openedAt: 0, kick: false, suspect: false, kickTried: false, timer: null, deferTimer: null }
+		return { lastRxAt: 0, openedAt: 0, kick: false, kickTried: false, timer: null, deferTimer: null }
 	}
 	function addLogErrSafe(msg, sid) {
 		try { addLogErr(msg, sid) } catch (e) {}
@@ -3398,7 +3396,6 @@
 		w.lastRxAt = 0
 		w.openedAt = 0
 		w.kick = false
-		w.suspect = false
 		w.kickTried = false
 		if (w.deferTimer) {
 			clearInterval(w.deferTimer)
@@ -3408,7 +3405,6 @@
 	function noteSerialRx(sid) {
 		const w = rxWatch(sid)
 		w.lastRxAt = Date.now()
-		w.suspect = false
 		w.kickTried = false
 		reopenAttemptBySid[sid] = 0
 		clearTimeout(w.timer)
@@ -3420,7 +3416,7 @@
 		const w = rxWatch(sid)
 		const base = w.lastRxAt || w.openedAt
 		if (!base) return
-		const wait = w.suspect ? RX_STALL_SUSPECT_MS : RX_STALL_MS
+		const wait = RX_STALL_MS
 		clearTimeout(w.timer)
 		w.timer = setTimeout(function () {
 			w.timer = null
@@ -3442,7 +3438,6 @@
 			const r = SerialHub.getReader(sid)
 			if (r) {
 				w.kick = true
-				w.suspect = true
 				try { await r.cancel() } catch (e) {}
 				armRxStallWatch(sid)
 				return
@@ -3516,7 +3511,6 @@
 			return
 		}
 		w.kick = true
-		w.suspect = true
 		r.cancel().catch(function () {})
 	}
 
@@ -3583,7 +3577,6 @@
 							streamError = true
 						} else {
 							addLogErr('串口读取错误(' + sid + '): ' + errorType + ' - ' + errorMsg + '，已自动恢复继续接收', sid)
-							w.suspect = true
 							armRxStallWatch(sid)
 						}
 					} else {
