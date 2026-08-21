@@ -2561,7 +2561,7 @@
 		requestWakeLock(sid)
 		const w = rxWatch(sid)
 		w.openedAt = Date.now()
-		if (opts.rxRecover) w.suspect = true
+		// rxRecover 仅表示自动重开后继续监控,不再驱动 stall 计时
 		if (reason === 'user') reopenAttemptBySid[sid] = 0
 		readData(sid).catch(function (e) {
 			addLogErrSafe('串口读取循环异常退出(' + sid + '): ' + (e && e.message ? e.message : e), sid)
@@ -3313,7 +3313,6 @@
 			}
 			const sendTime = new Date()
 			await writer.write(data)
-			armRxStallWatch(sid)
 			addLog(data, false, sendTime, sid)
 			addParseLog([...data], false, sendTime, sid, sendName)
 		} catch (error) {
@@ -3340,7 +3339,6 @@
 			writer = port.writable.getWriter()
 			const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
 			await writer.write(u8)
-			armRxStallWatch(sid)
 		} catch (error) {
 			const errorType = error.name || 'UnknownError'
 			const errorMsg = error.message || '未知错误'
@@ -3357,16 +3355,13 @@
 	const RECOVERABLE_READ_ERRORS = ['BufferOverrunError', 'BreakError', 'FramingError', 'ParityError']
 	const READ_RECOVER_WINDOW_MS = 10000
 	const READ_RECOVER_MAX = 20
-	// 发送后完全无 RX 才判定卡住。要比协议默认等待(5s)略长,避免慢设备误关开(DTR 会复位 MCU)
-	const RX_STALL_MS = 8000
-	// overrun 等线路错误刚「恢复」后 USB IN 经常其实已死,可以更快确认
-	const RX_STALL_SUSPECT_MS = 2000
-	const RX_LONG_IDLE_MS = 30000
+	// 卡死检测超时:读循环异常退出或线路错误后,等待此长时间仍无数据则判定 USB IN 卡死
+	const RX_STALL_MS = 2000
 	const REOPEN_DELAYS = [300, 1000, 3000]
 	const reopenAttemptBySid = { S: 0, A: 0, B: 0 }
 
 	function makeRxWatch() {
-		return { lastRxAt: 0, openedAt: 0, kick: false, suspect: false, kickTried: false, timer: null, deferTimer: null }
+		return { lastRxAt: 0, openedAt: 0, kick: false, kickTried: false, timer: null, deferTimer: null }
 	}
 	function addLogErrSafe(msg, sid) {
 		try { addLogErr(msg, sid) } catch (e) {}
@@ -3401,7 +3396,6 @@
 		w.lastRxAt = 0
 		w.openedAt = 0
 		w.kick = false
-		w.suspect = false
 		w.kickTried = false
 		if (w.deferTimer) {
 			clearInterval(w.deferTimer)
@@ -3411,7 +3405,6 @@
 	function noteSerialRx(sid) {
 		const w = rxWatch(sid)
 		w.lastRxAt = Date.now()
-		w.suspect = false
 		w.kickTried = false
 		reopenAttemptBySid[sid] = 0
 		clearTimeout(w.timer)
@@ -3423,9 +3416,7 @@
 		const w = rxWatch(sid)
 		const base = w.lastRxAt || w.openedAt
 		if (!base) return
-		const idle = Date.now() - base
-		if (!w.suspect && idle < RX_LONG_IDLE_MS) return
-		const wait = w.suspect ? RX_STALL_SUSPECT_MS : RX_STALL_MS
+		const wait = RX_STALL_MS
 		clearTimeout(w.timer)
 		w.timer = setTimeout(function () {
 			w.timer = null
@@ -3443,11 +3434,10 @@
 		if (!port) return
 		if (!w.kickTried) {
 			w.kickTried = true
-			addLogErr('发送后未收到数据，正在尝试恢复接收', sid)
+			addLogErr('接收已停止，正在尝试恢复读取', sid)
 			const r = SerialHub.getReader(sid)
 			if (r) {
 				w.kick = true
-				w.suspect = true
 				try { await r.cancel() } catch (e) {}
 				armRxStallWatch(sid)
 				return
@@ -3521,7 +3511,6 @@
 			return
 		}
 		w.kick = true
-		w.suspect = true
 		r.cancel().catch(function () {})
 	}
 
@@ -3588,7 +3577,6 @@
 							streamError = true
 						} else {
 							addLogErr('串口读取错误(' + sid + '): ' + errorType + ' - ' + errorMsg + '，已自动恢复继续接收', sid)
-							w.suspect = true
 							armRxStallWatch(sid)
 						}
 					} else {
