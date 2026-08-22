@@ -73,7 +73,7 @@
 	}
 	const SerialHub = {
 		mode: 'single',
-		activeSendId: 'A',
+		activeSendId: 'S',
 
 		// UI 的 A/B → 物理 sid。I/O 路径必须用物理 sid，不能再按当前 mode 猜。
 		uiSid(sid) {
@@ -89,8 +89,12 @@
 			if (sid === 'A' || sid === 'B') return this.mode === 'dual'
 			return false
 		},
+		isRoutable(sid) {
+			return this.isVisible(sid) || sid === this.activeSendPhys()
+		},
 		logModeOf(sid) {
-			return sid === 'S' ? 'single' : 'dual'
+			if (sid === 'S') return this.mode === 'dual' ? 'dual' : 'single'
+			return 'dual'
 		},
 		allPhys() { return ['S', 'A', 'B'] },
 
@@ -126,7 +130,7 @@
 		setSekWaitStart(sid, t) { this._sess(sid).sekWaitStart = t },
 
 		getSessionLabel(sid) {
-			if (sid === 'S') return ''
+			if (sid === 'S') return this.mode === 'dual' ? '单' : ''
 			return sid === 'B' ? this.getLabelB() : this.getLabelA()
 		},
 		getLabelA() {
@@ -2476,6 +2480,13 @@
 		}
 		serialStatuChange(false, sid)
 		updateOpenButton(sid)
+		if (sid === 'S' && SerialHub.mode === 'dual') {
+			const wasActiveSendS = SerialHub.activeSendId === 'S'
+			refreshActiveSendSButton()
+			if (wasActiveSendS && !(window.serialApi && window.serialApi.isPinned())) {
+				showToast('单路串口已断开，主发口已切到 A', 2500)
+			}
+		}
 	}
 
 	//打开串口
@@ -2561,6 +2572,7 @@
 		SerialHub.setOpen(sid, true)
 		SerialHub.setManualClose(sid, false)
 		updateOpenButton(sid)
+		if (sid === 'S') refreshActiveSendSButton()
 		// 新连接: 清空 SEK 会话基准水量, 避免串到上一块表
 		if (SerialHub.isVisible(sid) && (sid === 'S' || sid === 'A') && window.skSession) {
 			try {
@@ -3317,10 +3329,12 @@
 		const port = SerialHub.getPort(sid)
 		if (!port || !port.writable) {
 			addLogErr('请先打开串口再发送数据', sid)
+			if (sid === 'S') showToast('单路串口未打开，请切回单路模式连接后再切回双路', 2500)
 			return
 		}
 		if (!SerialHub.isOpen(sid)) {
 			addLogErr('请先打开串口再发送数据', sid)
+			if (sid === 'S') showToast('单路串口未打开，请切回单路模式连接后再切回双路', 2500)
 			return
 		}
 		let writer
@@ -3350,6 +3364,7 @@
 		const port = SerialHub.getPort(sid)
 		if (!port || !port.writable || !SerialHub.isOpen(sid)) {
 			addLogErr('请先打开串口再发送数据', sid)
+			if (sid === 'S') showToast('单路串口未打开，请切回单路模式连接后再切回双路', 2500)
 			return
 		}
 		let writer
@@ -3679,7 +3694,7 @@
 		// 只转发当前可见模式的会话，隐藏模式的口继续收日志但不污染 serialApi
 		// 单路: 全量转发(与 main 语义一致)
 		// 双路: sid=null 订阅者仅收 activeSend(钉扎时即钉扎口)的 RX; 指定 sid 的订阅者仅收对应 sid
-		if (window.serialApi && SerialHub.isVisible(sid)) {
+		if (window.serialApi && SerialHub.isRoutable(sid)) {
 			const api = window.serialApi
 			if (SerialHub.mode === 'single') {
 				if (api._receivers && api._receivers.length) {
@@ -3806,7 +3821,7 @@
 		// 事务钉扎: pin 期间 activeSendSid()/writeData/isOpen/RX 转发均锁定到钉扎会话
 		pinSession(sid) {
 			sid = sid || SerialHub.activeSendSid()
-			if (sid !== 'A' && sid !== 'B') {
+			if (sid !== 'A' && sid !== 'B' && sid !== 'S') {
 				addLogErr('pinSession: 无效的会话 id: ' + sid)
 				return
 			}
@@ -3825,7 +3840,7 @@
 			return pinSid != null
 		},
 		async writeDataTo(id, data) {
-			if (id !== 'A' && id !== 'B') {
+			if (id !== 'A' && id !== 'B' && id !== 'S') {
 				addLogErr('writeDataTo: 无效的会话 id: ' + id)
 				return
 			}
@@ -3834,7 +3849,7 @@
 		onReceiveFrom(id, cb) {
 			// 按 session 订阅 RX: 只收指定 sid 的上行; 无 id 等价 onReceive(跟随 activeSend)
 			if (typeof cb !== 'function') return function () {}
-			if (id != null && id !== 'A' && id !== 'B') {
+			if (id != null && id !== 'A' && id !== 'B' && id !== 'S') {
 				addLogErr('onReceiveFrom: 无效的会话 id: ' + id)
 				return function () {}
 			}
@@ -4100,7 +4115,7 @@
 		row.setAttribute('data-seq', String(++logSeq))
 		row.setAttribute('data-sid', sid === 'B' ? 'B' : (sid === 'S' ? 'S' : 'A'))
 		const sess = SerialHub.logModeOf(sid) === 'dual'
-			? (sid === 'B' ? SerialHub.getLabelB() : SerialHub.getLabelA())
+			? SerialHub.getSessionLabel(sid)
 			: ''
 		const dirLabel = form
 		const sessHtml = sess
@@ -4730,6 +4745,8 @@
 			// 刷新端口显示名
 			refreshPortDisplayNames()
 			resetLoopSend()
+			// 更新「单」按钮显隐（双路模式下 S 口可能未打开）
+			refreshActiveSendSButton()
 		} finally {
 			modeSwitching = false
 		}
@@ -4857,6 +4874,22 @@
 			btns[i].classList.toggle('active', btns[i].getAttribute('data-sid') === sid)
 		}
 	}
+	// 更新「单」按钮显隐（S 未打开时隐藏，同时静默回落主发到 A；钉扎中不抢切）
+	function refreshActiveSendSButton() {
+		if (SerialHub.mode !== 'dual') return
+		if (!activeSendGroup) return
+		const btn = activeSendGroup.querySelector('.dual-send-btn[data-sid="S"]')
+		if (!btn) return
+		const sOpen = SerialHub.isOpen('S')
+		btn.hidden = !sOpen
+		// S 未打开时，若当前主发是 S，静默回落到 A（钉扎中不抢切）
+		if (!sOpen && SerialHub.activeSendId === 'S') {
+			if (window.serialApi && window.serialApi.isPinned()) return
+			SerialHub.activeSendId = 'A'
+			setActiveSendUI('A')
+			try { sessionStorage.setItem('serialActiveSendId', 'A') } catch (e) {}
+		}
+	}
 	if (activeSendGroup) {
 		activeSendGroup.addEventListener('click', function (e) {
 			const btn = e.target.closest('.dual-send-btn')
@@ -4885,9 +4918,15 @@
 				if (labelBInput) labelBInput.value = savedLabelB
 			}
 			const savedActiveSend = sessionStorage.getItem('serialActiveSendId')
-			if (savedActiveSend && activeSendGroup) {
-				SerialHub.activeSendId = savedActiveSend
-				setActiveSendUI(savedActiveSend)
+			if (activeSendGroup) {
+				if (savedActiveSend === 'S' || savedActiveSend === 'A' || savedActiveSend === 'B') {
+					SerialHub.activeSendId = savedActiveSend
+					setActiveSendUI(savedActiveSend)
+				} else {
+					SerialHub.activeSendId = 'A'
+					setActiveSendUI('A')
+				}
+				refreshActiveSendSButton()
 			}
 		} catch (e) {}
 	})()

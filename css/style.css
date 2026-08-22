@@ -941,6 +941,29 @@ body {
   border-left-color: #f59e0b;
 }
 
+.serial-logs.is-dual .log-row[data-sid='S'] {
+  border-left-color: #6366f1;
+}
+
+.serial-logs.is-dual .log-row[data-sid='S'] .log-sess,
+.serial-logs.is-dual .log-row[data-sid='S'] .log-time {
+  color: #6366f1;
+}
+
+.serial-logs.is-dual .log-row[data-sid='S'] .log-body {
+  color: #4f46e5;
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S'] .log-body,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S'] .log-sess,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S'] .log-time {
+  color: #a5b4fc;
+}
+
+.serial-logs.is-dual .log-row[data-sid='S'] {
+  background-color: color-mix(in srgb, #6366f1 7%, transparent);
+}
+
 .serial-logs.is-dual .log-row[data-sid='A'] .log-body {
   color: #047857;
 }
