@@ -5065,18 +5065,21 @@
 				}
 				return null
 			}
-			function findPortByPos(pos) {
-				return pos < ports.length ? ports[pos] : null
-			}
 			const used = []
-			async function restoreSid(sid, fallbackPos) {
+			// 位置回退取第一个尚未被占用的口。不能用"前面成功了几个"累加序号:
+			// 身份匹配可能命中 ports 里的任意位置, 把它也算成占用了对应序号会跳过真正空闲的口,
+			// 轻则恢复失败, 重则静默绑到另一台设备上
+			function findFirstFreePort() {
+				for (let i = 0; i < ports.length; i++) {
+					if (used.indexOf(ports[i]) === -1) return ports[i]
+				}
+				return null
+			}
+			async function restoreSid(sid) {
 				if (!getSerialWantOpen(sid)) return null
 				const idKey = getSerialWantPortKey(sid)
 				let plan = findPortByKey(sid)
-				if (!plan && !idKey) {
-					plan = findPortByPos(fallbackPos)
-					if (plan && used.indexOf(plan) !== -1) plan = null
-				}
+				if (!plan && !idKey) plan = findFirstFreePort()
 				if (getSerialWantOpen(sid) && !plan) {
 					addLogErr((sid === 'S' ? '单路' : sid) + ' 未找到原设备，请重新选择串口', sid)
 					return null
@@ -5096,9 +5099,9 @@
 				}
 				return plan
 			}
-			const planS = await restoreSid('S', 0)
-			const planA = await restoreSid('A', planS ? 1 : 0)
-			const planB = await restoreSid('B', (planS ? 1 : 0) + (planA ? 1 : 0))
+			await restoreSid('S')
+			const planA = await restoreSid('A')
+			const planB = await restoreSid('B')
 			if (wantA && wantB && planA && planB) {
 				const aIdKey = getSerialWantPortKey('A')
 				const bIdKey = getSerialWantPortKey('B')
