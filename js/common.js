@@ -161,6 +161,20 @@
 			return null
 		},
 
+		// 端口是否正被别的会话真正占着。findSessionByPort 答的是"归谁"(热插拔要的语义),
+		// 这里答的是"现在能不能用": 关闭后仍记着的口是空闲的, Web Serial 允许重新 open。
+		busyOwnerOfPort(port, exceptSid) {
+			if (!port) return null
+			const all = this.allPhys()
+			for (let i = 0; i < all.length; i++) {
+				const sid = all[i]
+				if (sid === exceptSid) continue
+				if (this.getPort(sid) !== port) continue
+				if (this.isOpen(sid) || this.isOpening(sid)) return sid
+			}
+			return null
+		},
+
 		// 只在当前可见模式里找未打开会话（热插拔不要误绑到隐藏模式）
 		findClosedSession() {
 			if (this.mode === 'single') {
@@ -2791,9 +2805,9 @@
 		if (window.bluApi && typeof window.bluApi.ownsPort === 'function' && window.bluApi.ownsPort(port)) {
 			return 'BLU'
 		}
-		const owner = SerialHub.findSessionByPort(port)
-		if (owner && owner !== exceptSid) return owner
-		return null
+		// 关闭后仍保留 session.port 是有意的: 芯片继续显示上次设备, 点打开即可重连。
+		// 所以这里必须按"是否真的开着"判, 不能按归属判。
+		return SerialHub.busyOwnerOfPort(port, exceptSid)
 	}
 
 	function portConflictMsg(taken) {

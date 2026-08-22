@@ -5285,8 +5285,14 @@
 		return vid === 0x15A2 && pid === 0x300A
 	}
 
+	// 只挡"串口页正开着"的口。关过但仍被记住的口是空闲的, 按归属判会让 BLU
+	// 扫不到设备, 还会误报"该口已被串口调试占用"。
 	function serialOwnsPort(port) {
-		if (!port || !window.SerialHub || typeof window.SerialHub.findSessionByPort !== 'function') return false
+		if (!port || !window.SerialHub) return false
+		if (typeof window.SerialHub.busyOwnerOfPort === 'function') {
+			return !!window.SerialHub.busyOwnerOfPort(port)
+		}
+		if (typeof window.SerialHub.findSessionByPort !== 'function') return false
 		return !!window.SerialHub.findSessionByPort(port)
 	}
 
