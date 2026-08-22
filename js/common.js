@@ -2309,7 +2309,9 @@
 	//选择串口（单路模式用）
 	document.getElementById('serial-select-port').addEventListener('click', async (e) => {
 		if (isPortMetaClick(e)) return
-		await selectPortFor(SerialHub.uiSid('A'))
+		const sid = SerialHub.uiSid('A')
+		// 未选口时芯片主体承担「连接」: 选口后直接打开; 已选口时只换设备
+		await selectPortFor(sid, { openAfterSelect: !SerialHub.getPort(sid) })
 	})
 
 	// opts.openAfterSelect: 无口时点「连接」走的一步到位路径, 选中后直接打开
@@ -2608,6 +2610,12 @@
 		return true
 	}
 
+	function chipElFor(sid) {
+		if (sid === 'B') return document.getElementById('serial-chip-b')
+		if (SerialHub.mode === 'dual') return document.getElementById('serial-chip-a')
+		return document.getElementById('serial-chip')
+	}
+
 	// 更新打开/关闭按钮文案
 	// 只写当前可见模式的按钮；隐藏模式的口在后台保持开着
 	function updateOpenButton(sid) {
@@ -2624,13 +2632,25 @@
 		}
 		const btn = document.getElementById(btnId)
 		if (!btn) return
-		// 单双路同一套三态: 无口「连接」(选口+打开一步到位)、有口未开「打开」、已开「关闭」
+		const hasPort = !!SerialHub.getPort(sid)
+		const chip = chipElFor(sid)
+		if (chip) {
+			chip.classList.toggle('is-open', open)
+			chip.classList.toggle('is-empty', !hasPort)
+		}
+		// 无口时芯片主体就是「选择串口」, 点它即选口+打开, 不再放一个语义重复的动作键
+		btn.hidden = !hasPort
+		if (!hasPort) return
+		const label = SerialHub.getSessionLabel(sid)
+		const prefix = label ? label + ' · ' : ''
 		if (open) {
-			btn.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭'
-		} else if (SerialHub.getPort(sid)) {
-			btn.innerHTML = '<i class="bi bi-play-circle"></i> 打开'
+			btn.innerHTML = '<i class="bi bi-power"></i>'
+			btn.title = '断开'
+			btn.setAttribute('aria-label', prefix + '断开串口')
 		} else {
-			btn.innerHTML = '<i class="bi bi-plug"></i> 连接'
+			btn.innerHTML = '<i class="bi bi-play-fill"></i>'
+			btn.title = '打开'
+			btn.setAttribute('aria-label', prefix + '打开串口')
 		}
 	}
 
@@ -2671,41 +2691,6 @@
 	serialToggle.addEventListener('click', async () => {
 		await handleToggleClick('A')
 	})
-
-	//双路主按钮：让这路在线（无口先选口再开，一步到位；有口未开则打开；已开则关闭）
-	//单路仍走 handleToggleClick（未选口点打开仍 toast 提示），不复用本函数
-	async function handleConnectClick(sid) {
-		sid = SerialHub.uiSid(sid)
-		if (SerialHub.isOpening(sid)) return
-		if (SerialHub.isOpen(sid)) {
-			SerialHub.setManualClose(sid, true)
-			SerialHub.setOpening(sid, true)
-			try {
-				await closeSerial(sid)
-			} finally {
-				SerialHub.setOpening(sid, false)
-			}
-			return
-		}
-		if (!SerialHub.getPort(sid)) {
-			// selectPortFor 自己持 opening 锁（含系统选口对话框期间）
-			await selectPortFor(sid)
-			if (!SerialHub.getPort(sid)) return // 用户取消系统选口对话框：不 toast，selectPortFor 已只打日志
-		}
-		const port = SerialHub.getPort(sid)
-		const taken = findPortConflict(port, sid)
-		if (taken) {
-			addLogErr(portConflictMsg(taken), sid)
-			return
-		}
-		SerialHub.setOpening(sid, true)
-		SerialHub.setManualClose(sid, false)
-		try {
-			await openSerial(sid)
-		} finally {
-			SerialHub.setOpening(sid, false)
-		}
-	}
 
 	//设置读取元素
 	function get(id) {
@@ -3195,10 +3180,12 @@
 		}
 		const btn = document.getElementById(btnId)
 		if (!btn) return
+		const chip = chipElFor(sid)
+		if (chip) chip.classList.toggle('is-empty', !port)
 		if (!port) {
 			const def = SerialHub.mode === 'dual' ? '选择' : '选择串口'
 			btn.innerHTML = '<i class="bi bi-usb-plug"></i> ' + def
-			btn.title = '选择串口'
+			btn.title = '点击选择串口并连接'
 			return
 		}
 		const name = getPortDisplayName(port)
@@ -4810,7 +4797,7 @@
 		dualSelectPortA.addEventListener('click', async function (e) {
 			if (isPortMetaClick(e)) return
 			if (SerialHub.isOpening('A')) return
-			await selectPortFor('A')
+			await selectPortFor('A', { openAfterSelect: !SerialHub.getPort('A') })
 		})
 	}
 
@@ -4820,7 +4807,7 @@
 		dualSelectPortB.addEventListener('click', async function (e) {
 			if (isPortMetaClick(e)) return
 			if (SerialHub.isOpening('B')) return
-			await selectPortFor('B')
+			await selectPortFor('B', { openAfterSelect: !SerialHub.getPort('B') })
 		})
 	}
 
@@ -4828,7 +4815,7 @@
 	const dualOpenA = document.getElementById('serial-open-or-close-a')
 	if (dualOpenA) {
 		dualOpenA.addEventListener('click', async function () {
-			await handleConnectClick('A')
+			await handleToggleClick('A')
 		})
 	}
 
@@ -4836,7 +4823,7 @@
 	const dualOpenB = document.getElementById('serial-open-or-close-b')
 	if (dualOpenB) {
 		dualOpenB.addEventListener('click', async function () {
-			await handleConnectClick('B')
+			await handleToggleClick('B')
 		})
 	}
 

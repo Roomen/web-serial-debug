@@ -3336,6 +3336,118 @@ hr {
   margin-right: 2px;
 }
 
+/* ===== 设备芯片: 状态点 + 设备名 + 动作键合成一个控件 =====
+   三者原本是三个独立控件, 但说的是同一个会话的三个侧面, 且动作键的
+   动词态与状态指示器的形容词态高度重叠。合成一枚芯片后各自去掉边框圆角,
+   由芯片统一承担外壳。ID 全部保留, 渲染函数按 ID 找元素的路径不受影响。 */
+.serial-device-chip {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+  transition: border-color var(--transition-fast);
+}
+
+.serial-device-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border-color));
+}
+
+/* 已连接时整枚芯片染上成功色, 一眼可辨 */
+.serial-device-chip.is-open {
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+}
+
+/* 芯片内部的三段一律去掉自己的外壳, 交给芯片 */
+.serial-device-chip > * {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+/* 三个状态类各自带 background/border, 与本块同权重且写在后面, 必须逐个点名
+   压过去, 否则芯片左段会挂上一块状态底色, 看起来像两块拼的而不是一枚芯片。
+   只夺 background/border, 文字颜色仍留给状态类(「正在连接…」要橙字)。 */
+.serial-device-chip .serial-status-indicator,
+.serial-device-chip .serial-status-indicator.connected,
+.serial-device-chip .serial-status-indicator.disconnected,
+.serial-device-chip .serial-status-indicator.connecting {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 7px 0 7px 10px;
+  gap: 0;
+}
+
+/* 状态文字平时收起, 只留色点; 只有瞬时的「正在连接…」才展开,
+   因为那一态动作键表达不了。已连接/未连接由色点 + 动作键图标共同表达。 */
+.serial-device-chip .serial-status-text {
+  display: none;
+}
+
+.serial-device-chip .serial-status-indicator.connecting .serial-status-text {
+  display: inline;
+  margin-left: 8px;
+  font-size: 0.72rem;
+}
+
+.serial-device-chip .serial-port-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  padding: 7px 10px;
+  color: var(--text-primary);
+}
+
+.serial-device-chip .serial-port-btn:hover {
+  background: var(--bg-surface-hover);
+}
+
+/* 未选口时芯片主体就是「选择串口」, 不需要再给一个动作键 */
+.serial-device-chip.is-empty .serial-status-indicator {
+  padding-left: 12px;
+}
+
+.serial-device-chip .serial-open-btn {
+  flex: 0 0 auto;
+  width: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-left: 1px solid var(--border-color);
+  color: var(--accent);
+  background: transparent;
+  box-shadow: none;
+}
+
+.serial-device-chip .serial-open-btn:hover {
+  background: var(--bg-surface-hover);
+  transform: none;
+  box-shadow: none;
+}
+
+.serial-device-chip .serial-open-btn[hidden] {
+  display: none !important;
+}
+
+.serial-device-chip .serial-open-btn i {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+/* 已连接时动作键是「断开」, 用危险色提示后果 */
+.serial-device-chip.is-open .serial-open-btn {
+  color: var(--success);
+}
+
+.serial-device-chip.is-open .serial-open-btn:hover {
+  color: var(--danger);
+}
+
 /* Status Indicator */
 .serial-status-indicator {
   display: flex;
@@ -6189,6 +6301,27 @@ body.blu-wave-fullscreen-open {
   white-space: nowrap;
 }
 
+/* 双路行内的芯片: 覆盖上面几条为独立控件写的固定宽度与 !important,
+   否则状态区会为一个色点白占 68px, 动作键也收不成方形图标键 */
+.serial-device-chip .dual-status {
+  min-width: 0;
+  max-width: none;
+}
+
+.serial-device-chip .dual-status .serial-status-indicator {
+  padding: 5px 0 5px 8px;
+  max-width: none;
+}
+
+.serial-device-chip .dual-port-btn {
+  max-width: 150px;
+}
+
+.serial-device-chip .dual-open-btn {
+  width: 30px;
+  padding: 0 !important;
+}
+
 /* 主发口选择器与 A/B 同行靠右（原 .dual-params-row 分隔行已并入单行布局） */
 .dual-active-send {
   display: flex;
@@ -6226,6 +6359,10 @@ body.blu-wave-fullscreen-open {
   font-family: var(--font-sans);
   transition: all var(--transition-fast);
   white-space: nowrap;
+}
+
+.dual-send-btn[hidden] {
+  display: none !important;
 }
 
 .dual-send-btn:not([hidden]) + .dual-send-btn {
