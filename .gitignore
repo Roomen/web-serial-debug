@@ -11,3 +11,9 @@ tools/sk-cross-test/*.o
 !.dev.vars.example
 .env*
 !.env.example
+
+# herdr 多 agent 协作的简报/报告产物，不入库
+/.herdr-task
+
+# 冒烟测试输出
+tools/smoke-out
