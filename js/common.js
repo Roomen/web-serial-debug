@@ -2364,13 +2364,13 @@
 					if (other) await getPortIdentityKey(other)
 				}
 				if (!key) {
-					addLogErr(`无法获取设备标识（非 USB 串口），重命名仅本次会话有效`)
+					showToast(`无法获取设备标识（非 USB 串口），重命名仅本次会话有效`)
 				} else if (key.fingerprint && key.fingerprint.siblingCount > 1) {
-					addLogErr('检测到同型号多串口(CDC)，别名按授权顺序槽位记忆；重插后顺序变化时请重命名')
+					showToast('检测到同型号多串口(CDC)，别名按授权顺序槽位记忆；重插后顺序变化时请重命名')
 				}
 				refreshPortDisplayNames()
 				updateOpenButton(sid)
-				addLogErr(`串口已选择 (会话 ${sid}${key ? '' : '，无持久标识'})`)
+				showToast(`串口已选择 (会话 ${sid}${key ? '' : '，无持久标识'})`)
 				// 锁由本函数持有到结束，这里不要再套一层 setOpening
 				if (wasOpen || openAfterSelect) {
 					await openSerial(sid, { reason: 'user' })
@@ -4250,6 +4250,11 @@
 			tip = document.createElement('div')
 			tip.id = 'serial-toast'
 			tip.setAttribute('role', 'status')
+			tip.title = '点击关闭'
+			tip.addEventListener('click', function () {
+				tip.classList.remove('is-show')
+				clearTimeout(_toastTimer)
+			})
 			document.body.appendChild(tip)
 		}
 		tip.className = 'serial-toast' + (kind === 'error' ? ' is-error' : '')
