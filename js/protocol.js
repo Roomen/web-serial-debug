@@ -1721,7 +1721,7 @@
 			let val
 			if (v == null) val = ''
 			else if (typeof v === 'object' && !Array.isArray(v)) {
-				if (v.name !== undefined) val = v.value + (v.name ? ' (' + v.name + ')' : '')
+				if (v.name !== undefined) val = escHtml(v.value + (v.name ? ' (' + v.name + ')' : ''))
 				else {
 					const parts = []
 					for (const key in v) {
@@ -1729,7 +1729,7 @@
 						const kv = v[key]
 						parts.push(kv && typeof kv === 'object' ? (kv.value + (kv.name ? '(' + kv.name + ')' : '')) : kv)
 					}
-					val = parts.join(', ')
+					val = escHtml(parts.join(', '))
 				}
 			} else val = escHtml(String(v))
 			cells.push({ name: k, value: val, hover: fieldHoverSpan(p, k) })
