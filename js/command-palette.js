@@ -108,11 +108,15 @@
 			alias: 'xuanze chuankou select port',
 			run: function () { clickEl('serial-select-port') }
 		})
-		const toggleText = textOf('serial-open-or-close') || '打开串口'
+		// 按钮三态: 无口「连接」(选口+打开)、有口未开「打开」、已开「关闭」
+		const toggleText = textOf('serial-open-or-close') || '连接'
+		let toggleTitle = '打开串口'
+		if (toggleText.indexOf('关闭') >= 0) toggleTitle = '关闭串口'
+		else if (toggleText.indexOf('连接') >= 0) toggleTitle = '连接串口'
 		list.push({
 			group: '串口',
-			title: toggleText.indexOf('关闭') >= 0 ? '关闭串口' : '打开串口',
-			alias: 'open close serial dakai guanbi chuankou',
+			title: toggleTitle,
+			alias: 'open close serial connect dakai guanbi lianjie chuankou',
 			run: function () { clickEl('serial-open-or-close') }
 		})
 		list.push({

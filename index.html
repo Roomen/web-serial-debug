@@ -224,19 +224,19 @@
 
                     <!-- 单路模式控件 -->
                     <div class="connect-bar-section connect-bar-main" id="serial-single-ctrl">
-                        <button class="btn btn-outline-secondary serial-port-btn" id="serial-select-port">
-                            <i class="bi bi-usb-plug"></i> 选择串口
-                        </button>
-
-                        <button class="btn btn-primary serial-open-btn" id="serial-open-or-close">
-                            <i class="bi bi-play-circle"></i> 打开串口
-                        </button>
-
-                        <div id="serial-status">
-                            <div class="serial-status-indicator disconnected">
-                                <span class="serial-status-dot"></span>
-                                <span class="serial-status-text">未连接</span>
+                        <div class="serial-device-chip is-empty" id="serial-chip">
+                            <div id="serial-status">
+                                <div class="serial-status-indicator disconnected">
+                                    <span class="serial-status-dot"></span>
+                                    <span class="serial-status-text">未连接</span>
+                                </div>
                             </div>
+                            <button class="btn serial-port-btn" id="serial-select-port">
+                                <i class="bi bi-usb-plug"></i> 选择串口
+                            </button>
+                            <button class="btn serial-open-btn" id="serial-open-or-close" title="连接" aria-label="连接" hidden>
+                                <i class="bi bi-plug"></i>
+                            </button>
                         </div>
                     </div>
 
@@ -245,41 +245,46 @@
                         <!-- 会话 A -->
                         <div class="dual-session-row">
                             <input class="dual-session-label" id="serial-session-a-label" value="TX" maxlength="8" title="会话 A 标签（可编辑）">
-                            <button class="btn btn-outline-secondary serial-port-btn dual-port-btn" id="serial-select-port-a">
-                                <i class="bi bi-usb-plug"></i> 选择
-                            </button>
-                            <button class="btn btn-primary serial-open-btn dual-open-btn" id="serial-open-or-close-a">
-                                <i class="bi bi-plug"></i> 连接
-                            </button>
-                            <div class="dual-status" id="serial-status-a">
-                                <div class="serial-status-indicator disconnected">
-                                    <span class="serial-status-dot"></span>
-                                    <span class="serial-status-text">未连接</span>
+                            <div class="serial-device-chip is-empty" id="serial-chip-a">
+                                <div class="dual-status" id="serial-status-a">
+                                    <div class="serial-status-indicator disconnected">
+                                        <span class="serial-status-dot"></span>
+                                        <span class="serial-status-text">未连接</span>
+                                    </div>
                                 </div>
+                                <button class="btn serial-port-btn dual-port-btn" id="serial-select-port-a">
+                                    <i class="bi bi-usb-plug"></i> 选择
+                                </button>
+                                <button class="btn serial-open-btn dual-open-btn" id="serial-open-or-close-a" title="连接" aria-label="会话 A连接" hidden>
+                                    <i class="bi bi-plug"></i>
+                                </button>
                             </div>
                         </div>
                         <!-- 会话 B -->
                         <div class="dual-session-row">
                             <input class="dual-session-label" id="serial-session-b-label" value="RX" maxlength="8" title="会话 B 标签（可编辑）">
-                            <button class="btn btn-outline-secondary serial-port-btn dual-port-btn" id="serial-select-port-b">
-                                <i class="bi bi-usb-plug"></i> 选择
-                            </button>
-                            <button class="btn btn-primary serial-open-btn dual-open-btn" id="serial-open-or-close-b">
-                                <i class="bi bi-plug"></i> 连接
-                            </button>
-                            <div class="dual-status" id="serial-status-b">
-                                <div class="serial-status-indicator disconnected">
-                                    <span class="serial-status-dot"></span>
-                                    <span class="serial-status-text">未连接</span>
+                            <div class="serial-device-chip is-empty" id="serial-chip-b">
+                                <div class="dual-status" id="serial-status-b">
+                                    <div class="serial-status-indicator disconnected">
+                                        <span class="serial-status-dot"></span>
+                                        <span class="serial-status-text">未连接</span>
+                                    </div>
                                 </div>
+                                <button class="btn serial-port-btn dual-port-btn" id="serial-select-port-b">
+                                    <i class="bi bi-usb-plug"></i> 选择
+                                </button>
+                                <button class="btn serial-open-btn dual-open-btn" id="serial-open-or-close-b" title="连接" aria-label="会话 B连接" hidden>
+                                    <i class="bi bi-plug"></i>
+                                </button>
                             </div>
                         </div>
                         <!-- 主发口（与 A/B 同行靠右） -->
                         <div class="dual-active-send">
                             <span class="dual-active-send-label">主发:</span>
                             <div class="dual-send-toggle" id="serial-active-send" role="group" aria-label="选择主发送口">
-                                <button type="button" class="dual-send-btn active" data-sid="A">A</button>
-                                <button type="button" class="dual-send-btn" data-sid="B">B</button>
+                                <button type="button" class="dual-send-btn active" data-sid="S" aria-label="单路串口">单</button>
+                                <button type="button" class="dual-send-btn" data-sid="A" aria-label="双路 A">A</button>
+                                <button type="button" class="dual-send-btn" data-sid="B" aria-label="双路 B">B</button>
                             </div>
                         </div>
                     </div>

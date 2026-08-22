@@ -13,7 +13,6 @@
   --bg-body: #f5f5f7;
   --bg-surface: #ffffff;
   --bg-surface-hover: #f5f5f7;
-  --bg-sidebar: rgba(255, 255, 255, 0.72);
   --bg-sidebar-toggle: #e8e8ed;
   --bg-header: rgba(255, 255, 255, 0.85);
   --bg-header-text: #1d1d1f;
@@ -72,7 +71,6 @@
     --bg-body: #1c1c1e;
     --bg-surface: #2c2c2e;
     --bg-surface-hover: #3a3a3c;
-    --bg-sidebar: rgba(44, 44, 46, 0.85);
     --bg-sidebar-toggle: #3a3a3c;
     --bg-header: rgba(28, 28, 30, 0.85);
     --bg-header-text: #f5f5f7;
@@ -119,7 +117,6 @@
   --bg-body: #1c1c1e;
   --bg-surface: #2c2c2e;
   --bg-surface-hover: #3a3a3c;
-  --bg-sidebar: rgba(44, 44, 46, 0.85);
   --bg-sidebar-toggle: #3a3a3c;
   --bg-header: rgba(28, 28, 30, 0.85);
   --bg-header-text: #f5f5f7;
@@ -165,7 +162,6 @@
   --bg-body: #f5f5f7;
   --bg-surface: #ffffff;
   --bg-surface-hover: #f5f5f7;
-  --bg-sidebar: rgba(255, 255, 255, 0.72);
   --bg-sidebar-toggle: #e8e8ed;
   --bg-header: rgba(255, 255, 255, 0.85);
   --bg-header-text: #1d1d1f;
@@ -258,9 +254,7 @@ body {
 #activity-rail {
   flex: 0 0 auto;
   width: 60px;
-  background: var(--bg-sidebar);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: var(--bg-body);
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -801,12 +795,8 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background-color: var(--bg-surface);
   color: var(--text-primary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
   overflow: hidden;
-  box-shadow: var(--shadow-sm) inset;
   transition: background-color var(--transition-normal), color var(--transition-normal);
 }
 
@@ -939,6 +929,60 @@ body {
 
 .serial-logs.is-dual .log-row[data-sid='B'] {
   border-left-color: #f59e0b;
+}
+
+.serial-logs.is-dual .log-row[data-sid='S'] {
+  border-left-color: #6366f1;
+  background-color: color-mix(in srgb, #6366f1 7%, transparent);
+}
+
+.serial-logs.is-dual .log-row[data-sid='S'] .log-sess,
+.serial-logs.is-dual .log-row[data-sid='S'] .log-time {
+  color: #6366f1;
+}
+
+.serial-logs.is-dual .log-row[data-sid='S'] .log-body {
+  color: #4f46e5;
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S'] .log-body,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S'] .log-sess,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S'] .log-time {
+  color: #a5b4fc;
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S'] {
+  background-color: color-mix(in srgb, #a5b4fc 7%, transparent);
+}
+
+.serial-logs.is-dual .log-row[data-sid='S']:hover {
+  background-color: color-mix(in srgb, #6366f1 14%, transparent);
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S']:hover {
+  background-color: color-mix(in srgb, #a5b4fc 16%, transparent);
+}
+
+.serial-logs.is-dual .log-row[data-sid='S'].selected {
+  background-color: color-mix(in srgb, #6366f1 22%, transparent);
+  box-shadow: inset 0 0 0 1.5px #6366f1;
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S'].selected {
+  background-color: color-mix(in srgb, #a5b4fc 24%, transparent);
+  box-shadow: inset 0 0 0 1.5px #a5b4fc;
+}
+
+.serial-logs.is-dual .log-row[data-sid='S']::selection,
+.serial-logs.is-dual .log-row[data-sid='S'] *::selection {
+  background: #6366f1;
+  color: #fff;
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S']::selection,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S'] *::selection {
+  background: #a5b4fc;
+  color: #1c1c1e;
 }
 
 .serial-logs.is-dual .log-row[data-sid='A'] .log-body {
@@ -2494,14 +2538,15 @@ hr {
   flex-direction: column;
   height: 100%;
   min-width: 0;
-  padding: 8px 6px 10px 10px;
-  background: var(--bg-body);
+  padding: 0;
+  background: var(--bg-surface);
 }
 
+/* 日志标题行是台面自己的表头, 不再是浮起卡片之间的间隔 */
 #log-main > div:first-child {
   border-bottom: 1px solid var(--border-color);
-  margin-bottom: 8px;
-  padding-bottom: 6px;
+  margin-bottom: 0;
+  padding: 8px 12px 6px;
 }
 
 /* ========== Protocol Parse Panel ========== */
@@ -2516,13 +2561,10 @@ hr {
   flex-direction: column;
   height: var(--parse-h);
   min-height: 0;
-  margin-bottom: 8px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background-color: var(--bg-surface);
+  margin-bottom: 0;
+  border-top: 1px solid var(--border-color);
   overflow: visible;
   transition: background-color var(--transition-normal), border-color var(--transition-normal);
-  box-shadow: var(--shadow-sm);
 }
 
 #serial-parse-panel.collapsed {
@@ -3294,6 +3336,118 @@ hr {
   margin-right: 2px;
 }
 
+/* ===== 设备芯片: 状态点 + 设备名 + 动作键合成一个控件 =====
+   三者原本是三个独立控件, 但说的是同一个会话的三个侧面, 且动作键的
+   动词态与状态指示器的形容词态高度重叠。合成一枚芯片后各自去掉边框圆角,
+   由芯片统一承担外壳。ID 全部保留, 渲染函数按 ID 找元素的路径不受影响。 */
+.serial-device-chip {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+  transition: border-color var(--transition-fast);
+}
+
+.serial-device-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border-color));
+}
+
+/* 已连接时整枚芯片染上成功色, 一眼可辨 */
+.serial-device-chip.is-open {
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+}
+
+/* 芯片内部的三段一律去掉自己的外壳, 交给芯片 */
+.serial-device-chip > * {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+/* 三个状态类各自带 background/border, 与本块同权重且写在后面, 必须逐个点名
+   压过去, 否则芯片左段会挂上一块状态底色, 看起来像两块拼的而不是一枚芯片。
+   只夺 background/border, 文字颜色仍留给状态类(「正在连接…」要橙字)。 */
+.serial-device-chip .serial-status-indicator,
+.serial-device-chip .serial-status-indicator.connected,
+.serial-device-chip .serial-status-indicator.disconnected,
+.serial-device-chip .serial-status-indicator.connecting {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 7px 0 7px 10px;
+  gap: 0;
+}
+
+/* 状态文字平时收起, 只留色点; 只有瞬时的「正在连接…」才展开,
+   因为那一态动作键表达不了。已连接/未连接由色点 + 动作键图标共同表达。 */
+.serial-device-chip .serial-status-text {
+  display: none;
+}
+
+.serial-device-chip .serial-status-indicator.connecting .serial-status-text {
+  display: inline;
+  margin-left: 8px;
+  font-size: 0.72rem;
+}
+
+.serial-device-chip .serial-port-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  padding: 7px 10px;
+  color: var(--text-primary);
+}
+
+.serial-device-chip .serial-port-btn:hover {
+  background: var(--bg-surface-hover);
+}
+
+/* 未选口时芯片主体就是「选择串口」, 不需要再给一个动作键 */
+.serial-device-chip.is-empty .serial-status-indicator {
+  padding-left: 12px;
+}
+
+.serial-device-chip .serial-open-btn {
+  flex: 0 0 auto;
+  width: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-left: 1px solid var(--border-color);
+  color: var(--accent);
+  background: transparent;
+  box-shadow: none;
+}
+
+.serial-device-chip .serial-open-btn:hover {
+  background: var(--bg-surface-hover);
+  transform: none;
+  box-shadow: none;
+}
+
+.serial-device-chip .serial-open-btn[hidden] {
+  display: none !important;
+}
+
+.serial-device-chip .serial-open-btn i {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+/* 已连接时动作键是「断开」, 用危险色提示后果 */
+.serial-device-chip.is-open .serial-open-btn {
+  color: var(--success);
+}
+
+.serial-device-chip.is-open .serial-open-btn:hover {
+  color: var(--danger);
+}
+
 /* Status Indicator */
 .serial-status-indicator {
   display: flex;
@@ -3388,13 +3542,10 @@ hr {
   flex-direction: column;
   width: 100%;
   min-width: 0;
-  margin-bottom: 8px;
-  background-color: var(--bg-surface);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  margin-bottom: 0;
+  border-top: 1px solid var(--border-color);
   overflow: hidden;
   transition: background-color var(--transition-normal), border-color var(--transition-normal);
-  box-shadow: var(--shadow-sm);
 }
 
 #serial-send-panel.collapsed #serial-send-body {
@@ -4280,22 +4431,31 @@ hr {
 /* Toast */
 .serial-toast {
   position: fixed;
-  left: 50%;
-  top: 16px;
-  transform: translateX(-50%) translateY(-8px);
+  right: 16px;
+  top: 60px;
+  left: auto;
+  transform: translateX(8px) translateY(-8px);
   z-index: 2000;
-  padding: 8px 16px;
+  padding: 8px 14px 8px 16px;
   border-radius: var(--radius-md);
   background: var(--bg-tooltip);
   color: var(--text-inverse);
   font-size: 0.8125rem;
   line-height: 1.4;
-  max-width: min(560px, calc(100vw - 32px));
-  text-align: center;
+  max-width: min(420px, calc(100vw - 32px));
+  text-align: left;
   box-shadow: var(--shadow-md);
   opacity: 0;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
   transition: opacity 0.18s ease, transform 0.18s ease, background-color var(--transition-normal), color var(--transition-normal);
+}
+
+.serial-toast::after {
+  content: '\2715';
+  margin-left: 8px;
+  font-size: 0.75rem;
+  opacity: 0.7;
 }
 
 .serial-toast.is-error {
@@ -4305,7 +4465,7 @@ hr {
 
 .serial-toast.is-show {
   opacity: 1;
-  transform: translateX(-50%) translateY(0);
+  transform: translateX(0) translateY(0);
 }
 
 /* ========== BLU 100k Power Analysis ========== */
@@ -5818,7 +5978,7 @@ body.blu-wave-fullscreen-open {
     position: sticky;
     top: 0;
     z-index: 3;
-    background-color: var(--bg-body);
+    background-color: var(--bg-surface);
   }
 
   #serial-log-panes,
@@ -6150,6 +6310,27 @@ body.blu-wave-fullscreen-open {
   white-space: nowrap;
 }
 
+/* 双路行内的芯片: 覆盖上面几条为独立控件写的固定宽度与 !important,
+   否则状态区会为一个色点白占 68px, 动作键也收不成方形图标键 */
+.serial-device-chip .dual-status {
+  min-width: 0;
+  max-width: none;
+}
+
+.serial-device-chip .dual-status .serial-status-indicator {
+  padding: 5px 0 5px 8px;
+  max-width: none;
+}
+
+.serial-device-chip .dual-port-btn {
+  max-width: 150px;
+}
+
+.serial-device-chip .dual-open-btn {
+  width: 30px;
+  padding: 0 !important;
+}
+
 /* 主发口选择器与 A/B 同行靠右（原 .dual-params-row 分隔行已并入单行布局） */
 .dual-active-send {
   display: flex;
@@ -6189,7 +6370,11 @@ body.blu-wave-fullscreen-open {
   white-space: nowrap;
 }
 
-.dual-send-btn + .dual-send-btn {
+.dual-send-btn[hidden] {
+  display: none !important;
+}
+
+.dual-send-btn:not([hidden]) + .dual-send-btn {
   border-left: 1px solid var(--border-color);
 }
 
