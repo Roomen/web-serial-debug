@@ -2312,8 +2312,10 @@
 		await selectPortFor(SerialHub.uiSid('A'))
 	})
 
-	async function selectPortFor(sid) {
+	// opts.openAfterSelect: 无口时点「连接」走的一步到位路径, 选中后直接打开
+	async function selectPortFor(sid, opts) {
 		sid = SerialHub.uiSid(sid)
+		const openAfterSelect = !!(opts && opts.openAfterSelect)
 		if (SerialHub.isOpening(sid)) return
 		SerialHub.setOpening(sid, true)
 		try {
@@ -2354,7 +2356,7 @@
 				updateOpenButton(sid)
 				addLogErr(`串口已选择 (会话 ${sid}${key ? '' : '，无持久标识'})`)
 				// 锁由本函数持有到结束，这里不要再套一层 setOpening
-				if (wasOpen) {
+				if (wasOpen || openAfterSelect) {
 					await openSerial(sid, { reason: 'user' })
 				}
 			})
@@ -2613,33 +2615,22 @@
 		if (!SerialHub.isVisible(sid)) return
 		const open = SerialHub.isOpen(sid)
 		let btnId
-		let dualLabel = false
 		if (sid === 'B') {
 			btnId = 'serial-open-or-close-b'
-			dualLabel = true
 		} else if (SerialHub.mode === 'dual') {
 			btnId = 'serial-open-or-close-a'
-			dualLabel = true
 		} else {
 			btnId = 'serial-open-or-close'
 		}
 		const btn = document.getElementById(btnId)
 		if (!btn) return
-		// 双路：无口「连接」（选口+打开一步到位）、有口未开「打开」、已开「关闭」；行上已有 TX/RX 标签，不再重复 A/B
-		if (dualLabel) {
-			if (open) {
-				btn.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭'
-			} else if (SerialHub.getPort(sid)) {
-				btn.innerHTML = '<i class="bi bi-play-circle"></i> 打开'
-			} else {
-				btn.innerHTML = '<i class="bi bi-plug"></i> 连接'
-			}
-			return
-		}
+		// 单双路同一套三态: 无口「连接」(选口+打开一步到位)、有口未开「打开」、已开「关闭」
 		if (open) {
 			btn.innerHTML = '<i class="bi bi-stop-circle"></i> 关闭'
-		} else {
+		} else if (SerialHub.getPort(sid)) {
 			btn.innerHTML = '<i class="bi bi-play-circle"></i> 打开'
+		} else {
+			btn.innerHTML = '<i class="bi bi-plug"></i> 连接'
 		}
 	}
 
@@ -2649,7 +2640,8 @@
 		if (SerialHub.isOpening(sid)) return
 		const port = SerialHub.getPort(sid)
 		if (!port) {
-			showMsg('请先选择串口')
+			// 「连接」态: 选口 + 打开一步到位, 省掉一次点「选择」
+			await selectPortFor(sid, { openAfterSelect: true })
 			return
 		}
 		if (SerialHub.isOpen(sid)) {
