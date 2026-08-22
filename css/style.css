@@ -943,6 +943,7 @@ body {
 
 .serial-logs.is-dual .log-row[data-sid='S'] {
   border-left-color: #6366f1;
+  background-color: color-mix(in srgb, #6366f1 7%, transparent);
 }
 
 .serial-logs.is-dual .log-row[data-sid='S'] .log-sess,
@@ -960,8 +961,38 @@ body {
   color: #a5b4fc;
 }
 
-.serial-logs.is-dual .log-row[data-sid='S'] {
-  background-color: color-mix(in srgb, #6366f1 7%, transparent);
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S'] {
+  background-color: color-mix(in srgb, #a5b4fc 7%, transparent);
+}
+
+.serial-logs.is-dual .log-row[data-sid='S']:hover {
+  background-color: color-mix(in srgb, #6366f1 14%, transparent);
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S']:hover {
+  background-color: color-mix(in srgb, #a5b4fc 16%, transparent);
+}
+
+.serial-logs.is-dual .log-row[data-sid='S'].selected {
+  background-color: color-mix(in srgb, #6366f1 22%, transparent);
+  box-shadow: inset 0 0 0 1.5px #6366f1;
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S'].selected {
+  background-color: color-mix(in srgb, #a5b4fc 24%, transparent);
+  box-shadow: inset 0 0 0 1.5px #a5b4fc;
+}
+
+.serial-logs.is-dual .log-row[data-sid='S']::selection,
+.serial-logs.is-dual .log-row[data-sid='S'] *::selection {
+  background: #6366f1;
+  color: #fff;
+}
+
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S']::selection,
+[data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='S'] *::selection {
+  background: #a5b4fc;
+  color: #1c1c1e;
 }
 
 .serial-logs.is-dual .log-row[data-sid='A'] .log-body {
@@ -6212,7 +6243,7 @@ body.blu-wave-fullscreen-open {
   white-space: nowrap;
 }
 
-.dual-send-btn + .dual-send-btn {
+.dual-send-btn:not([hidden]) + .dual-send-btn {
   border-left: 1px solid var(--border-color);
 }
 
