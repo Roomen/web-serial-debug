@@ -1756,15 +1756,23 @@
 	if (rawToolOptions) {
 		try {
 			const parsed = JSON.parse(rawToolOptions)
-			if (parsed && typeof parsed === 'object') {
+			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
 				toolOptions = Object.assign({}, DEFAULT_TOOL_OPTIONS, parsed)
+				// 就地校正 4 个日志字段的非法值, 与 pickLogOptions() 口径一致
+				const t = parseInt(toolOptions.timeOut, 10)
+				toolOptions.timeOut = !isNaN(t) && t >= 0 ? t : DEFAULT_TOOL_OPTIONS.timeOut
+				const m = parseInt(toolOptions.maxLogRows, 10)
+				toolOptions.maxLogRows = !isNaN(m) && m >= 100 ? m : DEFAULT_TOOL_OPTIONS.maxLogRows
+				if (typeof toolOptions.logType !== 'string' || !toolOptions.logType) {
+					toolOptions.logType = DEFAULT_TOOL_OPTIONS.logType
+				}
+				if (typeof toolOptions.autoScroll !== 'boolean') {
+					toolOptions.autoScroll = DEFAULT_TOOL_OPTIONS.autoScroll
+				}
 			}
 		} catch (e) {}
 	}
 	//老配置里没有该字段时回落到默认值
-	if (!toolOptions.maxLogRows) {
-		toolOptions.maxLogRows = 5000
-	}
 	if (toolOptions.skDownEncrypt == null) {
 		toolOptions.skDownEncrypt = false
 	}
