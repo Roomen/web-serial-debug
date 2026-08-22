@@ -1027,15 +1027,18 @@
 		if (menu) menu.classList.toggle('is-open', on)
 	}
 
+	// 返回 { text, html }: text 为设备自报等不可信内容(必须 textContent 渲染),
+	// html 仅在工具自拼时给出(可 innerHTML)。不要退回"按内容里有没有 < 判断"的写法:
+	// 设备自报的 SN 里含 < 就会被当成 HTML 注入。
 	function shortDeviceLabel(port, index) {
-		if (!port) return '未选设备'
+		if (!port) return { text: '未选设备' }
 		let info = {}
 		try { info = port.getInfo ? port.getInfo() : {} } catch (e) {}
 		const sn = getPortSn(port)
 		const vp = formatVidPid(info, true)
-		if (sn) return sn
-		if (vp) return 'BLU · <span class="blu-vp">' + vp + '</span>'
-		return bluKnownPorts.length > 1 ? ('设备 #' + (index + 1)) : 'BLU'
+		if (sn) return { text: sn }
+		if (vp) return { html: 'BLU · <span class="blu-vp">' + vp + '</span>' }
+		return { text: bluKnownPorts.length > 1 ? ('设备 #' + (index + 1)) : 'BLU' }
 	}
 
 	function renderDeviceList() {
@@ -1043,10 +1046,10 @@
 		const label = E('blu-device-label')
 		if (label) {
 			const idx = bluPort ? bluKnownPorts.indexOf(bluPort) : -1
-			const html = shortDeviceLabel(bluPort, idx >= 0 ? idx : 0)
-			// 允许短 VID/PID 用 span
-			if (html.indexOf('<') >= 0) label.innerHTML = html
-			else label.textContent = html
+			const lbl = shortDeviceLabel(bluPort, idx >= 0 ? idx : 0)
+			// 只有工具自拼的 html 字段才走 innerHTML, 设备自报内容一律 textContent
+			if (lbl.html != null) label.innerHTML = lbl.html
+			else label.textContent = lbl.text
 			label.title = bluPort ? bluPortLabel(bluPort, idx >= 0 ? idx : 0) : '点击选择或添加设备'
 		}
 		if (!list) return

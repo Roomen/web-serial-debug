@@ -22,7 +22,10 @@
 
 	function init() {
 		if (E('blu-cmd-sheet-wrap')) return
-		buildDOM()
+		// buildDOM 在缺少 #view-blu 时会直接 return, 模块级 tab/wrap 等仍是 undefined;
+		// 此时必须停在这里, 否则 bindEvents 第一行就对 undefined 取属性抛 TypeError,
+		// 报错信息与真实原因(找不到 #view-blu)无关, 排查成本高。
+		if (!buildDOM()) return
 		bindEvents()
 
 		// 恢复上次展开状态
@@ -35,7 +38,7 @@
 
 	function buildDOM() {
 		const viewBlu = E('view-blu')
-		if (!viewBlu) return
+		if (!viewBlu) return false
 
 		const html =
 		'<div class="blu-cmd-sheet-wrap" id="blu-cmd-sheet-wrap">' +
@@ -104,6 +107,7 @@
 		resultEl = E('blu-cmd-result')
 		closeBtn = E('blu-cmd-close')
 		autoCloseCheck = E('blu-cmd-auto-close')
+		return true
 	}
 
 	function bindEvents() {

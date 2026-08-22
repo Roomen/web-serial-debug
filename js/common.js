@@ -412,7 +412,7 @@
 		},
 	]
 	//工具配置
-	let toolOptions = {
+	const DEFAULT_TOOL_OPTIONS = {
 		//自动滚动
 		autoScroll: true,
 		//显示时间 界面未开放
@@ -452,6 +452,7 @@
 		//当前协议
 		skProtocol: 'sek',
 	}
+	let toolOptions = Object.assign({}, DEFAULT_TOOL_OPTIONS)
 	// 日志条（分包超时 / 最大行数 / 日志类型 / 自动滚动）单双路独立，与 serialOptions 同一策略
 	const TOOL_OPTIONS_DUAL_KEY = 'toolOptionsDual'
 	const LOG_OPTION_KEYS = ['timeOut', 'maxLogRows', 'logType', 'autoScroll']
@@ -710,7 +711,10 @@
 	let quickSend = document.getElementById('serial-quick-send')
 	let sendList = localStorage.getItem('quickSendList')
 	if (sendList) {
-		quickSendList = JSON.parse(sendList)
+		try {
+			const parsed = JSON.parse(sendList)
+			if (Array.isArray(parsed)) quickSendList = parsed
+		} catch (e) {}
 	}
 	quickSendList.forEach((item, index) => {
 		let option = document.createElement('option')
@@ -1747,14 +1751,28 @@
 	//读取参数：单路/双路各自独立的串口参数，按当前模式刷新 dropdown
 	applySerialParamsToUI()
 	window.addEventListener('pagehide', persistLogsNow)
-	let options = localStorage.getItem('toolOptions')
-	if (options) {
-		toolOptions = JSON.parse(options)
+	// 坏数据/旧版本缺字段都不能中断本 IIFE: 解析失败回落默认值, 解析成功也要并入默认值补齐新增字段
+	const rawToolOptions = localStorage.getItem('toolOptions')
+	if (rawToolOptions) {
+		try {
+			const parsed = JSON.parse(rawToolOptions)
+			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+				toolOptions = Object.assign({}, DEFAULT_TOOL_OPTIONS, parsed)
+				// 就地校正 4 个日志字段的非法值, 与 pickLogOptions() 口径一致
+				const t = parseInt(toolOptions.timeOut, 10)
+				toolOptions.timeOut = !isNaN(t) && t >= 0 ? t : DEFAULT_TOOL_OPTIONS.timeOut
+				const m = parseInt(toolOptions.maxLogRows, 10)
+				toolOptions.maxLogRows = !isNaN(m) && m >= 100 ? m : DEFAULT_TOOL_OPTIONS.maxLogRows
+				if (typeof toolOptions.logType !== 'string' || !toolOptions.logType) {
+					toolOptions.logType = DEFAULT_TOOL_OPTIONS.logType
+				}
+				if (typeof toolOptions.autoScroll !== 'boolean') {
+					toolOptions.autoScroll = DEFAULT_TOOL_OPTIONS.autoScroll
+				}
+			}
+		} catch (e) {}
 	}
 	//老配置里没有该字段时回落到默认值
-	if (!toolOptions.maxLogRows) {
-		toolOptions.maxLogRows = 5000
-	}
 	if (toolOptions.skDownEncrypt == null) {
 		toolOptions.skDownEncrypt = false
 	}
