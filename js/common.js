@@ -1236,8 +1236,9 @@
 			if (note) head += '<div class="sk-parse-note">' + HTMLEncode(note) + '</div>'
 			if (r.needKey) head += '<div class="sk-parse-err">⚠ 加密报文,请在右侧「第三方协议」中的「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>'
 			const outEl = document.getElementById('serial-protocol-output')
-			const dirCls = dir === 'tx' ? 'sk-parse-down' : dir === 'rx' ? 'sk-parse-up' : ''
-			const wrapOpen = dirCls ? '<div class="sk-parse-block ' + dirCls + '" data-dir="' + dir + '">' : ''
+			const dirNorm = dir === 'tx' ? 'tx' : dir === 'rx' ? 'rx' : ''
+			const dirCls = dirNorm === 'tx' ? 'sk-parse-down' : dirNorm === 'rx' ? 'sk-parse-up' : ''
+			const wrapOpen = dirCls ? '<div class="sk-parse-block ' + dirCls + '" data-dir="' + dirNorm + '">' : ''
 			const wrapClose = dirCls ? '</div>' : ''
 			outEl.innerHTML = wrapOpen + head + skFormatFrame(r) + wrapClose
 			if (typeof skBindSeriesCharts === 'function') {
