@@ -934,7 +934,10 @@
 				name: name,
 				list: [],
 			})
-			quickSend.innerHTML += `<option value="${quickSendList.length - 1}">${name}</option>`
+			const option = document.createElement('option')
+			option.innerText = name
+			option.value = quickSendList.length - 1
+			quickSend.appendChild(option)
 			quickSend.value = quickSendList.length - 1
 			quickSend.dispatchEvent(new Event('change'))
 			saveQuickList()
@@ -4233,9 +4236,16 @@
 		row.setAttribute('data-ts', String(when.getTime()))
 		row.setAttribute('data-seq', String(++logSeq))
 		row.setAttribute('data-sid', sid === 'B' ? 'B' : (sid === 'S' ? 'S' : (sid === 'A' ? 'A' : 'SYS')))
-		row.innerHTML = '<span class="log-time">' + time + '</span>' +
-			'<span class="log-dir">!</span>' +
-			'<span class="log-body text-danger">' + msg + '</span>'
+		const timeSpan = document.createElement('span')
+		timeSpan.className = 'log-time'
+		timeSpan.textContent = time
+		const dirSpan = document.createElement('span')
+		dirSpan.className = 'log-dir'
+		dirSpan.textContent = '!'
+		const bodySpan = document.createElement('span')
+		bodySpan.className = 'log-body text-danger'
+		bodySpan.textContent = msg
+		row.append(timeSpan, dirSpan, bodySpan)
 		appendLogNode(row, target)
 		if (getLogTypeForSid(target) === 'term') showToast(msg, null, 'error')
 	}
