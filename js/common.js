@@ -45,6 +45,10 @@
 	let logSeq = 0
 	// 单/双路切换串行化标志
 	let modeSwitching = false
+	// 重连宽限期: 重连期间 refreshActiveSendSButton 不降级主发（端口还没开始重连，isOpen 为 false 会误降级）
+	// 必须在此声明: refreshActiveSendSButton 会在 restoreMode -> switchToDualUI 里被调到，
+	// 那比文件末尾的 reloadAutoReconnect 早得多，声明放在末尾会踩 TDZ
+	let reconnectGrace = false
 
 	// ===== SerialHub: 单路 / 双路 A / 双路 B 三套独立会话 =====
 	// 物理 sid：'S' 单路，'A' 双路 A，'B' 双路 B。切模式只换 UI，不关另一模式的口。
@@ -5016,8 +5020,6 @@
 	// ===== reload 自动重连 =====
 	// 必须放在本 IIFE 末尾: dual 恢复要调 switchToDualUI, 而 serialLogs 等 const 在后面才初始化(前面执行会踩 TDZ)
 	// 仅刷新(reload)且刷新前串口处于打开意图时自动重连；新开/跳转不连
-	// 重连宽限期: 重连期间 refreshActiveSendSButton 不降级主发（端口还没开始重连，isOpen 为 false 会误降级）
-	let reconnectGrace = false
 	;(async function reloadAutoReconnect() {
 		let navType = 'navigate'
 		try {
