@@ -1594,6 +1594,49 @@
 	function multiParamToBytes(fields) {
 		const container = document.getElementById('serial-protocol-down-param-multi')
 		if (!container) return []
+		// 检查是否有字段带 bits 属性（位域打包模式）
+		const hasBits = fields.some(f => f.bits != null)
+		if (hasBits) {
+			// 位域打包：计算总字节数
+			let maxBit = 0
+			fields.forEach(f => {
+				if (f.bits) {
+					const hi = f.bits[0]
+					if (hi > maxBit) maxBit = hi
+				}
+			})
+			const totalBytes = Math.floor(maxBit / 8) + 1
+			const bytes = new Array(totalBytes).fill(0)
+			fields.forEach((f, idx) => {
+				const el = container.querySelector('[data-index="' + idx + '"]')
+				if (!el) return
+				let val
+				if (el.tagName === 'SELECT') {
+					val = parseInt(el.value, 10)
+					if (isNaN(val)) return
+				} else {
+					val = parseInt(el.value.trim(), 10)
+					if (isNaN(val)) return
+				}
+				if (f.bits) {
+					const hi = f.bits[0], lo = f.bits[1]
+					const width = hi - lo + 1
+					const mask = (1 << width) - 1
+					const v = val & mask
+					// 小端序：bit0 在 byte0 的 LSB
+					for (let b = 0; b < totalBytes; b++) {
+						const bitLo = b * 8
+						const bitHi = b * 8 + 7
+						if (bitHi < lo || bitLo > hi) continue
+						const shift = lo - bitLo
+						const subMask = Math.min(mask, (1 << (Math.min(bitHi, hi) - Math.max(bitLo, lo) + 1)) - 1)
+						bytes[b] |= (v & subMask) << shift
+					}
+				}
+			})
+			return bytes
+		}
+		// 无位域：各字段独立占字节/字（原有逻辑）
 		const bytes = []
 		fields.forEach((f, idx) => {
 			const el = container.querySelector('[data-index="' + idx + '"]')
@@ -1784,6 +1827,9 @@
 			if (preset.param) {
 				paramGroup.style.display = ''
 				paramLabel.textContent = preset.param.label || '参数'
+				// 切换非 multi 预设时隐藏 multi 容器，避免残留
+				const multiContainer = document.getElementById('serial-protocol-down-param-multi')
+				if (multiContainer) { multiContainer.style.display = 'none'; multiContainer.innerHTML = '' }
 				if (preset.param.type === 'enum') {
 					paramVal.style.display = 'none'
 					paramVal.type = 'text'

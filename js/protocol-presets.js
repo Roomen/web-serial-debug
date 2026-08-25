@@ -193,9 +193,9 @@ window.SK_DOWN_PRESETS = [
 				tlv: [{ tag: 32, items: [{ id: 9 }] }] },
 			{ name: '设置图像格式', func: '0x01', desc: 'Tag32-ID10 bit3-0格式 bit7需识别 bit6旋转',
 				param: { type: 'multi', fields: [
-					{ label: '格式', type: 'enum', default: '0', options: { 0: '二值', 1: '半灰度', 2: '全灰度' } },
-					{ label: '需识别', type: 'enum', default: '0', options: { 0: '否', 1: '是' } },
-					{ label: '需旋转90°', type: 'enum', default: '0', options: { 0: '否', 1: '是' } }
+					{ label: '格式', type: 'enum', bits: [3, 0], default: '0', options: { 0: '二值', 1: '半灰度', 2: '全灰度' } },
+					{ label: '需识别', type: 'enum', bits: [7, 7], default: '0', options: { 0: '否', 1: '是' } },
+					{ label: '需旋转90°', type: 'enum', bits: [6, 6], default: '0', options: { 0: '否', 1: '是' } }
 				] },
 				tlv: [{ tag: 32, items: [{ id: 10 }] }] },
 			{ name: '设置图像品质', func: '0x01', desc: 'Tag32-ID11 压缩系数 0-100',
@@ -251,10 +251,10 @@ window.SK_DOWN_PRESETS = [
 				tlv: [{ tag: 33, items: [{ id: 30 }] }] },
 			{ name: '设置485串口参数', func: '0x01', desc: 'Tag33-ID31 bit6数据位/bit5停止位/bit4-3校验/bit2-0波特率',
 				param: { type: 'multi', fields: [
-					{ label: '数据位', type: 'enum', default: '0', options: { 0: '7位', 1: '8位' } },
-					{ label: '停止位', type: 'enum', default: '0', options: { 0: '1位', 1: '2位' } },
-					{ label: '校验', type: 'enum', default: '0', options: { 0: '无', 1: '奇校验', 2: '偶校验', 3: 'mark', 4: 'space' } },
-					{ label: '波特率', type: 'enum', default: '0', options: { 0: '2400', 1: '4800', 2: '9600', 3: '19200', 4: '38400', 5: '57600', 6: '115200' } }
+					{ label: '数据位', type: 'enum', bits: [6, 6], default: '0', options: { 0: '7位', 1: '8位' } },
+					{ label: '停止位', type: 'enum', bits: [5, 5], default: '0', options: { 0: '1位', 1: '2位' } },
+					{ label: '校验', type: 'enum', bits: [4, 3], default: '0', options: { 0: '无', 1: '奇校验', 2: '偶校验', 3: 'mark', 4: 'space' } },
+					{ label: '波特率', type: 'enum', bits: [2, 0], default: '0', options: { 0: '2400', 1: '4800', 2: '9600', 3: '19200', 4: '38400', 5: '57600', 6: '115200' } }
 				] },
 				tlv: [{ tag: 33, items: [{ id: 31 }] }] },
 			{ name: '设置数据类型上报开关', func: '0x01', desc: 'Tag33-ID32 32bit位域 BIT0-13各数据',
