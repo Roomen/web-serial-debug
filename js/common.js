@@ -1542,6 +1542,90 @@
 		}
 		return a
 	}
+	// 多字段参数：渲染动态输入框
+	function renderMultiFields(fields) {
+		const container = document.getElementById('serial-protocol-down-param-multi')
+		if (!container) return
+		container.style.display = ''
+		container.innerHTML = ''
+		fields.forEach((f, idx) => {
+			const wrap = document.createElement('div')
+			wrap.style.display = 'inline-flex'
+			wrap.style.alignItems = 'center'
+			wrap.style.gap = '2px'
+			wrap.style.marginRight = '8px'
+			wrap.style.marginBottom = '4px'
+			const lbl = document.createElement('span')
+			lbl.textContent = f.label || ''
+			lbl.style.fontSize = '0.7rem'
+			lbl.style.color = '#6c757d'
+			wrap.appendChild(lbl)
+			if (f.type === 'enum' && f.options) {
+				const sel = document.createElement('select')
+				sel.className = 'form-select form-select-sm'
+				sel.style.width = f.width || '120px'
+				sel.dataset.index = idx
+				for (const [k, v] of Object.entries(f.options)) {
+					const op = document.createElement('option')
+					op.value = k
+					op.textContent = v
+					if (String(k) === String(f.default || Object.keys(f.options)[0])) op.selected = true
+					sel.appendChild(op)
+				}
+				sel.addEventListener('change', () => { if (_currentParamType === 'multi') buildWithParam() })
+				wrap.appendChild(sel)
+			} else {
+				const inp = document.createElement('input')
+				inp.type = f.type === 'uint8' || f.type === 'uint16le' || f.type === 'int8' ? 'number' : 'text'
+				inp.className = 'form-control form-control-sm'
+				inp.style.width = f.width || '100px'
+				inp.dataset.index = idx
+				inp.value = f.default || ''
+				if (f.min != null) inp.min = f.min
+				if (f.max != null) inp.max = f.max
+				if (f.placeholder) inp.placeholder = f.placeholder
+				inp.addEventListener('input', () => { if (_currentParamType === 'multi') buildWithParam() })
+				wrap.appendChild(inp)
+			}
+			container.appendChild(wrap)
+		})
+	}
+	// 多字段参数：收集动态输入框的值并转为字节数组（小端序）
+	function multiParamToBytes(fields) {
+		const container = document.getElementById('serial-protocol-down-param-multi')
+		if (!container) return []
+		const bytes = []
+		fields.forEach((f, idx) => {
+			const el = container.querySelector('[data-index="' + idx + '"]')
+			if (!el) return
+			let val
+			if (el.tagName === 'SELECT') {
+				val = parseInt(el.value, 10)
+				if (isNaN(val)) return
+			} else {
+				val = el.value.trim()
+				if (!val) return
+			}
+			if (f.type === 'uint8' || f.type === 'int8') {
+				let n = parseInt(val, 10)
+				if (isNaN(n)) return
+				if (f.type === 'int8') n = n & 0xff
+				bytes.push(n & 0xff)
+			} else if (f.type === 'uint16le') {
+				let n = parseInt(val, 10)
+				if (isNaN(n)) return
+				bytes.push(n & 0xff, (n >> 8) & 0xff)
+			} else if (f.type === 'hexbytes') {
+				const hb = hexToBytes(val, f.fillLen)
+				bytes.push(...hb)
+			} else {
+				let n = parseInt(val, 10)
+				if (isNaN(n)) return
+				bytes.push(n & 0xff)
+			}
+		})
+		return bytes
+	}
 	function numToBytes(val, type) {
 		switch (type) {
 			case 'uint32le': return [val & 0xff, (val >> 8) & 0xff, (val >> 16) & 0xff, (val >> 24) & 0xff]
@@ -1671,6 +1755,9 @@
 					const s = paramVal.value.trim()
 					if (!s) return
 					bytes = hexToBytes(s, preset.param.fillLen)
+				} else if (preset.param.type === 'multi') {
+					bytes = multiParamToBytes(preset.param.fields)
+					if (!bytes || !bytes.length) return
 				} else {
 					const rawVal = parseInt(paramVal.value.trim(), 10)
 					if (isNaN(rawVal)) return
@@ -1771,6 +1858,12 @@
 					paramVal.placeholder = preset.param.placeholder || 'HEX, 如 01:02:03:04:05:06'
 					paramUnit.textContent = preset.param.fillLen ? ('(' + preset.param.fillLen + 'B)') : ''
 					_currentParamType = 'hexbytes'
+				} else if (preset.param.type === 'multi') {
+					paramVal.style.display = 'none'
+					paramSelEnum.style.display = 'none'
+					paramUnit.textContent = ''
+					renderMultiFields(preset.param.fields)
+					_currentParamType = 'multi'
 				} else {
 					paramVal.type = 'text'
 					paramVal.style.display = ''
