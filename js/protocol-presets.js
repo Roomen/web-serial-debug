@@ -253,7 +253,7 @@ window.SK_DOWN_PRESETS = [
 				param: { type: 'multi', fields: [
 					{ label: '数据位', type: 'enum', bits: [6, 6], default: '0', options: { 0: '7位', 1: '8位' } },
 					{ label: '停止位', type: 'enum', bits: [5, 5], default: '0', options: { 0: '1位', 1: '2位' } },
-					{ label: '校验', type: 'enum', bits: [4, 3], default: '0', options: { 0: '无', 1: '奇校验', 2: '偶校验', 3: 'mark', 4: 'space' } },
+					{ label: '校验', type: 'enum', bits: [4, 3], default: '0', options: { 0: '无', 1: '奇校验', 2: '偶校验', 3: 'mark' } },
 					{ label: '波特率', type: 'enum', bits: [2, 0], default: '0', options: { 0: '2400', 1: '4800', 2: '9600', 3: '19200', 4: '38400', 5: '57600', 6: '115200' } }
 				] },
 				tlv: [{ tag: 33, items: [{ id: 31 }] }] },
