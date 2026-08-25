@@ -1530,6 +1530,18 @@
 		}
 		return a
 	}
+	// HEX 字符串（支持冒号分隔或连续）→ 字节数组，不足 fillLen 补 0x00
+	function hexToBytes(s, fillLen) {
+		if (!s) return []
+		let hex = s.replace(/[^0-9a-fA-F]/g, '')
+		if (hex.length % 2 !== 0) hex = '0' + hex
+		const a = []
+		for (let i = 0; i < hex.length; i += 2) a.push(parseInt(hex.substr(i, 2), 16))
+		if (fillLen != null) {
+			while (a.length < fillLen) a.push(0x00)
+		}
+		return a
+	}
 	function numToBytes(val, type) {
 		switch (type) {
 			case 'uint32le': return [val & 0xff, (val >> 8) & 0xff, (val >> 16) & 0xff, (val >> 24) & 0xff]
@@ -1655,6 +1667,10 @@
 					if (!iso) return
 					bytes = histDateQueryBytes(iso)
 					if (!bytes) return
+				} else if (preset.param.type === 'hexbytes') {
+					const s = paramVal.value.trim()
+					if (!s) return
+					bytes = hexToBytes(s, preset.param.fillLen)
 				} else {
 					const rawVal = parseInt(paramVal.value.trim(), 10)
 					if (isNaN(rawVal)) return
@@ -1746,6 +1762,15 @@
 					paramVal.value = preset.param.default || b.default
 					paramUnit.textContent = '近' + (preset.param.maxDays || 60) + '日可选'
 					_currentParamType = 'histDate'
+				} else if (preset.param.type === 'hexbytes') {
+					paramVal.type = 'text'
+					paramVal.style.display = ''
+					paramVal.style.width = '180px'
+					paramSelEnum.style.display = 'none'
+					paramVal.value = preset.param.default || ''
+					paramVal.placeholder = preset.param.placeholder || 'HEX, 如 01:02:03:04:05:06'
+					paramUnit.textContent = preset.param.fillLen ? ('(' + preset.param.fillLen + 'B)') : ''
+					_currentParamType = 'hexbytes'
 				} else {
 					paramVal.type = 'text'
 					paramVal.style.display = ''
