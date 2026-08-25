@@ -1542,6 +1542,133 @@
 		}
 		return a
 	}
+	// 多字段参数：渲染动态输入框
+	function renderMultiFields(fields) {
+		const container = document.getElementById('serial-protocol-down-param-multi')
+		if (!container) return
+		container.style.display = ''
+		container.innerHTML = ''
+		fields.forEach((f, idx) => {
+			const wrap = document.createElement('div')
+			wrap.style.display = 'inline-flex'
+			wrap.style.alignItems = 'center'
+			wrap.style.gap = '2px'
+			wrap.style.marginRight = '8px'
+			wrap.style.marginBottom = '4px'
+			const lbl = document.createElement('span')
+			lbl.textContent = f.label || ''
+			lbl.style.fontSize = '0.7rem'
+			lbl.style.color = '#6c757d'
+			wrap.appendChild(lbl)
+			if (f.type === 'enum' && f.options) {
+				const sel = document.createElement('select')
+				sel.className = 'form-select form-select-sm'
+				sel.style.width = f.width || '120px'
+				sel.dataset.index = idx
+				for (const [k, v] of Object.entries(f.options)) {
+					const op = document.createElement('option')
+					op.value = k
+					op.textContent = v
+					if (String(k) === String(f.default || Object.keys(f.options)[0])) op.selected = true
+					sel.appendChild(op)
+				}
+				sel.addEventListener('change', () => { if (_currentParamType === 'multi') buildWithParam() })
+				wrap.appendChild(sel)
+			} else {
+				const inp = document.createElement('input')
+				inp.type = f.type === 'uint8' || f.type === 'uint16le' || f.type === 'int8' ? 'number' : 'text'
+				inp.className = 'form-control form-control-sm'
+				inp.style.width = f.width || '100px'
+				inp.dataset.index = idx
+				inp.value = f.default || ''
+				if (f.min != null) inp.min = f.min
+				if (f.max != null) inp.max = f.max
+				if (f.placeholder) inp.placeholder = f.placeholder
+				inp.addEventListener('input', () => { if (_currentParamType === 'multi') buildWithParam() })
+				wrap.appendChild(inp)
+			}
+			container.appendChild(wrap)
+		})
+	}
+	// 多字段参数：收集动态输入框的值并转为字节数组（小端序）
+	function multiParamToBytes(fields) {
+		const container = document.getElementById('serial-protocol-down-param-multi')
+		if (!container) return []
+		// 检查是否有字段带 bits 属性（位域打包模式）
+		const hasBits = fields.some(f => f.bits != null)
+		if (hasBits) {
+			// 位域打包：计算总字节数
+			let maxBit = 0
+			fields.forEach(f => {
+				if (f.bits) {
+					const hi = f.bits[0]
+					if (hi > maxBit) maxBit = hi
+				}
+			})
+			const totalBytes = Math.floor(maxBit / 8) + 1
+			const bytes = new Array(totalBytes).fill(0)
+			fields.forEach((f, idx) => {
+				const el = container.querySelector('[data-index="' + idx + '"]')
+				if (!el) return
+				let val
+				if (el.tagName === 'SELECT') {
+					val = parseInt(el.value, 10)
+					if (isNaN(val)) return
+				} else {
+					val = parseInt(el.value.trim(), 10)
+					if (isNaN(val)) return
+				}
+				if (f.bits) {
+					const hi = f.bits[0], lo = f.bits[1]
+					const width = hi - lo + 1
+					const mask = (1 << width) - 1
+					const v = val & mask
+					// 小端序：bit0 在 byte0 的 LSB
+					for (let b = 0; b < totalBytes; b++) {
+						const bitLo = b * 8
+						const bitHi = b * 8 + 7
+						if (bitHi < lo || bitLo > hi) continue
+						const shift = lo - bitLo
+						const subMask = Math.min(mask, (1 << (Math.min(bitHi, hi) - Math.max(bitLo, lo) + 1)) - 1)
+						bytes[b] |= (v & subMask) << shift
+					}
+				}
+			})
+			return bytes
+		}
+		// 无位域：各字段独立占字节/字（原有逻辑）
+		const bytes = []
+		fields.forEach((f, idx) => {
+			const el = container.querySelector('[data-index="' + idx + '"]')
+			if (!el) return
+			let val
+			if (el.tagName === 'SELECT') {
+				val = parseInt(el.value, 10)
+				if (isNaN(val)) return
+			} else {
+				val = el.value.trim()
+				if (!val) return
+			}
+			if (f.type === 'uint8' || f.type === 'int8') {
+				let n = parseInt(val, 10)
+				if (isNaN(n)) return
+				if (f.type === 'int8') n = n & 0xff
+				bytes.push(n & 0xff)
+			} else if (f.type === 'uint16le') {
+				let n = parseInt(val, 10)
+				if (isNaN(n)) return
+				bytes.push(n & 0xff, (n >> 8) & 0xff)
+			} else if (f.type === 'hexbytes') {
+				const hb = hexToBytes(val, f.fillLen)
+				bytes.push(...hb)
+			} else {
+				let n = parseInt(val, 10)
+				if (isNaN(n)) return
+				bytes.push(n & 0xff)
+			}
+		})
+		return bytes
+	}
 	function numToBytes(val, type) {
 		switch (type) {
 			case 'uint32le': return [val & 0xff, (val >> 8) & 0xff, (val >> 16) & 0xff, (val >> 24) & 0xff]
@@ -1671,6 +1798,9 @@
 					const s = paramVal.value.trim()
 					if (!s) return
 					bytes = hexToBytes(s, preset.param.fillLen)
+				} else if (preset.param.type === 'multi') {
+					bytes = multiParamToBytes(preset.param.fields)
+					if (!bytes || !bytes.length) return
 				} else {
 					const rawVal = parseInt(paramVal.value.trim(), 10)
 					if (isNaN(rawVal)) return
@@ -1697,6 +1827,9 @@
 			if (preset.param) {
 				paramGroup.style.display = ''
 				paramLabel.textContent = preset.param.label || '参数'
+				// 切换非 multi 预设时隐藏 multi 容器，避免残留
+				const multiContainer = document.getElementById('serial-protocol-down-param-multi')
+				if (multiContainer) { multiContainer.style.display = 'none'; multiContainer.innerHTML = '' }
 				if (preset.param.type === 'enum') {
 					paramVal.style.display = 'none'
 					paramVal.type = 'text'
@@ -1771,6 +1904,12 @@
 					paramVal.placeholder = preset.param.placeholder || 'HEX, 如 01:02:03:04:05:06'
 					paramUnit.textContent = preset.param.fillLen ? ('(' + preset.param.fillLen + 'B)') : ''
 					_currentParamType = 'hexbytes'
+				} else if (preset.param.type === 'multi') {
+					paramVal.style.display = 'none'
+					paramSelEnum.style.display = 'none'
+					paramUnit.textContent = ''
+					renderMultiFields(preset.param.fields)
+					_currentParamType = 'multi'
 				} else {
 					paramVal.type = 'text'
 					paramVal.style.display = ''

@@ -64,8 +64,12 @@ window.SK_DOWN_PRESETS = [
 				tlv: [{ tag: 3, items: [{ id: 4 }] }] },
 			{ name: '设置即时告警ID', func: '0x01', desc: 'Tag3-ID5 16位位域(HEX) 见TLV编辑',
 				tlv: [{ tag: 3, items: [{ id: 5, value: [] }] }] },
-			{ name: '设置环境温度报警阈值', func: '0x01', desc: 'Tag3-ID33 低温+高温(℃) int8各1B 见TLV',
-				tlv: [{ tag: 3, items: [{ id: 33, value: [] }] }] },
+			{ name: '设置环境温度报警阈值', func: '0x01', desc: 'Tag3-ID33 低温+高温(℃) int8各1B',
+				param: { type: 'multi', fields: [
+					{ label: '低温(℃)', type: 'int8', default: '0', min: '-40', max: '85' },
+					{ label: '高温(℃)', type: 'int8', default: '0', min: '-40', max: '85' }
+				] },
+				tlv: [{ tag: 3, items: [{ id: 33 }] }] },
 		]
 	},
 	{
@@ -147,10 +151,15 @@ window.SK_DOWN_PRESETS = [
 				tlv: [{ tag: 3, items: [{ id: 32 }] }] },
 			{ name: '设置电池参数', func: '0x01', desc: 'Tag3-ID39 总容量+起始容量 uint16各2B 见TLV',
 				tlv: [{ tag: 3, items: [{ id: 39, value: [] }] }] },
-			{ name: '设置结算日参数', func: '0x01', desc: 'Tag3-ID13 起始日+结算日间隔(天) 各1B 见TLV',
-				tlv: [{ tag: 3, items: [{ id: 13, value: [] }] }] },
-			{ name: '设置水表实时时间', func: '0x01', desc: 'Tag3-ID20 水表时间 BCD YYYYMMDDhhmmss 见TLV',
-				tlv: [{ tag: 3, items: [{ id: 20, value: [] }] }] },
+			{ name: '设置结算日参数', func: '0x01', desc: 'Tag3-ID13 起始日+结算日间隔(天) 各1B',
+				param: { type: 'multi', fields: [
+					{ label: '起始日', type: 'uint8', default: '1', min: '1', max: '31' },
+					{ label: '结算日间隔(天)', type: 'uint8', default: '1', min: '1', max: '365' }
+				] },
+				tlv: [{ tag: 3, items: [{ id: 13 }] }] },
+			{ name: '设置水表实时时间', func: '0x01', desc: 'Tag3-ID20 水表时间 BCD YYYYMMDDhhmmss',
+				param: { label: '时间', type: 'hexbytes', default: '', fillLen: 7, placeholder: '如 2508251230000' },
+				tlv: [{ tag: 3, items: [{ id: 20 }] }] },
 		]
 	},
 	{
@@ -182,8 +191,13 @@ window.SK_DOWN_PRESETS = [
 			{ name: '设置灰度图片坐标', func: '0x01', desc: 'Tag32-ID9 相对Y坐标 0-480',
 				param: { label: 'Y坐标', type: 'uint16le', default: '0' },
 				tlv: [{ tag: 32, items: [{ id: 9 }] }] },
-			{ name: '设置图像格式', func: '0x01', desc: 'Tag32-ID10 bit3-0格式 bit7需识别 bit6旋转 见TLV',
-				tlv: [{ tag: 32, items: [{ id: 10, value: [] }] }] },
+			{ name: '设置图像格式', func: '0x01', desc: 'Tag32-ID10 bit3-0格式 bit7需识别 bit6旋转',
+				param: { type: 'multi', fields: [
+					{ label: '格式', type: 'enum', bits: [3, 0], default: '0', options: { 0: '二值', 1: '半灰度', 2: '全灰度' } },
+					{ label: '需识别', type: 'enum', bits: [7, 7], default: '0', options: { 0: '否', 1: '是' } },
+					{ label: '需旋转90°', type: 'enum', bits: [6, 6], default: '0', options: { 0: '否', 1: '是' } }
+				] },
+				tlv: [{ tag: 32, items: [{ id: 10 }] }] },
 			{ name: '设置图像品质', func: '0x01', desc: 'Tag32-ID11 压缩系数 0-100',
 				param: { label: '品质(0-100)', type: 'uint8', default: '50' },
 				tlv: [{ tag: 32, items: [{ id: 11 }] }] },
@@ -226,18 +240,26 @@ window.SK_DOWN_PRESETS = [
 			{ name: '设置总线表集抄', func: '0x01', desc: 'Tag33-ID25 0停止 1开始集抄',
 				param: { label: '集抄', type: 'enum', default: '0', options: { 0: '停止', 1: '开始集抄' } },
 				tlv: [{ tag: 33, items: [{ id: 25 }] }] },
-			{ name: '设置抄表日期', func: '0x01', desc: 'Tag33-ID27 bit1-31表示日期需抄表 4B位域 见TLV',
-				tlv: [{ tag: 33, items: [{ id: 27, value: [] }] }] },
+			{ name: '设置抄表日期', func: '0x01', desc: 'Tag33-ID27 bit1-31表示日期需抄表 4B位域',
+				param: { label: '位域', type: 'hexbytes', default: '', fillLen: 4, placeholder: '如 00:00:00:00' },
+				tlv: [{ tag: 33, items: [{ id: 27 }] }] },
 			{ name: '设置周期数据上报方式', func: '0x01', desc: 'Tag33-ID29 0x90=tag90 0x94=tag94',
 				param: { label: '上报方式', type: 'enum', default: '144', options: { 144: 'tag90(0x90)', 148: 'tag94(0x94)' } },
 				tlv: [{ tag: 33, items: [{ id: 29 }] }] },
 			{ name: '设置485总线协议ID', func: '0x01', desc: 'Tag33-ID30 0-255',
 				param: { label: '协议ID', type: 'uint8', default: '0' },
 				tlv: [{ tag: 33, items: [{ id: 30 }] }] },
-			{ name: '设置485串口参数', func: '0x01', desc: 'Tag33-ID31 bit6数据位/bit5停止位/bit4-3校验/bit2-0波特率 见TLV',
-				tlv: [{ tag: 33, items: [{ id: 31, value: [] }] }] },
-			{ name: '设置数据类型上报开关', func: '0x01', desc: 'Tag33-ID32 32bit位域 BIT0-13各数据 见TLV',
-				tlv: [{ tag: 33, items: [{ id: 32, value: [] }] }] },
+			{ name: '设置485串口参数', func: '0x01', desc: 'Tag33-ID31 bit6数据位/bit5停止位/bit4-3校验/bit2-0波特率',
+				param: { type: 'multi', fields: [
+					{ label: '数据位', type: 'enum', bits: [6, 6], default: '0', options: { 0: '7位', 1: '8位' } },
+					{ label: '停止位', type: 'enum', bits: [5, 5], default: '0', options: { 0: '1位', 1: '2位' } },
+					{ label: '校验', type: 'enum', bits: [4, 3], default: '0', options: { 0: '无', 1: '奇校验', 2: '偶校验', 3: 'mark' } },
+					{ label: '波特率', type: 'enum', bits: [2, 0], default: '0', options: { 0: '2400', 1: '4800', 2: '9600', 3: '19200', 4: '38400', 5: '57600', 6: '115200' } }
+				] },
+				tlv: [{ tag: 33, items: [{ id: 31 }] }] },
+			{ name: '设置数据类型上报开关', func: '0x01', desc: 'Tag33-ID32 32bit位域 BIT0-13各数据',
+				param: { label: '位域', type: 'hexbytes', default: '', fillLen: 4, placeholder: '如 00:00:00:00' },
+				tlv: [{ tag: 33, items: [{ id: 32 }] }] },
 		]
 	},
 	{
