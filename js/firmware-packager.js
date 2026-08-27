@@ -221,7 +221,21 @@
 	function logUpgradeBtn(name, data, index) {
 		const line = document.createElement('div')
 		line.className = 'fw-log-upgrade-row'
-		line.innerHTML = '<button class="fw-log-upgrade-btn" data-fw-idx="' + index + '"><i class="bi bi-arrow-right-circle"></i> 使用此固件进行串口升级</button><span class="fw-log-upgrade-name">' + name + '</span>'
+		const button = document.createElement('button')
+		button.type = 'button'
+		button.className = 'fw-log-upgrade-btn'
+		button.dataset.fwIdx = index
+
+		const icon = document.createElement('i')
+		icon.className = 'bi bi-arrow-right-circle'
+		const buttonText = document.createElement('span')
+		buttonText.textContent = '使用此固件进行串口升级'
+		button.append(icon, buttonText)
+
+		const fileName = document.createElement('span')
+		fileName.className = 'fw-log-upgrade-name'
+		fileName.textContent = name
+		line.append(button, fileName)
 		el.log.appendChild(line)
 		el.log.scrollTop = el.log.scrollHeight
 	}
