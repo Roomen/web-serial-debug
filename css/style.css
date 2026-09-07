@@ -3360,6 +3360,82 @@ hr {
   border-color: color-mix(in srgb, var(--success) 45%, transparent);
 }
 
+/* 双路 A/B 芯片：边框常态即按会话染色，与 A/B 标签、日志图例同色 */
+#serial-chip-a {
+  border-color: color-mix(in srgb, #10b981 45%, var(--border-color));
+}
+
+#serial-chip-b {
+  border-color: color-mix(in srgb, #f59e0b 45%, var(--border-color));
+}
+
+#serial-chip-a:hover {
+  border-color: color-mix(in srgb, #10b981 60%, var(--border-color));
+}
+
+#serial-chip-b:hover {
+  border-color: color-mix(in srgb, #f59e0b 60%, var(--border-color));
+}
+
+#serial-chip-a.is-open {
+  border-color: #059669;
+}
+
+#serial-chip-b.is-open {
+  border-color: #d97706;
+}
+
+#serial-chip-a.is-open .serial-open-btn {
+  color: #059669;
+}
+
+#serial-chip-b.is-open .serial-open-btn {
+  color: #d97706;
+}
+
+/* 断开动作键悬停仍要变危险色提示后果，不能被上面的会话色盖掉 */
+#serial-chip-a.is-open .serial-open-btn:hover,
+#serial-chip-b.is-open .serial-open-btn:hover {
+  color: var(--danger);
+}
+
+[data-theme='dark'] #serial-chip-a {
+  border-color: color-mix(in srgb, #34d399 45%, var(--border-color));
+}
+
+[data-theme='dark'] #serial-chip-b {
+  border-color: color-mix(in srgb, #fbbf24 45%, var(--border-color));
+}
+
+[data-theme='dark'] #serial-chip-a:hover {
+  border-color: color-mix(in srgb, #34d399 60%, var(--border-color));
+}
+
+[data-theme='dark'] #serial-chip-b:hover {
+  border-color: color-mix(in srgb, #fbbf24 60%, var(--border-color));
+}
+
+[data-theme='dark'] #serial-chip-a.is-open {
+  border-color: #34d399;
+}
+
+[data-theme='dark'] #serial-chip-b.is-open {
+  border-color: #fbbf24;
+}
+
+[data-theme='dark'] #serial-chip-a.is-open .serial-open-btn {
+  color: #34d399;
+}
+
+[data-theme='dark'] #serial-chip-b.is-open .serial-open-btn {
+  color: #fbbf24;
+}
+
+[data-theme='dark'] #serial-chip-a.is-open .serial-open-btn:hover,
+[data-theme='dark'] #serial-chip-b.is-open .serial-open-btn:hover {
+  color: var(--danger);
+}
+
 /* 芯片内部的三段一律去掉自己的外壳, 交给芯片 */
 .serial-device-chip > * {
   border: none;
@@ -6461,13 +6537,23 @@ body.blu-wave-fullscreen-open {
   background: var(--accent);
 }
 
-/* A/B 选中态与日志右侧图例(.serial-log-legend.is-dual)同色 */
+/* A/B 选中态与悬停态都与日志右侧图例(.serial-log-legend.is-dual)同色 */
 .dual-send-btn.active[data-sid="A"] {
   background: #10b981;
 }
 
 .dual-send-btn.active[data-sid="B"] {
   background: #f59e0b;
+}
+
+.dual-send-btn[data-sid="A"]:hover:not(.active) {
+  color: #059669;
+  background: color-mix(in srgb, #10b981 16%, transparent);
+}
+
+.dual-send-btn[data-sid="B"]:hover:not(.active) {
+  color: #d97706;
+  background: color-mix(in srgb, #f59e0b 16%, transparent);
 }
 
 [data-theme='dark'] .dual-send-btn.active[data-sid="A"] {
@@ -6478,6 +6564,16 @@ body.blu-wave-fullscreen-open {
 [data-theme='dark'] .dual-send-btn.active[data-sid="B"] {
   background: #fbbf24;
   color: #1c1c1e;
+}
+
+[data-theme='dark'] .dual-send-btn[data-sid="A"]:hover:not(.active) {
+  color: #34d399;
+  background: color-mix(in srgb, #34d399 18%, transparent);
+}
+
+[data-theme='dark'] .dual-send-btn[data-sid="B"]:hover:not(.active) {
+  color: #fbbf24;
+  background: color-mix(in srgb, #fbbf24 18%, transparent);
 }
 
 /* Dual Log Panels */
