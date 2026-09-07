@@ -3360,6 +3360,38 @@ hr {
   border-color: color-mix(in srgb, var(--success) 45%, transparent);
 }
 
+/* 单路芯片：固定用强调蓝，跟双路 A(绿)/B(琥珀) 一眼区分开 */
+#serial-chip {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-color));
+}
+
+#serial-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border-color));
+}
+
+#serial-chip.is-open {
+  border-color: var(--accent);
+}
+
+#serial-chip.is-open .serial-open-btn {
+  color: var(--accent);
+}
+
+#serial-chip.is-open .serial-open-btn:hover {
+  color: var(--danger);
+}
+
+#serial-chip .serial-status-indicator.connected {
+  background: var(--accent-light);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+#serial-chip .serial-status-indicator.connected .serial-status-dot {
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
 /* 双路 A/B 芯片：边框常态即按会话染色，与 A/B 标签、日志图例同色 */
 #serial-chip-a {
   border-color: color-mix(in srgb, #10b981 45%, var(--border-color));
