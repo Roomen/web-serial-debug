@@ -97,7 +97,9 @@
 			return this.isVisible(sid) || sid === this.activeSendPhys()
 		},
 		logModeOf(sid) {
-			if (sid === 'S') return this.mode === 'dual' ? 'dual' : 'single'
+			// 单路会话(S)的日志永远归单路窗口，不随当前模式改变——
+			// 否则切到双路后，后台仍开着的单路口一发送/接收，日志就混进双路窗口。
+			if (sid === 'S') return 'single'
 			return 'dual'
 		},
 		allPhys() { return ['S', 'A', 'B'] },

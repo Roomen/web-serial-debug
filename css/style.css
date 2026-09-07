@@ -6322,14 +6322,25 @@ body.blu-wave-fullscreen-open {
   outline: none;
 }
 
+/* 与日志右侧图例(.serial-log-legend.is-dual)同色，A=绿 B=琥珀 */
 .dual-session-label[data-session="A"] {
-  border-color: var(--success);
-  color: var(--success);
+  border-color: #059669;
+  color: #059669;
 }
 
 .dual-session-label[data-session="B"] {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: #d97706;
+  color: #d97706;
+}
+
+[data-theme='dark'] .dual-session-label[data-session="A"] {
+  border-color: #34d399;
+  color: #34d399;
+}
+
+[data-theme='dark'] .dual-session-label[data-session="B"] {
+  border-color: #fbbf24;
+  color: #fbbf24;
 }
 
 .dual-port-btn,
@@ -6444,6 +6455,25 @@ body.blu-wave-fullscreen-open {
 .dual-send-btn.active {
   color: #fff;
   background: var(--accent);
+}
+
+/* A/B 选中态与日志右侧图例(.serial-log-legend.is-dual)同色 */
+.dual-send-btn.active[data-sid="A"] {
+  background: #10b981;
+}
+
+.dual-send-btn.active[data-sid="B"] {
+  background: #f59e0b;
+}
+
+[data-theme='dark'] .dual-send-btn.active[data-sid="A"] {
+  background: #34d399;
+  color: #1c1c1e;
+}
+
+[data-theme='dark'] .dual-send-btn.active[data-sid="B"] {
+  background: #fbbf24;
+  color: #1c1c1e;
 }
 
 /* Dual Log Panels */
