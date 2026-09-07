@@ -3381,12 +3381,6 @@ hr {
   color: var(--danger);
 }
 
-#serial-chip .serial-status-indicator.connected {
-  background: var(--accent-light);
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-}
-
 #serial-chip .serial-status-indicator.connected .serial-status-dot {
   background: var(--accent);
   box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 50%, transparent);
@@ -3429,18 +3423,6 @@ hr {
 #serial-chip-a.is-open .serial-open-btn:hover,
 #serial-chip-b.is-open .serial-open-btn:hover {
   color: var(--danger);
-}
-
-#serial-chip-a .serial-status-indicator.connected {
-  background: color-mix(in srgb, #10b981 14%, transparent);
-  color: #059669;
-  border-color: color-mix(in srgb, #10b981 30%, transparent);
-}
-
-#serial-chip-b .serial-status-indicator.connected {
-  background: color-mix(in srgb, #f59e0b 14%, transparent);
-  color: #d97706;
-  border-color: color-mix(in srgb, #f59e0b 30%, transparent);
 }
 
 #serial-chip-a .serial-status-indicator.connected .serial-status-dot {
@@ -3488,18 +3470,6 @@ hr {
 [data-theme='dark'] #serial-chip-a.is-open .serial-open-btn:hover,
 [data-theme='dark'] #serial-chip-b.is-open .serial-open-btn:hover {
   color: var(--danger);
-}
-
-[data-theme='dark'] #serial-chip-a .serial-status-indicator.connected {
-  background: color-mix(in srgb, #34d399 16%, transparent);
-  color: #34d399;
-  border-color: color-mix(in srgb, #34d399 30%, transparent);
-}
-
-[data-theme='dark'] #serial-chip-b .serial-status-indicator.connected {
-  background: color-mix(in srgb, #fbbf24 16%, transparent);
-  color: #fbbf24;
-  border-color: color-mix(in srgb, #fbbf24 30%, transparent);
 }
 
 [data-theme='dark'] #serial-chip-a .serial-status-indicator.connected .serial-status-dot {
