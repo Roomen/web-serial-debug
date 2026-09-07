@@ -97,7 +97,9 @@
 			return this.isVisible(sid) || sid === this.activeSendPhys()
 		},
 		logModeOf(sid) {
-			if (sid === 'S') return this.mode === 'dual' ? 'dual' : 'single'
+			// 单路会话(S)的日志永远归单路窗口，不随当前模式改变——
+			// 否则切到双路后，后台仍开着的单路口一发送/接收，日志就混进双路窗口。
+			if (sid === 'S') return 'single'
 			return 'dual'
 		},
 		allPhys() { return ['S', 'A', 'B'] },
@@ -2485,7 +2487,7 @@
 	}
 
 	function isPortMetaClick(e) {
-		return !!(e && e.target && e.target.closest && e.target.closest('.port-rename-btn, .port-alias-clear-btn'))
+		return !!(e && e.target && e.target.closest && e.target.closest('.port-rename-btn, .port-alias-clear-btn, .port-forget-btn'))
 	}
 
 	//选择串口（单路模式用）
@@ -5128,7 +5130,24 @@
 		if (getPortAlias(port)) {
 			html += '<span class="port-alias-clear-btn" role="button" title="清除别名" data-port-sid="' + sid + '"><i class="bi bi-x"></i></span>'
 		}
+		// 关闭状态下才允许取消选择：打开中先走关闭按钮，避免拔掉一个正用着的口
+		if (!SerialHub.isOpen(sid)) {
+			html += '<span class="port-forget-btn" role="button" title="取消选择，恢复未连接状态" data-port-sid="' + sid + '"><i class="bi bi-x-circle"></i></span>'
+		}
 		return html
+	}
+
+	/** 取消选择：关闭状态下把会话恢复成从未选过口的样子 */
+	async function forgetPort(sid) {
+		sid = SerialHub.uiSid(sid)
+		if (SerialHub.isOpen(sid) || SerialHub.isOpening(sid)) return
+		await closeSerial(sid)
+		SerialHub.setPort(sid, null)
+		SerialHub.setManualClose(sid, true)
+		setSerialWantOpen(false, sid)
+		setSerialWantPortKey(sid, null)
+		updatePortButtonDisplay(sid, null)
+		updateOpenButton(sid)
 	}
 
 	/** 启动重命名交互：port 对象和 sid */
@@ -5171,6 +5190,16 @@
 		setPortAlias(port, '').then(function () {
 			refreshPortDisplayNames()
 		})
+	})
+
+	// 事件委托：port-forget-btn 点击（取消选择，恢复未连接状态）
+	document.addEventListener('click', function (e) {
+		const btn = e.target.closest('.port-forget-btn')
+		if (!btn) return
+		e.preventDefault()
+		e.stopPropagation()
+		const sid = btn.getAttribute('data-port-sid')
+		if (sid) forgetPort(sid)
 	})
 
 	// 状态区只表达连接态；设备名/改名已合并进选口按钮
