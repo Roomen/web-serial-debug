@@ -405,7 +405,7 @@
 			presets: [],
 		})
 		W.registerProtocol('sk-ultrasonic', {
-			name: 'SK-超声',
+			name: '188协议（超声）',
 			parseFrame: W.sk188ParseFrame,
 			formatFrame: W.sk188FormatFrame,
 			findFrame: W.sk188FindFrame,
@@ -529,7 +529,7 @@
 			const v = sel ? sel.value : 'sek'
 			const isSk188 = v === 'sk188' || v === 'sk-ultrasonic'
 			const title = document.getElementById('sk188-down-title')
-			if (title) title.textContent = v === 'sk-ultrasonic' ? 'SK-超声下行下发' : '188协议下行下发'
+			if (title) title.textContent = v === 'sk-ultrasonic' ? '188协议（超声）下行下发' : '188协议下行下发'
 			const readOption = cmdSel.querySelector('option[value="0x01"]')
 			if (readOption) readOption.textContent = v === 'sk-ultrasonic' ? '0x01 拓展读流量 (901E)' : '0x01 读数据'
 			if (preview) preview.value = ''
