@@ -171,6 +171,7 @@
 		for (let i = 0; i + 11 <= b.length; i++) {
 			if (b[i] !== HEADER[0] || b[i + 1] !== HEADER[1]) continue
 			const dataLen = b[i + 10]
+			if (dataLen < 3) continue
 			const total = 13 + dataLen
 			if (i + total > b.length) continue
 			if (b[i + total - 1] !== END_BYTE) continue
@@ -183,11 +184,24 @@
 
 	// ===== 解析 =====
 	W.sk188ParseFrame = function (bytes, opt) {
-		const b = (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes || [])
-		const result = { raw: Array.from(b), ok: false, errors: [], fields: {} }
+		const raw = (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes || [])
+		let frameOffset = 0
+		while (raw[frameOffset] === 0xfe) frameOffset++
+		const b = raw.subarray(frameOffset)
+		const result = { raw: Array.from(raw), frameOffset, ok: false, errors: [], fields: {} }
 		const errors = result.errors
-		if (b.length < 13 || b[0] !== HEADER[0] || b[1] !== HEADER[1]) { errors.push('帧头不匹配(需 68 10)'); return result }
+		if (b.length < 2) { errors.push('长度不足,缺少帧头 68 10'); return result }
+		if (b[0] !== HEADER[0] || b[1] !== HEADER[1]) {
+			errors.push('帧头不匹配(需 68 10,实际 ' + hexBytesSpaced(b.subarray(0, 2)) + ')')
+			if (b.length >= 16 && b[0] === 0x68 && b[9] === 0x95 && b[10] === 3 &&
+				b[11] === 0xa0 && b[12] === 0x18 && b[15] === END_BYTE && checksum(b, 14) === b[14]) {
+				errors.push('疑似写表号应答地址偏移错误：0x10 被表号覆盖，请检查设备固件；此报文不能作为有效帧')
+			}
+			return result
+		}
+		if (b.length < 11) { errors.push('长度不足,缺少数据长度字段'); return result }
 		const dataLen = b[10]
+		if (dataLen < 3) { errors.push('数据长度不足,至少需3字节(数据标识2字节+序号1字节)'); return result }
 		const total = 13 + dataLen
 		if (b.length < total) { errors.push('长度不足,需 ' + total + ' 字节,实际 ' + b.length); return result }
 		if (b[total - 1] !== END_BYTE) errors.push('帧尾非 0x16')
@@ -305,12 +319,15 @@
 	}
 
 	W.sk188ByteMap = function (r) {
-		const raw = (r.raw instanceof Uint8Array) ? r.raw : Uint8Array.from(r.raw || [])
+		const bytes = (r.raw instanceof Uint8Array) ? r.raw : Uint8Array.from(r.raw || [])
+		const offset = r.frameOffset || 0
+		const raw = bytes.subarray(offset)
 		const n = raw.length
-		const map = new Array(n).fill('')
-		if (n < 13) return map
+		const map = new Array(bytes.length).fill('')
+		for (let i = 0; i < offset; i++) map[i] = '前导 = FE (不参与校验)'
+		if (n < 13 || raw[0] !== HEADER[0] || raw[1] !== HEADER[1] || raw[10] < 3) return map
 		const dataLen = raw[10]
-		const set = (off, len, tip) => { for (let k = 0; k < len; k++) if (off + k < n) map[off + k] = tip }
+		const set = (off, len, tip) => { for (let k = 0; k < len; k++) if (off + k < n) map[offset + off + k] = tip }
 		set(0, 2, '帧头 = 68 10')
 		set(2, ADDR_SIZE, '表号 = ' + describeAddr(raw.subarray(2, 9)))
 		set(9, 1, '控制码 = ' + hexByte(raw[9]) + ' (功能码=' + hexByte(raw[9] & 0x3f) + ', 方向=' + ((raw[9] >> 7) & 1 ? '应答' : '请求') + ')')
