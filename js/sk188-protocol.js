@@ -79,6 +79,7 @@
 		0x16: [0xa0, 0x16],
 	}
 	function identMatches(cmd, id0, id1) {
+		if (cmd === 0x01 && id0 === 0x1e && id1 === 0x90) return true
 		const p = IDENT[cmd]
 		if (!p) return false
 		return (id0 === p[0] && id1 === p[1]) || (id0 === p[1] && id1 === p[0])
@@ -146,7 +147,7 @@
 		const seq = (opt.seq != null ? opt.seq : 0) & 0xff
 		const commuStatus = opt.commuStatus ? 1 : 0
 		const content = buildContent(cmd, seq, opt)
-		const ident = IDENT[cmd]
+		const ident = cmd === 0x01 && opt.extendedRead ? [0x1e, 0x90] : IDENT[cmd]
 		const dataLen = 2 + 1 + content.length
 
 		const frame = new Uint8Array(13 + dataLen)
@@ -162,6 +163,53 @@
 		frame[14 + content.length] = cs
 		frame[15 + content.length] = END_BYTE
 		return frame
+	}
+
+	W.skUltrasonicBuildDownFrame = function (opt) {
+		return W.sk188BuildDownFrame(Object.assign({}, opt, { extendedRead: true }))
+	}
+
+	// 901E: TLV; 累计量为小端 uint32 m³ + uint16 L + 单位码。
+	function decodeExtended(content, errors) {
+		const names = ['软件版本', '正向累计流量', '反向累计流量', '瞬时流量', '水温', '环境温度', '压力', '电池电压', '状态', '净累计流量', '净流量方向']
+		const lengths = [8, 7, 7, 5, 2, 2, 2, 2, 3, 7, 3]
+		const lines = []
+		if (!content.length) errors.push('拓展读数据应答内容为空')
+		for (let pos = 0; pos < content.length;) {
+			if (pos + 2 > content.length) { errors.push('拓展字段头长度不足'); break }
+			const tag = content[pos++], len = content[pos++]
+			const name = names[tag] || ('未知字段 ' + hexByte(tag))
+			if (pos + len > content.length) { errors.push(name + '内容长度不足'); break }
+			const data = content.subarray(pos, pos + len)
+			pos += len
+			if (lengths[tag] !== undefined && len !== lengths[tag]) {
+				errors.push(name + '长度错误(需' + lengths[tag] + '字节)')
+				continue
+			}
+			const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+			let value = hexBytesSpaced(data)
+			if (tag === 1 || tag === 2 || tag === 9) {
+				const m3 = view.getUint32(0, true), liters = view.getUint16(4, true)
+				if (liters > 999) errors.push(name + '余量升超出0–999')
+				if (data[6] !== 0x29) errors.push(name + '单位标识不支持: ' + hexByte(data[6]))
+				value = m3 + '.' + String(liters).padStart(3, '0') + ' m³'
+			} else if (tag === 3) {
+				value = view.getInt32(0, true) + ' (单位标识=' + hexByte(data[4]) + ')'
+			} else if (tag === 4 || tag === 5) {
+				value = (view.getInt16(0, true) / 10).toFixed(1) + ' °C'
+			} else if (tag === 6) {
+				value = String(view.getUint16(0, true)) + ' (原始值)'
+			} else if (tag === 7) {
+				value = (view.getUint16(0, true) / 100).toFixed(2) + ' V'
+			} else if (tag === 8) {
+				value += ' (低电=' + !!(data[2] & 0x40) + ' 空管=' + !!(data[2] & 0x10)
+					+ ' 计量异常=' + !!(data[2] & 0x08) + ' 电池拆卸=' + !!(data[2] & 0x04) + ')'
+			} else if (tag === 10) {
+				value = data[0] === 0 ? '正向' : data[0] === 1 ? '反向' : '未知(' + data[0] + ')'
+			}
+			lines.push(name + ' = ' + value)
+		}
+		return lines.join('\n')
 	}
 
 	// ===== 查找帧 (跳过应答帧可能带的 FE FE FE 前导) =====
@@ -233,7 +281,9 @@
 		if (cmdDef) {
 			switch (cmd) {
 				case 0x01:
-					if (dataFrom && content.length >= 19) {
+					if (id0 === 0x1e && id1 === 0x90) {
+						result.decoded = dataFrom ? decodeExtended(content, errors) : '(拓展读数据请求 901E, 无参数)'
+					} else if (dataFrom && content.length >= 19) {
 						const f1 = bcdLeToInt(content.subarray(0, 4)), u1 = content[4]
 						const f2 = bcdLeToInt(content.subarray(5, 9)), u2 = content[9]
 						const status = content.subarray(17, 19)
@@ -354,8 +404,17 @@
 			buildDownFrame: W.sk188BuildDownFrame,
 			presets: [],
 		})
+		W.registerProtocol('sk-ultrasonic', {
+			name: 'SK-超声',
+			parseFrame: W.sk188ParseFrame,
+			formatFrame: W.sk188FormatFrame,
+			findFrame: W.sk188FindFrame,
+			byteMap: W.sk188ByteMap,
+			buildDownFrame: W.skUltrasonicBuildDownFrame,
+			presets: [],
+		})
 		const sel = document.getElementById('serial-protocol-select')
-		if (sel && W._activeProtocol === 'sk188' && sel.value !== 'sk188') sel.value = 'sk188'
+		if (sel && ['sk188', 'sk-ultrasonic'].includes(W._activeProtocol)) sel.value = W._activeProtocol
 		initDownUi()
 	}
 
@@ -437,7 +496,8 @@
 				if (cmd === 0x04) opt.valveOp = parseInt(paramSel.value, 16)
 				if (cmd === 0x15) opt.newAddr = paramVal.value
 				if (cmd === 0x16) opt.degreeM3 = parseFloat(paramVal.value)
-				const frame = W.sk188BuildDownFrame(opt)
+				const ultrasonic = document.getElementById('serial-protocol-select').value === 'sk-ultrasonic'
+				const frame = ultrasonic ? W.skUltrasonicBuildDownFrame(opt) : W.sk188BuildDownFrame(opt)
 				localStorage.setItem('sk188DownAddr', addrEl.value)
 				const nextSeq = ((opt.seq + 1) & 0xff)
 				seqEl.value = String(nextSeq)
@@ -467,7 +527,12 @@
 		function applyVisibility() {
 			const sel = document.getElementById('serial-protocol-select')
 			const v = sel ? sel.value : 'sek'
-			const isSk188 = v === 'sk188'
+			const isSk188 = v === 'sk188' || v === 'sk-ultrasonic'
+			const title = document.getElementById('sk188-down-title')
+			if (title) title.textContent = v === 'sk-ultrasonic' ? 'SK-超声下行下发' : '188协议下行下发'
+			const readOption = cmdSel.querySelector('option[value="0x01"]')
+			if (readOption) readOption.textContent = v === 'sk-ultrasonic' ? '0x01 拓展读流量 (901E)' : '0x01 读数据'
+			if (preview) preview.value = ''
 			const isSek = v === 'sek'
 			const card = document.getElementById('sk188-down-card')
 			if (card) card.style.display = isSk188 ? '' : 'none'
