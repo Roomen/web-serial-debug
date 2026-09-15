@@ -188,7 +188,12 @@
 			}
 			const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
 			let value = hexBytesSpaced(data)
-			if (tag === 1 || tag === 2 || tag === 9) {
+			if (tag === 0) {
+				// ASCII 版本串后 8 位: 协议末位 + 上行方式 + 日期(YYMMDD); 旧固件发的是前 8 位, 只显示原串
+				const ascii = String.fromCharCode.apply(null, Array.from(data, c => c >= 0x20 && c < 0x7f ? c : 0x2e))
+				const m = /^(.)([A-Za-z])(\d{6})$/.exec(ascii)
+				value = '"' + ascii + '"' + (m ? ' (协议末位=' + m[1] + ' 上行=' + m[2] + ' 日期=' + m[3] + ')' : '') + ' [' + value + ']'
+			} else if (tag === 1 || tag === 2 || tag === 9) {
 				const m3 = view.getUint32(0, true), liters = view.getUint16(4, true)
 				if (liters > 999) errors.push(name + '余量升超出0–999')
 				if (data[6] !== 0x29) errors.push(name + '单位标识不支持: ' + hexByte(data[6]))
