@@ -386,6 +386,8 @@
 							this.resyncCount++
 							// 错位期间的样点已经污染了档位切换滤波的滑动均值，不清会继续外溢
 							this.converter.resetFilter()
+							// 错位期读到的计数器来自坏相位，据此算丢点是噪声，跳过一个间隔
+							this.lastCounter = -1
 							raw = rawAt(data, off)
 							fixed = true
 							break
