@@ -72,6 +72,10 @@
 		ownsPort: function (port) { return !!(port && bluPort === port) },
 		isOpen: function () { return !!bluOpen },
 		getPort: function () { return bluPort },
+		// 排查样点流用：先 captureRaw() 再采样，停采后 dumpRaw() 导出 .bin + .json
+		captureRaw: function (bytes) { return rawCapArm(bytes) },
+		dumpRaw: function () { return rawCapDump() },
+		streamStats: function () { return rawCapStats() },
 	}
 	// SerialPort → SN（WebUSB / metadata / getInfo 扩展字段）；不再展示无意义的 VID:PID
 	const bluPortSn = typeof WeakMap !== 'undefined' ? new WeakMap() : null
@@ -1425,6 +1429,7 @@
 		}
 		parser.reset()
 		parser.resetStats()
+		rawCapLen = 0
 		resyncSeen = 0
 		resyncLogTs = 0
 		converter.resetFilter()
@@ -1881,6 +1886,61 @@
 		}
 	}
 
+	// ---- 原始字节抓包 ----
+	// 样点流出问题时，解码后的 CSV 分不清是「相位错位」还是「设备发了坏字」。
+	// 抓原始字节是唯一能定性的证据，所以留一条控制台入口，不进 UI。
+	const RAW_CAP_MAX = 16 * 1024 * 1024
+	let rawCapBuf = null
+	let rawCapLen = 0
+
+	function rawCapArm(bytes) {
+		const cap = Math.max(4096, Math.min(RAW_CAP_MAX, (bytes | 0) || 4 * 1024 * 1024))
+		rawCapBuf = new Uint8Array(cap)
+		rawCapLen = 0
+		bluLog('原始流抓包已就绪：下次采样记录前 ' + cap + ' 字节，采完执行 bluApi.dumpRaw()', 'success')
+		return cap
+	}
+
+	// 只抓已入流的字节，且严格在 parser.push 之前，保证导出的偏移与解析器看到的一致
+	function rawCapPush(u8) {
+		if (!rawCapBuf || rawCapLen >= rawCapBuf.length) return
+		const n = Math.min(u8.length, rawCapBuf.length - rawCapLen)
+		rawCapBuf.set(u8.subarray(0, n), rawCapLen)
+		rawCapLen += n
+	}
+
+	function rawCapStats() {
+		return {
+			appVersion: window.APP_VERSION || '',
+			capturedBytes: rawCapLen,
+			lockMask: '0x' + (parser.lockMask >>> 0).toString(16),
+			learnLeft: parser.learnLeft,
+			resyncCount: parser.resyncCount,
+			droppedBytes: parser.droppedBytes,
+			badSamples: parser.badSamples,
+			deviceStreamHz: Math.round(deviceStreamHz),
+			targetRateHz: targetRateHz,
+			modifiersOk: modifiersOk,
+			R: modifiers.R,
+			O: modifiers.O,
+		}
+	}
+
+	function rawCapDump() {
+		const st = rawCapStats()
+		if (!rawCapLen) {
+			bluLog('原始流抓包为空：先执行 bluApi.captureRaw() 再开始采样', 'warn')
+			return st
+		}
+		downloadBlob(new Blob([rawCapBuf.subarray(0, rawCapLen)],
+			{ type: 'application/octet-stream' }), 'blu100k_raw_', '.bin')
+		downloadText(JSON.stringify(st, null, 2), 'blu100k_raw_',
+			'application/json;charset=utf-8', '.json')
+		bluLog('原始流已导出 ' + rawCapLen + ' 字节 · resync ' + st.resyncCount +
+			' · 放行非法 ' + st.badSamples + ' · lockMask ' + st.lockMask)
+		return st
+	}
+
 	// 设备/USB 丢字节会让 4 字节样点流错位，parser 会自动找回相位；这里节流上报
 	let resyncSeen = 0
 	let resyncLogTs = 0
@@ -1941,6 +2001,7 @@
 			return
 		}
 
+		rawCapPush(u8)
 		const samples = parser.push(u8)
 		reportResync()
 		if (!samples.length) return
@@ -5060,9 +5121,11 @@
 	}
 
 	function downloadText(text, prefix, mime, ext) {
-		mime = mime || 'text/csv;charset=utf-8'
-		ext = ext || '.csv'
-		const blob = new Blob([text], { type: mime })
+		downloadBlob(new Blob([text], { type: mime || 'text/csv;charset=utf-8' }),
+			prefix, ext || '.csv')
+	}
+
+	function downloadBlob(blob, prefix, ext) {
 		const a = document.createElement('a')
 		a.href = URL.createObjectURL(blob)
 		a.download = prefix + new Date().toISOString().slice(0, 19).replace(/:/g, '-') + ext
