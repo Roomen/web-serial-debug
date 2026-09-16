@@ -42,6 +42,11 @@
 	const LEARN_MASK = 0xfffe0000 >>> 0
 	const LEARN_WORDS = 512
 	const LEARN_MIN_BITS = 6
+	// 实测本设备 bit18~23 是每样点 +1 的 6 bit 滚动计数器，bit17 恒 0、logic 恒 0xFF。
+	// 位置写死但运行时校验：学习期对不上就不用，不会把别的固件判死。
+	const POS_COUNTER = 18
+	const MASK_COUNTER = 0x3f
+	const COUNTER_MOD = MASK_COUNTER + 1
 	// 重同步确认样点数：连续 K 个合法字才认新相位，避免误锁
 	const RESYNC_CONFIRM = 8
 
@@ -258,6 +263,9 @@
 		this.learnAnd = 0xffffffff >>> 0
 		this.lockMask = 0
 		this.lockVal = 0
+		this.counterOk = true
+		this.lastCounter = -1
+		this.lostSamples = 0
 	}
 
 	SampleParser.prototype.reset = function () {
@@ -270,6 +278,11 @@
 	SampleParser.prototype._learn = function (raw) {
 		this.learnOr |= raw
 		this.learnAnd &= raw
+		const c = (raw >>> POS_COUNTER) & MASK_COUNTER
+		if (this.lastCounter >= 0 && c !== ((this.lastCounter + 1) & MASK_COUNTER)) {
+			this.counterOk = false
+		}
+		this.lastCounter = c
 		if (--this.learnLeft > 0) return
 		const mask = (~(this.learnOr ^ this.learnAnd) & LEARN_MASK) >>> 0
 		if (popcount32(mask) < LEARN_MIN_BITS) {
@@ -296,20 +309,40 @@
 		) >>> 0
 	}
 
-	/** 合法样点字：学到的恒定位对得上，且 range<=5 */
+	/**
+	 * 单字判据：学到的恒定位对得上，且 range<=5。
+	 * 这里刻意不查计数器——真丢样点时相位其实是好的，查了只会白试三种偏移。
+	 */
 	SampleParser.prototype._looksValid = function (raw) {
 		if (((raw & this.lockMask) >>> 0) !== this.lockVal) return false
 		return ((raw >>> POS_RANGE) & MASK_RANGE) <= MAX_RANGE
 	}
 
-	/** 从 off 起需要 need 个连续合法字；数据不够返回 false */
+	/** 从 off 起需要 need 个连续合法字；认新相位时才连计数器一起查，锁得更死 */
 	SampleParser.prototype._phaseLocks = function (data, off, n, need) {
+		let prev = -1
 		for (let k = 0; k < need; k++) {
 			const o = off + k * SAMPLE_BYTES
 			if (o + SAMPLE_BYTES > n) return false
-			if (!this._looksValid(rawAt(data, o))) return false
+			const raw = rawAt(data, o)
+			if (!this._looksValid(raw)) return false
+			if (this.counterOk) {
+				const c = (raw >>> POS_COUNTER) & MASK_COUNTER
+				if (prev >= 0 && c !== ((prev + 1) & MASK_COUNTER)) return false
+				prev = c
+			}
 		}
 		return true
+	}
+
+	/** 计数器跳变 = 真丢样点（区别于相位错位）。跨度 >64 会少算，只作量级参考 */
+	SampleParser.prototype._countLoss = function (raw) {
+		const c = (raw >>> POS_COUNTER) & MASK_COUNTER
+		if (this.lastCounter >= 0) {
+			const step = (c - this.lastCounter + COUNTER_MOD) % COUNTER_MOD
+			if (step !== 1) this.lostSamples += (step - 1 + COUNTER_MOD) % COUNTER_MOD
+		}
+		this.lastCounter = c
 	}
 
 	/**
@@ -337,7 +370,11 @@
 			let raw = rawAt(data, off)
 			if (this.learnLeft > 0) {
 				this._learn(raw)
-			} else if (this.lockMask && !this._looksValid(raw)) {
+				out.push(this.converter.handleRaw(raw))
+				off += SAMPLE_BYTES
+				continue
+			}
+			if (this.lockMask && !this._looksValid(raw)) {
 				// 设备/驱动丢字节会让 4 字节相位永久错位，且 range 被 clamp 成 5 后
 				// 看着像几十安的锯齿。这里试 1/2/3 字节偏移找回相位。
 				let fixed = false
@@ -362,6 +399,7 @@
 					this.badSamples++
 				}
 			}
+			if (this.counterOk) this._countLoss(raw)
 			out.push(this.converter.handleRaw(raw))
 			off += SAMPLE_BYTES
 		}

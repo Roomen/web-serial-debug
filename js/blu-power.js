@@ -1916,9 +1916,11 @@
 			capturedBytes: rawCapLen,
 			lockMask: '0x' + (parser.lockMask >>> 0).toString(16),
 			learnLeft: parser.learnLeft,
+			counterOk: parser.counterOk,
 			resyncCount: parser.resyncCount,
 			droppedBytes: parser.droppedBytes,
 			badSamples: parser.badSamples,
+			lostSamples: parser.lostSamples,
 			deviceStreamHz: Math.round(deviceStreamHz),
 			targetRateHz: targetRateHz,
 			modifiersOk: modifiersOk,
@@ -1952,6 +1954,8 @@
 			lockLogged = true
 			if (!parser.lockMask) {
 				bluLog('样点流恒定位不足，本次不做错位重同步（设备可能在用 bit17~31）', 'warn')
+			} else if (!parser.counterOk) {
+				bluLog('样点流无滚动计数器，无法统计真实丢点数', 'warn')
 			}
 		}
 		if (parser.resyncCount === resyncSeen) return
@@ -1960,7 +1964,7 @@
 		if (now - resyncLogTs < 2000) return
 		resyncLogTs = now
 		bluLog('样点流错位已重同步 ' + resyncSeen + ' 次（丢 ' + parser.droppedBytes +
-			' 字节）：USB 掉字节，波形可能有短暂毛刺', 'warn')
+			' 字节 · 丢 ' + parser.lostSamples + ' 点）：USB 掉字节，波形可能有短暂毛刺', 'warn')
 	}
 
 	function noteSampleFrame() {
