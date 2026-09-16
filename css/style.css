@@ -5658,6 +5658,30 @@ body.blu-wave-fullscreen-open {
   font-family: var(--font-mono);
 }
 
+.blu-span-group {
+  gap: 2px;
+}
+
+/* 窗口时长快捷键：当前窗口命中哪一档就点亮哪一档，等于一个只读的缩放刻度 */
+.blu-span-btn {
+  min-width: 40px;
+  padding: 0 5px;
+  font-size: 0.68rem;
+}
+
+.blu-span-btn.is-on {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border-color));
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-surface));
+  font-weight: 700;
+}
+
+/* 当前采样率下点数不够的档位：留着但置灰，免得用户以为按钮坏了 */
+.blu-span-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 .blu-y-scale-group {
   gap: 4px;
 }

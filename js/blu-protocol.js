@@ -58,13 +58,10 @@
 		return n
 	}
 
+	// 与 BLU.app 的 modifiers.r 一致（开源 PPK2 只有 5 档且末档是 0.043，不要拿来对）
 	const DEFAULT_R = {
 		'0': 1031.64, '1': 101.65, '2': 10.15,
-		'3': 0.94, '4': 0.113, '5': 0.013,
-	}
-
-	function num(v, dflt) {
-		return typeof v === 'number' && isFinite(v) ? v : dflt
+		'3': 0.94, '4': 0.099, '5': 0.009,
 	}
 
 	function packBytes(bytes) {
@@ -176,8 +173,6 @@
 	function Converter(modifiers) {
 		this.modifiers = modifiers || defaultModifiers()
 		this.adcMult = ADC_MULT
-		// 增益项里的 s*(vdd/1000) 需要真实源电压，单位 mV
-		this.vddMv = (this.modifiers && this.modifiers.savedVddMv) || 0
 		this.rollingAvg = null
 		this.rollingAvg4 = null
 		this.prevRange = null
@@ -190,13 +185,7 @@
 
 	Converter.prototype.setModifiers = function (mod) {
 		this.modifiers = mod || defaultModifiers()
-		if (this.modifiers.savedVddMv) this.vddMv = this.modifiers.savedVddMv
 		this.resetFilter()
-	}
-
-	Converter.prototype.setVdd = function (mv) {
-		const v = Number(mv)
-		if (isFinite(v) && v > 0) this.vddMv = v
 	}
 
 	Converter.prototype.resetFilter = function () {
@@ -208,22 +197,17 @@
 	}
 
 	/**
-	 * 对照 Nordic pc-nrfconnect-ppk 的 SerialDevice.getAdcResult：
-	 * 只做 (adc-O)*adcMult/R 是「未加增益」的中间量，还要再过一次二次增益与偏置修正。
-	 * 少这一步在本设备上是约 5% 的系统性偏低（range 2 上 6.6%），且随电流增大而变大。
+	 * 对照厂商上位机 BLU.app（Electron，source map 里的 src/device/serialDevice.ts）：
+	 * 电流只取 (adc - O) * adcMult / R，到此为止。
+	 * metadata 里的 GS/GI/S/I/UG 是 Nordic 开源版 pc-nrfconnect-ppk 才用的二次增益修正，
+	 * BLU.app 明确写成 `let adc = resultWithoutGain;`——不要照搬开源版，那会让读数偏高约 5%。
 	 */
 	Converter.prototype.getAdcResult = function (rangeIdx, adcValue) {
 		const r = String(rangeIdx)
-		const m = this.modifiers
-		const O = m.O[r] || 0
-		const R = m.R[r]
+		const O = this.modifiers.O[r] || 0
+		const R = this.modifiers.R[r]
 		if (!R || R === 0) return 0
-		const noGain = (adcValue - O) * (this.adcMult / R)
-		const gs = num(m.GS[r], 1)
-		const gi = num(m.GI[r], 1)
-		const ug = num(m.UG[r], 1)
-		let adc = ug * (noGain * (gs * noGain + gi) +
-			(num(m.S[r], 0) * (this.vddMv / 1000) + num(m.I[r], 0)))
+		let adc = (adcValue - O) * (this.adcMult / R)
 
 		const prevRolling = this.rollingAvg
 		const prevRolling4 = this.rollingAvg4

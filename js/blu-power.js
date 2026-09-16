@@ -1427,8 +1427,6 @@
 				bluLog('初始化波形磁盘存储失败：' + (e && e.message ? e.message : e), 'warn')
 			}
 		}
-		// 增益修正里的 s*(vdd/1000) 用真实源电压，不能停留在 metadata 里的出厂值
-		converter.setVdd(mv)
 		parser.reset()
 		parser.resetStats()
 		rawCapLen = 0
@@ -3717,6 +3715,7 @@
 		// 电流 / 功率：限速刷新，避免顶部数字闪得看不清
 		if (digitDue) {
 			lastDigitTs = now
+			syncSpanUi()
 			if (elI) elI.textContent = dispInit ? fmtCurrent(dispCurrentUA) : '--'
 			if (elP) elP.textContent = dispInit ? fmtPower(dispCurrentUA * setVoltageV()) : '--'
 			if (elV) {
@@ -5256,6 +5255,38 @@
 			fmtFreq(1 / samplePeriodSec) + (file.name ? ' · ' + file.name : ''))
 	}
 
+	/**
+	 * 把可视窗口设为指定时长（秒）。
+	 * 换算成 xZoom 后走 zoomX，Live/暂停的锚点行为与 +/- 按钮完全一致。
+	 */
+	function setViewSpanSec(sec) {
+		if (!(sec > 0)) return
+		const period = samplePeriodSec > 0 ? samplePeriodSec : (1 / Math.max(1, targetRateHz))
+		const pts = Math.max(MIN_VIEW_POINTS, Math.round(sec / period))
+		const target = clampXZoom(DEFAULT_VIEW_POINTS / pts)
+		const cur = view.xZoom
+		if (cur > 0 && Math.abs(target / cur - 1) > 1e-6) zoomX(target / cur)
+		syncSpanUi()
+	}
+
+	/** 高亮当前命中的档位；当前采样率下点数不足 MIN_VIEW_POINTS 的档位置灰 */
+	function syncSpanUi() {
+		const group = E('blu-span-group')
+		if (!group) return
+		const period = samplePeriodSec > 0 ? samplePeriodSec : (1 / Math.max(1, targetRateHz))
+		const winPts = currentViewPts()
+		const winSec = winPts > 1 ? (winPts - 1) * period : 0
+		const btns = group.querySelectorAll('.blu-span-btn')
+		for (let i = 0; i < btns.length; i++) {
+			const sec = parseFloat(btns[i].dataset.span)
+			const reachable = sec / period >= MIN_VIEW_POINTS && sec <= MAX_VIEW_DURATION_SEC
+			btns[i].disabled = !reachable
+			// 容差 12%：相邻档位差 10 倍，不会误判
+			btns[i].classList.toggle('is-on',
+				reachable && winSec > 0 && Math.abs(winSec / sec - 1) < 0.12)
+		}
+	}
+
 	function zoomX(factor) {
 		// Live：只改倍率继续贴最新端；暂停：以视口中心为锚
 		if (!scrollPaused || !plotLayout || plotLayout.pw < 1 || ringCount < 2) {
@@ -6028,6 +6059,15 @@
 			const el = E(id)
 			if (el) el.addEventListener('click', fn)
 		}
+		const spanGroup = E('blu-span-group')
+		if (spanGroup) {
+			spanGroup.addEventListener('click', function (ev) {
+				const btn = ev.target.closest('.blu-span-btn')
+				if (!btn || btn.disabled) return
+				setViewSpanSec(parseFloat(btn.dataset.span))
+			})
+		}
+		syncSpanUi()
 		bindClick('blu-zoom-x-in', function () { zoomX(1.6) })
 		bindClick('blu-zoom-x-out', function () { zoomX(1 / 1.6) })
 		bindClick('blu-zoom-x-reset', resetX)
