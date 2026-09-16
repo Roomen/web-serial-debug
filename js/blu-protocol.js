@@ -35,6 +35,12 @@
 	const POS_RANGE = 14
 	const MASK_LOGIC = 0xff
 	const POS_LOGIC = 24
+	// bit17~23 协议未定义，正常样点恒为 0；range 只到 5。两者合起来 10 bit 用于判定 4 字节相位
+	const MASK_RESERVED = 0x7f
+	const POS_RESERVED = 17
+	const MAX_RANGE = 5
+	// 重同步确认样点数：连续 K 个合法字才认新相位，避免误锁
+	const RESYNC_CONFIRM = 8
 
 	const DEFAULT_R = {
 		'0': 1031.64, '1': 101.65, '2': 10.15,
@@ -226,15 +232,56 @@
 		}
 	}
 
-	// ---- 流式 4 字节拆包 ----
+	// ---- 流式 4 字节拆包（带相位重同步）----
 	function SampleParser(converter) {
 		this.converter = converter || new Converter()
 		this.remainder = new Uint8Array(0)
+		// 统计：丢字节数 / 重同步次数 / 放行的非法字数，供 UI 诊断
+		this.resyncCount = 0
+		this.droppedBytes = 0
+		this.badSamples = 0
 	}
 
 	SampleParser.prototype.reset = function () {
 		this.remainder = new Uint8Array(0)
 		this.converter.resetFilter()
+	}
+
+	SampleParser.prototype.resetStats = function () {
+		this.resyncCount = 0
+		this.droppedBytes = 0
+		this.badSamples = 0
+	}
+
+	function rawAt(data, off) {
+		return (
+			data[off] |
+			(data[off + 1] << 8) |
+			(data[off + 2] << 16) |
+			(data[off + 3] << 24)
+		) >>> 0
+	}
+
+	/**
+	 * 合法样点字：保留位全 0、range<=5、logic 为 0。
+	 * logic 参与判定是因为只查保留位抓不到「偏移 1 字节」——那种相位下保留位恰好落在
+	 * 恒零的 bit16~23 上，波形会变成贴 0 的假平线。本设备不接数字通道，logic 恒 0；
+	 * 万一某设备真报非零 logic，也只是永远锁不上相位、退回原样放行，不会丢字节。
+	 */
+	function rawLooksValid(raw) {
+		if (((raw >>> POS_RESERVED) & MASK_RESERVED) !== 0) return false
+		if (((raw >>> POS_LOGIC) & MASK_LOGIC) !== 0) return false
+		return ((raw >>> POS_RANGE) & MASK_RANGE) <= MAX_RANGE
+	}
+
+	/** 从 off 起需要 need 个连续合法字；数据不够返回 false */
+	function phaseLocks(data, off, n, need) {
+		for (let k = 0; k < need; k++) {
+			const o = off + k * SAMPLE_BYTES
+			if (o + SAMPLE_BYTES > n) return false
+			if (!rawLooksValid(rawAt(data, o))) return false
+		}
+		return true
 	}
 
 	/**
@@ -254,14 +301,38 @@
 		const out = []
 		let off = 0
 		const n = data.length
+		// 重同步至少要能校验 RESYNC_CONFIRM 个字加上 3 字节相位偏移
+		const probeNeed = RESYNC_CONFIRM * SAMPLE_BYTES + SAMPLE_BYTES - 1
+		// 熔断：本批连续找不回相位就别再逐点试三种偏移（设备若真用 logic 位，100k/s 下白烧 CPU）
+		let probeFails = 0
 		while (off + SAMPLE_BYTES <= n) {
-			const raw =
-				data[off] |
-				(data[off + 1] << 8) |
-				(data[off + 2] << 16) |
-				(data[off + 3] << 24)
-			// >>> 0 保证无符号
-			out.push(this.converter.handleRaw(raw >>> 0))
+			let raw = rawAt(data, off)
+			if (!rawLooksValid(raw)) {
+				// 设备/驱动丢字节会让 4 字节相位永久错位，且 range 被 clamp 成 5 后
+				// 看着像几十安的锯齿。这里试 1/2/3 字节偏移找回相位。
+				let fixed = false
+				if (n - off >= probeNeed && probeFails < 64) {
+					for (let shift = 1; shift < SAMPLE_BYTES; shift++) {
+						if (phaseLocks(data, off + shift, n, RESYNC_CONFIRM)) {
+							off += shift
+							this.droppedBytes += shift
+							this.resyncCount++
+							// 错位期间的样点已经污染了档位切换滤波的滑动均值，不清会继续外溢
+							this.converter.resetFilter()
+							raw = rawAt(data, off)
+							fixed = true
+							break
+						}
+					}
+				}
+				// 没锁上就放行原样点：保持旧行为，绝不卡住数据流
+				if (fixed) probeFails = 0
+				else {
+					probeFails++
+					this.badSamples++
+				}
+			}
+			out.push(this.converter.handleRaw(raw))
 			off += SAMPLE_BYTES
 		}
 		this.remainder = off < n ? data.subarray(off) : new Uint8Array(0)
