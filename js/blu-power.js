@@ -1435,6 +1435,7 @@
 		resyncSeen = 0
 		resyncLogTs = 0
 		lockLogged = false
+		lossLogged = false
 		converter.resetFilter()
 		rateAdj = new PROTO.RateAdjuster(targetRateHz, baseHz)
 		// 预热：按目标输出率 × 秒数，并封顶，避免 100k×2s 丢 20 万点才出波形
@@ -1950,6 +1951,9 @@
 	let resyncSeen = 0
 	let resyncLogTs = 0
 	let lockLogged = false
+	let lossLogged = false
+	// 对照 Nordic DATALOSS_THRESHOLD：500 点 ≈ 5 ms
+	const DATALOSS_THRESHOLD = 500
 
 	function reportResync() {
 		if (!lockLogged && parser.learnLeft === 0) {
@@ -1959,6 +1963,12 @@
 			} else if (!parser.counterOk) {
 				bluLog('样点流无滚动计数器，无法统计真实丢点数', 'warn')
 			}
+		}
+		// 对照 Nordic：丢样点超过阈值就明确报出来，否则波形看着连续、其实是抽稀过的
+		if (parser.lostSamples >= DATALOSS_THRESHOLD && !lossLogged) {
+			lossLogged = true
+			bluLog('检测到样点丢失（至少 ' + parser.lostSamples + ' 点）：设备发得比浏览器收得快，' +
+				'波形被无声抽稀，统计与时间轴都会偏', 'error')
 		}
 		if (parser.resyncCount === resyncSeen) return
 		resyncSeen = parser.resyncCount
