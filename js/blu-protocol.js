@@ -49,6 +49,8 @@
 	const COUNTER_MOD = MASK_COUNTER + 1
 	// 重同步确认样点数：连续 K 个合法字才认新相位，避免误锁
 	const RESYNC_CONFIRM = 8
+	// 连续丢弃上限：超过就认为判据不可信，退回原样放行，避免把整段波形丢空
+	const DROP_LIMIT = 64
 
 	function popcount32(v) {
 		let n = 0
@@ -59,6 +61,10 @@
 	const DEFAULT_R = {
 		'0': 1031.64, '1': 101.65, '2': 10.15,
 		'3': 0.94, '4': 0.113, '5': 0.013,
+	}
+
+	function num(v, dflt) {
+		return typeof v === 'number' && isFinite(v) ? v : dflt
 	}
 
 	function packBytes(bytes) {
@@ -170,6 +176,8 @@
 	function Converter(modifiers) {
 		this.modifiers = modifiers || defaultModifiers()
 		this.adcMult = ADC_MULT
+		// 增益项里的 s*(vdd/1000) 需要真实源电压，单位 mV
+		this.vddMv = (this.modifiers && this.modifiers.savedVddMv) || 0
 		this.rollingAvg = null
 		this.rollingAvg4 = null
 		this.prevRange = null
@@ -182,7 +190,13 @@
 
 	Converter.prototype.setModifiers = function (mod) {
 		this.modifiers = mod || defaultModifiers()
+		if (this.modifiers.savedVddMv) this.vddMv = this.modifiers.savedVddMv
 		this.resetFilter()
+	}
+
+	Converter.prototype.setVdd = function (mv) {
+		const v = Number(mv)
+		if (isFinite(v) && v > 0) this.vddMv = v
 	}
 
 	Converter.prototype.resetFilter = function () {
@@ -193,12 +207,23 @@
 		this.afterSpike = 0
 	}
 
+	/**
+	 * 对照 Nordic pc-nrfconnect-ppk 的 SerialDevice.getAdcResult：
+	 * 只做 (adc-O)*adcMult/R 是「未加增益」的中间量，还要再过一次二次增益与偏置修正。
+	 * 少这一步在本设备上是约 5% 的系统性偏低（range 2 上 6.6%），且随电流增大而变大。
+	 */
 	Converter.prototype.getAdcResult = function (rangeIdx, adcValue) {
 		const r = String(rangeIdx)
-		const O = this.modifiers.O[r] || 0
-		const R = this.modifiers.R[r]
+		const m = this.modifiers
+		const O = m.O[r] || 0
+		const R = m.R[r]
 		if (!R || R === 0) return 0
-		let adc = (adcValue - O) * (this.adcMult / R)
+		const noGain = (adcValue - O) * (this.adcMult / R)
+		const gs = num(m.GS[r], 1)
+		const gi = num(m.GI[r], 1)
+		const ug = num(m.UG[r], 1)
+		let adc = ug * (noGain * (gs * noGain + gi) +
+			(num(m.S[r], 0) * (this.vddMv / 1000) + num(m.I[r], 0)))
 
 		const prevRolling = this.rollingAvg
 		const prevRolling4 = this.rollingAvg4
@@ -263,7 +288,9 @@
 		this.learnAnd = 0xffffffff >>> 0
 		this.lockMask = 0
 		this.lockVal = 0
-		this.counterOk = true
+		this.counterHits = 0
+		this.counterPairs = 0
+		this.counterOk = false
 		this.lastCounter = -1
 		this.lostSamples = 0
 	}
@@ -278,12 +305,17 @@
 	SampleParser.prototype._learn = function (raw) {
 		this.learnOr |= raw
 		this.learnAnd &= raw
+		// 计数器判定按「多数步进为 +1」，不能要求全中：真丢样点时本来就会跳，
+		// 而丢得越狠越需要这个计数器来报丢点数。
 		const c = (raw >>> POS_COUNTER) & MASK_COUNTER
-		if (this.lastCounter >= 0 && c !== ((this.lastCounter + 1) & MASK_COUNTER)) {
-			this.counterOk = false
+		if (this.lastCounter >= 0) {
+			this.counterPairs++
+			if (c === ((this.lastCounter + 1) & MASK_COUNTER)) this.counterHits++
 		}
 		this.lastCounter = c
 		if (--this.learnLeft > 0) return
+		this.counterOk = this.counterPairs > 0 &&
+			this.counterHits / this.counterPairs >= 0.5
 		const mask = (~(this.learnOr ^ this.learnAnd) & LEARN_MASK) >>> 0
 		if (popcount32(mask) < LEARN_MIN_BITS) {
 			// 恒定位太少，判据不可靠：不做重同步，保持原有行为
@@ -364,7 +396,7 @@
 		const n = data.length
 		// 重同步至少要能校验 RESYNC_CONFIRM 个字加上 3 字节相位偏移
 		const probeNeed = RESYNC_CONFIRM * SAMPLE_BYTES + SAMPLE_BYTES - 1
-		// 熔断：本批连续找不回相位就别再逐点试三种偏移（设备若真用 logic 位，100k/s 下白烧 CPU）
+		// 熔断：本批连续找不回相位就别再逐点试三种偏移，也不再丢点
 		let probeFails = 0
 		while (off + SAMPLE_BYTES <= n) {
 			let raw = rawAt(data, off)
@@ -378,7 +410,7 @@
 				// 设备/驱动丢字节会让 4 字节相位永久错位，且 range 被 clamp 成 5 后
 				// 看着像几十安的锯齿。这里试 1/2/3 字节偏移找回相位。
 				let fixed = false
-				if (n - off >= probeNeed && probeFails < 64) {
+				if (n - off >= probeNeed && probeFails < DROP_LIMIT) {
 					for (let shift = 1; shift < SAMPLE_BYTES; shift++) {
 						if (this._phaseLocks(data, off + shift, n, RESYNC_CONFIRM)) {
 							off += shift
@@ -394,11 +426,18 @@
 						}
 					}
 				}
-				// 没锁上就放行原样点：保持旧行为，绝不卡住数据流
-				if (fixed) probeFails = 0
-				else {
+				if (fixed) {
+					probeFails = 0
+				} else {
 					probeFails++
 					this.badSamples++
+					// 锁不上就整点丢掉，不要把坏字当电流画出去——用户看到的几十安
+					// 尖峰就是这么来的。丢一个点远好过在波形上凭空造一个 49 A。
+					// 但连续丢太多说明判据本身可能就是错的，那就退回原样放行。
+					if (probeFails < DROP_LIMIT) {
+						off += SAMPLE_BYTES
+						continue
+					}
 				}
 			}
 			if (this.counterOk) this._countLoss(raw)

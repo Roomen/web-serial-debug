@@ -1427,6 +1427,8 @@
 				bluLog('初始化波形磁盘存储失败：' + (e && e.message ? e.message : e), 'warn')
 			}
 		}
+		// 增益修正里的 s*(vdd/1000) 用真实源电压，不能停留在 metadata 里的出厂值
+		converter.setVdd(mv)
 		parser.reset()
 		parser.resetStats()
 		rawCapLen = 0
@@ -1964,7 +1966,7 @@
 		if (now - resyncLogTs < 2000) return
 		resyncLogTs = now
 		bluLog('样点流错位已重同步 ' + resyncSeen + ' 次（丢 ' + parser.droppedBytes +
-			' 字节 · 丢 ' + parser.lostSamples + ' 点）：USB 掉字节，波形可能有短暂毛刺', 'warn')
+			' 字节 · 至少丢 ' + parser.lostSamples + ' 点）：USB 掉字节', 'warn')
 	}
 
 	function noteSampleFrame() {
