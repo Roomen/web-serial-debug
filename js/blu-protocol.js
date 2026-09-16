@@ -35,12 +35,21 @@
 	const POS_RANGE = 14
 	const MASK_LOGIC = 0xff
 	const POS_LOGIC = 24
-	// bit17~23 协议未定义，正常样点恒为 0；range 只到 5。两者合起来 10 bit 用于判定 4 字节相位
-	const MASK_RESERVED = 0x7f
-	const POS_RESERVED = 17
 	const MAX_RANGE = 5
+	// 相位判定：bit17~31（保留位 + logic）里在流开头保持不变的那些位，加上 range<=5。
+	// 不写死「保留位恒 0」——厂商 Python API 只定义了 ADC/RANGE/LOGIC，没说 bit17~23
+	// 一定是 0（PPK2 同位置放的是滚动计数器），写死会让重同步在真机上永远不触发。
+	const LEARN_MASK = 0xfffe0000 >>> 0
+	const LEARN_WORDS = 512
+	const LEARN_MIN_BITS = 6
 	// 重同步确认样点数：连续 K 个合法字才认新相位，避免误锁
 	const RESYNC_CONFIRM = 8
+
+	function popcount32(v) {
+		let n = 0
+		while (v) { v &= v - 1; n++ }
+		return n
+	}
 
 	const DEFAULT_R = {
 		'0': 1031.64, '1': 101.65, '2': 10.15,
@@ -240,11 +249,36 @@
 		this.resyncCount = 0
 		this.droppedBytes = 0
 		this.badSamples = 0
+		this._learnReset()
+	}
+
+	SampleParser.prototype._learnReset = function () {
+		this.learnLeft = LEARN_WORDS
+		this.learnOr = 0
+		this.learnAnd = 0xffffffff >>> 0
+		this.lockMask = 0
+		this.lockVal = 0
 	}
 
 	SampleParser.prototype.reset = function () {
 		this.remainder = new Uint8Array(0)
 		this.converter.resetFilter()
+		this._learnReset()
+	}
+
+	/** 流开头按对齐假设统计恒定位，学完得出相位判定掩码 */
+	SampleParser.prototype._learn = function (raw) {
+		this.learnOr |= raw
+		this.learnAnd &= raw
+		if (--this.learnLeft > 0) return
+		const mask = (~(this.learnOr ^ this.learnAnd) & LEARN_MASK) >>> 0
+		if (popcount32(mask) < LEARN_MIN_BITS) {
+			// 恒定位太少，判据不可靠：不做重同步，保持原有行为
+			this.lockMask = 0
+			return
+		}
+		this.lockMask = mask
+		this.lockVal = (this.learnAnd & mask) >>> 0
 	}
 
 	SampleParser.prototype.resetStats = function () {
@@ -262,24 +296,18 @@
 		) >>> 0
 	}
 
-	/**
-	 * 合法样点字：保留位全 0、range<=5、logic 为 0。
-	 * logic 参与判定是因为只查保留位抓不到「偏移 1 字节」——那种相位下保留位恰好落在
-	 * 恒零的 bit16~23 上，波形会变成贴 0 的假平线。本设备不接数字通道，logic 恒 0；
-	 * 万一某设备真报非零 logic，也只是永远锁不上相位、退回原样放行，不会丢字节。
-	 */
-	function rawLooksValid(raw) {
-		if (((raw >>> POS_RESERVED) & MASK_RESERVED) !== 0) return false
-		if (((raw >>> POS_LOGIC) & MASK_LOGIC) !== 0) return false
+	/** 合法样点字：学到的恒定位对得上，且 range<=5 */
+	SampleParser.prototype._looksValid = function (raw) {
+		if (((raw & this.lockMask) >>> 0) !== this.lockVal) return false
 		return ((raw >>> POS_RANGE) & MASK_RANGE) <= MAX_RANGE
 	}
 
 	/** 从 off 起需要 need 个连续合法字；数据不够返回 false */
-	function phaseLocks(data, off, n, need) {
+	SampleParser.prototype._phaseLocks = function (data, off, n, need) {
 		for (let k = 0; k < need; k++) {
 			const o = off + k * SAMPLE_BYTES
 			if (o + SAMPLE_BYTES > n) return false
-			if (!rawLooksValid(rawAt(data, o))) return false
+			if (!this._looksValid(rawAt(data, o))) return false
 		}
 		return true
 	}
@@ -307,13 +335,15 @@
 		let probeFails = 0
 		while (off + SAMPLE_BYTES <= n) {
 			let raw = rawAt(data, off)
-			if (!rawLooksValid(raw)) {
+			if (this.learnLeft > 0) {
+				this._learn(raw)
+			} else if (this.lockMask && !this._looksValid(raw)) {
 				// 设备/驱动丢字节会让 4 字节相位永久错位，且 range 被 clamp 成 5 后
 				// 看着像几十安的锯齿。这里试 1/2/3 字节偏移找回相位。
 				let fixed = false
 				if (n - off >= probeNeed && probeFails < 64) {
 					for (let shift = 1; shift < SAMPLE_BYTES; shift++) {
-						if (phaseLocks(data, off + shift, n, RESYNC_CONFIRM)) {
+						if (this._phaseLocks(data, off + shift, n, RESYNC_CONFIRM)) {
 							off += shift
 							this.droppedBytes += shift
 							this.resyncCount++
