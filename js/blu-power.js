@@ -72,6 +72,10 @@
 		ownsPort: function (port) { return !!(port && bluPort === port) },
 		isOpen: function () { return !!bluOpen },
 		getPort: function () { return bluPort },
+		// 排查样点流用：先 captureRaw() 再采样，停采后 dumpRaw() 导出 .bin + .json
+		captureRaw: function (bytes) { return rawCapArm(bytes) },
+		dumpRaw: function () { return rawCapDump() },
+		streamStats: function () { return rawCapStats() },
 	}
 	// SerialPort → SN（WebUSB / metadata / getInfo 扩展字段）；不再展示无意义的 VID:PID
 	const bluPortSn = typeof WeakMap !== 'undefined' ? new WeakMap() : null
@@ -1241,6 +1245,33 @@
 		btn.title = bluPowered ? 'DUT 已上电 · 点击下电' : 'DUT 已下电 · 点击上电'
 	}
 
+	// 打开设备时判定 DUT 是否在供电。
+	// 协议里没有任何「读状态」的命令：metadata 47 个字段在上电/下电下实测完全一致，
+	// 厂商上位机 BLU.app 干脆是连上就把 DUT 下电。只能短采一段看电流。
+	// 实测本设备：下电中位数 0.056 µA（p99.9 0.099），上电 3634 µA，差 5 个数量级。
+	const DUT_PROBE_MS = 250
+	const DUT_ON_THRESHOLD_UA = 0.5
+
+	async function probeDutPower() {
+		if (!bluOpen || bluSampling || metaCollecting) return null
+		dutProbe = { parser: new PROTO.SampleParser(new PROTO.Converter(modifiers)), vals: [] }
+		try {
+			await bluWrite(PROTO.cmdAverageStart(), 'AVERAGE_START · DUT 供电探测')
+			await new Promise(function (r) { setTimeout(r, DUT_PROBE_MS) })
+		} catch (e) {
+			dutProbe = null
+			return null
+		}
+		try { await bluWrite(PROTO.cmdAverageStop(), 'AVERAGE_STOP · DUT 供电探测') } catch (e) {}
+		const vals = dutProbe ? dutProbe.vals : []
+		dutProbe = null
+		if (vals.length < 200) return null
+		// 用中位数：开采样头几十个点有上电涌流/残留，均值会被拉偏
+		vals.sort(function (a, b) { return a - b })
+		const med = vals[vals.length >> 1]
+		return { on: med >= DUT_ON_THRESHOLD_UA, medianUA: med, n: vals.length }
+	}
+
 	async function toggleDutPower() {
 		if (!bluOpen) {
 			bluLog('请先打开设备再上下电', 'warn')
@@ -1340,6 +1371,8 @@
 
 	let metaCollecting = false
 	let metaCollectBuf = ''
+	// 非空时读循环把样点喂给它而不是主波形（打开设备时的 DUT 供电探测）
+	let dutProbe = null
 
 	function resetLongStats() {
 		longStats.n = 0
@@ -1425,8 +1458,11 @@
 		}
 		parser.reset()
 		parser.resetStats()
+		rawCapLen = 0
 		resyncSeen = 0
 		resyncLogTs = 0
+		lockLogged = false
+		lossLogged = false
 		converter.resetFilter()
 		rateAdj = new PROTO.RateAdjuster(targetRateHz, baseHz)
 		// 预热：按目标输出率 × 秒数，并封顶，避免 100k×2s 丢 20 万点才出波形
@@ -1799,6 +1835,14 @@
 			await new Promise(function (r) { setTimeout(r, 80) })
 			// 对照 example_auto：get_modifiers →（用户设压/上电）→ start
 			await fetchAndApplyModifiers()
+			// 打开设备不改变设备侧供电；实测一下它现在到底带没带电，按钮照实显示
+			const probe = await probeDutPower()
+			if (probe) {
+				markPowered(probe.on)
+				bluLog('DUT 供电实测：' + (probe.on ? '上电' : '下电') +
+					'（探测电流中位数 ' + fmtCurrent(probe.medianUA) + '）',
+					probe.on ? 'success' : '')
+			}
 			scheduleUIUpdate()
 		} catch (e) {
 			bluOpen = false
@@ -1881,18 +1925,93 @@
 		}
 	}
 
+	// ---- 原始字节抓包 ----
+	// 样点流出问题时，解码后的 CSV 分不清是「相位错位」还是「设备发了坏字」。
+	// 抓原始字节是唯一能定性的证据，所以留一条控制台入口，不进 UI。
+	const RAW_CAP_MAX = 16 * 1024 * 1024
+	let rawCapBuf = null
+	let rawCapLen = 0
+
+	function rawCapArm(bytes) {
+		const cap = Math.max(4096, Math.min(RAW_CAP_MAX, (bytes | 0) || 4 * 1024 * 1024))
+		rawCapBuf = new Uint8Array(cap)
+		rawCapLen = 0
+		bluLog('原始流抓包已就绪：下次采样记录前 ' + cap + ' 字节，采完执行 bluApi.dumpRaw()', 'success')
+		return cap
+	}
+
+	// 只抓已入流的字节，且严格在 parser.push 之前，保证导出的偏移与解析器看到的一致
+	function rawCapPush(u8) {
+		if (!rawCapBuf || rawCapLen >= rawCapBuf.length) return
+		const n = Math.min(u8.length, rawCapBuf.length - rawCapLen)
+		rawCapBuf.set(u8.subarray(0, n), rawCapLen)
+		rawCapLen += n
+	}
+
+	function rawCapStats() {
+		return {
+			appVersion: window.APP_VERSION || '',
+			capturedBytes: rawCapLen,
+			lockMask: '0x' + (parser.lockMask >>> 0).toString(16),
+			learnLeft: parser.learnLeft,
+			counterOk: parser.counterOk,
+			resyncCount: parser.resyncCount,
+			droppedBytes: parser.droppedBytes,
+			badSamples: parser.badSamples,
+			lostSamples: parser.lostSamples,
+			deviceStreamHz: Math.round(deviceStreamHz),
+			targetRateHz: targetRateHz,
+			modifiersOk: modifiersOk,
+			R: modifiers.R,
+			O: modifiers.O,
+		}
+	}
+
+	function rawCapDump() {
+		const st = rawCapStats()
+		if (!rawCapLen) {
+			bluLog('原始流抓包为空：先执行 bluApi.captureRaw() 再开始采样', 'warn')
+			return st
+		}
+		downloadBlob(new Blob([rawCapBuf.subarray(0, rawCapLen)],
+			{ type: 'application/octet-stream' }), 'blu100k_raw_', '.bin')
+		downloadText(JSON.stringify(st, null, 2), 'blu100k_raw_',
+			'application/json;charset=utf-8', '.json')
+		bluLog('原始流已导出 ' + rawCapLen + ' 字节 · resync ' + st.resyncCount +
+			' · 放行非法 ' + st.badSamples + ' · lockMask ' + st.lockMask)
+		return st
+	}
+
 	// 设备/USB 丢字节会让 4 字节样点流错位，parser 会自动找回相位；这里节流上报
 	let resyncSeen = 0
 	let resyncLogTs = 0
+	let lockLogged = false
+	let lossLogged = false
+	// 对照 Nordic DATALOSS_THRESHOLD：500 点 ≈ 5 ms
+	const DATALOSS_THRESHOLD = 500
 
 	function reportResync() {
+		if (!lockLogged && parser.learnLeft === 0) {
+			lockLogged = true
+			if (!parser.lockMask) {
+				bluLog('样点流恒定位不足，本次不做错位重同步（设备可能在用 bit17~31）', 'warn')
+			} else if (!parser.counterOk) {
+				bluLog('样点流无滚动计数器，无法统计真实丢点数', 'warn')
+			}
+		}
+		// 对照 Nordic：丢样点超过阈值就明确报出来，否则波形看着连续、其实是抽稀过的
+		if (parser.lostSamples >= DATALOSS_THRESHOLD && !lossLogged) {
+			lossLogged = true
+			bluLog('检测到样点丢失（至少 ' + parser.lostSamples + ' 点）：设备发得比浏览器收得快，' +
+				'波形被无声抽稀，统计与时间轴都会偏', 'error')
+		}
 		if (parser.resyncCount === resyncSeen) return
 		resyncSeen = parser.resyncCount
 		const now = performance.now()
 		if (now - resyncLogTs < 2000) return
 		resyncLogTs = now
 		bluLog('样点流错位已重同步 ' + resyncSeen + ' 次（丢 ' + parser.droppedBytes +
-			' 字节）：USB 掉字节，波形可能有短暂毛刺', 'warn')
+			' 字节 · 至少丢 ' + parser.lostSamples + ' 点）：USB 掉字节', 'warn')
 	}
 
 	function noteSampleFrame() {
@@ -1935,12 +2054,23 @@
 			return
 		}
 
+		// DUT 供电探测：短采一段，样点只进探测缓冲，不碰主波形
+		if (dutProbe) {
+			const probed = dutProbe.parser.push(u8)
+			for (let i = 0; i < probed.length; i++) {
+				const v = probed[i].iUA
+				if (isFinite(v)) dutProbe.vals.push(v)
+			}
+			return
+		}
+
 		// 非采样或排空窗口：读循环仍消费串口字节，但不解析/入库/刷新瞬时值
 		// 对照 API stop_measuring 后 get_data 丢弃、start 前 while get_data 抽空
 		if (!bluSampling || dropSampleStream) {
 			return
 		}
 
+		rawCapPush(u8)
 		const samples = parser.push(u8)
 		reportResync()
 		if (!samples.length) return
@@ -3632,6 +3762,7 @@
 		// 电流 / 功率：限速刷新，避免顶部数字闪得看不清
 		if (digitDue) {
 			lastDigitTs = now
+			syncSpanUi()
 			if (elI) elI.textContent = dispInit ? fmtCurrent(dispCurrentUA) : '--'
 			if (elP) elP.textContent = dispInit ? fmtPower(dispCurrentUA * setVoltageV()) : '--'
 			if (elV) {
@@ -5060,9 +5191,11 @@
 	}
 
 	function downloadText(text, prefix, mime, ext) {
-		mime = mime || 'text/csv;charset=utf-8'
-		ext = ext || '.csv'
-		const blob = new Blob([text], { type: mime })
+		downloadBlob(new Blob([text], { type: mime || 'text/csv;charset=utf-8' }),
+			prefix, ext || '.csv')
+	}
+
+	function downloadBlob(blob, prefix, ext) {
 		const a = document.createElement('a')
 		a.href = URL.createObjectURL(blob)
 		a.download = prefix + new Date().toISOString().slice(0, 19).replace(/:/g, '-') + ext
@@ -5167,6 +5300,38 @@
 		scheduleUIUpdate()
 		bluLog('已导入 ' + ringCount + ' 点 · Δt≈' + (samplePeriodSec * 1e6).toFixed(2) + ' µs · ' +
 			fmtFreq(1 / samplePeriodSec) + (file.name ? ' · ' + file.name : ''))
+	}
+
+	/**
+	 * 把可视窗口设为指定时长（秒）。
+	 * 换算成 xZoom 后走 zoomX，Live/暂停的锚点行为与 +/- 按钮完全一致。
+	 */
+	function setViewSpanSec(sec) {
+		if (!(sec > 0)) return
+		const period = samplePeriodSec > 0 ? samplePeriodSec : (1 / Math.max(1, targetRateHz))
+		const pts = Math.max(MIN_VIEW_POINTS, Math.round(sec / period))
+		const target = clampXZoom(DEFAULT_VIEW_POINTS / pts)
+		const cur = view.xZoom
+		if (cur > 0 && Math.abs(target / cur - 1) > 1e-6) zoomX(target / cur)
+		syncSpanUi()
+	}
+
+	/** 高亮当前命中的档位；当前采样率下点数不足 MIN_VIEW_POINTS 的档位置灰 */
+	function syncSpanUi() {
+		const group = E('blu-span-group')
+		if (!group) return
+		const period = samplePeriodSec > 0 ? samplePeriodSec : (1 / Math.max(1, targetRateHz))
+		const winPts = currentViewPts()
+		const winSec = winPts > 1 ? (winPts - 1) * period : 0
+		const btns = group.querySelectorAll('.blu-span-btn')
+		for (let i = 0; i < btns.length; i++) {
+			const sec = parseFloat(btns[i].dataset.span)
+			const reachable = sec / period >= MIN_VIEW_POINTS && sec <= MAX_VIEW_DURATION_SEC
+			btns[i].disabled = !reachable
+			// 容差 12%：相邻档位差 10 倍，不会误判
+			btns[i].classList.toggle('is-on',
+				reachable && winSec > 0 && Math.abs(winSec / sec - 1) < 0.12)
+		}
 	}
 
 	function zoomX(factor) {
@@ -5941,12 +6106,21 @@
 			const el = E(id)
 			if (el) el.addEventListener('click', fn)
 		}
-		bindClick('blu-zoom-x-in', function () { zoomX(1.6) })
-		bindClick('blu-zoom-x-out', function () { zoomX(1 / 1.6) })
-		bindClick('blu-zoom-x-reset', resetX)
-		bindClick('blu-zoom-y-in', function () { zoomY(1.6) })
-		bindClick('blu-zoom-y-out', function () { zoomY(1 / 1.6) })
-		bindClick('blu-zoom-y-reset', resetY)
+		const spanGroup = E('blu-span-group')
+		if (spanGroup) {
+			spanGroup.addEventListener('click', function (ev) {
+				const btn = ev.target.closest('.blu-span-btn')
+				if (!btn || btn.disabled) return
+				setViewSpanSec(parseFloat(btn.dataset.span))
+			})
+		}
+		syncSpanUi()
+		// X/Y 的 +/- 按钮已去掉（滚轮缩放：画布内缩 X，Y 轴区域内缩 Y），
+		// 但滚轮缩完需要一条回去的路，所以保留一个两轴统一的复位。
+		bindClick('blu-view-reset', function () {
+			resetY()
+			resetX()
+		})
 		bindClick('blu-cursor-clear', clearSelection)
 		bindClick('blu-cursor-all', selectAllData)
 		bindClick('blu-cursor-zoom', zoomToSelection)

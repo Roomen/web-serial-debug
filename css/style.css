@@ -5240,12 +5240,6 @@ hr {
   box-shadow: 0 1px 0 var(--border-color);
 }
 
-.blu-cursor-hint {
-  font-size: 0.68rem;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
 .blu-pwr-note {
   font-size: 0.62rem;
   color: var(--text-muted);
@@ -5630,7 +5624,9 @@ body.blu-wave-fullscreen-open {
 .blu-waveform-controls {
   display: flex;
   align-items: center;
-  gap: 10px;
+  /* 有分隔线兜底，组间不需要大留白；row-gap 稍大，换行后两行不粘在一起 */
+  column-gap: 6px;
+  row-gap: 5px;
   padding: 3px 8px;
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
@@ -5640,22 +5636,75 @@ body.blu-wave-fullscreen-open {
   flex-wrap: wrap;
 }
 
-.blu-zoom-group {
+/* 工具条按「视图 / Y 轴 / 触发 / 游标」四组排，组间用竖线分隔，
+   组内 gap 比组间小，靠间距和分隔线让人一眼看出边界，而不是挤成一长条。 */
+.blu-ctl-group {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
 }
 
-.blu-zoom-label {
+.blu-ctl-label {
   font-size: 0.68rem;
   font-weight: 700;
   color: var(--text-muted);
-  margin-right: 2px;
+  margin-right: 3px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.blu-ctl-sep {
+  width: 1px;
+  align-self: center;
+  height: 22px;
+  background: color-mix(in srgb, var(--text-muted) 38%, transparent);
+}
+
+/* 组内再分一层：游标操作 vs 选区操作 */
+.blu-ctl-subsep {
+  width: 1px;
+  height: 14px;
+  margin: 0 3px;
+  background: color-mix(in srgb, var(--border-color) 60%, transparent);
+}
+
+.blu-ctl-info {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  cursor: help;
+  padding: 0 2px;
+  font-size: 0.9rem;
+}
+
+.blu-ctl-info:hover,
+.blu-ctl-info:focus-visible {
+  color: var(--accent);
+}
+
+.blu-span-group {
+  gap: 2px;
+}
+
+/* 窗口时长快捷键：当前窗口命中哪一档就点亮哪一档，等于一个只读的缩放刻度 */
+.blu-span-btn {
+  min-width: 38px;
+  padding: 0 6px;
+  font-size: 0.68rem;
   font-family: var(--font-mono);
 }
 
-.blu-zoom-btn {
-  font-family: var(--font-mono);
+.blu-span-btn.is-on {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border-color));
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-surface));
+  font-weight: 700;
+}
+
+/* 当前采样率下点数不够的档位：留着但置灰，免得用户以为按钮坏了 */
+.blu-span-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .blu-y-scale-group {
@@ -5708,13 +5757,13 @@ body.blu-wave-fullscreen-open {
   gap: 4px;
 }
 
-.blu-scope-trig-group.is-active .blu-zoom-label {
+.blu-scope-trig-group.is-active .blu-ctl-label {
   color: #ec4899;
 }
 
 .blu-scope-trig-select {
-  min-width: 64px;
-  max-width: 80px;
+  min-width: 58px;
+  max-width: 72px;
   height: 28px;
   padding: 0 4px;
   font-size: 0.72rem;
@@ -5731,7 +5780,7 @@ body.blu-wave-fullscreen-open {
 }
 
 .blu-scope-trig-level {
-  width: 88px;
+  width: 76px;
   height: 28px;
   padding: 0 6px;
   font-size: 0.72rem;
@@ -5749,16 +5798,18 @@ body.blu-wave-fullscreen-open {
 }
 
 .blu-cursor-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
   flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* 信息图标和它前面的按钮留口气，别粘成一坨 */
+.blu-ctl-info {
+  margin-left: 2px;
 }
 
 .blu-cursor-mode-select {
-  min-width: 72px;
-  max-width: 96px;
+  min-width: 64px;
+  max-width: 84px;
   height: 28px;
   padding: 0 4px;
   font-size: 0.72rem;

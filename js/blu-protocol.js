@@ -35,16 +35,33 @@
 	const POS_RANGE = 14
 	const MASK_LOGIC = 0xff
 	const POS_LOGIC = 24
-	// bit17~23 协议未定义，正常样点恒为 0；range 只到 5。两者合起来 10 bit 用于判定 4 字节相位
-	const MASK_RESERVED = 0x7f
-	const POS_RESERVED = 17
 	const MAX_RANGE = 5
+	// 相位判定：bit17~31（保留位 + logic）里在流开头保持不变的那些位，加上 range<=5。
+	// 不写死「保留位恒 0」——厂商 Python API 只定义了 ADC/RANGE/LOGIC，没说 bit17~23
+	// 一定是 0（PPK2 同位置放的是滚动计数器），写死会让重同步在真机上永远不触发。
+	const LEARN_MASK = 0xfffe0000 >>> 0
+	const LEARN_WORDS = 512
+	const LEARN_MIN_BITS = 6
+	// 实测本设备 bit18~23 是每样点 +1 的 6 bit 滚动计数器，bit17 恒 0、logic 恒 0xFF。
+	// 位置写死但运行时校验：学习期对不上就不用，不会把别的固件判死。
+	const POS_COUNTER = 18
+	const MASK_COUNTER = 0x3f
+	const COUNTER_MOD = MASK_COUNTER + 1
 	// 重同步确认样点数：连续 K 个合法字才认新相位，避免误锁
 	const RESYNC_CONFIRM = 8
+	// 连续丢弃上限：超过就认为判据不可信，退回原样放行，避免把整段波形丢空
+	const DROP_LIMIT = 64
 
+	function popcount32(v) {
+		let n = 0
+		while (v) { v &= v - 1; n++ }
+		return n
+	}
+
+	// 与 BLU.app 的 modifiers.r 一致（开源 PPK2 只有 5 档且末档是 0.043，不要拿来对）
 	const DEFAULT_R = {
 		'0': 1031.64, '1': 101.65, '2': 10.15,
-		'3': 0.94, '4': 0.113, '5': 0.013,
+		'3': 0.94, '4': 0.099, '5': 0.009,
 	}
 
 	function packBytes(bytes) {
@@ -179,6 +196,12 @@
 		this.afterSpike = 0
 	}
 
+	/**
+	 * 对照厂商上位机 BLU.app（Electron，source map 里的 src/device/serialDevice.ts）：
+	 * 电流只取 (adc - O) * adcMult / R，到此为止。
+	 * metadata 里的 GS/GI/S/I/UG 是 Nordic 开源版 pc-nrfconnect-ppk 才用的二次增益修正，
+	 * BLU.app 明确写成 `let adc = resultWithoutGain;`——不要照搬开源版，那会让读数偏高约 5%。
+	 */
 	Converter.prototype.getAdcResult = function (rangeIdx, adcValue) {
 		const r = String(rangeIdx)
 		const O = this.modifiers.O[r] || 0
@@ -240,11 +263,51 @@
 		this.resyncCount = 0
 		this.droppedBytes = 0
 		this.badSamples = 0
+		this._learnReset()
+	}
+
+	SampleParser.prototype._learnReset = function () {
+		this.learnLeft = LEARN_WORDS
+		this.learnOr = 0
+		this.learnAnd = 0xffffffff >>> 0
+		this.lockMask = 0
+		this.lockVal = 0
+		this.counterHits = 0
+		this.counterPairs = 0
+		this.counterOk = false
+		this.lastCounter = -1
+		this.lostSamples = 0
 	}
 
 	SampleParser.prototype.reset = function () {
 		this.remainder = new Uint8Array(0)
 		this.converter.resetFilter()
+		this._learnReset()
+	}
+
+	/** 流开头按对齐假设统计恒定位，学完得出相位判定掩码 */
+	SampleParser.prototype._learn = function (raw) {
+		this.learnOr |= raw
+		this.learnAnd &= raw
+		// 计数器判定按「多数步进为 +1」，不能要求全中：真丢样点时本来就会跳，
+		// 而丢得越狠越需要这个计数器来报丢点数。
+		const c = (raw >>> POS_COUNTER) & MASK_COUNTER
+		if (this.lastCounter >= 0) {
+			this.counterPairs++
+			if (c === ((this.lastCounter + 1) & MASK_COUNTER)) this.counterHits++
+		}
+		this.lastCounter = c
+		if (--this.learnLeft > 0) return
+		this.counterOk = this.counterPairs > 0 &&
+			this.counterHits / this.counterPairs >= 0.5
+		const mask = (~(this.learnOr ^ this.learnAnd) & LEARN_MASK) >>> 0
+		if (popcount32(mask) < LEARN_MIN_BITS) {
+			// 恒定位太少，判据不可靠：不做重同步，保持原有行为
+			this.lockMask = 0
+			return
+		}
+		this.lockMask = mask
+		this.lockVal = (this.learnAnd & mask) >>> 0
 	}
 
 	SampleParser.prototype.resetStats = function () {
@@ -263,25 +326,39 @@
 	}
 
 	/**
-	 * 合法样点字：保留位全 0、range<=5、logic 为 0。
-	 * logic 参与判定是因为只查保留位抓不到「偏移 1 字节」——那种相位下保留位恰好落在
-	 * 恒零的 bit16~23 上，波形会变成贴 0 的假平线。本设备不接数字通道，logic 恒 0；
-	 * 万一某设备真报非零 logic，也只是永远锁不上相位、退回原样放行，不会丢字节。
+	 * 单字判据：学到的恒定位对得上，且 range<=5。
+	 * 这里刻意不查计数器——真丢样点时相位其实是好的，查了只会白试三种偏移。
 	 */
-	function rawLooksValid(raw) {
-		if (((raw >>> POS_RESERVED) & MASK_RESERVED) !== 0) return false
-		if (((raw >>> POS_LOGIC) & MASK_LOGIC) !== 0) return false
+	SampleParser.prototype._looksValid = function (raw) {
+		if (((raw & this.lockMask) >>> 0) !== this.lockVal) return false
 		return ((raw >>> POS_RANGE) & MASK_RANGE) <= MAX_RANGE
 	}
 
-	/** 从 off 起需要 need 个连续合法字；数据不够返回 false */
-	function phaseLocks(data, off, n, need) {
+	/** 从 off 起需要 need 个连续合法字；认新相位时才连计数器一起查，锁得更死 */
+	SampleParser.prototype._phaseLocks = function (data, off, n, need) {
+		let prev = -1
 		for (let k = 0; k < need; k++) {
 			const o = off + k * SAMPLE_BYTES
 			if (o + SAMPLE_BYTES > n) return false
-			if (!rawLooksValid(rawAt(data, o))) return false
+			const raw = rawAt(data, o)
+			if (!this._looksValid(raw)) return false
+			if (this.counterOk) {
+				const c = (raw >>> POS_COUNTER) & MASK_COUNTER
+				if (prev >= 0 && c !== ((prev + 1) & MASK_COUNTER)) return false
+				prev = c
+			}
 		}
 		return true
+	}
+
+	/** 计数器跳变 = 真丢样点（区别于相位错位）。跨度 >64 会少算，只作量级参考 */
+	SampleParser.prototype._countLoss = function (raw) {
+		const c = (raw >>> POS_COUNTER) & MASK_COUNTER
+		if (this.lastCounter >= 0) {
+			const step = (c - this.lastCounter + COUNTER_MOD) % COUNTER_MOD
+			if (step !== 1) this.lostSamples += (step - 1 + COUNTER_MOD) % COUNTER_MOD
+		}
+		this.lastCounter = c
 	}
 
 	/**
@@ -303,35 +380,51 @@
 		const n = data.length
 		// 重同步至少要能校验 RESYNC_CONFIRM 个字加上 3 字节相位偏移
 		const probeNeed = RESYNC_CONFIRM * SAMPLE_BYTES + SAMPLE_BYTES - 1
-		// 熔断：本批连续找不回相位就别再逐点试三种偏移（设备若真用 logic 位，100k/s 下白烧 CPU）
+		// 熔断：本批连续找不回相位就别再逐点试三种偏移，也不再丢点
 		let probeFails = 0
 		while (off + SAMPLE_BYTES <= n) {
 			let raw = rawAt(data, off)
-			if (!rawLooksValid(raw)) {
+			if (this.learnLeft > 0) {
+				this._learn(raw)
+				out.push(this.converter.handleRaw(raw))
+				off += SAMPLE_BYTES
+				continue
+			}
+			if (this.lockMask && !this._looksValid(raw)) {
 				// 设备/驱动丢字节会让 4 字节相位永久错位，且 range 被 clamp 成 5 后
 				// 看着像几十安的锯齿。这里试 1/2/3 字节偏移找回相位。
 				let fixed = false
-				if (n - off >= probeNeed && probeFails < 64) {
+				if (n - off >= probeNeed && probeFails < DROP_LIMIT) {
 					for (let shift = 1; shift < SAMPLE_BYTES; shift++) {
-						if (phaseLocks(data, off + shift, n, RESYNC_CONFIRM)) {
+						if (this._phaseLocks(data, off + shift, n, RESYNC_CONFIRM)) {
 							off += shift
 							this.droppedBytes += shift
 							this.resyncCount++
 							// 错位期间的样点已经污染了档位切换滤波的滑动均值，不清会继续外溢
 							this.converter.resetFilter()
+							// 错位期读到的计数器来自坏相位，据此算丢点是噪声，跳过一个间隔
+							this.lastCounter = -1
 							raw = rawAt(data, off)
 							fixed = true
 							break
 						}
 					}
 				}
-				// 没锁上就放行原样点：保持旧行为，绝不卡住数据流
-				if (fixed) probeFails = 0
-				else {
+				if (fixed) {
+					probeFails = 0
+				} else {
 					probeFails++
 					this.badSamples++
+					// 锁不上就整点丢掉，不要把坏字当电流画出去——用户看到的几十安
+					// 尖峰就是这么来的。丢一个点远好过在波形上凭空造一个 49 A。
+					// 但连续丢太多说明判据本身可能就是错的，那就退回原样放行。
+					if (probeFails < DROP_LIMIT) {
+						off += SAMPLE_BYTES
+						continue
+					}
 				}
 			}
+			if (this.counterOk) this._countLoss(raw)
 			out.push(this.converter.handleRaw(raw))
 			off += SAMPLE_BYTES
 		}
