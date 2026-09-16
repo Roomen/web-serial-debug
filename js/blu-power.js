@@ -1245,6 +1245,33 @@
 		btn.title = bluPowered ? 'DUT 已上电 · 点击下电' : 'DUT 已下电 · 点击上电'
 	}
 
+	// 打开设备时判定 DUT 是否在供电。
+	// 协议里没有任何「读状态」的命令：metadata 47 个字段在上电/下电下实测完全一致，
+	// 厂商上位机 BLU.app 干脆是连上就把 DUT 下电。只能短采一段看电流。
+	// 实测本设备：下电中位数 0.056 µA（p99.9 0.099），上电 3634 µA，差 5 个数量级。
+	const DUT_PROBE_MS = 250
+	const DUT_ON_THRESHOLD_UA = 0.5
+
+	async function probeDutPower() {
+		if (!bluOpen || bluSampling || metaCollecting) return null
+		dutProbe = { parser: new PROTO.SampleParser(new PROTO.Converter(modifiers)), vals: [] }
+		try {
+			await bluWrite(PROTO.cmdAverageStart(), 'AVERAGE_START · DUT 供电探测')
+			await new Promise(function (r) { setTimeout(r, DUT_PROBE_MS) })
+		} catch (e) {
+			dutProbe = null
+			return null
+		}
+		try { await bluWrite(PROTO.cmdAverageStop(), 'AVERAGE_STOP · DUT 供电探测') } catch (e) {}
+		const vals = dutProbe ? dutProbe.vals : []
+		dutProbe = null
+		if (vals.length < 200) return null
+		// 用中位数：开采样头几十个点有上电涌流/残留，均值会被拉偏
+		vals.sort(function (a, b) { return a - b })
+		const med = vals[vals.length >> 1]
+		return { on: med >= DUT_ON_THRESHOLD_UA, medianUA: med, n: vals.length }
+	}
+
 	async function toggleDutPower() {
 		if (!bluOpen) {
 			bluLog('请先打开设备再上下电', 'warn')
@@ -1344,6 +1371,8 @@
 
 	let metaCollecting = false
 	let metaCollectBuf = ''
+	// 非空时读循环把样点喂给它而不是主波形（打开设备时的 DUT 供电探测）
+	let dutProbe = null
 
 	function resetLongStats() {
 		longStats.n = 0
@@ -1806,6 +1835,14 @@
 			await new Promise(function (r) { setTimeout(r, 80) })
 			// 对照 example_auto：get_modifiers →（用户设压/上电）→ start
 			await fetchAndApplyModifiers()
+			// 打开设备不改变设备侧供电；实测一下它现在到底带没带电，按钮照实显示
+			const probe = await probeDutPower()
+			if (probe) {
+				markPowered(probe.on)
+				bluLog('DUT 供电实测：' + (probe.on ? '上电' : '下电') +
+					'（探测电流中位数 ' + fmtCurrent(probe.medianUA) + '）',
+					probe.on ? 'success' : '')
+			}
 			scheduleUIUpdate()
 		} catch (e) {
 			bluOpen = false
@@ -2014,6 +2051,16 @@
 					metaCollectBuf = metaCollectBuf.slice(-32768)
 				}
 			} catch (e) {}
+			return
+		}
+
+		// DUT 供电探测：短采一段，样点只进探测缓冲，不碰主波形
+		if (dutProbe) {
+			const probed = dutProbe.parser.push(u8)
+			for (let i = 0; i < probed.length; i++) {
+				const v = probed[i].iUA
+				if (isFinite(v)) dutProbe.vals.push(v)
+			}
 			return
 		}
 
