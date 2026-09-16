@@ -1427,6 +1427,7 @@
 		parser.resetStats()
 		resyncSeen = 0
 		resyncLogTs = 0
+		lockLogged = false
 		converter.resetFilter()
 		rateAdj = new PROTO.RateAdjuster(targetRateHz, baseHz)
 		// 预热：按目标输出率 × 秒数，并封顶，避免 100k×2s 丢 20 万点才出波形
@@ -1884,8 +1885,15 @@
 	// 设备/USB 丢字节会让 4 字节样点流错位，parser 会自动找回相位；这里节流上报
 	let resyncSeen = 0
 	let resyncLogTs = 0
+	let lockLogged = false
 
 	function reportResync() {
+		if (!lockLogged && parser.learnLeft === 0) {
+			lockLogged = true
+			if (!parser.lockMask) {
+				bluLog('样点流恒定位不足，本次不做错位重同步（设备可能在用 bit17~31）', 'warn')
+			}
+		}
 		if (parser.resyncCount === resyncSeen) return
 		resyncSeen = parser.resyncCount
 		const now = performance.now()
