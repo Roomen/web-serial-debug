@@ -6068,12 +6068,12 @@
 			})
 		}
 		syncSpanUi()
-		bindClick('blu-zoom-x-in', function () { zoomX(1.6) })
-		bindClick('blu-zoom-x-out', function () { zoomX(1 / 1.6) })
-		bindClick('blu-zoom-x-reset', resetX)
-		bindClick('blu-zoom-y-in', function () { zoomY(1.6) })
-		bindClick('blu-zoom-y-out', function () { zoomY(1 / 1.6) })
-		bindClick('blu-zoom-y-reset', resetY)
+		// X/Y 的 +/- 按钮已去掉（滚轮缩放：画布内缩 X，Y 轴区域内缩 Y），
+		// 但滚轮缩完需要一条回去的路，所以保留一个两轴统一的复位。
+		bindClick('blu-view-reset', function () {
+			resetY()
+			resetX()
+		})
 		bindClick('blu-cursor-clear', clearSelection)
 		bindClick('blu-cursor-all', selectAllData)
 		bindClick('blu-cursor-zoom', zoomToSelection)

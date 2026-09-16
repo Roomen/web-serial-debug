@@ -1095,29 +1095,31 @@
                     <div class="blu-wave-wrap">
                         <div class="blu-waveform-area">
                             <div class="blu-waveform-controls">
-                                <div class="blu-zoom-group">
-                                    <span class="blu-zoom-label">X</span>
-                                    <button class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-icon-btn" id="blu-zoom-x-in" title="X 轴放大">+</button>
-                                    <button class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-icon-btn" id="blu-zoom-x-out" title="X 轴缩小">&minus;</button>
-                                    <button class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-icon-btn" id="blu-zoom-x-reset" title="X 轴复位 / Live"><i class="bi bi-arrow-repeat"></i></button>
+                                <!-- 视图：时间窗口是最常用的操作，放最左 -->
+                                <div class="blu-ctl-group blu-span-group" id="blu-span-group" title="把可视窗口设为固定时长（Live 下继续贴最新端，暂停后以视口中心为锚）">
+                                    <span class="blu-ctl-label">窗口</span>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-span-btn" data-span="0.001">1ms</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-span-btn" data-span="0.01">10ms</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-span-btn" data-span="0.1">100ms</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-span-btn" data-span="1">1s</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-span-btn" data-span="10">10s</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-span-btn" data-span="60">1min</button>
                                 </div>
-                                <div class="blu-zoom-group blu-span-group" id="blu-span-group" title="把可视窗口设为固定时长（Live 下继续贴最新端，暂停后以视口中心为锚）">
-                                    <span class="blu-zoom-label">窗口</span>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-span-btn" data-span="0.001">1ms</button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-span-btn" data-span="0.01">10ms</button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-span-btn" data-span="0.1">100ms</button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-span-btn" data-span="1">1s</button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-span-btn" data-span="10">10s</button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-span-btn" data-span="60">1min</button>
+                                <span class="blu-ctl-sep"></span>
+                                <div class="blu-ctl-group">
+                                    <button class="btn btn-sm btn-outline-secondary" id="blu-pause-scroll" title="暂停波形滚动（数据仍在采集）">
+                                        <i class="bi bi-pause-fill"></i> 暂停滚动
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-view-reset" title="视图复位：X 回默认窗口并回到 Live，Y 回自动量程">
+                                        <i class="bi bi-arrow-repeat"></i>
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-fullscreen" title="放大波形区（Esc 退出）">
+                                        <i class="bi bi-arrows-fullscreen"></i>
+                                    </button>
                                 </div>
-                                <div class="blu-zoom-group">
-                                    <span class="blu-zoom-label">Y</span>
-                                    <button class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-icon-btn" id="blu-zoom-y-in" title="Y 轴放大">+</button>
-                                    <button class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-icon-btn" id="blu-zoom-y-out" title="Y 轴缩小">&minus;</button>
-                                    <button class="btn btn-sm btn-outline-secondary blu-zoom-btn blu-icon-btn" id="blu-zoom-y-reset" title="Y 轴复位"><i class="bi bi-arrow-repeat"></i></button>
-                                </div>
-                                <div class="blu-zoom-group blu-y-scale-group">
-                                    <span class="blu-zoom-label">Y轴</span>
+                                <span class="blu-ctl-sep"></span>
+                                <div class="blu-ctl-group blu-y-scale-group">
+                                    <span class="blu-ctl-label">Y 轴</span>
                                     <select id="blu-y-scale" class="blu-y-scale-select" title="Y 轴刻度：Linear 线性 · Log 真对数 · Symlog 近零线性/大电流压缩">
                                         <option value="linear">Linear</option>
                                         <option value="log">Log</option>
@@ -1128,8 +1130,9 @@
                                     </button>
                                     <button type="button" class="blu-y-scale-hint" id="blu-y-scale-hint" hidden title="">建议 Log</button>
                                 </div>
-                                <div class="blu-zoom-group blu-scope-trig-group" id="blu-scope-trig-group" title="示波器式显示触发：沿对齐后钉住视口，周期波形更稳（不控制采样启停）">
-                                    <span class="blu-zoom-label">触发</span>
+                                <span class="blu-ctl-sep"></span>
+                                <div class="blu-ctl-group blu-scope-trig-group" id="blu-scope-trig-group" title="示波器式显示触发：沿对齐后钉住视口，周期波形更稳（不控制采样启停）">
+                                    <span class="blu-ctl-label">触发</span>
                                     <select id="blu-scope-trig" class="blu-scope-trig-select" title="显示触发：关 / 上升沿 / 下降沿 / 任意沿">
                                         <option value="off" selected>关</option>
                                         <option value="rise">↑沿</option>
@@ -1138,16 +1141,9 @@
                                     </select>
                                     <input type="text" id="blu-scope-trig-level" class="blu-scope-trig-level" placeholder="Auto µA" title="触发电平（µA）。留空=自动（近期 min/max 中点）。示例：100、1.5mA、200uA" autocomplete="off" spellcheck="false">
                                 </div>
-                                <div class="blu-zoom-group">
-                                    <button class="btn btn-sm btn-outline-secondary" id="blu-pause-scroll" title="暂停波形滚动（数据仍在采集）">
-                                        <i class="bi bi-pause-fill"></i> 暂停滚动
-                                    </button>
-                                    <button class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-fullscreen" title="放大波形区（Esc 退出）">
-                                        <i class="bi bi-arrows-fullscreen"></i>
-                                    </button>
-                                </div>
-                                <div class="blu-cursor-group">
-                                    <span class="blu-cursor-hint" title="Shift+拖动新建选择 · 拖边界微调 · 暂停后滚轮以指针为锚缩放 · Live 下只改倍率继续滚动">Shift+拖选 · 暂停后锚点缩放</span>
+                                <!-- 游标/选择：操作对象是选区，排在最后 -->
+                                <div class="blu-ctl-group blu-cursor-group">
+                                    <span class="blu-ctl-label">游标</span>
                                     <select id="blu-cursor-snap" class="blu-cursor-mode-select" title="游标边沿吸附（测频用时域边沿，无需 FFT）">
                                         <option value="free">自由</option>
                                         <option value="rise">上升沿</option>
@@ -1157,9 +1153,11 @@
                                     <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-snap-a" title="A 吸附到最近边沿">A→沿</button>
                                     <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-snap-b" title="B 吸附到最近边沿">B→沿</button>
                                     <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-period" title="A/B 贴到相邻同向边沿（测一个周期）">测周期</button>
-                                    <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-clear" title="清除选择">清除</button>
+                                    <span class="blu-ctl-subsep"></span>
                                     <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-all" title="选择全部数据">全选</button>
-                                    <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-zoom" title="缩放到选择区间">缩放到选择</button>
+                                    <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-zoom" title="把视口缩放到 A/B 选择区间">缩放选区</button>
+                                    <button class="btn btn-sm btn-outline-secondary" id="blu-cursor-clear" title="清除 A/B 选择">清除</button>
+                                    <span class="blu-ctl-info" tabindex="0" title="Shift+拖动新建选择 · 拖边界微调 · 暂停后滚轮以指针为锚缩放 · Live 下只改倍率继续滚动 · 滚轮在 Y 轴区域缩放 Y"><i class="bi bi-info-circle"></i></span>
                                 </div>
                             </div>
                             <canvas id="blu-canvas" class="blu-canvas"></canvas>
