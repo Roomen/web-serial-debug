@@ -1424,6 +1424,9 @@
 			}
 		}
 		parser.reset()
+		parser.resetStats()
+		resyncSeen = 0
+		resyncLogTs = 0
 		converter.resetFilter()
 		rateAdj = new PROTO.RateAdjuster(targetRateHz, baseHz)
 		// 预热：按目标输出率 × 秒数，并封顶，避免 100k×2s 丢 20 万点才出波形
@@ -1878,6 +1881,20 @@
 		}
 	}
 
+	// 设备/USB 丢字节会让 4 字节样点流错位，parser 会自动找回相位；这里节流上报
+	let resyncSeen = 0
+	let resyncLogTs = 0
+
+	function reportResync() {
+		if (parser.resyncCount === resyncSeen) return
+		resyncSeen = parser.resyncCount
+		const now = performance.now()
+		if (now - resyncLogTs < 2000) return
+		resyncLogTs = now
+		bluLog('样点流错位已重同步 ' + resyncSeen + ' 次（丢 ' + parser.droppedBytes +
+			' 字节）：USB 掉字节，波形可能有短暂毛刺', 'warn')
+	}
+
 	function noteSampleFrame() {
 		lastSampleFrameTs = performance.now()
 		if (stallReported) {
@@ -1925,6 +1942,7 @@
 		}
 
 		const samples = parser.push(u8)
+		reportResync()
 		if (!samples.length) return
 		noteSampleFrame()
 
