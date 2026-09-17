@@ -387,67 +387,44 @@ body {
   letter-spacing: 0.2px;
 }
 
-.theme-toggle-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0;
+/* 主题三档：跟随系统 / 浅色 / 深色 */
+.theme-switch {
+  display: inline-flex;
   margin: 4px 0;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--bg-sidebar-toggle);
 }
 
-.theme-toggle-track {
-  position: relative;
+.theme-switch button {
   display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  width: 44px;
-  height: 22px;
-  background: #e8e8ed;
-  border-radius: 11px;
-  padding: 0 4px;
-  transition: background var(--transition-normal);
-}
-
-[data-theme="dark"] .theme-toggle-track {
-  background: #3a3a3c;
-}
-
-.theme-toggle-track i {
-  font-size: 10px;
-  z-index: 1;
-  transition: opacity var(--transition-normal);
-}
-
-.theme-toggle-track .bi-sun-fill {
-  color: #fbbf24;
-}
-
-.theme-toggle-track .bi-moon-stars-fill {
-  color: #636366;
-}
-
-[data-theme="dark"] .theme-toggle-track .bi-sun-fill {
-  color: #636366;
-}
-
-[data-theme="dark"] .theme-toggle-track .bi-moon-stars-fill {
-  color: #0a84ff;
-}
-
-.theme-toggle-thumb {
-  position: absolute;
-  left: 2px;
-  top: 2px;
-  width: 18px;
-  height: 18px;
-  background: #fff;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
   border-radius: 50%;
-  transition: transform var(--transition-normal);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 9px;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
-[data-theme="dark"] .theme-toggle-thumb {
-  transform: translateX(22px);
+.theme-switch button:hover {
+  color: var(--text-primary);
+}
+
+.theme-switch button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.theme-switch button.active {
+  background: var(--bg-surface);
+  color: var(--accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
 .rail-version {
@@ -2184,13 +2161,6 @@ select option {
   flex-wrap: wrap;
   align-items: center;
   gap: 10px 14px;
-}
-
-.protocol-basic-proto {
-  flex: 1 1 170px;
-  min-width: 170px;
-  width: auto;
-  max-width: 220px;
 }
 
 .protocol-switch-inline {
@@ -7507,13 +7477,17 @@ body.blu-wave-fullscreen-open {
 
 /* 日志空态引导 */
 .serial-logs:empty::before {
-  content: '选择串口并连接后，收发数据会显示在这里';
+  content: '暂无收发数据';
   display: block;
   margin-top: 16vh;
   text-align: center;
   font-family: var(--font-sans);
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+#log-main:not(.wb-connected) .serial-logs:empty::before {
+  content: '选择串口并连接后，收发数据会显示在这里';
 }
 
 /* 顶栏右侧：协议快捷切换 + 命令面板 */
@@ -7536,7 +7510,7 @@ body.blu-wave-fullscreen-open {
   white-space: nowrap;
 }
 
-#wb-proto-quick {
+#serial-protocol-select {
   width: 150px;
   font-size: 0.75rem;
 }
@@ -7768,7 +7742,7 @@ body.blu-wave-fullscreen-open {
     flex: 1 1 auto;
   }
 
-  #wb-proto-quick {
+  #serial-protocol-select {
     flex: 1 1 auto;
     width: auto;
   }

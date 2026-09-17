@@ -260,39 +260,17 @@
 		if (qs) registerPanel({ id: 'quick-send', title: '快捷发送', icon: 'bi-lightning-charge', el: qs, order: 10 })
 		const proto = $('nav-protocol')
 		if (proto) registerPanel({ id: 'protocol', title: '协议设置与下发', label: '协议', icon: 'bi-braces', el: proto, order: 20 })
-		standalonePanel('rw', '随机读写测试', '随机读写', 'bi-shuffle', 'sk-rw-card', 30, '当前协议不支持随机读写测试，在「协议」面板切换到 SEK 后可用')
-		standalonePanel('batch', '批量配置写入', '批量配置', 'bi-list-check', 'sk-batch-card', 40, '当前协议不支持批量配置写入，在「协议」面板切换到 SEK 后可用')
+		standalonePanel('rw', '随机读写测试', '随机读写', 'bi-shuffle', 'sk-rw-card', 30, '当前协议不支持随机读写测试，在顶栏把协议切换到 SEK 后可用')
+		standalonePanel('batch', '批量配置写入', '批量配置', 'bi-list-check', 'sk-batch-card', 40, '当前协议不支持批量配置写入，在顶栏把协议切换到 SEK 后可用')
 		const fw = $('nav-firmware')
 		if (fw) registerPanel({ id: 'firmware', title: '固件升级', icon: 'bi-cpu', el: fw, order: 50 })
 		const parse = $('serial-parse-body')
 		if (parse) registerPanel({ id: 'parse', title: '协议解析', label: '解析', icon: 'bi-diagram-3', el: parse, order: 0, docks: ['bottom'], fixed: true })
 	}
 
-	// ---------- 顶栏：协议快捷切换 + 命令面板 ----------
+	// ---------- 顶栏：命令面板入口 ----------
 
 	function initConnectBarTools() {
-		const src = $('serial-protocol-select')
-		const dst = $('wb-proto-quick')
-		if (src && dst) {
-			const syncOptions = function () {
-				dst.textContent = ''
-				Array.prototype.forEach.call(src.options, function (o) {
-					const n = document.createElement('option')
-					n.value = o.value
-					n.textContent = o.textContent
-					dst.appendChild(n)
-				})
-				dst.value = src.value
-			}
-			syncOptions()
-			new MutationObserver(syncOptions).observe(src, { childList: true, subtree: true, characterData: true })
-			src.addEventListener('change', function () { dst.value = src.value })
-			dst.addEventListener('change', function () {
-				if (src.value === dst.value) return
-				src.value = dst.value
-				src.dispatchEvent(new Event('change', { bubbles: true }))
-			})
-		}
 		const pal = $('wb-palette-btn')
 		if (pal) {
 			pal.addEventListener('click', function () {
@@ -383,6 +361,8 @@
 			buildStatusBar(bar, sids)
 		}
 		const now = Date.now()
+		const logMain = $('log-main')
+		if (logMain) logMain.classList.toggle('wb-connected', sids.some(function (sid) { return hub.getStats(sid).open }))
 		sids.forEach(function (sid) {
 			const r = statusRefs.sessions[sid]
 			const st = hub.getStats(sid)
@@ -406,10 +386,6 @@
 			const txt = prog ? prog.textContent.trim() : ''
 			t.text.textContent = t.def.label + (txt ? ' ' + txt : '') + ' 运行中'
 		})
-		// 协议被代码切换(如恢复配置)时不会派发 change，这里顺带对齐顶栏下拉
-		const src = $('serial-protocol-select')
-		const dst = $('wb-proto-quick')
-		if (src && dst && dst.value !== src.value) dst.value = src.value
 	}
 
 	// ---------- 初始化 ----------

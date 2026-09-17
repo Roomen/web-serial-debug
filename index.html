@@ -22,12 +22,12 @@
     <link rel="mask-icon" href="imgs/logo.svg" color="#007aff">
     <script>
         (function () {
+            // 主题三档：light / dark 为手动选择，其余(未设置)跟随系统；首屏前就定下，避免闪烁
             var t = localStorage.getItem('serial-debug-theme')
-            if (t) {
-                document.documentElement.setAttribute('data-theme', t)
-            } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-                document.documentElement.setAttribute('data-theme', 'dark')
+            if (t !== 'light' && t !== 'dark') {
+                t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
             }
+            document.documentElement.setAttribute('data-theme', t)
         })()
     </script>
     <script>
@@ -117,13 +117,11 @@
                     </ul>
                 </div>
                 <div class="rail-divider"></div>
-                <button id="theme-toggle" class="theme-toggle-btn" title="切换亮色/暗色模式">
-                    <span class="theme-toggle-track">
-                        <i class="bi bi-sun-fill"></i>
-                        <i class="bi bi-moon-stars-fill"></i>
-                        <span class="theme-toggle-thumb"></span>
-                    </span>
-                </button>
+                <div class="theme-switch" id="theme-switch" role="radiogroup" aria-label="主题">
+                    <button type="button" role="radio" data-theme-choice="auto" title="主题：跟随系统" aria-label="跟随系统"><i class="bi bi-circle-half"></i></button>
+                    <button type="button" role="radio" data-theme-choice="light" title="主题：浅色" aria-label="浅色"><i class="bi bi-sun"></i></button>
+                    <button type="button" role="radio" data-theme-choice="dark" title="主题：深色" aria-label="深色"><i class="bi bi-moon-stars"></i></button>
+                </div>
                 <a href="https://github.com/Roomen/web-serial-debug/issues/new" target="_blank" rel="noopener" class="rail-item" title="提交建议 / Bug">
                     <i class="bi bi-chat-dots"></i>
                     <span class="rail-label">反馈</span>
@@ -289,11 +287,13 @@
                             </div>
                         </div>
                     </div>
-                    <!-- 右侧：当前协议 + 命令面板入口 -->
+                    <!-- 右侧：当前协议(全局唯一的协议选择) + 命令面板入口 -->
                     <div class="connect-bar-section connect-bar-tools">
-                        <label class="connect-bar-proto" title="当前协议（与协议下发面板同步）">
+                        <label class="connect-bar-proto" title="当前协议：决定实时解析、协议下发与测试面板使用的协议">
                             <span class="connect-bar-proto-label">协议</span>
-                            <select class="form-select form-select-sm" id="wb-proto-quick" aria-label="当前协议"></select>
+                            <select class="form-select form-select-sm" id="serial-protocol-select" aria-label="当前协议">
+                                <option value="sek">SEK（默认）</option>
+                            </select>
                         </label>
                         <button type="button" class="btn connect-bar-palette" id="wb-palette-btn" title="命令面板（Ctrl/⌘+K）">
                             <i class="bi bi-command"></i><span class="connect-bar-palette-text">命令</span><kbd>K</kbd>
@@ -505,12 +505,6 @@
                                 <div class="tab-pane d-flex flex-column flex-grow-1" id="nav-protocol" role="tabpanel">
                                     <div class="protocol-basic-card mb-2">
                                         <div class="protocol-basic-row">
-                                            <div class="input-group input-group-sm protocol-basic-proto">
-                                                <span class="input-group-text">协议</span>
-                                                <select class="form-select" id="serial-protocol-select">
-                                                    <option value="sek">SEK（默认）</option>
-                                                </select>
-                                            </div>
                                             <div class="protocol-switch-inline">
                                                 <div class="form-check form-switch">
                                                     <input class="form-check-input" type="checkbox" id="serial-protocol-enable">

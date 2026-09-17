@@ -3,40 +3,45 @@
 		alert('当前浏览器不支持串口操作,请更换Edge或Chrome浏览器')
 	}
 
-	/* ========== Theme Toggle ========== */
+	/* ========== Theme: 跟随系统 / 浅色 / 深色 ========== */
+	// 存储键缺省即跟随系统；data-theme 总是写成解析后的 light/dark，样式只认这两个值
 	const STORAGE_KEY = 'serial-debug-theme'
-	const themeToggle = document.getElementById('theme-toggle')
-	const savedTheme = localStorage.getItem(STORAGE_KEY)
+	const themeSwitch = document.getElementById('theme-switch')
+	const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
 
-	if (savedTheme) {
-		document.documentElement.setAttribute('data-theme', savedTheme)
-	} else {
-		const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-		if (prefersDark) {
-			document.documentElement.setAttribute('data-theme', 'dark')
-		}
+	function themeChoice() {
+		const v = localStorage.getItem(STORAGE_KEY)
+		return v === 'light' || v === 'dark' ? v : 'auto'
 	}
 
-	function updateToggleUi() {
-		const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
-		themeToggle.title = isDark ? '切换至亮色模式' : '切换至暗色模式'
+	function applyTheme() {
+		const choice = themeChoice()
+		const resolved = choice === 'auto' ? (darkQuery.matches ? 'dark' : 'light') : choice
+		document.documentElement.setAttribute('data-theme', resolved)
+		if (!themeSwitch) return
+		themeSwitch.querySelectorAll('[data-theme-choice]').forEach((btn) => {
+			const on = btn.dataset.themeChoice === choice
+			btn.classList.toggle('active', on)
+			btn.setAttribute('aria-checked', String(on))
+		})
 	}
 
-	updateToggleUi()
+	window.getThemeChoice = themeChoice
+	window.setThemeChoice = function (choice) {
+		if (choice === 'light' || choice === 'dark') localStorage.setItem(STORAGE_KEY, choice)
+		else localStorage.removeItem(STORAGE_KEY)
+		applyTheme()
+	}
 
-	themeToggle.addEventListener('click', () => {
-		const current = document.documentElement.getAttribute('data-theme')
-		const next = current === 'dark' ? 'light' : 'dark'
-		document.documentElement.setAttribute('data-theme', next)
-		localStorage.setItem(STORAGE_KEY, next)
-		updateToggleUi()
-	})
-
-	window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-		if (!localStorage.getItem(STORAGE_KEY)) {
-			document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light')
-			updateToggleUi()
-		}
+	applyTheme()
+	if (themeSwitch) {
+		themeSwitch.addEventListener('click', (e) => {
+			const btn = e.target.closest('[data-theme-choice]')
+			if (btn) window.setThemeChoice(btn.dataset.themeChoice)
+		})
+	}
+	darkQuery.addEventListener('change', () => {
+		if (themeChoice() === 'auto') applyTheme()
 	})
 	// 事务钉扎: 升级/批量配置等事务进行中锁定主发口, 防止中途切换把后续帧发到另一台设备
 	let pinSid = null
@@ -113,16 +118,12 @@
 		setPort(sid, port) { this._sess(sid).port = port },
 
 		isOpen(sid) { return this._sess(sid).open },
-		setOpen(sid, v) {
+		setOpen(sid, v) { this._sess(sid).open = v },
+		resetStats(sid) {
 			const s = this._sess(sid)
-			if (v && !s.open) {
-				s.openedAt = Date.now()
-				s.txBytes = 0
-				s.rxBytes = 0
-			} else if (!v) {
-				s.openedAt = 0
-			}
-			s.open = v
+			s.openedAt = Date.now()
+			s.txBytes = 0
+			s.rxBytes = 0
 		},
 		getStats(sid) {
 			const s = this._sess(sid)
@@ -2778,6 +2779,8 @@
 			}
 			return false
 		}
+		// 手动打开才重新计时/计数；热插拔等自动重连视为同一次连接的延续
+		if (reason === 'user' || !SerialHub.getStats(sid).openedAt) SerialHub.resetStats(sid)
 		SerialHub.setOpen(sid, true)
 		SerialHub.setManualClose(sid, false)
 		updateOpenButton(sid)
@@ -3557,6 +3560,7 @@
 			writer = port.writable.getWriter()
 			const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
 			await writer.write(u8)
+			SerialHub._sess(sid).txBytes += u8.length
 		} catch (error) {
 			const errorType = error.name || 'UnknownError'
 			const errorMsg = error.message || '未知错误'
