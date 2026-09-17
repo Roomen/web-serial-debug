@@ -1634,10 +1634,57 @@
 		scheduleUIUpdate()
 	}
 
+	// 全屏只放大波形区(控件 + 画布 + 统计 + 分析)：优先用浏览器原生全屏，
+	// 不可用或被拒时退回窗口内铺满(.blu-wave-fullscreen)。状态以实际 DOM 为准，Esc/系统退出都能同步
+	function waveFsTarget() {
+		return document.querySelector('#view-blu .blu-wave-wrap')
+	}
+
+	function applyWaveMaximize(on) {
+		const el = waveFsTarget()
+		if (el) el.classList.toggle('blu-wave-fullscreen', on)
+		document.body.classList.toggle('blu-wave-fullscreen-open', on)
+		syncWaveFullscreenUi()
+	}
+
+	function syncWaveFullscreenUi() {
+		const el = waveFsTarget()
+		const native = !!el && document.fullscreenElement === el
+		waveFullscreen = native || !!(el && el.classList.contains('blu-wave-fullscreen'))
+		const btn = E('blu-fullscreen')
+		if (btn) {
+			btn.innerHTML = waveFullscreen
+				? '<i class="bi bi-fullscreen-exit"></i>'
+				: '<i class="bi bi-arrows-fullscreen"></i>'
+			btn.title = waveFullscreen ? '退出全屏（Esc / F）' : '全屏查看波形（F）'
+			btn.setAttribute('aria-pressed', String(waveFullscreen))
+		}
+		// 画布按容器尺寸重绘；原生全屏会触发 resize，窗口内铺满不会，这里统一补一次
+		requestAnimationFrame(function () { scheduleUIUpdate() })
+	}
+
+	let waveFsPending = false
 	function setWaveFullscreen(on) {
-		waveFullscreen = !!on
-		const wrap = E('view-blu')
-		if (wrap) wrap.classList.toggle('blu-wave-fullscreen', waveFullscreen)
+		const el = waveFsTarget()
+		if (!el || waveFsPending) return
+		on = !!on
+		if (on === waveFullscreen) return
+		if (on) {
+			if (document.fullscreenEnabled && el.requestFullscreen) {
+				//请求结果回来前忽略重复触发，否则连按会叠出两种全屏
+				waveFsPending = true
+				el.requestFullscreen({ navigationUI: 'hide' })
+					.catch(function () { applyWaveMaximize(true) })
+					.finally(function () { waveFsPending = false })
+			} else {
+				applyWaveMaximize(true)
+			}
+			return
+		}
+		if (document.fullscreenElement === el) {
+			document.exitFullscreen().catch(function () { /* 已由浏览器退出 */ })
+		}
+		applyWaveMaximize(false)
 	}
 
 	function setRecordMode(mode) {
@@ -6300,8 +6347,21 @@
 			setWaveFullscreen(!waveFullscreen)
 		})
 
+		document.addEventListener('fullscreenchange', syncWaveFullscreenUi)
 		document.addEventListener('keydown', function (e) {
-			if (e.key === 'Escape' && waveFullscreen) setWaveFullscreen(false)
+			if (e.key === 'Escape' && waveFullscreen) {
+				setWaveFullscreen(false)
+				return
+			}
+			// F 切换全屏：仅功耗页可见、焦点不在输入控件、无修饰键时
+			if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing) {
+				const view = E('view-blu')
+				if (!view || !view.classList.contains('active')) return
+				const t = e.target
+				if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
+				e.preventDefault()
+				setWaveFullscreen(!waveFullscreen)
+			}
 		})
 
 		const elLogToggle = E('blu-log-toggle')
