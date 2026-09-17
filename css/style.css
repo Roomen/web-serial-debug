@@ -7177,10 +7177,15 @@ body.blu-wave-fullscreen-open {
   background: var(--border-color);
 }
 
-/* 协议不支持时，独立面板对应的卡片被协议模块隐藏 */
-#main:has(#sk-rw-card[style*="display: none"]) .wb-dock-btn[data-dock-panel="rw"],
-#main:has(#sk-batch-card[style*="display: none"]) .wb-dock-btn[data-dock-panel="batch"] {
-  opacity: 0.45;
+/* 当前协议不支持的面板：按钮禁用，不可打开 */
+.wb-dock-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.wb-dock-btn:disabled:hover {
+  color: var(--text-secondary);
+  background: transparent;
 }
 
 .wb-pane-unavailable {

@@ -373,6 +373,7 @@
 		})
 		if (window.Workbench) {
 			window.Workbench.list().forEach(function (p) {
+				if (!p.available) return
 				list.push({
 					group: '视图',
 					title: (p.shown ? '收起面板：' : '打开面板：') + p.title,

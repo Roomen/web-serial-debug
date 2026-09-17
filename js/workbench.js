@@ -69,8 +69,12 @@
 		if (api) api.setCollapsed(v)
 	}
 
+	function isAvailable(p) {
+		return !p.available || !!p.available()
+	}
+
 	function isShown(p) {
-		return state[p.dock] === p.id && !isDockCollapsed(p.dock)
+		return state[p.dock] === p.id && isAvailable(p) && !isDockCollapsed(p.dock)
 	}
 
 	function registerPanel(def) {
@@ -86,6 +90,9 @@
 			docks: docks,
 			// fixed: 节点本身就在停靠区里(协议解析)，不搬运
 			fixed: !!def.fixed,
+			// available: 返回 false 时面板不可打开(如当前协议不支持)，停靠栏按钮禁用
+			available: typeof def.available === 'function' ? def.available : null,
+			unavailableHint: def.unavailableHint || '',
 		}
 		const saved = state.docks[p.id]
 		if (docks.indexOf(saved) !== -1) p.dock = saved
@@ -105,7 +112,7 @@
 
 	function open(id) {
 		const p = find(id)
-		if (!p) return false
+		if (!p || !isAvailable(p)) return false
 		ensureSerialView()
 		state[p.dock] = p.id
 		render()
@@ -127,7 +134,7 @@
 
 	function move(id, dock) {
 		const p = find(id)
-		if (!p || p.docks.indexOf(dock) === -1 || p.dock === dock) return
+		if (!p || !isAvailable(p) || p.docks.indexOf(dock) === -1 || p.dock === dock) return
 		const from = p.dock
 		p.dock = dock
 		state.docks[p.id] = dock
@@ -144,7 +151,7 @@
 	function render() {
 		const hosts = { right: $('nav-tabContent'), bottom: $('wb-bottom-body') }
 		DOCKS.forEach(function (dock) {
-			const list = inDock(dock)
+			const list = inDock(dock).filter(isAvailable)
 			const has = list.some(function (p) { return p.id === state[dock] })
 			if (!has) state[dock] = list.length ? list[0].id : null
 		})
@@ -186,7 +193,7 @@
 		const p = find(state.bottom)
 		if (box) {
 			box.textContent = ''
-			inDock('bottom').forEach(function (q) {
+			inDock('bottom').filter(isAvailable).forEach(function (q) {
 				const b = document.createElement('button')
 				b.type = 'button'
 				b.className = 'wb-bottom-tab'
@@ -209,7 +216,7 @@
 		const bar = $('wb-dock-bar')
 		if (!bar) return
 		const list = sorted(panels.filter(function (p) { return !p.fixed })).concat(sorted(panels.filter(function (p) { return p.fixed })))
-		const sig = list.map(function (p) { return p.id + ':' + p.dock }).join('|')
+		const sig = list.map(function (p) { return p.id + ':' + p.dock + ':' + isAvailable(p) }).join('|')
 		if (bar.dataset.sig !== sig) {
 			bar.dataset.sig = sig
 			bar.textContent = ''
@@ -224,7 +231,9 @@
 				b.className = 'wb-dock-btn'
 				b.dataset.dockPanel = p.id
 				b.dataset.dock = p.dock
-				b.title = p.title + '（' + DOCK_NAME[p.dock] + '）'
+				const ok = isAvailable(p)
+				b.disabled = !ok
+				b.title = ok ? p.title + '（' + DOCK_NAME[p.dock] + '）' : (p.unavailableHint || p.title + '当前不可用')
 				const label = document.createElement('span')
 				label.className = 'wb-dock-label'
 				label.textContent = p.label
@@ -252,7 +261,25 @@
 		tip.className = 'wb-pane-unavailable'
 		tip.append(iconEl('bi-info-circle'), document.createTextNode(hint))
 		pane.append(tip, card)
-		registerPanel({ id: id, title: title, label: label, icon: icon, el: pane, order: order })
+		registerPanel({
+			id: id, title: title, label: label, icon: icon, el: pane, order: order,
+			// 协议模块切协议时用 style.display 隐藏不支持的卡片，以此为准
+			available: function () { return card.style.display !== 'none' },
+			unavailableHint: hint,
+		})
+		// 协议模块改卡片显隐后同步：禁用按钮，正在显示的面板让位给同停靠区的其它面板
+		new MutationObserver(refreshAvailability).observe(card, { attributes: true, attributeFilter: ['style'] })
+	}
+
+	function refreshAvailability() {
+		if (!ready) return
+		const collapse = DOCKS.filter(function (dock) {
+			const p = find(state[dock])
+			return p && !isAvailable(p) && !isDockCollapsed(dock) && !inDock(dock).some(isAvailable)
+		})
+		render()
+		collapse.forEach(function (dock) { setDockCollapsed(dock, true) })
+		renderBar()
 	}
 
 	function registerBuiltins() {
@@ -497,7 +524,7 @@
 		},
 		list: function () {
 			return sorted(panels).map(function (p) {
-				return { id: p.id, title: p.title, dock: p.dock, docks: p.docks.slice(), shown: isShown(p) }
+				return { id: p.id, title: p.title, dock: p.dock, docks: p.docks.slice(), shown: isShown(p), available: isAvailable(p) }
 			})
 		},
 	}
