@@ -5798,6 +5798,58 @@ body.blu-wave-fullscreen-open {
   border-color: #dc3545;
 }
 
+/* 波形显示样式弹层 */
+.blu-wave-style-popover.dropdown-menu {
+  width: 250px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 60;
+}
+
+.blu-ws-title {
+  margin-bottom: 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.blu-wave-style-popover .btn-group .btn {
+  font-size: 0.72rem;
+}
+
+.blu-ws-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  font-size: 0.75rem;
+}
+
+.blu-ws-row.form-check {
+  padding-left: 2.5em;
+  min-height: 0;
+}
+
+.blu-ws-alpha .form-range {
+  flex: 1;
+}
+
+.blu-ws-alpha span {
+  min-width: 32px;
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+.blu-ws-note {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  line-height: 1.4;
+}
+
 .blu-y-scale-group {
   gap: 4px;
 }

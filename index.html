@@ -1118,6 +1118,30 @@
                                     <button class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-fullscreen" title="放大波形区（Esc 退出）">
                                         <i class="bi bi-arrows-fullscreen"></i>
                                     </button>
+                                    <div class="dropdown blu-wave-style">
+                                        <button type="button" class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-wave-style-btn" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" title="波形显示样式">
+                                            <i class="bi bi-layers"></i>
+                                        </button>
+                                        <div class="dropdown-menu blu-wave-style-popover">
+                                            <div class="blu-ws-title">波形显示（缩小时）</div>
+                                            <div class="btn-group btn-group-sm w-100" role="group" aria-label="波形画法">
+                                                <input type="radio" class="btn-check" name="blu-wave-style" id="blu-wave-style-band" value="band" autocomplete="off">
+                                                <label class="btn btn-outline-secondary" for="blu-wave-style-band" title="Joulescope / Otii 式：均值线 + 最小~最大值色带">均值 + 范围带</label>
+                                                <input type="radio" class="btn-check" name="blu-wave-style" id="blu-wave-style-envelope" value="envelope" autocomplete="off">
+                                                <label class="btn btn-outline-secondary" for="blu-wave-style-envelope" title="PPK 式：每列最小/最大值连成折线">包络折线</label>
+                                            </div>
+                                            <div class="form-check form-switch blu-ws-row">
+                                                <input class="form-check-input" type="checkbox" role="switch" id="blu-wave-sigma">
+                                                <label class="form-check-label" for="blu-wave-sigma">±1σ 带</label>
+                                            </div>
+                                            <div class="blu-ws-row blu-ws-alpha">
+                                                <label for="blu-wave-alpha">色带浓度</label>
+                                                <input type="range" class="form-range" id="blu-wave-alpha" min="5" max="60" step="1">
+                                                <span id="blu-wave-alpha-val">20%</span>
+                                            </div>
+                                            <div class="blu-ws-note">±1σ 带浓度为范围带的 2 倍；放大到逐点显示时始终为折线</div>
+                                        </div>
+                                    </div>
                                 </div>
                                 <span class="blu-ctl-sep"></span>
                                 <div class="blu-ctl-group blu-y-scale-group">
