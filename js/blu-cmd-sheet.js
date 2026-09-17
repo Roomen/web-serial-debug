@@ -183,7 +183,7 @@
 	// 波形全屏(原生全屏或窗口内铺满)时收起面板，免得挡住波形
 	function observeFullscreen() {
 		function check() {
-			const wave = document.querySelector('#view-blu .blu-wave-wrap')
+			const wave = document.querySelector('#view-blu .blu-wrapper')
 			const on = !!wave && (document.fullscreenElement === wave || wave.classList.contains('blu-wave-fullscreen'))
 			if (on && isOpen) setOpen(false, true)
 		}
