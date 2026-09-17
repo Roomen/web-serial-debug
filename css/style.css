@@ -5465,14 +5465,35 @@ hr {
   overflow: hidden;
 }
 
+/* 全屏：原生 :fullscreen 与窗口内铺满共用布局，波形区吃掉剩余高度 */
 .blu-wave-wrap.blu-wave-fullscreen {
   position: fixed;
   inset: 0;
   z-index: 1080;
   margin: 0;
-  padding: 12px;
-  background: var(--bg-body);
   border-radius: 0;
+}
+
+.blu-wave-wrap:fullscreen,
+.blu-wave-wrap.blu-wave-fullscreen {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  padding: 10px 12px;
+  overflow: auto;
+  background: var(--bg-body);
+}
+
+.blu-wave-wrap:fullscreen .blu-waveform-area,
+.blu-wave-wrap.blu-wave-fullscreen .blu-waveform-area {
+  flex: 1 1 auto;
+  min-height: 320px;
+}
+
+.blu-wave-wrap:fullscreen::backdrop {
+  background: #000;
 }
 
 body.blu-wave-fullscreen-open {
@@ -6357,18 +6378,6 @@ body.blu-wave-fullscreen-open {
   flex-shrink: 0;
 }
 
-#view-blu.blu-wave-fullscreen {
-  position: fixed;
-  inset: 0;
-  z-index: 1080;
-  background: var(--bg-body);
-  padding: 12px;
-  overflow: auto;
-}
-
-#view-blu.blu-wave-fullscreen .blu-wave-wrap {
-  min-height: calc(100vh - 24px);
-}
 
 /* ========== Dual Serial Monitor ========== */
 

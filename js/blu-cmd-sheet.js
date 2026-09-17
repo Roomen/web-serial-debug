@@ -180,19 +180,15 @@
 		sheet.addEventListener('focusin', cancelAutoClose, true)
 	}
 
+	// 波形全屏(原生全屏或窗口内铺满)时收起面板，免得挡住波形
 	function observeFullscreen() {
-		const viewBlu = E('view-blu')
-		if (!viewBlu) return
-		const observer = new MutationObserver(function (mutations) {
-			for (const m of mutations) {
-				if (m.attributeName === 'class') {
-					if (viewBlu.classList.contains('blu-wave-fullscreen') && isOpen) {
-						setOpen(false, true)
-					}
-				}
-			}
-		})
-		observer.observe(viewBlu, { attributes: true, attributeFilter: ['class'] })
+		function check() {
+			const wave = document.querySelector('#view-blu .blu-wave-wrap')
+			const on = !!wave && (document.fullscreenElement === wave || wave.classList.contains('blu-wave-fullscreen'))
+			if (on && isOpen) setOpen(false, true)
+		}
+		document.addEventListener('fullscreenchange', check)
+		new MutationObserver(check).observe(document.body, { attributes: true, attributeFilter: ['class'] })
 	}
 
 	function setOpen(open, silent) {
