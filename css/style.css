@@ -5683,28 +5683,119 @@ body.blu-wave-fullscreen-open {
 }
 
 .blu-span-group {
-  gap: 2px;
+  gap: 6px;
 }
 
-/* 窗口时长快捷键：当前窗口命中哪一档就点亮哪一档，等于一个只读的缩放刻度 */
-.blu-span-btn {
-  min-width: 38px;
-  padding: 0 6px;
-  font-size: 0.68rem;
+/* 窗口时长调节轴：对数刻度，1ms 到 2min 跨 5 个数量级，线性轴拖不准 */
+.blu-span-slider {
+  position: relative;
+  width: 220px;
+  height: 28px;
+  padding: 0 8px;
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+}
+
+.blu-span-track {
+  position: relative;
+  top: 7px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-color);
+}
+
+/* 当前采样率下点数不够的区间 */
+.blu-span-blocked {
+  position: absolute;
+  left: 0;
+  top: -2px;
+  bottom: -2px;
+  width: 0;
+  border-radius: 2px;
+  background: repeating-linear-gradient(135deg, var(--text-muted) 0 2px, transparent 2px 5px);
+  opacity: 0.45;
+}
+
+.blu-span-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-surface);
+}
+
+.blu-span-slider:focus-visible .blu-span-thumb,
+.blu-span-slider.is-drag .blu-span-thumb {
+  box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.blu-span-ticks {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 14px;
+  height: 14px;
+}
+
+.blu-span-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.6rem;
   font-family: var(--font-mono);
+  line-height: 14px;
+  cursor: pointer;
 }
 
-.blu-span-btn.is-on {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--border-color));
+.blu-span-tick::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -4px;
+  width: 1px;
+  height: 3px;
+  background: var(--text-muted);
+}
+
+.blu-span-tick:hover {
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg-surface));
-  font-weight: 700;
 }
 
-/* 当前采样率下点数不够的档位：留着但置灰，免得用户以为按钮坏了 */
-.blu-span-btn:disabled {
+.blu-span-tick:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+.blu-span-input {
+  width: 66px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.blu-span-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.blu-span-input.is-invalid {
+  border-color: #dc3545;
 }
 
 .blu-y-scale-group {

@@ -5302,36 +5302,230 @@
 			fmtFreq(1 / samplePeriodSec) + (file.name ? ' · ' + file.name : ''))
 	}
 
+	// 窗口调节轴：对数刻度，吸附 1/3/5 档；10s 以上改用 30s/1min/2min，比 50s/100s 更符合直觉
+	const SPAN_AXIS_MIN_SEC = 0.001
+	const SPAN_AXIS_MAX_SEC = MAX_VIEW_DURATION_SEC
+	const SPAN_DETENTS = [
+		0.001, 0.003, 0.005, 0.01, 0.03, 0.05, 0.1, 0.3, 0.5,
+		1, 3, 5, 10, 30, 60, 120
+	]
+	const SPAN_TICKS = [
+		[0.001, '1ms'], [0.01, '10ms'], [0.1, '100ms'], [1, '1s'], [10, '10s'], [60, '1min']
+	]
+	let spanDragging = false
+
+	function spanToFrac(sec) {
+		const f = Math.log(sec / SPAN_AXIS_MIN_SEC) / Math.log(SPAN_AXIS_MAX_SEC / SPAN_AXIS_MIN_SEC)
+		return Math.max(0, Math.min(1, f))
+	}
+
+	function fracToSpan(f) {
+		return SPAN_AXIS_MIN_SEC * Math.pow(SPAN_AXIS_MAX_SEC / SPAN_AXIS_MIN_SEC, f)
+	}
+
+	/** 当前采样率下可达的窗口时长范围 */
+	function spanLimits() {
+		const period = samplePeriodSec > 0 ? samplePeriodSec : (1 / Math.max(1, targetRateHz))
+		return { period: period, min: MIN_VIEW_POINTS * period, max: MAX_VIEW_DURATION_SEC }
+	}
+
+	function snapSpan(sec) {
+		const lg = Math.log(sec)
+		let best = SPAN_DETENTS[0]
+		for (let i = 1; i < SPAN_DETENTS.length; i++) {
+			if (Math.abs(Math.log(SPAN_DETENTS[i]) - lg) < Math.abs(Math.log(best) - lg)) best = SPAN_DETENTS[i]
+		}
+		return best
+	}
+
+	/** 从 sec 出发往 dir（±1）走一档，跳过够不到的档 */
+	function stepSpan(sec, dir) {
+		const lim = spanLimits()
+		const list = dir > 0 ? SPAN_DETENTS : SPAN_DETENTS.slice().reverse()
+		for (let i = 0; i < list.length; i++) {
+			const d = list[i]
+			if (d < lim.min || d > lim.max) continue
+			if (dir > 0 ? d > sec * 1.02 : d < sec / 1.02) return d
+		}
+		return null
+	}
+
+	/** 名义窗口时长：只看 xZoom，不被已有点数截断（刚开始采集时也显示设定值） */
+	function currentSpanSec() {
+		const winPts = Math.max(MIN_VIEW_POINTS, Math.round(DEFAULT_VIEW_POINTS / view.xZoom))
+		return winPts * spanLimits().period
+	}
+
+	function fmtSpan(sec) {
+		if (!(sec > 0)) return '--'
+		if (sec < 1e-3) return Number((sec * 1e6).toPrecision(3)) + ' µs'
+		if (sec < 1) return Number((sec * 1e3).toPrecision(3)) + ' ms'
+		if (sec < 60) return Number(sec.toPrecision(3)) + ' s'
+		return Number((sec / 60).toPrecision(3)) + ' min'
+	}
+
+	/** 解析 "250ms" / "3 s" / "1.5min" / "800us"；纯数字按秒 */
+	function parseSpan(text) {
+		const m = /^\s*(\d+(?:\.\d*)?|\.\d+)\s*(µs|us|ms|s|sec|m|min)?\s*$/i.exec(text || '')
+		if (!m) return null
+		const unit = (m[2] || 's').toLowerCase()
+		const mul = { 'µs': 1e-6, us: 1e-6, ms: 1e-3, s: 1, sec: 1, m: 60, min: 60 }[unit]
+		const sec = parseFloat(m[1]) * mul
+		return sec > 0 ? sec : null
+	}
+
 	/**
 	 * 把可视窗口设为指定时长（秒）。
-	 * 换算成 xZoom 后走 zoomX，Live/暂停的锚点行为与 +/- 按钮完全一致。
+	 * 换算成 xZoom 后走 zoomX，Live/暂停的锚点行为与滚轮一致。
 	 */
 	function setViewSpanSec(sec) {
 		if (!(sec > 0)) return
-		const period = samplePeriodSec > 0 ? samplePeriodSec : (1 / Math.max(1, targetRateHz))
-		const pts = Math.max(MIN_VIEW_POINTS, Math.round(sec / period))
+		const lim = spanLimits()
+		sec = Math.max(lim.min, Math.min(lim.max, sec))
+		const pts = Math.max(MIN_VIEW_POINTS, Math.round(sec / lim.period))
 		const target = clampXZoom(DEFAULT_VIEW_POINTS / pts)
 		const cur = view.xZoom
 		if (cur > 0 && Math.abs(target / cur - 1) > 1e-6) zoomX(target / cur)
 		syncSpanUi()
 	}
 
-	/** 高亮当前命中的档位；当前采样率下点数不足 MIN_VIEW_POINTS 的档位置灰 */
-	function syncSpanUi() {
-		const group = E('blu-span-group')
-		if (!group) return
-		const period = samplePeriodSec > 0 ? samplePeriodSec : (1 / Math.max(1, targetRateHz))
-		const winPts = currentViewPts()
-		const winSec = winPts > 1 ? (winPts - 1) * period : 0
-		const btns = group.querySelectorAll('.blu-span-btn')
-		for (let i = 0; i < btns.length; i++) {
-			const sec = parseFloat(btns[i].dataset.span)
-			const reachable = sec / period >= MIN_VIEW_POINTS && sec <= MAX_VIEW_DURATION_SEC
-			btns[i].disabled = !reachable
-			// 容差 12%：相邻档位差 10 倍，不会误判
-			btns[i].classList.toggle('is-on',
-				reachable && winSec > 0 && Math.abs(winSec / sec - 1) < 0.12)
+	function placeSpanThumb(sec) {
+		const thumb = E('blu-span-thumb')
+		if (thumb) thumb.style.left = (spanToFrac(sec) * 100) + '%'
+		const slider = E('blu-span-slider')
+		if (slider) {
+			slider.setAttribute('aria-valuenow', String(sec))
+			slider.setAttribute('aria-valuetext', fmtSpan(sec))
 		}
+	}
+
+	/** 调节轴、读数、不可达区间跟随当前窗口（滚轮缩放后也会回到这里） */
+	function syncSpanUi() {
+		if (!E('blu-span-slider')) return
+		const lim = spanLimits()
+		const blocked = E('blu-span-blocked')
+		if (blocked) blocked.style.width = (spanToFrac(lim.min) * 100) + '%'
+		const ticks = E('blu-span-ticks')
+		if (ticks) {
+			const btns = ticks.children
+			for (let i = 0; i < btns.length; i++) {
+				const sec = parseFloat(btns[i].dataset.span)
+				btns[i].disabled = sec < lim.min || sec > lim.max
+			}
+		}
+		const sec = currentSpanSec()
+		if (!spanDragging && sec > 0) placeSpanThumb(sec)
+		const input = E('blu-span-input')
+		if (input && document.activeElement !== input) {
+			input.value = fmtSpan(sec)
+			input.classList.remove('is-invalid')
+		}
+	}
+
+	function initSpanSlider() {
+		const slider = E('blu-span-slider')
+		const ticks = E('blu-span-ticks')
+		const input = E('blu-span-input')
+		if (!slider || !ticks || !input) return
+		slider.setAttribute('aria-valuemin', String(SPAN_AXIS_MIN_SEC))
+		slider.setAttribute('aria-valuemax', String(SPAN_AXIS_MAX_SEC))
+		SPAN_TICKS.forEach(function (t) {
+			const btn = document.createElement('button')
+			btn.type = 'button'
+			btn.className = 'blu-span-tick'
+			btn.dataset.span = String(t[0])
+			btn.textContent = t[1]
+			btn.tabIndex = -1
+			btn.style.left = (spanToFrac(t[0]) * 100) + '%'
+			ticks.appendChild(btn)
+		})
+
+		const track = slider.querySelector('.blu-span-track')
+		const secAtPointer = function (e) {
+			const r = track.getBoundingClientRect()
+			const sec = fracToSpan((e.clientX - r.left) / Math.max(1, r.width))
+			const lim = spanLimits()
+			const v = e.altKey ? sec : snapSpan(sec)
+			return Math.max(lim.min, Math.min(lim.max, v))
+		}
+		const dragTo = function (e) {
+			const sec = secAtPointer(e)
+			placeSpanThumb(sec)
+			setViewSpanSec(sec)
+		}
+		slider.addEventListener('pointerdown', function (e) {
+			if (e.button !== 0) return
+			const tick = e.target.closest('.blu-span-tick')
+			if (tick) {
+				if (!tick.disabled) setViewSpanSec(parseFloat(tick.dataset.span))
+				e.preventDefault()
+				return
+			}
+			spanDragging = true
+			slider.classList.add('is-drag')
+			slider.setPointerCapture(e.pointerId)
+			slider.focus()
+			e.preventDefault()
+			dragTo(e)
+		})
+		slider.addEventListener('pointermove', function (e) {
+			if (spanDragging) dragTo(e)
+		})
+		const endDrag = function () {
+			if (!spanDragging) return
+			spanDragging = false
+			slider.classList.remove('is-drag')
+			syncSpanUi()
+		}
+		slider.addEventListener('pointerup', endDrag)
+		slider.addEventListener('lostpointercapture', endDrag)
+
+		const step = function (dir) {
+			const next = stepSpan(currentSpanSec(), dir)
+			if (next != null) setViewSpanSec(next)
+		}
+		slider.addEventListener('wheel', function (e) {
+			e.preventDefault()
+			const d = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX
+			if (d) step(d > 0 ? -1 : 1)
+		}, { passive: false })
+		slider.addEventListener('keydown', function (e) {
+			const lim = spanLimits()
+			if (e.key === 'ArrowRight' || e.key === 'ArrowUp') step(1)
+			else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') step(-1)
+			else if (e.key === 'Home') setViewSpanSec(Math.max(lim.min, SPAN_AXIS_MIN_SEC))
+			else if (e.key === 'End') setViewSpanSec(lim.max)
+			else return
+			e.preventDefault()
+		})
+
+		input.addEventListener('focus', function () { input.select() })
+		const commit = function () {
+			const sec = parseSpan(input.value)
+			if (sec == null) {
+				input.classList.add('is-invalid')
+				return false
+			}
+			input.classList.remove('is-invalid')
+			setViewSpanSec(sec)
+			return true
+		}
+		input.addEventListener('keydown', function (e) {
+			if (e.key === 'Enter') {
+				if (commit()) input.blur()
+			} else if (e.key === 'Escape') {
+				input.classList.remove('is-invalid')
+				input.blur()
+			} else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+				e.preventDefault()
+				step(e.key === 'ArrowUp' ? 1 : -1)
+				input.value = fmtSpan(currentSpanSec())
+				input.select()
+			}
+		})
+		// 失焦即还原成实际窗口（非法输入不留在框里）
+		input.addEventListener('blur', syncSpanUi)
+		syncSpanUi()
 	}
 
 	function zoomX(factor) {
@@ -6106,20 +6300,13 @@
 			const el = E(id)
 			if (el) el.addEventListener('click', fn)
 		}
-		const spanGroup = E('blu-span-group')
-		if (spanGroup) {
-			spanGroup.addEventListener('click', function (ev) {
-				const btn = ev.target.closest('.blu-span-btn')
-				if (!btn || btn.disabled) return
-				setViewSpanSec(parseFloat(btn.dataset.span))
-			})
-		}
-		syncSpanUi()
+		initSpanSlider()
 		// X/Y 的 +/- 按钮已去掉（滚轮缩放：画布内缩 X，Y 轴区域内缩 Y），
 		// 但滚轮缩完需要一条回去的路，所以保留一个两轴统一的复位。
 		bindClick('blu-view-reset', function () {
 			resetY()
 			resetX()
+			syncSpanUi()
 		})
 		bindClick('blu-cursor-clear', clearSelection)
 		bindClick('blu-cursor-all', selectAllData)
@@ -6156,6 +6343,7 @@
 				// 均以指针位置为锚（非视口中心）
 				if (e.shiftKey || isOverYAxis(cx)) zoomYAt(factor, cy)
 				else zoomXAt(factor, cx)
+				syncSpanUi()
 			}, { passive: false })
 
 			canvas.addEventListener('pointermove', function (e) {
