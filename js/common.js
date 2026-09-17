@@ -2221,21 +2221,166 @@
 	})
 	document.getElementById('serial-add-crlf').addEventListener('change', function (e) {
 		changeOption('addCRLF', this.checked)
+		updateSendInfo()
 	})
 	document.getElementById('serial-hex-send').addEventListener('change', function (e) {
 		changeOption('hexSend', this.checked)
+		updateSendInfo()
 	})
-	//发送间隔只在勾选循环发送时有意义
+	//发送间隔只在勾选循环发送时有意义；循环进行中给发送区一个醒目状态
 	const loopTimeGroup = document.getElementById('serial-loop-send-time-group')
 	function syncLoopTimeGroup() {
-		if (loopTimeGroup) loopTimeGroup.hidden = !document.getElementById('serial-loop-send').checked
+		const on = document.getElementById('serial-loop-send').checked
+		if (loopTimeGroup) loopTimeGroup.hidden = !on
+		const panel = document.getElementById('serial-send-panel')
+		if (panel) panel.classList.toggle('is-looping', on)
 	}
 	syncLoopTimeGroup()
-	document.getElementById('serial-send-content').addEventListener('keydown', function (e) {
-		if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+
+	// ---- 发送区：字节数/格式提示、历史、快捷键 ----
+	const sendInput = document.getElementById('serial-send-content')
+	const sendInfo = document.getElementById('serial-send-info')
+	const SEND_HISTORY_KEY = 'serialSendHistory'
+	const SEND_HISTORY_MAX = 30
+	let sendHistoryIdx = -1
+	let sendHistoryDraft = ''
+
+	function loadSendHistory() {
+		try {
+			const v = JSON.parse(localStorage.getItem(SEND_HISTORY_KEY) || '[]')
+			return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []
+		} catch (e) {
+			return []
+		}
+	}
+	function saveSendHistory(list) {
+		try { localStorage.setItem(SEND_HISTORY_KEY, JSON.stringify(list)) } catch (e) { /* 忽略 */ }
+	}
+	function pushSendHistory(content) {
+		const list = loadSendHistory()
+		sendHistoryIdx = -1
+		//循环发送每次都会走到这里，内容没变就不重复写
+		if (list[0] === content) return
+		const i = list.indexOf(content)
+		if (i !== -1) list.splice(i, 1)
+		list.unshift(content)
+		saveSendHistory(list.slice(0, SEND_HISTORY_MAX))
+	}
+	function setSendInput(v) {
+		sendInput.value = v
+		sendInput.dispatchEvent(new Event('change'))
+		updateSendInfo()
+	}
+
+	function updateSendInfo() {
+		const hex = document.getElementById('serial-hex-send').checked
+		sendInput.placeholder = hex ? '输入 HEX，如 41 54 0D 0A' : '输入文本，如 AT+GMR'
+		if (!sendInfo) return
+		const v = sendInput.value
+		const crlf = document.getElementById('serial-add-crlf').checked ? 2 : 0
+		let text = ''
+		let bad = false
+		if (v) {
+			if (hex) {
+				const clean = v.replace(/\s+/g, '')
+				if (/[^0-9A-Fa-f]/.test(clean)) {
+					text = '含非 HEX 字符'
+					bad = true
+				} else if (clean.length % 2) {
+					text = 'HEX 位数为奇数'
+					bad = true
+				} else {
+					text = (clean.length / 2 + crlf) + ' 字节'
+				}
+			} else {
+				text = (new TextEncoder().encode(v).length + crlf) + ' 字节'
+			}
+		}
+		sendInfo.textContent = text
+		sendInfo.classList.toggle('is-error', bad)
+	}
+	sendInput.addEventListener('input', function () {
+		sendHistoryIdx = -1
+		updateSendInfo()
+	})
+	updateSendInfo()
+
+	const sendKbd = document.getElementById('serial-send-kbd')
+	if (sendKbd && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)) sendKbd.textContent = '⌘ Enter'
+
+	sendInput.addEventListener('keydown', function (e) {
+		if (e.isComposing) return
+		if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
 			e.preventDefault()
 			document.getElementById('serial-send').click()
+			return
 		}
+		//光标在最前按 ↑ / 在最后按 ↓ 翻历史，和终端习惯一致
+		if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+		if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return
+		const atStart = this.selectionStart === 0 && this.selectionEnd === 0
+		const atEnd = this.selectionStart === this.value.length && this.selectionEnd === this.value.length
+		const list = loadSendHistory()
+		if (e.key === 'ArrowUp' && atStart && list.length) {
+			if (sendHistoryIdx === -1) sendHistoryDraft = this.value
+			if (sendHistoryIdx >= list.length - 1) return
+			e.preventDefault()
+			sendHistoryIdx++
+			setSendInput(list[sendHistoryIdx])
+			this.setSelectionRange(0, 0)
+		} else if (e.key === 'ArrowDown' && atEnd && sendHistoryIdx !== -1) {
+			e.preventDefault()
+			sendHistoryIdx--
+			const idx = sendHistoryIdx
+			setSendInput(idx === -1 ? sendHistoryDraft : list[idx])
+			sendHistoryIdx = idx
+		}
+	})
+
+	document.getElementById('serial-send-clear').addEventListener('click', function () {
+		setSendInput('')
+		sendInput.focus()
+	})
+
+	const historyBtn = document.getElementById('serial-send-history-btn')
+	const historyMenu = document.getElementById('serial-send-history-menu')
+	historyBtn.addEventListener('show.bs.dropdown', function () {
+		historyMenu.textContent = ''
+		const list = loadSendHistory()
+		if (!list.length) {
+			const li = document.createElement('li')
+			const span = document.createElement('span')
+			span.className = 'dropdown-item-text send-history-empty'
+			span.textContent = '还没有发送记录'
+			li.appendChild(span)
+			historyMenu.appendChild(li)
+			return
+		}
+		list.forEach(function (item) {
+			const li = document.createElement('li')
+			const b = document.createElement('button')
+			b.type = 'button'
+			b.className = 'dropdown-item send-history-item'
+			b.textContent = item
+			b.title = item
+			b.addEventListener('click', function () {
+				setSendInput(item)
+				sendInput.focus()
+			})
+			li.appendChild(b)
+			historyMenu.appendChild(li)
+		})
+		const divider = document.createElement('li')
+		divider.innerHTML = '<hr class="dropdown-divider">'
+		historyMenu.appendChild(divider)
+		const li = document.createElement('li')
+		const clear = document.createElement('button')
+		clear.type = 'button'
+		clear.className = 'dropdown-item text-danger'
+		clear.textContent = '清空历史'
+		clear.addEventListener('click', function () { saveSendHistory([]) })
+		li.appendChild(clear)
+		historyMenu.appendChild(li)
 	})
 	document.getElementById('serial-loop-send').addEventListener('change', function (e) {
 		syncLoopTimeGroup()
@@ -2311,7 +2456,15 @@
 	function resetLoopSend() {
 		clearInterval(serialloopSendTimer)
 		if (toolOptions.loopSend) {
+			//串口没打开时跳过本次，只提示一次，免得每个间隔刷一条错误；连上后自动开始发
+			let warned = false
 			serialloopSendTimer = setInterval(() => {
+				if (!SerialHub.isOpen(SerialHub.activeSendPhys())) {
+					if (!warned) addLogErr('串口未打开，循环发送等待连接中')
+					warned = true
+					return
+				}
+				warned = false
 				send()
 			}, toolOptions.loopSendTime)
 		}
@@ -3483,6 +3636,7 @@
 			return
 		}
 		const sendName = lookupQuickSendName(content)
+		pushSendHistory(content)
 		if (toolOptions.hexSend) {
 			await sendHex(content, sendName)
 		} else {
