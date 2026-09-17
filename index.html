@@ -1096,14 +1096,16 @@
                         <div class="blu-waveform-area">
                             <div class="blu-waveform-controls">
                                 <!-- 视图：时间窗口是最常用的操作，放最左 -->
-                                <div class="blu-ctl-group blu-span-group" id="blu-span-group" title="把可视窗口设为固定时长（Live 下继续贴最新端，暂停后以视口中心为锚）">
+                                <div class="blu-ctl-group blu-span-group" id="blu-span-group">
                                     <span class="blu-ctl-label">窗口</span>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-span-btn" data-span="0.001">1ms</button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-span-btn" data-span="0.01">10ms</button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-span-btn" data-span="0.1">100ms</button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-span-btn" data-span="1">1s</button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-span-btn" data-span="10">10s</button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-span-btn" data-span="60">1min</button>
+                                    <div class="blu-span-slider" id="blu-span-slider" role="slider" tabindex="0" aria-label="窗口时长" title="拖动调节窗口时长，吸附 1/3/5 档，按住 Alt 自由拖动；滚轮或 ←/→ 逐档；点刻度直达">
+                                        <div class="blu-span-track">
+                                            <div class="blu-span-blocked" id="blu-span-blocked"></div>
+                                            <div class="blu-span-thumb" id="blu-span-thumb"></div>
+                                        </div>
+                                        <div class="blu-span-ticks" id="blu-span-ticks"></div>
+                                    </div>
+                                    <input type="text" class="blu-span-input" id="blu-span-input" spellcheck="false" autocomplete="off" title="输入窗口时长后回车，如 250ms、3s、1.5min（纯数字按秒）" value="--">
                                 </div>
                                 <span class="blu-ctl-sep"></span>
                                 <div class="blu-ctl-group">
