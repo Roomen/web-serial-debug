@@ -270,6 +270,10 @@
 	function ensureSerialView() {
 		const rail = document.querySelector('.rail-item[data-view="view-serial"]')
 		if (rail && !rail.classList.contains('active')) rail.click()
+		const main = el('main')
+		if (main && main.classList.contains('right-collapsed')) {
+			clickSel('.toggle-button[data-pane="right"]')
+		}
 	}
 
 	function presetCommands() {
@@ -285,7 +289,7 @@
 					alias: 'changyong zhiling preset ' + (item.func || ''),
 					run: function () {
 						ensureSerialView()
-						if (!window.Workbench || !window.Workbench.open('protocol')) return
+						if (!clickEl('nav-protocol-tab')) return
 						//功能码必须先设对，否则预设下拉里没有该项
 						if (item.func && !setValue('serial-protocol-down-func', item.func)) return
 						setValue('serial-protocol-down-preset', item.name)
@@ -325,15 +329,12 @@
 				if (window.bluCmdSheet && !window.bluCmdSheet.isOpen()) window.bluCmdSheet.open()
 			}
 		})
-		const themeNow = typeof window.getThemeChoice === 'function' ? window.getThemeChoice() : 'auto'
-		;[['auto', '跟随系统', 'zidong auto system'], ['light', '浅色', 'qianse liangse light'], ['dark', '深色', 'shense anse dark']].forEach(function (t) {
-			list.push({
-				group: '视图',
-				title: '主题：' + t[1],
-				detail: themeNow === t[0] ? '当前' : '',
-				alias: 'zhuti theme ' + t[2],
-				run: function () { if (window.setThemeChoice) window.setThemeChoice(t[0]) }
-			})
+		const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+		list.push({
+			group: '视图',
+			title: isDark ? '切换到亮色主题' : '切换到暗色主题',
+			alias: 'zhuti theme dark light',
+			run: function () { clickEl('theme-toggle') }
 		})
 		const main = el('main')
 		const rightCollapsed = !!(main && main.classList.contains('right-collapsed'))
@@ -371,17 +372,6 @@
 				clickEl('serial-send-header')
 			}
 		})
-		if (window.Workbench) {
-			window.Workbench.list().forEach(function (p) {
-				list.push({
-					group: '视图',
-					title: (p.shown ? '收起面板：' : '打开面板：') + p.title,
-					detail: p.dock === 'bottom' ? '底部' : '右侧',
-					alias: 'mianban panel dock ' + p.id,
-					run: function () { window.Workbench.toggle(p.id) }
-				})
-			})
-		}
 		return list
 	}
 

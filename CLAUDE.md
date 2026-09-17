@@ -4,8 +4,6 @@
 
 本仓库是一个静态 Web Serial 串口调试工具。入口文件是 `index.html`，负责页面结构并通过 CDN 加载 Bootstrap、Bootstrap Icons、xterm.js、JSZip。主要业务逻辑在 `js/common.js`，包括串口打开/关闭、快捷发送、日志展示、协议注册表等。协议解析、固件升级/打包、BLU 功耗分析各自拆在 `js/` 下的独立文件里，按 `index.html` 末尾的 `<script>` 顺序加载。样式集中在 `css/style.css`，图片和界面截图放在 `imgs/`。当前没有 `tests/` 目录，也没有构建系统。
 
-串口调试视图的工具面板由 `js/workbench.js` 管理：每个工具是一个面板，用 `Workbench.registerPanel({ id, title, label, icon, el })` 注册，可停靠在右栏或底栏（底栏与协议解析共用外壳），最右侧停靠栏负责开合，底部状态栏显示连接时长、收发字节和运行中的后台任务。面板 DOM 是原样搬进停靠区的（不克隆），所以面板内控件的 id 和已绑定事件不受影响。新增工具时注册成面板，不要再往右栏里加 Bootstrap tab；需要跳到某个面板时调用 `Workbench.open(id)`，不要去点 DOM 按钮。右栏/底栏的开合状态沿用 `common.js` 里的 `serialRightPane` / `parsePanelDock`，不要另写一套。协议选择只有顶栏的 `#serial-protocol-select` 一处，不要在面板里再放一份镜像。随机读写、批量配置面板的「协议不支持」提示和停靠栏图标变暗，靠的是 CSS 匹配卡片上的内联 `style="display: none"`（协议模块用 `el.style.display` 控制显隐）；如果把协议模块改成切 class，要同步改 `css/style.css` 里 Workbench 段的这两个选择器，否则提示会不报错地失效。
-
 ## 构建、测试与本地运行
 
 项目无需安装依赖或编译。
@@ -19,8 +17,6 @@
 ## 编码风格与命名约定
 
 保持现有的原生 HTML/CSS/JavaScript 风格。`js/common.js` 使用浏览器全局 API、`let`/`const`、单引号、无分号和 Tab 缩进。CSS 也使用 Tab 缩进和简单选择器规则。HTML 使用四空格缩进，并大量使用 Bootstrap 工具类。新增元素 ID 优先沿用 `serial-*` 命名模式，例如 `serial-logs`、`serial-baud`。
-
-不要设置鼠标指针样式（CSS `cursor`、JS `style.cursor`），`css/style.css` 末尾已把 Bootstrap 给按钮加的手型还原为默认；也不要给悬停状态加位移或缩放（`transform`）。指针在相邻元素间来回切换样式、元素悬停时移动导致鼠标在进出之间反复触发，移动鼠标会显得发抖。各视图顶栏统一用 `.view-bar`（功耗分析的 `.blu-connect-bar` 同样式），与串口调试的连接条同高、贴边。
 
 小改动不要引入框架、打包器或转译工具。若调整 CDN 依赖，应直接修改 `index.html` 并确认无需本地包安装也能运行。
 

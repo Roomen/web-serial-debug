@@ -1634,57 +1634,10 @@
 		scheduleUIUpdate()
 	}
 
-	// 全屏放大功耗内容区(指标卡 + 波形控件/画布 + 统计 + 分析 + 日志)，不含顶部设备工具条：优先用浏览器原生全屏，
-	// 不可用或被拒时退回窗口内铺满(.blu-wave-fullscreen)。状态以实际 DOM 为准，Esc/系统退出都能同步
-	function waveFsTarget() {
-		return document.querySelector('#view-blu .blu-wrapper')
-	}
-
-	function applyWaveMaximize(on) {
-		const el = waveFsTarget()
-		if (el) el.classList.toggle('blu-wave-fullscreen', on)
-		document.body.classList.toggle('blu-wave-fullscreen-open', on)
-		syncWaveFullscreenUi()
-	}
-
-	function syncWaveFullscreenUi() {
-		const el = waveFsTarget()
-		const native = !!el && document.fullscreenElement === el
-		waveFullscreen = native || !!(el && el.classList.contains('blu-wave-fullscreen'))
-		const btn = E('blu-fullscreen')
-		if (btn) {
-			btn.innerHTML = waveFullscreen
-				? '<i class="bi bi-fullscreen-exit"></i>'
-				: '<i class="bi bi-arrows-fullscreen"></i>'
-			btn.title = waveFullscreen ? '退出全屏（Esc / F）' : '全屏查看波形（F）'
-			btn.setAttribute('aria-pressed', String(waveFullscreen))
-		}
-		// 画布按容器尺寸重绘；原生全屏会触发 resize，窗口内铺满不会，这里统一补一次
-		requestAnimationFrame(function () { scheduleUIUpdate() })
-	}
-
-	let waveFsPending = false
 	function setWaveFullscreen(on) {
-		const el = waveFsTarget()
-		if (!el || waveFsPending) return
-		on = !!on
-		if (on === waveFullscreen) return
-		if (on) {
-			if (document.fullscreenEnabled && el.requestFullscreen) {
-				//请求结果回来前忽略重复触发，否则连按会叠出两种全屏
-				waveFsPending = true
-				el.requestFullscreen({ navigationUI: 'hide' })
-					.catch(function () { applyWaveMaximize(true) })
-					.finally(function () { waveFsPending = false })
-			} else {
-				applyWaveMaximize(true)
-			}
-			return
-		}
-		if (document.fullscreenElement === el) {
-			document.exitFullscreen().catch(function () { /* 已由浏览器退出 */ })
-		}
-		applyWaveMaximize(false)
+		waveFullscreen = !!on
+		const wrap = E('view-blu')
+		if (wrap) wrap.classList.toggle('blu-wave-fullscreen', waveFullscreen)
 	}
 
 	function setRecordMode(mode) {
@@ -6347,21 +6300,8 @@
 			setWaveFullscreen(!waveFullscreen)
 		})
 
-		document.addEventListener('fullscreenchange', syncWaveFullscreenUi)
 		document.addEventListener('keydown', function (e) {
-			if (e.key === 'Escape' && waveFullscreen) {
-				setWaveFullscreen(false)
-				return
-			}
-			// F 切换全屏：仅功耗页可见、焦点不在输入控件、无修饰键时
-			if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing) {
-				const view = E('view-blu')
-				if (!view || !view.classList.contains('active')) return
-				const t = e.target
-				if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
-				e.preventDefault()
-				setWaveFullscreen(!waveFullscreen)
-			}
+			if (e.key === 'Escape' && waveFullscreen) setWaveFullscreen(false)
 		})
 
 		const elLogToggle = E('blu-log-toggle')
@@ -6541,6 +6481,18 @@
 				syncSpanUi()
 			}, { passive: false })
 
+			canvas.addEventListener('pointermove', function (e) {
+				// 仅在无拖拽时提示 Y 轴可滚轮缩放
+				if (drag || selectDrag || cursorEdgeDrag || minimapDrag) return
+				const rect = canvas.getBoundingClientRect()
+				const cx = e.clientX - rect.left
+				if (isOverYAxis(cx)) {
+					canvas.style.cursor = 'ns-resize'
+				} else if (canvas.style.cursor === 'ns-resize') {
+					canvas.style.cursor = ''
+				}
+			})
+
 			canvas.addEventListener('pointerdown', function (e) {
 				if (e.button !== 0) return
 				const rect = canvas.getBoundingClientRect()
@@ -6552,6 +6504,7 @@
 					if (edge) {
 						cursorEdgeDrag = { edge: edge }
 						try { canvas.setPointerCapture(e.pointerId) } catch (err) {}
+						canvas.style.cursor = 'ew-resize'
 						scheduleUIUpdate()
 						return
 					}
@@ -6584,6 +6537,13 @@
 				const x = e.clientX - rect.left
 				const y = e.clientY - rect.top
 				hover = { x: x, y: y }
+
+				// 悬停：Y 轴 ns-resize · 游标线 ew-resize · 其余 crosshair
+				if (!cursorEdgeDrag && !selectDrag && !drag && plotLayout) {
+					if (isOverYAxis(x)) canvas.style.cursor = 'ns-resize'
+					else if (hitTestCursorEdge(x)) canvas.style.cursor = 'ew-resize'
+					else canvas.style.cursor = 'crosshair'
+				}
 
 				if (cursorEdgeDrag && plotLayout) {
 					const li = plotLayout.fromX(x)
@@ -6629,6 +6589,7 @@
 						setCursorEdge(cursorEdgeDrag.edge, cur, { snap: true })
 					}
 					cursorEdgeDrag = null
+					canvas.style.cursor = 'crosshair'
 					updateCursorInfo()
 					scheduleUIUpdate()
 					return
@@ -6667,6 +6628,7 @@
 			})
 			canvas.addEventListener('pointerleave', function () {
 				hover = null
+				if (!cursorEdgeDrag) canvas.style.cursor = 'crosshair'
 				scheduleUIUpdate()
 			})
 		}

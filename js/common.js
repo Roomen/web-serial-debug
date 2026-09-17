@@ -3,45 +3,40 @@
 		alert('当前浏览器不支持串口操作,请更换Edge或Chrome浏览器')
 	}
 
-	/* ========== Theme: 跟随系统 / 浅色 / 深色 ========== */
-	// 存储键缺省即跟随系统；data-theme 总是写成解析后的 light/dark，样式只认这两个值
+	/* ========== Theme Toggle ========== */
 	const STORAGE_KEY = 'serial-debug-theme'
-	const themeSwitch = document.getElementById('theme-switch')
-	const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
+	const themeToggle = document.getElementById('theme-toggle')
+	const savedTheme = localStorage.getItem(STORAGE_KEY)
 
-	function themeChoice() {
-		const v = localStorage.getItem(STORAGE_KEY)
-		return v === 'light' || v === 'dark' ? v : 'auto'
+	if (savedTheme) {
+		document.documentElement.setAttribute('data-theme', savedTheme)
+	} else {
+		const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+		if (prefersDark) {
+			document.documentElement.setAttribute('data-theme', 'dark')
+		}
 	}
 
-	function applyTheme() {
-		const choice = themeChoice()
-		const resolved = choice === 'auto' ? (darkQuery.matches ? 'dark' : 'light') : choice
-		document.documentElement.setAttribute('data-theme', resolved)
-		if (!themeSwitch) return
-		themeSwitch.querySelectorAll('[data-theme-choice]').forEach((btn) => {
-			const on = btn.dataset.themeChoice === choice
-			btn.classList.toggle('active', on)
-			btn.setAttribute('aria-checked', String(on))
-		})
+	function updateToggleUi() {
+		const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+		themeToggle.title = isDark ? '切换至亮色模式' : '切换至暗色模式'
 	}
 
-	window.getThemeChoice = themeChoice
-	window.setThemeChoice = function (choice) {
-		if (choice === 'light' || choice === 'dark') localStorage.setItem(STORAGE_KEY, choice)
-		else localStorage.removeItem(STORAGE_KEY)
-		applyTheme()
-	}
+	updateToggleUi()
 
-	applyTheme()
-	if (themeSwitch) {
-		themeSwitch.addEventListener('click', (e) => {
-			const btn = e.target.closest('[data-theme-choice]')
-			if (btn) window.setThemeChoice(btn.dataset.themeChoice)
-		})
-	}
-	darkQuery.addEventListener('change', () => {
-		if (themeChoice() === 'auto') applyTheme()
+	themeToggle.addEventListener('click', () => {
+		const current = document.documentElement.getAttribute('data-theme')
+		const next = current === 'dark' ? 'light' : 'dark'
+		document.documentElement.setAttribute('data-theme', next)
+		localStorage.setItem(STORAGE_KEY, next)
+		updateToggleUi()
+	})
+
+	window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+		if (!localStorage.getItem(STORAGE_KEY)) {
+			document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light')
+			updateToggleUi()
+		}
 	})
 	// 事务钉扎: 升级/批量配置等事务进行中锁定主发口, 防止中途切换把后续帧发到另一台设备
 	let pinSid = null
@@ -70,10 +65,6 @@
 			packTimer: null,
 			sekWaitStart: null,
 			label: label,
-			//状态栏用：本次连接的起始时间与收发字节数，重新打开时清零
-			openedAt: 0,
-			txBytes: 0,
-			rxBytes: 0,
 		}
 	}
 	const sessionSingle = makeSerialSession('COM')
@@ -119,16 +110,6 @@
 
 		isOpen(sid) { return this._sess(sid).open },
 		setOpen(sid, v) { this._sess(sid).open = v },
-		resetStats(sid) {
-			const s = this._sess(sid)
-			s.openedAt = Date.now()
-			s.txBytes = 0
-			s.rxBytes = 0
-		},
-		getStats(sid) {
-			const s = this._sess(sid)
-			return { open: s.open, openedAt: s.openedAt, txBytes: s.txBytes, rxBytes: s.rxBytes }
-		},
 
 		isManualClose(sid) { return this._sess(sid).manualClose },
 		setManualClose(sid, v) { this._sess(sid).manualClose = v },
@@ -2165,7 +2146,21 @@
 		})
 	})()
 
-	// 右栏当前面板的记忆与恢复由 js/workbench.js 负责(旧 activeTab 键在那里迁移)
+	// 记住当前 tab，刷新不丢失
+	const tabTriggers = document.querySelectorAll('#nav-tab button[data-bs-toggle="tab"]')
+	tabTriggers.forEach(btn => {
+		btn.addEventListener('shown.bs.tab', (e) => {
+			localStorage.setItem('activeTab', e.target.id)
+		})
+	})
+	const savedTab = localStorage.getItem('activeTab')
+	if (savedTab) {
+		const tabBtn = document.getElementById(savedTab)
+		if (tabBtn) {
+			const tab = new bootstrap.Tab(tabBtn)
+			tab.show()
+		}
+	}
 
 	//实时修改选项
 	document.getElementById('serial-timer-out').addEventListener('change', (e) => {
@@ -2221,169 +2216,11 @@
 	})
 	document.getElementById('serial-add-crlf').addEventListener('change', function (e) {
 		changeOption('addCRLF', this.checked)
-		updateSendInfo()
 	})
 	document.getElementById('serial-hex-send').addEventListener('change', function (e) {
 		changeOption('hexSend', this.checked)
-		updateSendInfo()
-	})
-	//发送间隔只在勾选循环发送时有意义；循环进行中给发送区一个醒目状态
-	const loopTimeGroup = document.getElementById('serial-loop-send-time-group')
-	function syncLoopTimeGroup() {
-		const on = document.getElementById('serial-loop-send').checked
-		if (loopTimeGroup) loopTimeGroup.hidden = !on
-		const panel = document.getElementById('serial-send-panel')
-		if (panel) panel.classList.toggle('is-looping', on)
-	}
-	syncLoopTimeGroup()
-
-	// ---- 发送区：字节数/格式提示、历史、快捷键 ----
-	const sendInput = document.getElementById('serial-send-content')
-	const sendInfo = document.getElementById('serial-send-info')
-	const SEND_HISTORY_KEY = 'serialSendHistory'
-	const SEND_HISTORY_MAX = 30
-	let sendHistoryIdx = -1
-	let sendHistoryDraft = ''
-
-	function loadSendHistory() {
-		try {
-			const v = JSON.parse(localStorage.getItem(SEND_HISTORY_KEY) || '[]')
-			return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []
-		} catch (e) {
-			return []
-		}
-	}
-	function saveSendHistory(list) {
-		try { localStorage.setItem(SEND_HISTORY_KEY, JSON.stringify(list)) } catch (e) { /* 忽略 */ }
-	}
-	function pushSendHistory(content) {
-		const list = loadSendHistory()
-		sendHistoryIdx = -1
-		//循环发送每次都会走到这里，内容没变就不重复写
-		if (list[0] === content) return
-		const i = list.indexOf(content)
-		if (i !== -1) list.splice(i, 1)
-		list.unshift(content)
-		saveSendHistory(list.slice(0, SEND_HISTORY_MAX))
-	}
-	function setSendInput(v) {
-		sendInput.value = v
-		sendInput.dispatchEvent(new Event('change'))
-		updateSendInfo()
-	}
-
-	function updateSendInfo() {
-		const hex = document.getElementById('serial-hex-send').checked
-		sendInput.placeholder = hex ? '输入 HEX，如 41 54 0D 0A' : '输入文本，如 AT+GMR'
-		if (!sendInfo) return
-		const v = sendInput.value
-		const crlf = document.getElementById('serial-add-crlf').checked ? 2 : 0
-		let text = ''
-		let bad = false
-		if (v) {
-			if (hex) {
-				const clean = v.replace(/\s+/g, '')
-				if (/[^0-9A-Fa-f]/.test(clean)) {
-					text = '含非 HEX 字符'
-					bad = true
-				} else if (clean.length % 2) {
-					text = 'HEX 位数为奇数'
-					bad = true
-				} else {
-					text = (clean.length / 2 + crlf) + ' 字节'
-				}
-			} else {
-				text = (new TextEncoder().encode(v).length + crlf) + ' 字节'
-			}
-		}
-		sendInfo.textContent = text
-		sendInfo.classList.toggle('is-error', bad)
-	}
-	sendInput.addEventListener('input', function () {
-		sendHistoryIdx = -1
-		updateSendInfo()
-	})
-	updateSendInfo()
-
-	const sendKbd = document.getElementById('serial-send-kbd')
-	if (sendKbd && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)) sendKbd.textContent = '⌘ Enter'
-
-	sendInput.addEventListener('keydown', function (e) {
-		if (e.isComposing) return
-		if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-			e.preventDefault()
-			document.getElementById('serial-send').click()
-			return
-		}
-		//光标在最前按 ↑ / 在最后按 ↓ 翻历史，和终端习惯一致
-		if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
-		if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return
-		const atStart = this.selectionStart === 0 && this.selectionEnd === 0
-		const atEnd = this.selectionStart === this.value.length && this.selectionEnd === this.value.length
-		const list = loadSendHistory()
-		if (e.key === 'ArrowUp' && atStart && list.length) {
-			if (sendHistoryIdx === -1) sendHistoryDraft = this.value
-			if (sendHistoryIdx >= list.length - 1) return
-			e.preventDefault()
-			sendHistoryIdx++
-			setSendInput(list[sendHistoryIdx])
-			this.setSelectionRange(0, 0)
-		} else if (e.key === 'ArrowDown' && atEnd && sendHistoryIdx !== -1) {
-			e.preventDefault()
-			sendHistoryIdx--
-			const idx = sendHistoryIdx
-			setSendInput(idx === -1 ? sendHistoryDraft : list[idx])
-			sendHistoryIdx = idx
-		}
-	})
-
-	document.getElementById('serial-send-clear').addEventListener('click', function () {
-		setSendInput('')
-		sendInput.focus()
-	})
-
-	const historyBtn = document.getElementById('serial-send-history-btn')
-	const historyMenu = document.getElementById('serial-send-history-menu')
-	historyBtn.addEventListener('show.bs.dropdown', function () {
-		historyMenu.textContent = ''
-		const list = loadSendHistory()
-		if (!list.length) {
-			const li = document.createElement('li')
-			const span = document.createElement('span')
-			span.className = 'dropdown-item-text send-history-empty'
-			span.textContent = '还没有发送记录'
-			li.appendChild(span)
-			historyMenu.appendChild(li)
-			return
-		}
-		list.forEach(function (item) {
-			const li = document.createElement('li')
-			const b = document.createElement('button')
-			b.type = 'button'
-			b.className = 'dropdown-item send-history-item'
-			b.textContent = item
-			b.title = item
-			b.addEventListener('click', function () {
-				setSendInput(item)
-				sendInput.focus()
-			})
-			li.appendChild(b)
-			historyMenu.appendChild(li)
-		})
-		const divider = document.createElement('li')
-		divider.innerHTML = '<hr class="dropdown-divider">'
-		historyMenu.appendChild(divider)
-		const li = document.createElement('li')
-		const clear = document.createElement('button')
-		clear.type = 'button'
-		clear.className = 'dropdown-item text-danger'
-		clear.textContent = '清空历史'
-		clear.addEventListener('click', function () { saveSendHistory([]) })
-		li.appendChild(clear)
-		historyMenu.appendChild(li)
 	})
 	document.getElementById('serial-loop-send').addEventListener('change', function (e) {
-		syncLoopTimeGroup()
 		changeOption('loopSend', this.checked)
 		resetLoopSend()
 	})
@@ -2456,15 +2293,7 @@
 	function resetLoopSend() {
 		clearInterval(serialloopSendTimer)
 		if (toolOptions.loopSend) {
-			//串口没打开时跳过本次，只提示一次，免得每个间隔刷一条错误；连上后自动开始发
-			let warned = false
 			serialloopSendTimer = setInterval(() => {
-				if (!SerialHub.isOpen(SerialHub.activeSendPhys())) {
-					if (!warned) addLogErr('串口未打开，循环发送等待连接中')
-					warned = true
-					return
-				}
-				warned = false
 				send()
 			}, toolOptions.loopSendTime)
 		}
@@ -2932,8 +2761,6 @@
 			}
 			return false
 		}
-		// 手动打开才重新计时/计数；热插拔等自动重连视为同一次连接的延续
-		if (reason === 'user' || !SerialHub.getStats(sid).openedAt) SerialHub.resetStats(sid)
 		SerialHub.setOpen(sid, true)
 		SerialHub.setManualClose(sid, false)
 		updateOpenButton(sid)
@@ -3636,7 +3463,6 @@
 			return
 		}
 		const sendName = lookupQuickSendName(content)
-		pushSendHistory(content)
 		if (toolOptions.hexSend) {
 			await sendHex(content, sendName)
 		} else {
@@ -3686,7 +3512,6 @@
 			}
 			const sendTime = new Date()
 			await writer.write(data)
-			SerialHub._sess(sid).txBytes += data.length
 			addLog(data, false, sendTime, sid)
 			addParseLog([...data], false, sendTime, sid, sendName)
 		} catch (error) {
@@ -3714,7 +3539,6 @@
 			writer = port.writable.getWriter()
 			const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
 			await writer.write(u8)
-			SerialHub._sess(sid).txBytes += u8.length
 		} catch (error) {
 			const errorType = error.name || 'UnknownError'
 			const errorMsg = error.message || '未知错误'
@@ -4033,7 +3857,6 @@
 	function dataReceived(data, sid) {
 		sid = sid || SerialHub.activeSendPhys()
 		noteSerialRx(sid)
-		SerialHub._sess(sid).rxBytes += data.length
 		//立即把原始字节交给固件升级/协议测试等模块,由其自行按协议帧边界组装
 		// 只转发当前可见模式的会话，隐藏模式的口继续收日志但不污染 serialApi
 		// 单路: 全量转发(与 main 语义一致)
@@ -4870,12 +4693,6 @@
 			})
 		})
 
-		//供停靠栏(js/workbench.js)开合右栏，与拖拽条共用同一套状态
-		window.serialRightPane = {
-			isCollapsed: function () { return isCollapsed('right') },
-			setCollapsed: function (v) { if (isCollapsed('right') !== !!v) setCollapsed('right', !!v) }
-		}
-
 		//恢复上次的宽度与折叠状态
 		try {
 			const w = JSON.parse(localStorage.getItem(WIDTH_KEY) || '{}')
@@ -4936,15 +4753,9 @@
 			}
 			saveState()
 		}
-		//供日志行点击调用:折叠态自动展开；日志行点击总是要看协议解析，底栏切回解析面板
+		//供日志行点击调用:折叠态自动展开
 		window.expandParsePanel = function () {
-			if (window.Workbench) window.Workbench.open('parse')
-			else if (isCollapsed()) setCollapsed(false)
-		}
-		//底栏同时承载其它停靠面板(js/workbench.js)，折叠状态与本面板共用
-		window.parsePanelDock = {
-			isCollapsed: isCollapsed,
-			setCollapsed: function (v) { if (isCollapsed() !== !!v) setCollapsed(!!v) }
+			if (isCollapsed()) setCollapsed(false)
 		}
 
 		// 顶缝拖高度
