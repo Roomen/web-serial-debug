@@ -1,9 +1,9 @@
-// SK188 (188协议) 解析 + 下行构造
+// CJ/T 188 (188协议) 解析 + 下行构造
 // 帧: 68 10 [表号7B] [控制码1B] [数据长度1B] [数据标识2B] [序号1B] [数据N B] [校验和1B] 16
 // 控制码: bit0-5=功能码 bit6=通讯状态 bit7=方向(0=下行请求 1=上行应答)
 // 校验和 = 帧头(68)起到校验和前所有字节按字节求和取低8位; 应答帧比请求帧多3字节 FE FE FE 前导(不参与校验)
 // 本工具扮演平台/主机角色: 构造读/写/阀控请求下发给设备, 解析设备应答。
-// 依据: /Users/logan/Documents/code/SECK/FlowLogic/Protocol/SK188/sk188.{h,c} (未随本仓库分发)
+// 依据: 设备端 188 协议固件源码 (未随本仓库分发)
 // cmd=0x09(读密钥版本) 设备端未实现应答分支, 本模块不支持。
 ;(function () {
 	'use strict'
@@ -78,8 +78,14 @@
 		0x15: [0xa0, 0x18],
 		0x16: [0xa0, 0x16],
 	}
+	// CJ/T 188-2004 表8: 写标准时间与阀控共用 CTR_3=04H, 靠数据标识 A015 区分
+	const IDENT_TIME = [0xa0, 0x15]
+	function isTimeIdent(id0, id1) {
+		return (id0 === IDENT_TIME[0] && id1 === IDENT_TIME[1]) || (id0 === IDENT_TIME[1] && id1 === IDENT_TIME[0])
+	}
 	function identMatches(cmd, id0, id1) {
 		if (cmd === 0x01 && id0 === 0x1e && id1 === 0x90) return true
+		if (cmd === 0x04 && isTimeIdent(id0, id1)) return true
 		const p = IDENT[cmd]
 		if (!p) return false
 		return (id0 === p[0] && id1 === p[1]) || (id0 === p[1] && id1 === p[0])
@@ -104,6 +110,31 @@
 		return hexbytes(addr) + (isBroadcastAddr(addr) ? ' (广播,全部通配)' : ' (BCD=' + bcdDecodeBE(addr) + ')')
 	}
 
+	// 实时时间 YYYYMMDDhhmmss 7字节BCD; 按标准 6.4.2 多字节数据低字节先传: ss mm hh DD MM YY(低) YY(高)
+	function timeToBcdLe(d) {
+		const digits = String(d.getFullYear()).padStart(4, '0')
+			+ [d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds()].map(v => String(v).padStart(2, '0')).join('')
+		const out = new Uint8Array(7)
+		for (let i = 0; i < 7; i++) out[6 - i] = parseInt(digits.substr(i * 2, 2), 16)
+		return out
+	}
+	function bcdLeToTimeStr(b) {
+		const s = bcdDecodeBE(Array.from(b).reverse())
+		return s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8) + ' ' + s.slice(8, 10) + ':' + s.slice(10, 12) + ':' + s.slice(12, 14)
+	}
+	// 空串 = 本机当前时间; 否则接受 "YYYY-MM-DD hh:mm:ss" / "YYYYMMDDhhmmss"
+	function parseTimeInput(v) {
+		const str = String(v || '').trim()
+		if (!str) return new Date()
+		const m = /^(\d{4})\D?(\d{2})\D?(\d{2})\D*(\d{2})\D?(\d{2})\D?(\d{2})$/.exec(str)
+		if (!m) throw new Error('时间格式需为 YYYY-MM-DD hh:mm:ss (留空=本机当前时间)')
+		const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])
+		if (d.getFullYear() !== +m[1] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[3] || d.getHours() !== +m[4] || d.getMinutes() !== +m[5] || d.getSeconds() !== +m[6]) {
+			throw new Error('时间不合法: ' + str)
+		}
+		return d
+	}
+
 	function checksum(bytes, len) {
 		let s = 0
 		for (let i = 0; i < len; i++) s = (s + bytes[i]) & 0xff
@@ -116,7 +147,8 @@
 			case 0x01: // 读数据: 无请求参数
 			case 0x03: // 读表号: 无请求参数
 				return new Uint8Array(0)
-			case 0x04: { // 阀控: 1字节操作码
+			case 0x04: { // 阀控: 1字节操作码; 写标准时间: 7字节实时时间
+				if (opt.time) return timeToBcdLe(opt.time)
 				const op = (opt.valveOp != null ? opt.valveOp : 0x55) & 0xff
 				if (!VALVE_OP[op]) throw new Error('阀控操作码非法(需 0x55/0x99/0x77)')
 				return new Uint8Array([op])
@@ -126,7 +158,7 @@
 				if (addr.length !== ADDR_SIZE) throw new Error('新表号需 ' + ADDR_SIZE + ' 字节 HEX')
 				return addr
 			}
-			case 0x16: { // 写底度: 4字节小端BCD, 帧上单位为10L(见 sk188.c comToLittleEndianBCDArrayToUnsignedInt(...)×10); 面板按 m³ 输入,这里转换
+			case 0x16: { // 写底度: 4字节小端BCD, 帧上单位为10L(见设备固件 comToLittleEndianBCDArrayToUnsignedInt(...)×10); 面板按 m³ 输入,这里转换
 				const m3 = Number(opt.degreeM3)
 				if (!Number.isFinite(m3) || m3 < 0) throw new Error('底度需为非负数字(单位m³)')
 				const literL = Math.round(m3 * 1000)
@@ -138,7 +170,7 @@
 	}
 
 	// ===== 下行构造 =====
-	W.sk188BuildDownFrame = function (opt) {
+	W.cjt188BuildDownFrame = function (opt) {
 		opt = opt || {}
 		const cmd = (typeof opt.cmd === 'string') ? parseInt(opt.cmd, 16) : opt.cmd
 		if (!CMD_TABLE[cmd]) throw new Error('不支持的功能码 ' + opt.cmd)
@@ -147,7 +179,7 @@
 		const seq = (opt.seq != null ? opt.seq : 0) & 0xff
 		const commuStatus = opt.commuStatus ? 1 : 0
 		const content = buildContent(cmd, seq, opt)
-		const ident = cmd === 0x01 && opt.extendedRead ? [0x1e, 0x90] : IDENT[cmd]
+		const ident = cmd === 0x01 && opt.extendedRead ? [0x1e, 0x90] : (cmd === 0x04 && opt.time) ? IDENT_TIME : IDENT[cmd]
 		const dataLen = 2 + 1 + content.length
 
 		const frame = new Uint8Array(13 + dataLen)
@@ -166,7 +198,7 @@
 	}
 
 	W.skUltrasonicBuildDownFrame = function (opt) {
-		return W.sk188BuildDownFrame(Object.assign({}, opt, { extendedRead: true }))
+		return W.cjt188BuildDownFrame(Object.assign({}, opt, { extendedRead: true }))
 	}
 
 	// 901E: TLV; 累计量为小端 uint32 m³ + uint16 L + 单位码。
@@ -218,7 +250,7 @@
 	}
 
 	// ===== 查找帧 (跳过应答帧可能带的 FE FE FE 前导) =====
-	W.sk188FindFrame = function (bytes, opt) {
+	W.cjt188FindFrame = function (bytes, opt) {
 		const b = (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes || [])
 		const empty = { found: false, offset: 0, length: b.length, frame: b, prefix: 0, suffix: 0 }
 		for (let i = 0; i + 11 <= b.length; i++) {
@@ -236,7 +268,7 @@
 	}
 
 	// ===== 解析 =====
-	W.sk188ParseFrame = function (bytes, opt) {
+	W.cjt188ParseFrame = function (bytes, opt) {
 		const raw = (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes || [])
 		let frameOffset = 0
 		while (raw[frameOffset] === 0xfe) frameOffset++
@@ -271,13 +303,14 @@
 		const seq = b[13]
 		const content = b.subarray(14, 14 + Math.max(0, dataLen - 3))
 		const cmdDef = CMD_TABLE[cmd]
+		const isTime = cmd === 0x04 && isTimeIdent(id0, id1)
 		if (cmdDef && !identMatches(cmd, id0, id1)) errors.push('数据标识与功能码不匹配')
 
 		result.dir = dataFrom ? 'up' : 'down'
 		result.fields = {
 			方向: dataFrom ? '↑ 应答(设备→平台)' : '↓ 请求(平台→设备)',
 			表号: describeAddr(addr),
-			功能码: { value: hexByte(cmd), name: cmdDef ? cmdDef.name : '未知' },
+			功能码: { value: hexByte(cmd), name: isTime ? '写标准时间' : cmdDef ? cmdDef.name : '未知' },
 			通讯状态: commuStatus,
 			数据标识: hexByte(id0) + ' ' + hexByte(id1),
 			序号: seq,
@@ -306,7 +339,11 @@
 					result.decoded = dataFrom ? '表号即上方地址字段' : '(读表号请求, 无参数)'
 					break
 				case 0x04:
-					if (!dataFrom && content.length >= 1) {
+					if (isTime) {
+						if (dataFrom) result.decoded = '(写标准时间应答, 无数据内容)'
+						else if (content.length >= 7) result.decoded = '实时时间 = ' + bcdLeToTimeStr(content.subarray(0, 7))
+						else errors.push('写标准时间请求内容长度不足(需7字节)')
+					} else if (!dataFrom && content.length >= 1) {
 						result.decoded = '阀控操作 = ' + (VALVE_OP[content[0]] || ('未知(' + hexByte(content[0]) + ')'))
 					} else if (dataFrom && content.length >= 2) {
 						result.decoded = decodeStatus2(content)
@@ -338,7 +375,7 @@
 		return result
 	}
 
-	W.sk188FormatFrame = function (r) {
+	W.cjt188FormatFrame = function (r) {
 		let h = '<div class="sk-parse">'
 		h += '<div class="sk-parse-bar">' + (r.ok ? '✓' : '✗') + '</div>'
 		const f = r.fields || {}
@@ -373,7 +410,7 @@
 		return h
 	}
 
-	W.sk188ByteMap = function (r) {
+	W.cjt188ByteMap = function (r) {
 		const bytes = (r.raw instanceof Uint8Array) ? r.raw : Uint8Array.from(r.raw || [])
 		const offset = r.frameOffset || 0
 		const raw = bytes.subarray(offset)
@@ -400,54 +437,54 @@
 	// ===== 协议注册 =====
 	function tryRegister() {
 		if (typeof W.registerProtocol !== 'function') { setTimeout(tryRegister, 50); return }
-		W.registerProtocol('sk188', {
+		W.registerProtocol('cjt188', {
 			name: '188协议',
-			parseFrame: W.sk188ParseFrame,
-			formatFrame: W.sk188FormatFrame,
-			findFrame: W.sk188FindFrame,
-			byteMap: W.sk188ByteMap,
-			buildDownFrame: W.sk188BuildDownFrame,
+			parseFrame: W.cjt188ParseFrame,
+			formatFrame: W.cjt188FormatFrame,
+			findFrame: W.cjt188FindFrame,
+			byteMap: W.cjt188ByteMap,
+			buildDownFrame: W.cjt188BuildDownFrame,
 			presets: [],
 		})
 		W.registerProtocol('sk-ultrasonic', {
 			name: '188协议（超声）',
-			parseFrame: W.sk188ParseFrame,
-			formatFrame: W.sk188FormatFrame,
-			findFrame: W.sk188FindFrame,
-			byteMap: W.sk188ByteMap,
+			parseFrame: W.cjt188ParseFrame,
+			formatFrame: W.cjt188FormatFrame,
+			findFrame: W.cjt188FindFrame,
+			byteMap: W.cjt188ByteMap,
 			buildDownFrame: W.skUltrasonicBuildDownFrame,
 			presets: [],
 		})
 		const sel = document.getElementById('serial-protocol-select')
-		if (sel && ['sk188', 'sk-ultrasonic'].includes(W._activeProtocol)) sel.value = W._activeProtocol
+		if (sel && ['cjt188', 'sk-ultrasonic'].includes(W._activeProtocol)) sel.value = W._activeProtocol
 		initDownUi()
 	}
 
 	// ===== 下行下发面板 =====
 	function initDownUi() {
-		const cmdSel = document.getElementById('sk188-down-cmd')
-		if (!cmdSel || cmdSel.dataset.sk188Init) return
-		cmdSel.dataset.sk188Init = '1'
+		const cmdSel = document.getElementById('cjt188-down-cmd')
+		if (!cmdSel || cmdSel.dataset.cjt188Init) return
+		cmdSel.dataset.cjt188Init = '1'
 
-		const addrEl = document.getElementById('sk188-down-addr')
-		const addrResetBtn = document.getElementById('sk188-down-addr-reset')
-		const seqEl = document.getElementById('sk188-down-seq')
-		const paramGroup = document.getElementById('sk188-down-param-group')
-		const paramLabel = document.getElementById('sk188-down-param-label')
-		const paramVal = document.getElementById('sk188-down-param-val')
-		const paramSel = document.getElementById('sk188-down-param-sel')
-		const errEl = document.getElementById('sk188-down-err')
-		const buildBtn = document.getElementById('sk188-down-build')
-		const sendBtn = document.getElementById('sk188-down-send')
-		const preview = document.getElementById('sk188-down-preview')
+		const addrEl = document.getElementById('cjt188-down-addr')
+		const addrResetBtn = document.getElementById('cjt188-down-addr-reset')
+		const seqEl = document.getElementById('cjt188-down-seq')
+		const paramGroup = document.getElementById('cjt188-down-param-group')
+		const paramLabel = document.getElementById('cjt188-down-param-label')
+		const paramVal = document.getElementById('cjt188-down-param-val')
+		const paramSel = document.getElementById('cjt188-down-param-sel')
+		const errEl = document.getElementById('cjt188-down-err')
+		const buildBtn = document.getElementById('cjt188-down-build')
+		const sendBtn = document.getElementById('cjt188-down-send')
+		const preview = document.getElementById('cjt188-down-preview')
 
-		addrEl.value = localStorage.getItem('sk188DownAddr') || BROADCAST_ADDR
-		seqEl.value = localStorage.getItem('sk188DownSeq') || '1'
+		addrEl.value = localStorage.getItem('cjt188DownAddr') || BROADCAST_ADDR
+		seqEl.value = localStorage.getItem('cjt188DownSeq') || '1'
 
 		if (addrResetBtn) {
 			addrResetBtn.addEventListener('click', () => {
 				addrEl.value = BROADCAST_ADDR
-				localStorage.setItem('sk188DownAddr', BROADCAST_ADDR)
+				localStorage.setItem('cjt188DownAddr', BROADCAST_ADDR)
 			})
 		}
 
@@ -458,6 +495,13 @@
 			paramVal.style.display = 'none'
 			paramSel.style.display = 'none'
 			paramGroup.style.display = ''
+			if (cmdSel.value === 'time') {
+				paramLabel.textContent = '时间'
+				paramVal.style.display = ''
+				paramVal.placeholder = '留空=本机当前时间, 或 2026-01-01 12:00:00'
+				paramVal.value = ''
+				return
+			}
 			switch (cmd) {
 				case 0x04:
 					paramLabel.textContent = '阀控操作'
@@ -492,21 +536,23 @@
 		function buildFrame() {
 			showErr('')
 			try {
-				const cmd = parseInt(cmdSel.value, 16)
+				const isTime = cmdSel.value === 'time'
+				const cmd = isTime ? 0x04 : parseInt(cmdSel.value, 16)
 				const opt = {
 					addr: addrEl.value,
-					cmd: cmdSel.value,
+					cmd,
 					seq: parseInt(seqEl.value, 10) || 0,
 				}
-				if (cmd === 0x04) opt.valveOp = parseInt(paramSel.value, 16)
+				if (isTime) opt.time = parseTimeInput(paramVal.value)
+				if (cmd === 0x04 && !isTime) opt.valveOp = parseInt(paramSel.value, 16)
 				if (cmd === 0x15) opt.newAddr = paramVal.value
 				if (cmd === 0x16) opt.degreeM3 = parseFloat(paramVal.value)
 				const ultrasonic = document.getElementById('serial-protocol-select').value === 'sk-ultrasonic'
-				const frame = ultrasonic ? W.skUltrasonicBuildDownFrame(opt) : W.sk188BuildDownFrame(opt)
-				localStorage.setItem('sk188DownAddr', addrEl.value)
+				const frame = ultrasonic ? W.skUltrasonicBuildDownFrame(opt) : W.cjt188BuildDownFrame(opt)
+				localStorage.setItem('cjt188DownAddr', addrEl.value)
 				const nextSeq = ((opt.seq + 1) & 0xff)
 				seqEl.value = String(nextSeq)
-				localStorage.setItem('sk188DownSeq', String(nextSeq))
+				localStorage.setItem('cjt188DownSeq', String(nextSeq))
 				return frame
 			} catch (e) {
 				showErr(e.message)
@@ -532,15 +578,15 @@
 		function applyVisibility() {
 			const sel = document.getElementById('serial-protocol-select')
 			const v = sel ? sel.value : 'sek'
-			const isSk188 = v === 'sk188' || v === 'sk-ultrasonic'
-			const title = document.getElementById('sk188-down-title')
+			const isCjt188 = v === 'cjt188' || v === 'sk-ultrasonic'
+			const title = document.getElementById('cjt188-down-title')
 			if (title) title.textContent = v === 'sk-ultrasonic' ? '188协议（超声）下行下发' : '188协议下行下发'
 			const readOption = cmdSel.querySelector('option[value="0x01"]')
 			if (readOption) readOption.textContent = v === 'sk-ultrasonic' ? '0x01 拓展读流量 (901E)' : '0x01 读数据'
 			if (preview) preview.value = ''
 			const isSek = v === 'sek'
-			const card = document.getElementById('sk188-down-card')
-			if (card) card.style.display = isSk188 ? '' : 'none'
+			const card = document.getElementById('cjt188-down-card')
+			if (card) card.style.display = isCjt188 ? '' : 'none'
 			;['sk-down-card', 'sk-rw-card', 'sk-batch-card', 'serial-protocol-advanced'].forEach(function (id) {
 				const el = document.getElementById(id)
 				if (el) el.style.display = isSek ? '' : 'none'
