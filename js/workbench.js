@@ -281,12 +281,46 @@
 
 	// ---------- 状态栏 ----------
 
-	// 后台任务：停止键可用即视为运行中
+	// 后台任务：面板任务以停止键可用视为运行中；循环发送看勾选框
+	function panelTask(panel, stopId, progressId, label) {
+		return {
+			label: label,
+			title: '打开' + label + '面板',
+			running: function () {
+				const stop = $(stopId)
+				return !!(stop && !stop.disabled)
+			},
+			text: function () {
+				const prog = $(progressId)
+				const txt = prog ? prog.textContent.trim() : ''
+				return label + (txt ? ' ' + txt : '') + ' 运行中'
+			},
+			open: function () { open(panel) },
+		}
+	}
 	const TASKS = [
-		{ panel: 'rw', stop: 'sk-rw-stop', progress: 'sk-rw-progress-bar', label: '随机读写' },
-		{ panel: 'batch', stop: 'sk-batch-stop', progress: 'sk-batch-progress-bar', label: '批量配置' },
-		{ panel: 'protocol', stop: 'gz-auto-stop', progress: 'gz-auto-progress-bar', label: '工位测试' },
-		{ panel: 'firmware', stop: 'fw-stop', progress: 'fw-progress', label: '固件升级' },
+		panelTask('rw', 'sk-rw-stop', 'sk-rw-progress-bar', '随机读写'),
+		panelTask('batch', 'sk-batch-stop', 'sk-batch-progress-bar', '批量配置'),
+		panelTask('protocol', 'gz-auto-stop', 'gz-auto-progress-bar', '工位测试'),
+		panelTask('firmware', 'fw-stop', 'fw-progress', '固件升级'),
+		{
+			label: '循环发送',
+			title: '定位到串口发送',
+			running: function () {
+				const cb = $('serial-loop-send')
+				return !!(cb && cb.checked)
+			},
+			text: function () {
+				const t = $('serial-loop-send-time')
+				return '循环发送 每 ' + (t ? t.value : '?') + ' ms'
+			},
+			open: function () {
+				ensureSerialView()
+				if (typeof window.expandSendPanel === 'function') window.expandSendPanel()
+				const input = $('serial-send-content')
+				if (input) input.focus()
+			},
+		},
 	]
 
 	function fmtBytes(n) {
@@ -333,13 +367,13 @@
 			statusRefs.sessions[sid] = { seg: seg, name: name, state: stateEl, tx: tx, rx: rx, txWrap: txWrap, rxWrap: rxWrap }
 		})
 		const tasks = span('sb-group sb-tasks')
-		statusRefs.tasks = TASKS.map(function (t) {
+		statusRefs.tasks = TASKS.map(function (t, idx) {
 			const b = document.createElement('button')
 			b.type = 'button'
 			b.className = 'sb-task'
 			b.hidden = true
-			b.dataset.dockPanel = t.panel
-			b.title = '打开' + t.label + '面板'
+			b.dataset.task = String(idx)
+			b.title = t.title
 			const text = span('', '')
 			b.append(span('sb-spin'), text)
 			tasks.appendChild(b)
@@ -378,14 +412,21 @@
 			r.rx.textContent = fmtBytes(st.rxBytes)
 		})
 		statusRefs.tasks.forEach(function (t) {
-			const stop = $(t.def.stop)
-			const running = !!(stop && !stop.disabled)
+			const running = t.def.running()
 			t.btn.hidden = !running
-			if (!running) return
-			const prog = $(t.def.progress)
-			const txt = prog ? prog.textContent.trim() : ''
-			t.text.textContent = t.def.label + (txt ? ' ' + txt : '') + ' 运行中'
+			if (running) t.text.textContent = t.def.text()
 		})
+		// 双路时标出串口发送区当前发往哪个口
+		const target = $('serial-send-target')
+		if (target) {
+			const dual = hub.mode === 'dual'
+			target.hidden = !dual
+			if (dual) {
+				const sid = hub.activeSendPhys()
+				target.textContent = '→ ' + (sid === 'S' ? '单路串口' : (sid === 'B' ? hub.getLabelB() : hub.getLabelA()))
+				target.dataset.sid = sid
+			}
+		}
 	}
 
 	// ---------- 初始化 ----------
@@ -423,7 +464,8 @@
 		if (sb) {
 			sb.addEventListener('click', function (e) {
 				const b = e.target.closest('.sb-task')
-				if (b) open(b.dataset.dockPanel)
+				const def = b && TASKS[Number(b.dataset.task)]
+				if (def) def.open()
 			})
 		}
 
