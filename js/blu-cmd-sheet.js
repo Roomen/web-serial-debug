@@ -112,6 +112,9 @@
 
 	function bindEvents() {
 		tab.addEventListener('click', function () { setOpen(true) })
+		// 顶部工具条上的入口（底部标签已隐藏，避免压住运行日志栏）
+		const toolbarBtn = E('blu-cmd-open')
+		if (toolbarBtn) toolbarBtn.addEventListener('click', function () { setOpen(!isOpen) })
 		closeBtn.addEventListener('click', function () { setOpen(false) })
 		backdrop.addEventListener('click', function () { setOpen(false) })
 
@@ -177,19 +180,15 @@
 		sheet.addEventListener('focusin', cancelAutoClose, true)
 	}
 
+	// 波形全屏(原生全屏或窗口内铺满)时收起面板，免得挡住波形
 	function observeFullscreen() {
-		const viewBlu = E('view-blu')
-		if (!viewBlu) return
-		const observer = new MutationObserver(function (mutations) {
-			for (const m of mutations) {
-				if (m.attributeName === 'class') {
-					if (viewBlu.classList.contains('blu-wave-fullscreen') && isOpen) {
-						setOpen(false, true)
-					}
-				}
-			}
-		})
-		observer.observe(viewBlu, { attributes: true, attributeFilter: ['class'] })
+		function check() {
+			const wave = document.querySelector('#view-blu .blu-wrapper')
+			const on = !!wave && (document.fullscreenElement === wave || wave.classList.contains('blu-wave-fullscreen'))
+			if (on && isOpen) setOpen(false, true)
+		}
+		document.addEventListener('fullscreenchange', check)
+		new MutationObserver(check).observe(document.body, { attributes: true, attributeFilter: ['class'] })
 	}
 
 	function setOpen(open, silent) {
@@ -206,6 +205,8 @@
 			backdrop.hidden = true
 			sheet.hidden = true
 		}
+		const toolbarBtn = E('blu-cmd-open')
+		if (toolbarBtn) toolbarBtn.setAttribute('aria-pressed', String(!!open))
 		if (!silent) {
 			try { localStorage.setItem(STORAGE_KEY, open ? '1' : '0') } catch (e) {}
 		}
