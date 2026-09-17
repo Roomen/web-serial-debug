@@ -1634,10 +1634,10 @@
 		scheduleUIUpdate()
 	}
 
-	// 全屏只放大波形区(控件 + 画布 + 统计 + 分析)：优先用浏览器原生全屏，
+	// 全屏放大功耗内容区(指标卡 + 波形控件/画布 + 统计 + 分析 + 日志)，不含顶部设备工具条：优先用浏览器原生全屏，
 	// 不可用或被拒时退回窗口内铺满(.blu-wave-fullscreen)。状态以实际 DOM 为准，Esc/系统退出都能同步
 	function waveFsTarget() {
-		return document.querySelector('#view-blu .blu-wave-wrap')
+		return document.querySelector('#view-blu .blu-wrapper')
 	}
 
 	function applyWaveMaximize(on) {
