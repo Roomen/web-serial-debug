@@ -20,6 +20,8 @@
 
 保持现有的原生 HTML/CSS/JavaScript 风格。`js/common.js` 使用浏览器全局 API、`let`/`const`、单引号、无分号和 Tab 缩进。CSS 也使用 Tab 缩进和简单选择器规则。HTML 使用四空格缩进，并大量使用 Bootstrap 工具类。新增元素 ID 优先沿用 `serial-*` 命名模式，例如 `serial-logs`、`serial-baud`。
 
+不要设置鼠标指针样式（CSS `cursor`、JS `style.cursor`），`css/style.css` 末尾已把 Bootstrap 给按钮加的手型还原为默认；也不要给悬停状态加位移或缩放（`transform`）。指针在相邻元素间来回切换样式、元素悬停时移动导致鼠标在进出之间反复触发，移动鼠标会显得发抖。各视图顶栏统一用 `.view-bar`（功耗分析的 `.blu-connect-bar` 同样式），与串口调试的连接条同高、贴边。
+
 小改动不要引入框架、打包器或转译工具。若调整 CDN 依赖，应直接修改 `index.html` 并确认无需本地包安装也能运行。
 
 ## 测试指南

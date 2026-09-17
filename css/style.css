@@ -239,7 +239,6 @@ body {
 
 #main.pane-dragging {
   user-select: none;
-  cursor: col-resize;
 }
 
 #main.pane-dragging .sidebar-body,
@@ -343,7 +342,6 @@ body {
   background: none;
   border: 0;
   color: var(--text-muted);
-  cursor: pointer;
   font-size: 0.55rem;
   font-family: var(--font-sans);
   text-align: center;
@@ -361,10 +359,6 @@ body {
 .rail-item:hover {
   color: var(--text-primary);
   background: var(--accent-light);
-}
-
-.rail-item:hover i {
-  transform: scale(1.1);
 }
 
 .rail-item.active {
@@ -408,7 +402,6 @@ body {
   background: transparent;
   color: var(--text-secondary);
   font-size: 9px;
-  cursor: pointer;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 
@@ -509,7 +502,6 @@ body {
   text-decoration: none;
   font-size: 0.75rem;
   transition: color var(--transition-fast);
-  cursor: pointer;
   padding: 4px 12px;
   border-radius: var(--radius-sm);
 }
@@ -567,7 +559,6 @@ body {
   background: transparent;
   color: transparent;
   font-size: 11px;
-  cursor: col-resize;
   touch-action: none;
 }
 
@@ -609,7 +600,6 @@ body {
   bottom: auto;
   width: 12px;
   height: 100%;
-  cursor: pointer;
   color: var(--text-muted);
   background: var(--bg-sidebar-toggle);
 }
@@ -684,7 +674,6 @@ body {
   background-position: left center;
   border-radius: 2em;
   transition: background-position var(--transition-fast), background-color var(--transition-fast);
-  cursor: pointer;
 }
 
 .form-switch .form-check-input:checked {
@@ -819,7 +808,6 @@ body {
   padding: 2px 8px;
   border-left: 3px solid transparent;
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  cursor: pointer;
   transition: background-color var(--transition-fast), border-left-color var(--transition-fast);
 }
 
@@ -1057,7 +1045,6 @@ body {
 
 .log-row[data-dir='sys'] {
   border-left-color: var(--danger);
-  cursor: default;
 }
 
 .log-row[data-dir='sys'] .log-dir {
@@ -1218,27 +1205,19 @@ body {
 }
 
 /* ========== Quick Send Items ========== */
+/* 紧凑列表：一行一条，分隔线代替卡片；删除键放行尾、悬停才出现 */
 .quick-item {
   display: grid;
-  grid-template-columns: 18px 28px minmax(0, 1fr) var(--qs-name-w) 22px;
+  grid-template-columns: 14px minmax(0, 1fr) var(--qs-name-w) 20px 20px;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px !important;
-  margin-bottom: 4px;
-  background: var(--bg-code);
-  border: 1px solid transparent !important;
-  border-radius: var(--radius-md);
-  transition: all var(--transition-fast);
-}
-
-.quick-item:last-child {
-  margin-bottom: 0;
+  gap: 4px;
+  min-height: 30px;
+  padding: 2px 2px 2px 0;
+  border-bottom: 1px solid var(--border-light);
 }
 
 .quick-item:hover {
   background: var(--bg-surface-hover);
-  border-color: var(--border-color) !important;
-  box-shadow: var(--shadow-sm);
 }
 
 .quick-item.dragging {
@@ -1246,58 +1225,98 @@ body {
 }
 
 .quick-item .quick-drag-handle {
-  width: 18px;
-  height: 28px;
+  grid-column: 1;
+  grid-row: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  height: 24px;
   color: var(--text-muted);
-  opacity: 0.4;
-  cursor: grab;
+  opacity: 0;
   touch-action: none;
 }
 
-.quick-item .quick-drag-handle:hover {
-  opacity: 0.9;
+.quick-item:hover .quick-drag-handle {
+  opacity: 0.8;
 }
 
 .quick-item .quick-drag-handle i {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
 }
 
 .quick-item .quick-content {
-  font-size: 0.75rem;
-  font-family: var(--font-mono);
-  border-radius: var(--radius-sm);
+  grid-column: 2;
+  grid-row: 1;
   min-width: 0;
+  height: 24px;
+  min-height: 0;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 22px;
+}
+
+.quick-item:hover .quick-content {
+  border-color: var(--border-color);
+  background: var(--bg-input);
+}
+
+.quick-item .quick-content:focus {
+  border-color: var(--accent);
+  background: var(--bg-input);
+  box-shadow: 0 0 0 2px var(--accent-light);
 }
 
 .quick-item .quick-send {
+  grid-column: 3;
+  grid-row: 1;
   width: 100%;
   min-width: 0;
+  height: 24px;
+  padding: 0 8px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.7rem;
   font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 999px;
+  line-height: 22px;
+  border-radius: var(--radius-sm);
   color: var(--accent);
   background: var(--accent-light);
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
-  transition: all var(--transition-fast);
-  cursor: pointer;
+  border: 1px solid transparent;
 }
 
 .quick-item .quick-send:hover {
   color: #fff;
   background: var(--accent);
-  border-color: var(--accent);
+}
+
+.quick-item .quick-hex {
+  grid-column: 4;
+  grid-row: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+}
+
+.quick-item .quick-hex input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .quick-item .quick-remove {
-  width: 28px;
-  height: 28px;
+  grid-column: 5;
+  grid-row: 1;
+  width: 20px;
+  height: 20px;
   padding: 0;
   display: inline-flex;
   align-items: center;
@@ -1306,16 +1325,16 @@ body {
   border-radius: var(--radius-sm);
   color: var(--text-muted);
   background: transparent;
-  opacity: 0.45;
+  opacity: 0;
   line-height: 1;
-  transition: all var(--transition-fast);
 }
 
 .quick-item .quick-remove i {
-  font-size: 0.65rem;
+  font-size: 0.6rem;
 }
 
-.quick-item:hover .quick-remove {
+.quick-item:hover .quick-remove,
+.quick-item .quick-remove:focus-visible {
   opacity: 1;
 }
 
@@ -1324,33 +1343,33 @@ body {
   background: var(--danger-light);
 }
 
-.quick-item .quick-hex {
+.quick-send-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quick-send-group {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.quick-send-toolbar .btn {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  margin: 0;
-  padding: 0;
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-color);
-  cursor: pointer;
-  user-select: none;
+  gap: 4px;
+  white-space: nowrap;
 }
 
-.quick-item .quick-hex input {
-  width: 0.9em;
-  height: 0.9em;
-  margin: 0;
-  cursor: pointer;
+.quick-send-menu {
+  font-size: 0.8rem;
 }
 
-.quick-item .quick-hex:has(input:checked) {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  background: var(--accent-light);
+.quick-send-menu .dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* ========== Protocol Parse ========== */
@@ -1418,7 +1437,6 @@ body {
 }
 
 .sk-parse-fold > summary {
-  cursor: pointer;
   list-style: none;
   display: flex;
   align-items: center;
@@ -1518,7 +1536,6 @@ body {
   font-weight: 600;
   font-size: 0.65rem;
   color: var(--text-secondary);
-  cursor: pointer;
   padding: 1px 0;
 }
 
@@ -1541,7 +1558,6 @@ body {
   background: var(--bg-code);
   border-radius: 3px;
   white-space: nowrap;
-  cursor: help;
 }
 
 .sk-parse-item:hover,
@@ -1550,7 +1566,6 @@ body {
 }
 
 .sk-parse-grid td.sk-parse-hotspot {
-  cursor: help;
 }
 
 .sk-parse-grid td.sk-parse-hotspot:hover {
@@ -1569,7 +1584,6 @@ body {
   line-height: 1.35;
   max-height: 280px;
   overflow: auto;
-  cursor: help;
   border: 1px solid transparent;
 }
 
@@ -1665,7 +1679,6 @@ body {
   width: 100%;
   height: 148px;
   border-radius: 4px;
-  cursor: crosshair;
   background: color-mix(in srgb, var(--bg-elevated, #fff) 50%, transparent);
 }
 
@@ -1694,7 +1707,6 @@ body {
 }
 
 .sk-series-details > summary {
-  cursor: pointer;
   color: var(--text-secondary);
   font-size: 0.62rem;
   user-select: none;
@@ -1924,7 +1936,6 @@ body {
 
 /* ========== Hover Tips ========== */
 .sk-hex-byte {
-  cursor: help;
   border-radius: 2px;
   transition: background-color 0.1s;
 }
@@ -1993,7 +2004,6 @@ body {
 }
 
 .sk-hex-copyable {
-  cursor: pointer;
   font-family: var(--font-mono);
   letter-spacing: 0.02em;
 }
@@ -2099,16 +2109,17 @@ select option {
 
 /* 发送键列定宽，内容输入框才能上下对齐；表头与行共用同一列宽 */
 #nav-quick-send {
-  --qs-name-w: 104px;
+  --qs-name-w: clamp(96px, 32%, 150px);
 }
 
 .quick-send-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--qs-name-w) 22px;
+  grid-template-columns: minmax(0, 1fr) var(--qs-name-w) 20px 20px;
   align-items: center;
-  gap: 6px;
-  padding: 2px 8px 2px 66px;
-  margin-bottom: 6px;
+  gap: 4px;
+  padding: 8px 2px 4px 24px;
+  margin: 0;
+  border-bottom: 1px solid var(--border-color);
   font-size: 0.65rem;
   font-weight: 600;
   color: var(--text-muted);
@@ -2121,7 +2132,6 @@ select option {
   text-align: center;
 }
 .quick-send-head .col-hex {
-  min-width: 22px;
   text-align: center;
 }
 
@@ -2177,7 +2187,6 @@ select option {
 
 .protocol-switch-inline .form-check-label {
   font-size: 0.78rem;
-  cursor: pointer;
 }
 
 .protocol-advanced {
@@ -2191,7 +2200,6 @@ select option {
   align-items: center;
   gap: 6px;
   list-style: none;
-  cursor: pointer;
   user-select: none;
   font-size: 0.75rem;
   font-weight: 600;
@@ -2377,7 +2385,6 @@ hr {
   font-size: 0.95rem;
   font-weight: 600;
   font-family: var(--font-sans);
-  cursor: pointer;
   margin-top: 6px;
   letter-spacing: 0.5px;
   transition: all var(--transition-fast);
@@ -2385,7 +2392,6 @@ hr {
 
 .login-btn:hover {
   background: var(--accent-hover);
-  transform: translateY(-1px);
   box-shadow: 0 4px 16px rgba(0, 122, 255, 0.3);
 }
 
@@ -2395,7 +2401,6 @@ hr {
 
 .login-btn:disabled {
   opacity: 0.5;
-  cursor: not-allowed;
   transform: none;
   box-shadow: none;
 }
@@ -2470,7 +2475,6 @@ hr {
   border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
-  cursor: pointer;
   transition: all var(--transition-fast);
 }
 
@@ -2542,7 +2546,6 @@ hr {
   right: 8px;
   height: 8px;
   z-index: 5;
-  cursor: row-resize;
   touch-action: none;
 }
 
@@ -2606,7 +2609,6 @@ hr {
   gap: 8px;
   min-height: 28px;
   padding: 4px 10px;
-  cursor: pointer;
   user-select: none;
   border-bottom: 1px solid var(--border-color);
   border-radius: var(--radius-md) var(--radius-md) 0 0;
@@ -2640,7 +2642,6 @@ hr {
 
 .serial-parse-actions {
   flex: 0 0 auto;
-  cursor: default;
 }
 
 .serial-parse-actions .btn {
@@ -2685,7 +2686,6 @@ hr {
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   outline: none;
-  cursor: text;
   user-select: text;
 }
 
@@ -2699,7 +2699,6 @@ hr {
   align-items: center;
   justify-content: center;
   min-height: 72px;
-  cursor: pointer;
   border-style: dashed;
   background: linear-gradient(180deg, var(--bg-code) 0%, var(--bg-surface) 100%);
   transition: all var(--transition-fast);
@@ -2822,7 +2821,6 @@ hr {
 /* Dragging state */
 #log-main.parse-dragging {
   user-select: none;
-  cursor: row-resize;
 }
 
 #log-main.parse-dragging #serial-log-panes,
@@ -2939,7 +2937,6 @@ hr {
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  cursor: pointer;
   transition: all var(--transition-fast);
 }
 
@@ -3079,7 +3076,6 @@ hr {
 .serial-baud-combo .serial-field-input {
   width: 100%;
   padding-right: 30px !important;
-  cursor: pointer;
 }
 
 .serial-baud-arrow {
@@ -3125,7 +3121,6 @@ hr {
   font-size: 0.75rem;
   font-family: var(--font-mono);
   color: var(--text-primary);
-  cursor: pointer;
   transition: background var(--transition-fast);
 }
 
@@ -3154,7 +3149,6 @@ hr {
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  cursor: pointer;
   transition: all var(--transition-fast);
 }
 
@@ -3287,7 +3281,6 @@ hr {
 
 .serial-open-btn:hover {
   box-shadow: 0 4px 14px rgba(0, 122, 255, 0.3);
-  transform: translateY(-1px);
 }
 
 .serial-open-btn i {
@@ -3513,7 +3506,6 @@ hr {
 
 .serial-device-chip .serial-open-btn:hover {
   background: var(--bg-surface-hover);
-  transform: none;
   box-shadow: none;
 }
 
@@ -3647,7 +3639,6 @@ hr {
   gap: 8px;
   min-height: 28px;
   padding: 4px 10px;
-  cursor: pointer;
   user-select: none;
   border-bottom: 1px solid var(--border-color);
   color: var(--text-secondary);
@@ -3717,7 +3708,6 @@ hr {
 
 .serial-send-btn:hover {
   box-shadow: 0 4px 16px rgba(0, 122, 255, 0.3);
-  transform: translateY(-1px);
 }
 
 .serial-send-btn:active {
@@ -3734,7 +3724,6 @@ hr {
   border-radius: var(--radius-md);
   padding: 24px 16px;
   text-align: center;
-  cursor: pointer;
   transition: all var(--transition-fast);
   margin-bottom: 4px;
 }
@@ -3761,7 +3750,6 @@ hr {
 .fw-upgrade-dropzone:hover .fw-upgrade-drop-icon,
 .fw-upgrade-dropzone.drag-over .fw-upgrade-drop-icon {
   color: var(--accent);
-  transform: translateY(-2px);
 }
 
 .fw-upgrade-drop-text {
@@ -3820,7 +3808,6 @@ hr {
   background: none;
   border: none;
   color: var(--text-muted);
-  cursor: pointer;
   font-size: 1rem;
   padding: 2px;
   border-radius: 50%;
@@ -3834,71 +3821,23 @@ hr {
 
 /* ========== Firmware Packager ========== */
 .fw-pack-wrapper {
+  flex: 1 1 auto;
+  height: auto;
   width: 100%;
-  max-width: none;
-  margin: 0;
-  padding: 24px clamp(16px, 2.5vw, 36px) 32px;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px clamp(12px, 2vw, 24px) 20px;
   box-sizing: border-box;
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
 }
 
-.fw-banner {
-  background: linear-gradient(135deg, var(--accent), #5856d6);
-  border-radius: var(--radius-lg);
-  padding: 22px 28px;
-  margin-bottom: 22px;
-  position: relative;
-  overflow: hidden;
-  box-shadow: 0 4px 24px rgba(0, 122, 255, 0.2);
-}
 
-.fw-banner::after {
-  content: '';
-  position: absolute;
-  top: -60%;
-  right: -10%;
-  width: 220px;
-  height: 220px;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 50%;
-  pointer-events: none;
-}
 
-.fw-banner-content {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 18px;
-}
 
-.fw-banner-icon {
-  width: 50px;
-  height: 50px;
-  background: rgba(255, 255, 255, 0.18);
-  border-radius: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.5rem;
-  color: #fff;
-  flex-shrink: 0;
-  backdrop-filter: blur(4px);
-}
 
-.fw-banner-title {
-  margin: 0;
-  font-size: 1.2rem;
-  font-weight: 700;
-  color: #fff;
-  letter-spacing: 0.3px;
-}
 
-.fw-banner-sub {
-  margin: 4px 0 0;
-  font-size: 0.78rem;
-  color: rgba(255, 255, 255, 0.75);
-}
 
 /* Drop Zone Grid */
 .fw-drop-grid {
@@ -3954,9 +3893,8 @@ hr {
 }
 
 .fw-drop-zone {
-  padding: 32px 20px;
+  padding: 20px 16px;
   text-align: center;
-  cursor: pointer;
   transition: all var(--transition-fast);
   position: relative;
   border: 2px dashed var(--border-color);
@@ -3986,7 +3924,6 @@ hr {
 .fw-drop-zone:hover .fw-drop-zone-icon,
 .fw-drop-zone.drag-over .fw-drop-zone-icon {
   color: var(--accent);
-  transform: translateY(-3px);
 }
 
 .fw-drop-zone-text {
@@ -4006,7 +3943,6 @@ hr {
   border: none;
   color: var(--accent);
   font-weight: 600;
-  cursor: pointer;
   padding: 0 2px;
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -4068,7 +4004,6 @@ hr {
   background: none;
   border: none;
   color: var(--text-muted);
-  cursor: pointer;
   font-size: 1.05rem;
   padding: 4px;
   border-radius: 50%;
@@ -4085,8 +4020,8 @@ hr {
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
-  padding: 20px 24px;
-  margin-bottom: 20px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
   box-shadow: var(--shadow-sm);
 }
 
@@ -4154,7 +4089,6 @@ hr {
 
 .fw-check-pill {
   position: relative;
-  cursor: pointer;
   margin: 0;
 }
 
@@ -4183,19 +4117,40 @@ hr {
   color: var(--accent);
   background: var(--accent-light);
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* 选中态加勾，避免只靠颜色区分 */
+.fw-check-pill input:checked + .fw-check-pill-content::after {
+  content: '\F26E';
+  font-family: 'bootstrap-icons';
+  font-size: 0.9rem;
+  line-height: 1;
+  margin-left: 2px;
+}
+
+.fw-check-pill input:focus-visible + .fw-check-pill-content {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .fw-check-pill:hover .fw-check-pill-content {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--text-muted);
 }
 
-.fw-zip-row {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--border-color);
+.fw-diff-hint {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--warning);
 }
+
+/* 勾了差分包但还没选旧固件 */
+#view-fw-pack:has(#fp-old-info.d-none):has(#fp-gen-diff:checked) .fw-diff-hint {
+  display: flex;
+}
+
 
 .fw-blank-row {
   display: flex;
@@ -4210,63 +4165,12 @@ hr {
   flex: 1;
 }
 
-.fw-generate-btn {
-  position: relative;
-  display: block;
-  width: 100%;
-  padding: 0;
-  border: none;
-  background: none;
-  cursor: pointer;
-  margin-bottom: 20px;
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-}
 
-.fw-generate-btn-inner {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 16px 24px;
-  background: linear-gradient(135deg, var(--accent), #5856d6);
-  color: #fff;
-  font-size: 1rem;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  border-radius: var(--radius-lg);
-  transition: all var(--transition-fast);
-}
 
-.fw-generate-btn:hover .fw-generate-btn-inner {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 28px rgba(0, 122, 255, 0.35);
-}
 
-.fw-generate-btn:active .fw-generate-btn-inner {
-  transform: translateY(0);
-}
 
-.fw-generate-btn-inner i {
-  font-size: 1.15rem;
-}
 
-.fw-generate-btn-glow {
-  position: absolute;
-  inset: -3px;
-  border-radius: calc(var(--radius-lg) + 3px);
-  background: var(--accent);
-  opacity: 0;
-  transition: opacity var(--transition-normal);
-  filter: blur(12px);
-  z-index: 0;
-}
 
-.fw-generate-btn:hover .fw-generate-btn-glow {
-  opacity: 0.18;
-}
 
 .fw-log-card {
   background: var(--bg-surface);
@@ -4305,7 +4209,6 @@ hr {
   font-size: 0.68rem;
   padding: 3px 10px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   transition: all var(--transition-fast);
   display: flex;
   align-items: center;
@@ -4357,7 +4260,6 @@ hr {
   color: var(--accent);
   font: 600 0.72rem/1.3 var(--font-sans);
   white-space: nowrap;
-  cursor: pointer;
   transition: background-color var(--transition-fast), color var(--transition-fast);
 }
 
@@ -4557,7 +4459,6 @@ hr {
 
 /* Collapsible cards */
 .collapsible-header {
-  cursor: pointer;
   user-select: none;
   display: flex;
   align-items: center;
@@ -4593,7 +4494,6 @@ hr {
   box-shadow: var(--shadow-md);
   opacity: 0;
   pointer-events: auto;
-  cursor: pointer;
   transition: opacity 0.18s ease, transform 0.18s ease, background-color var(--transition-normal), color var(--transition-normal);
 }
 
@@ -4815,7 +4715,6 @@ hr {
   border-radius: var(--radius-sm);
   background: var(--bg-input);
   color: var(--text-primary);
-  cursor: pointer;
   white-space: nowrap;
 }
 
@@ -4881,7 +4780,6 @@ hr {
   background: transparent;
   color: var(--text-primary);
   text-align: left;
-  cursor: pointer;
 }
 
 .blu-device-item:hover,
@@ -4923,7 +4821,6 @@ hr {
   color: var(--accent);
   font-size: 0.75rem;
   font-weight: 600;
-  cursor: pointer;
 }
 
 .blu-device-add:hover {
@@ -5258,7 +5155,6 @@ hr {
   font-weight: 700;
   padding: 2px 6px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   white-space: nowrap;
 }
 
@@ -5310,7 +5206,6 @@ hr {
   font-size: 0.68rem;
   font-weight: 600;
   padding: 4px 8px;
-  cursor: pointer;
   border-radius: var(--radius-sm);
 }
 
@@ -5464,7 +5359,6 @@ hr {
   font-size: 0.68rem;
   font-family: var(--font-mono);
   text-align: left;
-  cursor: pointer;
 }
 
 .blu-event-item:last-child {
@@ -5514,7 +5408,6 @@ hr {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-body);
-  cursor: crosshair;
 }
 
 .blu-fft-peaks .blu-events-list,
@@ -5536,7 +5429,6 @@ hr {
 
 .blu-import-label {
   margin: 0;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -5638,7 +5530,6 @@ body.blu-wave-fullscreen-open {
   display: inline-flex;
   align-items: center;
   color: var(--text-muted);
-  cursor: help;
   padding: 0 2px;
   font-size: 0.9rem;
 }
@@ -5658,7 +5549,6 @@ body.blu-wave-fullscreen-open {
   width: 220px;
   height: 28px;
   padding: 0 8px;
-  cursor: pointer;
   touch-action: none;
   outline: none;
 }
@@ -5719,7 +5609,6 @@ body.blu-wave-fullscreen-open {
   font-size: 0.6rem;
   font-family: var(--font-mono);
   line-height: 14px;
-  cursor: pointer;
 }
 
 .blu-span-tick::before {
@@ -5738,7 +5627,6 @@ body.blu-wave-fullscreen-open {
 
 .blu-span-tick:disabled {
   opacity: 0.35;
-  cursor: not-allowed;
 }
 
 .blu-span-input {
@@ -5813,7 +5701,6 @@ body.blu-wave-fullscreen-open {
   line-height: 1;
   padding: 4px 7px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   white-space: nowrap;
   font-family: var(--font-mono);
 }
@@ -5901,7 +5788,6 @@ body.blu-wave-fullscreen-open {
   border-radius: 0;
   background: var(--bg-surface);
   display: block;
-  cursor: crosshair;
   user-select: none;
 }
 
@@ -5935,7 +5821,6 @@ body.blu-wave-fullscreen-open {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  cursor: pointer;
   user-select: none;
   padding: 4px 12px;
   font-size: 0.75rem;
@@ -6077,7 +5962,6 @@ body.blu-wave-fullscreen-open {
   padding: 6px 12px;
   margin: 0 6px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
 }
 
 .serial-cmdk-item.active {
@@ -6253,7 +6137,6 @@ body.blu-wave-fullscreen-open {
     width: 100% !important;
     height: 36px;
     border-top: 1px solid var(--border-color);
-    cursor: pointer;
     order: 1;
     color: var(--text-muted);
     background: var(--bg-sidebar-toggle);
@@ -6471,7 +6354,6 @@ body.blu-wave-fullscreen-open {
   border-radius: 0 0 var(--radius-md) var(--radius-md);
   background: var(--bg-surface);
   display: block;
-  cursor: pointer;
   flex-shrink: 0;
 }
 
@@ -6507,7 +6389,6 @@ body.blu-wave-fullscreen-open {
   color: var(--text-secondary);
   font-size: 0.75rem;
   font-weight: 600;
-  cursor: pointer;
   font-family: var(--font-sans);
   transition: all var(--transition-fast);
   white-space: nowrap;
@@ -6683,7 +6564,6 @@ body.blu-wave-fullscreen-open {
   color: var(--text-secondary);
   font-size: 0.7rem;
   font-weight: 700;
-  cursor: pointer;
   font-family: var(--font-sans);
   transition: all var(--transition-fast);
   white-space: nowrap;
@@ -6845,7 +6725,6 @@ body.blu-wave-fullscreen-open {
   background: transparent;
   color: var(--text-muted);
   font-size: 0.68rem;
-  cursor: pointer;
   vertical-align: middle;
   transition: all var(--transition-fast);
 }
@@ -6868,7 +6747,6 @@ body.blu-wave-fullscreen-open {
   background: transparent;
   color: var(--text-muted);
   font-size: 0.68rem;
-  cursor: pointer;
   vertical-align: middle;
   transition: all var(--transition-fast);
 }
@@ -6892,7 +6770,6 @@ body.blu-wave-fullscreen-open {
   background: transparent;
   color: var(--text-muted);
   font-size: 0.68rem;
-  cursor: pointer;
   vertical-align: middle;
   transition: all var(--transition-fast);
 }
@@ -6934,7 +6811,6 @@ body.blu-wave-fullscreen-open {
   font-size: 0.75rem;
   font-family: var(--font-sans);
   line-height: 1;
-  cursor: pointer;
   user-select: none;
   transition: all var(--transition-fast);
 }
@@ -6972,7 +6848,6 @@ body.blu-wave-fullscreen-open {
   background: linear-gradient(to top, rgba(0,0,0,0.08), transparent);
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
-  cursor: pointer;
 }
 
 [data-theme="dark"] .blu-cmd-backdrop {
@@ -7067,7 +6942,6 @@ body.blu-wave-fullscreen-open {
   color: var(--text-secondary);
   font-size: 0.8rem;
   font-weight: 700;
-  cursor: pointer;
   line-height: 1;
   padding: 0;
   transition: all var(--transition-fast);
@@ -7144,7 +7018,6 @@ body.blu-wave-fullscreen-open {
   border-radius: 999px;
   background: var(--bg-surface);
   color: var(--text-muted);
-  cursor: pointer;
   user-select: none;
 }
 
@@ -7254,7 +7127,6 @@ body.blu-wave-fullscreen-open {
   font-family: var(--font-sans);
   font-size: 0.6rem;
   line-height: 1;
-  cursor: pointer;
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 
@@ -7370,7 +7242,6 @@ body.blu-wave-fullscreen-open {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
-  cursor: pointer;
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 
@@ -7414,7 +7285,6 @@ body.blu-wave-fullscreen-open {
   color: var(--text-secondary);
   font-family: var(--font-sans);
   font-size: 0.76rem;
-  cursor: pointer;
 }
 
 .wb-bottom-tab:hover {
@@ -7639,7 +7509,6 @@ body.blu-wave-fullscreen-open {
   font-family: var(--font-sans);
   font-size: 0.68rem;
   font-weight: 600;
-  cursor: pointer;
 }
 
 .sb-task:hover {
@@ -7761,5 +7630,184 @@ body.blu-wave-fullscreen-open {
   .sb-group {
     flex-wrap: wrap;
     row-gap: 2px;
+  }
+}
+
+/* 鼠标指针一律保持浏览器默认：Bootstrap 给按钮等加的手型也还原，
+   悬停时指针在不同元素间来回切换样式，移动鼠标会显得发抖 */
+button:not(:disabled),
+[type="button"]:not(:disabled),
+[type="reset"]:not(:disabled),
+[type="submit"]:not(:disabled),
+[role="button"],
+.form-check-input,
+.form-check-label,
+.form-select,
+.form-range,
+.dropdown-item,
+summary {
+  cursor: default;
+}
+
+/* ========== 各视图顶栏统一：与串口调试连接条同高、同底色、贴边 ========== */
+.view-bar,
+.blu-connect-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-height: 44px;
+  margin: 0;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border-color);
+  border-radius: 0;
+  background: var(--bg-surface);
+  position: relative;
+  z-index: 30;
+}
+
+.blu-connect-bar {
+  --blu-control-h: 28px;
+  gap: 6px;
+  font-size: 0.8125rem;
+}
+
+.view-bar-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.view-bar-title i {
+  align-self: center;
+  color: var(--accent);
+}
+
+.view-bar-sub {
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.view-bar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fw-zip-switch {
+  margin: 0;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.fw-start-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 功耗分析：内容区与串口页一样留 8/12 边距 */
+.blu-wrapper {
+  padding: 8px 12px;
+}
+
+.blu-field-label,
+.blu-acq-trig-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.blu-storage-set {
+  gap: 4px;
+}
+
+.blu-storage-set .blu-field-label + select {
+  margin-right: 4px;
+}
+
+.blu-more-menu {
+  min-width: 200px;
+  font-size: 0.8rem;
+}
+
+.blu-more-menu .dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+#blu-cmd-open[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+/* 底部浮动的「串口发送」标签会压住运行日志栏，入口已移到顶部工具条 */
+.blu-cmd-tab {
+  display: none !important;
+}
+
+.blu-analysis-info {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.blu-analysis-info:hover,
+.blu-analysis-info:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
+@media (max-width: 768px) {
+  .blu-wrapper {
+    padding: 8px;
+  }
+
+  .blu-connect-bar .blu-tb-group,
+  .blu-connect-bar .blu-storage-set {
+    flex-wrap: wrap;
+    flex-shrink: 1;
+    height: auto;
+    row-gap: 4px;
+  }
+
+  .view-bar-sub {
+    display: none;
+  }
+}
+
+/* 1360 以下工具条放不下一行：数据类按钮只留图标（title 仍有完整说明） */
+@media (max-width: 1360px) {
+  .blu-connect-bar #blu-clear,
+  .blu-connect-bar #blu-export,
+  .blu-connect-bar #blu-cmd-open {
+    width: var(--blu-control-h);
+    padding: 0 !important;
+    font-size: 0 !important;
+    gap: 0;
+  }
+
+  .blu-connect-bar #blu-clear i,
+  .blu-connect-bar #blu-export i,
+  .blu-connect-bar #blu-cmd-open i {
+    font-size: 0.85rem;
   }
 }

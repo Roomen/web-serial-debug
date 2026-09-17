@@ -6481,18 +6481,6 @@
 				syncSpanUi()
 			}, { passive: false })
 
-			canvas.addEventListener('pointermove', function (e) {
-				// 仅在无拖拽时提示 Y 轴可滚轮缩放
-				if (drag || selectDrag || cursorEdgeDrag || minimapDrag) return
-				const rect = canvas.getBoundingClientRect()
-				const cx = e.clientX - rect.left
-				if (isOverYAxis(cx)) {
-					canvas.style.cursor = 'ns-resize'
-				} else if (canvas.style.cursor === 'ns-resize') {
-					canvas.style.cursor = ''
-				}
-			})
-
 			canvas.addEventListener('pointerdown', function (e) {
 				if (e.button !== 0) return
 				const rect = canvas.getBoundingClientRect()
@@ -6504,7 +6492,6 @@
 					if (edge) {
 						cursorEdgeDrag = { edge: edge }
 						try { canvas.setPointerCapture(e.pointerId) } catch (err) {}
-						canvas.style.cursor = 'ew-resize'
 						scheduleUIUpdate()
 						return
 					}
@@ -6537,13 +6524,6 @@
 				const x = e.clientX - rect.left
 				const y = e.clientY - rect.top
 				hover = { x: x, y: y }
-
-				// 悬停：Y 轴 ns-resize · 游标线 ew-resize · 其余 crosshair
-				if (!cursorEdgeDrag && !selectDrag && !drag && plotLayout) {
-					if (isOverYAxis(x)) canvas.style.cursor = 'ns-resize'
-					else if (hitTestCursorEdge(x)) canvas.style.cursor = 'ew-resize'
-					else canvas.style.cursor = 'crosshair'
-				}
 
 				if (cursorEdgeDrag && plotLayout) {
 					const li = plotLayout.fromX(x)
@@ -6589,7 +6569,6 @@
 						setCursorEdge(cursorEdgeDrag.edge, cur, { snap: true })
 					}
 					cursorEdgeDrag = null
-					canvas.style.cursor = 'crosshair'
 					updateCursorInfo()
 					scheduleUIUpdate()
 					return
@@ -6628,7 +6607,6 @@
 			})
 			canvas.addEventListener('pointerleave', function () {
 				hover = null
-				if (!cursorEdgeDrag) canvas.style.cursor = 'crosshair'
 				scheduleUIUpdate()
 			})
 		}

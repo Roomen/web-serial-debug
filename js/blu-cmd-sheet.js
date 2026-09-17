@@ -112,6 +112,9 @@
 
 	function bindEvents() {
 		tab.addEventListener('click', function () { setOpen(true) })
+		// 顶部工具条上的入口（底部标签已隐藏，避免压住运行日志栏）
+		const toolbarBtn = E('blu-cmd-open')
+		if (toolbarBtn) toolbarBtn.addEventListener('click', function () { setOpen(!isOpen) })
 		closeBtn.addEventListener('click', function () { setOpen(false) })
 		backdrop.addEventListener('click', function () { setOpen(false) })
 
@@ -206,6 +209,8 @@
 			backdrop.hidden = true
 			sheet.hidden = true
 		}
+		const toolbarBtn = E('blu-cmd-open')
+		if (toolbarBtn) toolbarBtn.setAttribute('aria-pressed', String(!!open))
 		if (!silent) {
 			try { localStorage.setItem(STORAGE_KEY, open ? '1' : '0') } catch (e) {}
 		}
