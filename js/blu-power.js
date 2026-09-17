@@ -288,7 +288,7 @@
 	let diskBudgetBytes = bytesFromDiskGB(storageCfg.diskGB)
 
 	// 顺序分块：hot 有 buf；cold/pending 落盘后可释放 buf
-	// { id, buf, n, sumI, sumP, minI, maxI, state, diskBytes }
+	// { id, buf, n, sumI, sumSqI, sumP, minI, maxI, state, diskBytes }
 	const waveChunks = []
 	let totalCount = 0 // 全部保留样点（冷+热）
 	let hotCount = 0
@@ -448,6 +448,7 @@
 			buf: buf,
 			n: 0,
 			sumI: 0,
+			sumSqI: 0, // 均值 ±1σ 带用：整块/冷块不回读也能算方差
 			sumP: 0,
 			minI: Infinity,
 			maxI: -Infinity,
@@ -689,6 +690,7 @@
 		ch.n++
 		const vset = setVoltageV()
 		ch.sumI += curUA
+		ch.sumSqI += curUA * curUA
 		ch.sumP += curUA * vset
 		if (off === 0) ch.firstI = curUA
 		ch.lastI = curUA
@@ -816,6 +818,9 @@
 		let first = 0
 		let last = 0
 		let got = false
+		let sum = 0
+		let sumSq = 0
+		let cnt = 0
 		let base = 0
 		for (let i = 0; i < waveChunks.length; i++) {
 			const ch = waveChunks[i]
@@ -830,6 +835,9 @@
 					const l = isFinite(ch.lastI) ? ch.lastI : ch.maxI
 					if (!got) { first = f; got = true }
 					last = l
+					sum += ch.sumI
+					sumSq += ch.sumSqI
+					cnt += ch.n
 					if (ch.minI < mn) mn = ch.minI
 					if (ch.maxI > mx) mx = ch.maxI
 					// 整块无逐点：仅当 minI>0 可知 minPos；minI≤0 时无法从块级统计推断
@@ -842,6 +850,9 @@
 							if (!isFinite(v)) continue
 							if (!got) { first = v; got = true }
 							last = v
+							sum += v
+							sumSq += v * v
+							cnt++
 							if (v < mn) mn = v
 							if (v > mx) mx = v
 							if (v > 0 && v < minPos) minPos = v
@@ -854,6 +865,11 @@
 							: 0
 						if (!got) { first = mid; got = true }
 						last = mid
+						// 部分区间按整块均值/均方近似
+						const len = b - a + 1
+						sum += ch.sumI / ch.n * len
+						sumSq += ch.sumSqI / ch.n * len
+						cnt += len
 						if (ch.minI < mn) mn = ch.minI
 						if (ch.maxI > mx) mx = ch.maxI
 						if (ch.minI > 0 && ch.minI < minPos) minPos = ch.minI
@@ -864,10 +880,15 @@
 			if (base > hi) break
 		}
 		if (!got || !isFinite(mn) || !isFinite(mx)) {
-			return { min: 0, max: 0, first: 0, last: 0, minPos: Infinity, loAbs: lo, hiAbs: hi }
+			return { min: 0, max: 0, first: 0, last: 0, mean: 0, sd: 0, minPos: Infinity, loAbs: lo, hiAbs: hi }
 		}
+		const mean = cnt ? sum / cnt : (mn + mx) * 0.5
+		const variance = cnt ? sumSq / cnt - mean * mean : 0
 		return {
 			min: mn, max: mx, first: first, last: last,
+			// 均值夹在 [min, max] 内，抵消冷块近似带来的越界
+			mean: Math.max(mn, Math.min(mx, mean)),
+			sd: variance > 0 ? Math.sqrt(variance) : 0,
 			minPos: minPos, loAbs: lo, hiAbs: hi,
 		}
 	}
@@ -967,6 +988,29 @@
 	}
 
 	loadAnalysisUiCfg()
+
+	// 缩小时的波形画法：band = 均值线 + min/max 带（+ ±1σ 带），关闭时为 PPK 式包络折线（默认）
+	const WAVE_STYLE_KEY = 'blu-wave-band'
+	const WAVE_BAND_ALPHA = 0.3
+	const WAVE_SIGMA_ALPHA = 0.6
+	const waveStyle = { band: false, sigma: true }
+
+	function loadWaveStyle() {
+		try {
+			const o = JSON.parse(localStorage.getItem(WAVE_STYLE_KEY) || 'null')
+			if (!o) return
+			if (typeof o.band === 'boolean') waveStyle.band = o.band
+			if (typeof o.sigma === 'boolean') waveStyle.sigma = o.sigma
+		} catch (e) { /* 忽略 */ }
+	}
+
+	function saveWaveStyle() {
+		try {
+			localStorage.setItem(WAVE_STYLE_KEY, JSON.stringify(waveStyle))
+		} catch (e) { /* 忽略 */ }
+	}
+
+	loadWaveStyle()
 	let yAutoTargetMin = null
 	let yAutoTargetMax = null
 	let yAutoDispMin = null
@@ -4505,7 +4549,65 @@
 			ctx.fillText(fmtTimeAxis(t), x, margin.top + ph + 14)
 		}
 
-		// 波形：PPK 风格 min/max 包络（缩放时）/ 逐点折线（放大时）
+		/**
+		 * Joulescope / Otii 式：min~max 淡色带 + ±1σ 深色带 + 均值线。
+		 * 两条带各自 fill；均值线追加到外层 path，由统一的 stroke 画出。
+		 */
+		function drawBandColumns(list) {
+			const segs = []
+			let seg = null
+			for (let k = 0; k < list.length; k++) {
+				const e = list[k].entry
+				const x = e ? toX(list[k].x) : NaN
+				const yMean = e ? toY(e.mean) : NaN
+				if (!e || !isFinite(e.min) || !isFinite(e.max) || !isFinite(x) || !isFinite(yMean)) {
+					seg = null
+					continue
+				}
+				if (!seg) { seg = []; segs.push(seg) }
+				const yMin = toY(e.min)
+				const yMax = toY(e.max)
+				const sdLo = toY(Math.max(e.min, e.mean - e.sd))
+				const sdHi = toY(Math.min(e.max, e.mean + e.sd))
+				seg.push({
+					x: x,
+					mean: yMean,
+					lo: isFinite(yMin) ? yMin : yMean,
+					hi: isFinite(yMax) ? yMax : yMean,
+					sdLo: isFinite(sdLo) ? sdLo : yMean,
+					sdHi: isFinite(sdHi) ? sdHi : yMean,
+				})
+			}
+			const fillBand = function (loKey, hiKey, alpha) {
+				ctx.globalAlpha = alpha
+				ctx.beginPath()
+				for (let i = 0; i < segs.length; i++) {
+					const sg = segs[i]
+					// 单列也给 1px 宽度，否则 fill 面积为 0
+					const pad = sg.length === 1 ? 0.5 : 0
+					ctx.moveTo(sg[0].x - pad, sg[0][hiKey])
+					for (let j = 1; j < sg.length; j++) ctx.lineTo(sg[j].x, sg[j][hiKey])
+					if (pad) ctx.lineTo(sg[0].x + pad, sg[0][hiKey])
+					if (pad) ctx.lineTo(sg[0].x + pad, sg[0][loKey])
+					for (let j = sg.length - 1; j >= 0; j--) ctx.lineTo(sg[j].x - (j === 0 ? pad : 0), sg[j][loKey])
+					ctx.closePath()
+				}
+				ctx.fill()
+			}
+			ctx.save()
+			ctx.fillStyle = accent
+			fillBand('lo', 'hi', WAVE_BAND_ALPHA)
+			if (waveStyle.sigma) fillBand('sdLo', 'sdHi', WAVE_SIGMA_ALPHA)
+			ctx.restore()
+			ctx.beginPath()
+			for (let i = 0; i < segs.length; i++) {
+				const sg = segs[i]
+				ctx.moveTo(sg[0].x, sg[0].mean)
+				for (let j = 1; j < sg.length; j++) ctx.lineTo(sg[j].x, sg[j].mean)
+			}
+		}
+
+		// 波形：缩放时按 waveStyle 画带或 PPK 包络 / 放大时逐点折线
 		ctx.strokeStyle = accent
 		ctx.lineWidth = 1.3
 		ctx.beginPath()
@@ -4526,6 +4628,8 @@
 				else ctx.lineTo(x, y)
 				drawnPts.push(x, y)
 			}
+		} else if (waveStyle.band) {
+			drawBandColumns(cols)
 		} else {
 			for (let k = 0; k < cols.length; k++) {
 				const e = cols[k].entry
@@ -5422,6 +5526,36 @@
 		}
 	}
 
+	function syncWaveStyleUi() {
+		const band = E('blu-wave-band')
+		if (band) {
+			band.classList.toggle('active', waveStyle.band)
+			band.setAttribute('aria-pressed', String(waveStyle.band))
+		}
+		const sigma = E('blu-wave-sigma')
+		if (sigma) {
+			sigma.classList.toggle('active', waveStyle.band && waveStyle.sigma)
+			sigma.setAttribute('aria-pressed', String(waveStyle.sigma))
+			sigma.disabled = !waveStyle.band
+		}
+	}
+
+	function initWaveStyleUi() {
+		const bindToggle = function (id, key) {
+			const el = E(id)
+			if (!el) return
+			el.addEventListener('click', function () {
+				waveStyle[key] = !waveStyle[key]
+				saveWaveStyle()
+				syncWaveStyleUi()
+				scheduleUIUpdate()
+			})
+		}
+		bindToggle('blu-wave-band', 'band')
+		bindToggle('blu-wave-sigma', 'sigma')
+		syncWaveStyleUi()
+	}
+
 	function initSpanSlider() {
 		const slider = E('blu-span-slider')
 		const ticks = E('blu-span-ticks')
@@ -6301,6 +6435,7 @@
 			if (el) el.addEventListener('click', fn)
 		}
 		initSpanSlider()
+		initWaveStyleUi()
 		// X/Y 的 +/- 按钮已去掉（滚轮缩放：画布内缩 X，Y 轴区域内缩 Y），
 		// 但滚轮缩完需要一条回去的路，所以保留一个两轴统一的复位。
 		bindClick('blu-view-reset', function () {

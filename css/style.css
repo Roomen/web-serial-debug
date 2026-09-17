@@ -5798,6 +5798,22 @@ body.blu-wave-fullscreen-open {
   border-color: #dc3545;
 }
 
+/* 均值带 / ±1σ 开关 */
+.blu-wave-toggle {
+  padding: 0 7px;
+  font-size: 0.7rem;
+}
+
+.blu-wave-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-surface));
+}
+
+.blu-wave-toggle:disabled {
+  opacity: 0.35;
+}
+
 .blu-y-scale-group {
   gap: 4px;
 }
