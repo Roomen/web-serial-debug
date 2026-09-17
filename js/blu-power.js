@@ -989,17 +989,18 @@
 
 	loadAnalysisUiCfg()
 
-	// 缩小时的波形画法：band = 均值线 + min/max 带（+ ±1σ 带），envelope = PPK 式包络折线
-	const WAVE_STYLE_KEY = 'blu-wave-style'
-	const waveStyle = { mode: 'band', sigma: true, alpha: 0.2 }
+	// 缩小时的波形画法：band = 均值线 + min/max 带（+ ±1σ 带），关闭时为 PPK 式包络折线（默认）
+	const WAVE_STYLE_KEY = 'blu-wave-band'
+	const WAVE_BAND_ALPHA = 0.3
+	const WAVE_SIGMA_ALPHA = 0.6
+	const waveStyle = { band: false, sigma: true }
 
 	function loadWaveStyle() {
 		try {
 			const o = JSON.parse(localStorage.getItem(WAVE_STYLE_KEY) || 'null')
 			if (!o) return
-			if (o.mode === 'band' || o.mode === 'envelope') waveStyle.mode = o.mode
+			if (typeof o.band === 'boolean') waveStyle.band = o.band
 			if (typeof o.sigma === 'boolean') waveStyle.sigma = o.sigma
-			if (o.alpha >= 0.05 && o.alpha <= 0.6) waveStyle.alpha = o.alpha
 		} catch (e) { /* 忽略 */ }
 	}
 
@@ -4595,8 +4596,8 @@
 			}
 			ctx.save()
 			ctx.fillStyle = accent
-			fillBand('lo', 'hi', waveStyle.alpha)
-			if (waveStyle.sigma) fillBand('sdLo', 'sdHi', Math.min(1, waveStyle.alpha * 2))
+			fillBand('lo', 'hi', WAVE_BAND_ALPHA)
+			if (waveStyle.sigma) fillBand('sdLo', 'sdHi', WAVE_SIGMA_ALPHA)
 			ctx.restore()
 			ctx.beginPath()
 			for (let i = 0; i < segs.length; i++) {
@@ -4627,7 +4628,7 @@
 				else ctx.lineTo(x, y)
 				drawnPts.push(x, y)
 			}
-		} else if (waveStyle.mode === 'band') {
+		} else if (waveStyle.band) {
 			drawBandColumns(cols)
 		} else {
 			for (let k = 0; k < cols.length; k++) {
@@ -5526,56 +5527,32 @@
 	}
 
 	function syncWaveStyleUi() {
-		const band = waveStyle.mode === 'band'
-		const rBand = E('blu-wave-style-band')
-		const rEnv = E('blu-wave-style-envelope')
-		if (rBand) rBand.checked = band
-		if (rEnv) rEnv.checked = !band
+		const band = E('blu-wave-band')
+		if (band) {
+			band.classList.toggle('active', waveStyle.band)
+			band.setAttribute('aria-pressed', String(waveStyle.band))
+		}
 		const sigma = E('blu-wave-sigma')
 		if (sigma) {
-			sigma.checked = waveStyle.sigma
-			sigma.disabled = !band
+			sigma.classList.toggle('active', waveStyle.band && waveStyle.sigma)
+			sigma.setAttribute('aria-pressed', String(waveStyle.sigma))
+			sigma.disabled = !waveStyle.band
 		}
-		const alpha = E('blu-wave-alpha')
-		if (alpha) {
-			alpha.value = String(Math.round(waveStyle.alpha * 100))
-			alpha.disabled = !band
-		}
-		const val = E('blu-wave-alpha-val')
-		if (val) val.textContent = Math.round(waveStyle.alpha * 100) + '%'
 	}
 
 	function initWaveStyleUi() {
-		const apply = function () {
-			saveWaveStyle()
-			syncWaveStyleUi()
-			scheduleUIUpdate()
-		}
-		;['blu-wave-style-band', 'blu-wave-style-envelope'].forEach(function (id) {
+		const bindToggle = function (id, key) {
 			const el = E(id)
 			if (!el) return
-			el.addEventListener('change', function () {
-				if (!el.checked) return
-				waveStyle.mode = el.value
-				apply()
-			})
-		})
-		const sigma = E('blu-wave-sigma')
-		if (sigma) {
-			sigma.addEventListener('change', function () {
-				waveStyle.sigma = sigma.checked
-				apply()
+			el.addEventListener('click', function () {
+				waveStyle[key] = !waveStyle[key]
+				saveWaveStyle()
+				syncWaveStyleUi()
+				scheduleUIUpdate()
 			})
 		}
-		const alpha = E('blu-wave-alpha')
-		if (alpha) {
-			alpha.addEventListener('input', function () {
-				const v = parseInt(alpha.value, 10)
-				if (!(v >= 5 && v <= 60)) return
-				waveStyle.alpha = v / 100
-				apply()
-			})
-		}
+		bindToggle('blu-wave-band', 'band')
+		bindToggle('blu-wave-sigma', 'sigma')
 		syncWaveStyleUi()
 	}
 
