@@ -65,6 +65,10 @@
 			packTimer: null,
 			sekWaitStart: null,
 			label: label,
+			//状态栏用：本次连接的起始时间与收发字节数，重新打开时清零
+			openedAt: 0,
+			txBytes: 0,
+			rxBytes: 0,
 		}
 	}
 	const sessionSingle = makeSerialSession('COM')
@@ -109,7 +113,21 @@
 		setPort(sid, port) { this._sess(sid).port = port },
 
 		isOpen(sid) { return this._sess(sid).open },
-		setOpen(sid, v) { this._sess(sid).open = v },
+		setOpen(sid, v) {
+			const s = this._sess(sid)
+			if (v && !s.open) {
+				s.openedAt = Date.now()
+				s.txBytes = 0
+				s.rxBytes = 0
+			} else if (!v) {
+				s.openedAt = 0
+			}
+			s.open = v
+		},
+		getStats(sid) {
+			const s = this._sess(sid)
+			return { open: s.open, openedAt: s.openedAt, txBytes: s.txBytes, rxBytes: s.rxBytes }
+		},
 
 		isManualClose(sid) { return this._sess(sid).manualClose },
 		setManualClose(sid, v) { this._sess(sid).manualClose = v },
@@ -2146,21 +2164,7 @@
 		})
 	})()
 
-	// 记住当前 tab，刷新不丢失
-	const tabTriggers = document.querySelectorAll('#nav-tab button[data-bs-toggle="tab"]')
-	tabTriggers.forEach(btn => {
-		btn.addEventListener('shown.bs.tab', (e) => {
-			localStorage.setItem('activeTab', e.target.id)
-		})
-	})
-	const savedTab = localStorage.getItem('activeTab')
-	if (savedTab) {
-		const tabBtn = document.getElementById(savedTab)
-		if (tabBtn) {
-			const tab = new bootstrap.Tab(tabBtn)
-			tab.show()
-		}
-	}
+	// 右栏当前面板的记忆与恢复由 js/workbench.js 负责(旧 activeTab 键在那里迁移)
 
 	//实时修改选项
 	document.getElementById('serial-timer-out').addEventListener('change', (e) => {
@@ -2220,7 +2224,20 @@
 	document.getElementById('serial-hex-send').addEventListener('change', function (e) {
 		changeOption('hexSend', this.checked)
 	})
+	//发送间隔只在勾选循环发送时有意义
+	const loopTimeGroup = document.getElementById('serial-loop-send-time-group')
+	function syncLoopTimeGroup() {
+		if (loopTimeGroup) loopTimeGroup.hidden = !document.getElementById('serial-loop-send').checked
+	}
+	syncLoopTimeGroup()
+	document.getElementById('serial-send-content').addEventListener('keydown', function (e) {
+		if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+			e.preventDefault()
+			document.getElementById('serial-send').click()
+		}
+	})
 	document.getElementById('serial-loop-send').addEventListener('change', function (e) {
+		syncLoopTimeGroup()
 		changeOption('loopSend', this.checked)
 		resetLoopSend()
 	})
@@ -3512,6 +3529,7 @@
 			}
 			const sendTime = new Date()
 			await writer.write(data)
+			SerialHub._sess(sid).txBytes += data.length
 			addLog(data, false, sendTime, sid)
 			addParseLog([...data], false, sendTime, sid, sendName)
 		} catch (error) {
@@ -3857,6 +3875,7 @@
 	function dataReceived(data, sid) {
 		sid = sid || SerialHub.activeSendPhys()
 		noteSerialRx(sid)
+		SerialHub._sess(sid).rxBytes += data.length
 		//立即把原始字节交给固件升级/协议测试等模块,由其自行按协议帧边界组装
 		// 只转发当前可见模式的会话，隐藏模式的口继续收日志但不污染 serialApi
 		// 单路: 全量转发(与 main 语义一致)
@@ -4693,6 +4712,12 @@
 			})
 		})
 
+		//供停靠栏(js/workbench.js)开合右栏，与拖拽条共用同一套状态
+		window.serialRightPane = {
+			isCollapsed: function () { return isCollapsed('right') },
+			setCollapsed: function (v) { if (isCollapsed('right') !== !!v) setCollapsed('right', !!v) }
+		}
+
 		//恢复上次的宽度与折叠状态
 		try {
 			const w = JSON.parse(localStorage.getItem(WIDTH_KEY) || '{}')
@@ -4753,9 +4778,15 @@
 			}
 			saveState()
 		}
-		//供日志行点击调用:折叠态自动展开
+		//供日志行点击调用:折叠态自动展开；日志行点击总是要看协议解析，底栏切回解析面板
 		window.expandParsePanel = function () {
-			if (isCollapsed()) setCollapsed(false)
+			if (window.Workbench) window.Workbench.open('parse')
+			else if (isCollapsed()) setCollapsed(false)
+		}
+		//底栏同时承载其它停靠面板(js/workbench.js)，折叠状态与本面板共用
+		window.parsePanelDock = {
+			isCollapsed: isCollapsed,
+			setCollapsed: function (v) { if (isCollapsed() !== !!v) setCollapsed(!!v) }
 		}
 
 		// 顶缝拖高度

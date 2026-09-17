@@ -2,7 +2,9 @@
 
 ## 项目结构与模块组织
 
-本仓库是一个静态 Web Serial 串口调试工具。入口文件是 `index.html`，负责页面结构并通过 CDN 加载 Bootstrap、Bootstrap Icons、xterm.js、JSZip。主要业务逻辑在 `js/common.js`，包括串口打开/关闭、快捷发送、日志展示、协议注册表等。协议解析、固件升级/打包、BLU 功耗分析各自拆在 `js/` 下的独立文件里，按 `index.html` 末尾的 `<script>` 顺序加载。样式集中在 `css/style.css`，图片和界面截图放在 `imgs/`。当前没有 `tests/` 目录，也没有构建系统。
+本仓库是一个静态 Web Serial 串口调试工具。入口文件是 `index.html`，负责页面结构并通过 CDN 加载 Bootstrap、Bootstrap Icons、xterm.js、JSZip。主要业务逻辑在 `js/common.js`，包括串口打开/关闭、快捷发送、日志展示、协议注册表等。协议解析、固件升级/打包、BLU 功耗分析各自拆在 `js/` 下的独立文件里，按 `index.html` 末尾的 `<script>` 顺序加载。
+
+串口调试视图的工具面板由 `js/workbench.js` 管理：每个工具是一个面板，用 `Workbench.registerPanel({ id, title, label, icon, el })` 注册，可停靠在右栏或底栏（底栏与协议解析共用外壳），最右侧停靠栏负责开合，底部状态栏显示连接时长、收发字节和运行中的后台任务。面板 DOM 是原样搬进停靠区的（不克隆），所以面板内控件的 id 和已绑定事件不受影响。新增工具时注册成面板，不要再往右栏里加 Bootstrap tab；需要跳到某个面板时调用 `Workbench.open(id)`，不要去点 DOM 按钮。右栏/底栏的开合状态沿用 `common.js` 里的 `serialRightPane` / `parsePanelDock`，不要另写一套。样式集中在 `css/style.css`，图片和界面截图放在 `imgs/`。当前没有 `tests/` 目录，也没有构建系统。
 
 ## 构建、测试与本地运行
 

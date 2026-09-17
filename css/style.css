@@ -228,8 +228,9 @@ body {
 #main {
   height: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--pane-right, 400px);
+  grid-template-columns: minmax(0, 1fr) var(--pane-right, 400px) var(--dock-bar-w);
   --pane-right: 400px;
+  --dock-bar-w: 52px;
 }
 
 #main.right-collapsed {
@@ -277,6 +278,12 @@ body {
   height: auto;
 }
 
+/* logo 是纯白填充，亮色主题下反相，否则与底色融为一体 */
+:root:not([data-theme="dark"]) .rail-brand img {
+  filter: invert(1);
+  opacity: 0.75;
+}
+
 .rail-top {
   display: flex;
   flex-direction: column;
@@ -307,6 +314,21 @@ body {
   height: 1px;
   margin: 4px 0;
   background: var(--border-light);
+}
+
+.rail-config {
+  width: 100%;
+}
+
+.rail-config-menu {
+  min-width: 170px;
+  font-size: 0.8rem;
+}
+
+.rail-config-menu .dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .rail-item {
@@ -734,43 +756,6 @@ body {
   border-radius: var(--radius-sm);
   padding: 4px 10px;
   font-size: 0.75rem;
-}
-
-/* ========== Nav Tabs ========== */
-#serial-tools > .sidebar-body > nav {
-  flex: 0 0 auto;
-  margin: 0 -2px 0;
-}
-
-#nav-tab {
-  border-bottom: 1px solid var(--border-color);
-  gap: 0;
-}
-
-.nav-tabs .nav-link {
-  color: var(--text-secondary);
-  border: none;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  padding: 8px 12px;
-  font-size: 0.75rem;
-  font-weight: 500;
-  transition: all var(--transition-fast);
-  background: transparent;
-  font-family: var(--font-sans);
-}
-
-.nav-tabs .nav-link:hover {
-  color: var(--text-primary);
-  border-bottom-color: var(--border-light);
-  background: transparent;
-}
-
-.nav-tabs .nav-link.active {
-  color: var(--accent);
-  background: transparent;
-  border-bottom-color: var(--accent);
-  font-weight: 600;
 }
 
 /* ========== Card / Container ========== */
@@ -1258,7 +1243,7 @@ body {
 /* ========== Quick Send Items ========== */
 .quick-item {
   display: grid;
-  grid-template-columns: 18px 28px minmax(0, 1fr) auto auto;
+  grid-template-columns: 18px 28px minmax(0, 1fr) var(--qs-name-w) 22px;
   align-items: center;
   gap: 6px;
   padding: 6px 8px !important;
@@ -1311,8 +1296,8 @@ body {
 }
 
 .quick-item .quick-send {
-  min-width: 60px;
-  max-width: 100px;
+  width: 100%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2107,7 +2092,7 @@ select option {
   background: transparent;
   flex: 1 1 0 !important;
   min-height: 0;
-  padding-top: 10px !important;
+  padding-top: 8px !important;
   transition: background-color var(--transition-normal);
 }
 
@@ -2135,9 +2120,14 @@ select option {
   color: var(--accent);
 }
 
+/* 发送键列定宽，内容输入框才能上下对齐；表头与行共用同一列宽 */
+#nav-quick-send {
+  --qs-name-w: 104px;
+}
+
 .quick-send-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) var(--qs-name-w) 22px;
   align-items: center;
   gap: 6px;
   padding: 2px 8px 2px 66px;
@@ -2151,8 +2141,6 @@ select option {
 
 .quick-send-head .col-content { min-width: 0; }
 .quick-send-head .col-name {
-  min-width: 60px;
-  max-width: 100px;
   text-align: center;
 }
 .quick-send-head .col-hex {
@@ -2199,8 +2187,8 @@ select option {
 }
 
 .protocol-basic-proto {
-  flex: 1 1 140px;
-  min-width: 0;
+  flex: 1 1 170px;
+  min-width: 170px;
   width: auto;
   max-width: 220px;
 }
@@ -3490,6 +3478,13 @@ hr {
   background: transparent;
 }
 
+/* 状态点外面还包着一层会话容器，不居中的话色点会贴在芯片顶边 */
+.serial-device-chip > #serial-status,
+.serial-device-chip > .dual-status {
+  display: flex;
+  align-items: center;
+}
+
 /* 三个状态类各自带 background/border, 与本块同权重且写在后面, 必须逐个点名
    压过去, 否则芯片左段会挂上一块状态底色, 看起来像两块拼的而不是一枚芯片。
    只夺 background/border, 文字颜色仍留给状态类(「正在连接…」要橙字)。 */
@@ -3738,6 +3733,7 @@ hr {
 }
 
 .serial-send-btn {
+  white-space: nowrap;
   font-size: 0.8125rem;
   font-weight: 600;
   padding: 8px 24px !important;
@@ -7247,4 +7243,549 @@ body.blu-wave-fullscreen-open {
 .blu-cmd-auto-close-switch .form-check-label {
   font-size: 0.68rem;
   color: var(--text-secondary);
+}
+
+/* ========== Workbench: 停靠栏 / 停靠区 / 状态栏 ========== */
+/* 三列显式定位：右栏收起时整列让出，停靠栏仍在第三列 */
+#log-main {
+  grid-column: 1;
+}
+
+#serial-tools {
+  grid-column: 2;
+}
+
+#wb-dock-bar {
+  grid-column: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-height: 0;
+  padding: 6px 0;
+  overflow-y: auto;
+  background: var(--bg-body);
+  border-left: 1px solid var(--border-color);
+}
+
+.wb-dock-btn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 46px;
+  padding: 7px 0 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.6rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.wb-dock-btn i {
+  font-size: 1.05rem;
+}
+
+.wb-dock-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
+}
+
+.wb-dock-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.wb-dock-btn[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-light);
+  font-weight: 600;
+}
+
+.wb-dock-btn[aria-pressed="true"]::before {
+  content: '';
+  position: absolute;
+  right: -3px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px 0 0 2px;
+  background: var(--accent);
+}
+
+/* 停在底部的面板：图标下加一道横线提示位置 */
+.wb-dock-btn[data-dock="bottom"] i {
+  box-shadow: 0 2px 0 -0.5px currentColor;
+}
+
+.wb-dock-sep {
+  width: 24px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border-color);
+}
+
+/* 协议不支持时，独立面板对应的卡片被协议模块隐藏 */
+#main:has(#sk-rw-card[style*="display: none"]) .wb-dock-btn[data-dock-panel="rw"],
+#main:has(#sk-batch-card[style*="display: none"]) .wb-dock-btn[data-dock-panel="batch"] {
+  opacity: 0.45;
+}
+
+.wb-pane-unavailable {
+  display: none;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.wb-pane:has(> .protocol-down-card[style*="display: none"]) > .wb-pane-unavailable {
+  display: flex;
+}
+
+.wb-pane-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* 右侧停靠区标题栏 */
+.wb-dock-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 32px;
+  padding: 0 0 6px 4px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.wb-dock-title {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wb-dock-title i {
+  color: var(--accent);
+}
+
+.wb-dock-action {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.wb-dock-action:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
+}
+
+.wb-dock-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 底部停靠区：沿用协议解析面板的外壳，标题栏变成面板标签 */
+.serial-parse-title {
+  min-width: 0;
+}
+
+.wb-bottom-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.wb-bottom-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.wb-bottom-tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.wb-bottom-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
+}
+
+.wb-bottom-tab[aria-selected="true"] {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+#serial-parse-panel:not(.collapsed) .wb-bottom-tab[aria-selected="true"] {
+  color: var(--accent);
+  background: var(--accent-light);
+}
+
+.serial-parse-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#serial-parse-panel.collapsed #wb-bottom-close {
+  display: none;
+}
+
+#wb-bottom-body {
+  display: none;
+}
+
+#serial-parse-panel.wb-alt #serial-parse-body {
+  display: none;
+}
+
+#serial-parse-panel.wb-alt:not(.collapsed) #wb-bottom-body {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  overflow: hidden;
+  background-color: var(--bg-surface);
+}
+
+#wb-bottom-body > .tab-pane.active {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* 底栏换成别的面板时，不受「解析内容为空就缩成一行」的规则影响 */
+#serial-parse-panel.wb-alt.is-empty:not(.collapsed) {
+  height: var(--parse-h);
+}
+
+#serial-parse-panel.wb-alt.is-empty:not(.collapsed) #serial-parse-resizer {
+  display: block;
+}
+
+/* 日志空态引导 */
+.serial-logs:empty::before {
+  content: '选择串口并连接后，收发数据会显示在这里';
+  display: block;
+  margin-top: 16vh;
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* 顶栏右侧：协议快捷切换 + 命令面板 */
+.connect-bar-tools {
+  margin-left: auto;
+  gap: 8px;
+}
+
+.connect-bar-proto {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.connect-bar-proto-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+#wb-proto-quick {
+  width: 150px;
+  font-size: 0.75rem;
+}
+
+.connect-bar-palette {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.connect-bar-palette:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--bg-surface);
+}
+
+.connect-bar-palette kbd {
+  padding: 0 5px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-surface-hover);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  box-shadow: none;
+}
+
+/* 底部状态栏 */
+#serial-statusbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 26px;
+  padding: 0 12px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-body);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sb-group {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.sb-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sb-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.sb-session.is-open .sb-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+.sb-session[data-sid="A"].is-open .sb-dot {
+  background: #10b981;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #10b981 18%, transparent);
+}
+
+.sb-session[data-sid="B"].is-open .sb-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #f59e0b 18%, transparent);
+}
+
+.sb-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sb-state,
+.sb-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.sb-session.is-open .sb-state {
+  color: var(--text-primary);
+}
+
+.sb-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sb-k {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.sb-num {
+  color: var(--text-primary);
+}
+
+.sb-task {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 9px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--warning);
+  font-family: var(--font-sans);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sb-task:hover {
+  background: color-mix(in srgb, var(--warning) 24%, transparent);
+}
+
+.sb-spin {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: sb-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes sb-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sb-spin {
+    animation: none;
+  }
+}
+
+.sb-hint {
+  margin-left: auto;
+  display: flex;
+  gap: 12px;
+  color: var(--text-muted);
+}
+
+/* 桌面端右栏收起后整列让出：停靠栏已经承担了"重新打开"的入口 */
+@media (min-width: 769px) {
+  #main.right-collapsed #serial-tools {
+    display: none;
+  }
+}
+
+@media (max-width: 1100px) {
+  .sb-hint {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  #main {
+    --dock-bar-w: 0px;
+  }
+
+  #log-main {
+    grid-row: 1;
+  }
+
+  #wb-dock-bar {
+    grid-column: 1;
+    grid-row: 2;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 4px;
+    padding: 6px 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-left: 0;
+    border-top: 1px solid var(--border-color);
+  }
+
+  #serial-tools {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  /* 页面高度随内容增长时，flex-basis:0 会把面板高度算成 0，内容溢出压到状态栏上 */
+  #nav-tabContent,
+  #nav-tabContent > .tab-pane,
+  .wb-pane-scroll {
+    flex: 0 0 auto !important;
+  }
+
+  .wb-dock-btn {
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: 6px;
+    width: auto;
+    padding: 6px 10px;
+    font-size: 0.72rem;
+  }
+
+  .wb-dock-btn[aria-pressed="true"]::before {
+    display: none;
+  }
+
+  .wb-dock-sep {
+    width: 1px;
+    height: 20px;
+    margin: 0 4px;
+  }
+
+  .connect-bar-proto {
+    flex: 1 1 auto;
+  }
+
+  #wb-proto-quick {
+    flex: 1 1 auto;
+    width: auto;
+  }
+
+  .connect-bar-palette-text {
+    display: none;
+  }
+
+  #serial-statusbar {
+    flex-wrap: wrap;
+    row-gap: 2px;
+    padding: 4px 10px;
+    white-space: normal;
+  }
+
+  .sb-group {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
 }

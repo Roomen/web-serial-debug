@@ -289,7 +289,7 @@
 					alias: 'changyong zhiling preset ' + (item.func || ''),
 					run: function () {
 						ensureSerialView()
-						if (!clickEl('nav-protocol-tab')) return
+						if (!window.Workbench || !window.Workbench.open('protocol')) return
 						//功能码必须先设对，否则预设下拉里没有该项
 						if (item.func && !setValue('serial-protocol-down-func', item.func)) return
 						setValue('serial-protocol-down-preset', item.name)
@@ -372,6 +372,17 @@
 				clickEl('serial-send-header')
 			}
 		})
+		if (window.Workbench) {
+			window.Workbench.list().forEach(function (p) {
+				list.push({
+					group: '视图',
+					title: (p.shown ? '收起面板：' : '打开面板：') + p.title,
+					detail: p.dock === 'bottom' ? '底部' : '右侧',
+					alias: 'mianban panel dock ' + p.id,
+					run: function () { window.Workbench.toggle(p.id) }
+				})
+			})
+		}
 		return list
 	}
 

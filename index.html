@@ -103,18 +103,19 @@
                 </button>
             </div>
             <div class="rail-bottom">
-                <button class="rail-item" id="serial-import" title="导入配置">
-                    <i class="bi bi-folder-plus"></i>
-                    <span class="rail-label">导入配置</span>
-                </button>
-                <button class="rail-item" id="serial-export" title="导出配置">
-                    <i class="bi bi-folder-symlink"></i>
-                    <span class="rail-label">导出配置</span>
-                </button>
-                <button class="rail-item" id="serial-reset" title="重置所有参数">
-                    <i class="bi bi-arrow-repeat"></i>
-                    <span class="rail-label">重置参数</span>
-                </button>
+                <div class="dropend rail-config">
+                    <button class="rail-item" id="rail-config-btn" type="button" title="配置：导入 / 导出 / 重置"
+                        data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-sliders"></i>
+                        <span class="rail-label">配置</span>
+                    </button>
+                    <ul class="dropdown-menu rail-config-menu" aria-labelledby="rail-config-btn">
+                        <li><button class="dropdown-item" type="button" id="serial-import"><i class="bi bi-folder-plus"></i> 导入配置…</button></li>
+                        <li><button class="dropdown-item" type="button" id="serial-export"><i class="bi bi-folder-symlink"></i> 导出配置</button></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><button class="dropdown-item text-danger" type="button" id="serial-reset"><i class="bi bi-arrow-counterclockwise"></i> 重置所有参数…</button></li>
+                    </ul>
+                </div>
                 <div class="rail-divider"></div>
                 <button id="theme-toggle" class="theme-toggle-btn" title="切换亮色/暗色模式">
                     <span class="theme-toggle-track">
@@ -288,6 +289,16 @@
                             </div>
                         </div>
                     </div>
+                    <!-- 右侧：当前协议 + 命令面板入口 -->
+                    <div class="connect-bar-section connect-bar-tools">
+                        <label class="connect-bar-proto" title="当前协议（与协议下发面板同步）">
+                            <span class="connect-bar-proto-label">协议</span>
+                            <select class="form-select form-select-sm" id="wb-proto-quick" aria-label="当前协议"></select>
+                        </label>
+                        <button type="button" class="btn connect-bar-palette" id="wb-palette-btn" title="命令面板（Ctrl/⌘+K）">
+                            <i class="bi bi-command"></i><span class="connect-bar-palette-text">命令</span><kbd>K</kbd>
+                        </button>
+                    </div>
                     <input type="file" id="serial-import-file" style="display: none;" accept="application/json" />
                 </div>
                 <div id="main">
@@ -366,11 +377,17 @@
                             <div id="serial-parse-header" title="点击折叠/展开">
                                 <span class="serial-parse-title">
                                     <i class="bi bi-chevron-right serial-parse-chevron"></i>
-                                    <i class="bi bi-diagram-3"></i> 协议解析
+                                    <span class="wb-bottom-tabs" id="wb-bottom-tabs" role="tablist" aria-label="底部面板"></span>
                                 </span>
                                 <span class="serial-parse-actions">
                                     <button class="btn btn-sm btn-outline-secondary" id="serial-parse-clear"
                                         type="button">清空</button>
+                                    <button class="wb-dock-action" id="wb-bottom-move" type="button" title="移到右侧" hidden>
+                                        <i class="bi bi-layout-sidebar-reverse"></i>
+                                    </button>
+                                    <button class="wb-dock-action" id="wb-bottom-close" type="button" title="收起底部面板">
+                                        <i class="bi bi-chevron-down"></i>
+                                    </button>
                                 </span>
                             </div>
                             <div id="serial-parse-body">
@@ -389,6 +406,8 @@
                                 <div id="serial-protocol-output" class="rounded p-2 overflow-auto">
                                 </div>
                             </div>
+                            <!-- 停靠到底部的其它面板挂在这里 -->
+                            <div id="wb-bottom-body" class="tab-content wb-dock-body"></div>
                         </div>
                         <div id="serial-send-panel" class="serial-send-area">
                             <div id="serial-send-header" title="点击折叠/展开">
@@ -415,12 +434,12 @@
                                             <input class="form-check-input" type="checkbox" id="serial-loop-send">
                                             <label class="form-check-label" for="serial-loop-send">循环发送</label>
                                         </div>
-                                        <div class="input-group input-group-sm">
+                                        <div class="input-group input-group-sm" id="serial-loop-send-time-group">
                                             <span class="input-group-text">发送间隔(MS)</span>
                                             <input type="number" id="serial-loop-send-time" class="form-control" min="1" value="1000" style="width: 90px;" />
                                         </div>
                                     </div>
-                                    <button id="serial-send" class="btn btn-primary serial-send-btn h-10 px-4">
+                                    <button id="serial-send" class="btn btn-primary serial-send-btn h-10 px-4" title="发送（Ctrl/⌘+Enter）">
                                         <i class="bi bi-send-fill"></i> 发送
                                     </button>
                                 </div>
@@ -434,22 +453,18 @@
                         </button>
                         <div class="collapse show overflow-hidden sidebar-body">
 
-                            <nav>
-                                <div class="nav nav-tabs" id="nav-tab" role="tablist">
-                                    <button class="nav-link active" id="nav-quick-send-tab" data-bs-toggle="tab"
-                                        data-bs-target="#nav-quick-send" type="button" role="tab" aria-controls="nav-quick-send"
-                                        aria-selected="true">快捷发送</button>
-                                    <button class="nav-link" id="nav-protocol-tab" data-bs-toggle="tab"
-                                        data-bs-target="#nav-protocol" type="button" role="tab" aria-controls="nav-protocol"
-                                         aria-selected="false">第三方协议</button>
-                                    <button class="nav-link" id="nav-firmware-tab" data-bs-toggle="tab"
-                                        data-bs-target="#nav-firmware" type="button" role="tab" aria-controls="nav-firmware"
-                                        aria-selected="false">固件升级</button>
-                                </div>
-                            </nav>
-                            <div class="tab-content flex-fill" id="nav-tabContent">
-                                <div class="tab-pane fade show active d-flex flex-column" id="nav-quick-send" role="tabpanel"
-                                    aria-labelledby="nav-quick-send-tab">
+                            <!-- 右侧停靠区：标题栏 + 当前面板；面板由 js/workbench.js 注册与切换 -->
+                            <div class="wb-dock-head" id="wb-right-head">
+                                <span class="wb-dock-title" id="wb-right-title"></span>
+                                <button class="wb-dock-action" id="wb-right-move" type="button" title="移到底部">
+                                    <i class="bi bi-layout-split"></i>
+                                </button>
+                                <button class="wb-dock-action" id="wb-right-close" type="button" title="收起右侧面板">
+                                    <i class="bi bi-chevron-bar-right"></i>
+                                </button>
+                            </div>
+                            <div class="tab-content flex-fill wb-dock-body" id="nav-tabContent">
+                                <div class="tab-pane show active d-flex flex-column" id="nav-quick-send" role="tabpanel">
                                     <div class="btn-toolbar">
                                         <div class="flex-grow-1 input-group input-group-sm me-2">
                                             <span class="input-group-text">选择分组</span>
@@ -487,8 +502,7 @@
                                         class="flex-grow-1 overflow-auto">
                                     </div>
                                 </div>
-                                <div class="tab-pane d-flex flex-column fade flex-grow-1" id="nav-protocol" role="tabpanel"
-                                    aria-labelledby="nav-protocol-tab">
+                                <div class="tab-pane d-flex flex-column flex-grow-1" id="nav-protocol" role="tabpanel">
                                     <div class="protocol-basic-card mb-2">
                                         <div class="protocol-basic-row">
                                             <div class="input-group input-group-sm protocol-basic-proto">
@@ -798,7 +812,7 @@
                                         <textarea class="form-control form-control-sm mt-1 sk-hex-copyable" rows="2" id="sk188-down-preview"
                                             readonly placeholder="待发送的完整 HEX（空格分隔，点击可复制）" title="点击复制生成的 HEX"></textarea>
                                     </div>
-                                    <div class="protocol-down-card mb-2 sk-rw-card" id="sk-rw-card">
+                                    <div class="protocol-down-card mb-2 sk-rw-card" id="sk-rw-card" data-dock-own="rw">
                                         <h6 class="pane-section-title">
                                             <i class="bi bi-shuffle"></i> 随机读写测试
                                             <span class="sk-rw-proto-badge" id="sk-rw-proto-name">SEK</span>
@@ -843,7 +857,7 @@
                                         <div class="sk-rw-summary" id="sk-rw-summary"></div>
                                         <div class="sk-rw-log" id="sk-rw-log"></div>
                                     </div>
-                                    <div class="protocol-down-card mb-2 sk-rw-card" id="sk-batch-card">
+                                    <div class="protocol-down-card mb-2 sk-rw-card" id="sk-batch-card" data-dock-own="batch">
                                         <h6 class="pane-section-title">
                                             <i class="bi bi-list-check"></i> 批量配置写入
                                             <span class="sk-rw-proto-badge" id="sk-batch-proto-name">SEK</span>
@@ -885,8 +899,7 @@
                                         <div class="sk-rw-log" id="sk-batch-log"></div>
                                     </div>
                                 </div>
-                                <div class="tab-pane d-flex flex-column fade" id="nav-firmware" role="tabpanel"
-                                    aria-labelledby="nav-firmware-tab">
+                                <div class="tab-pane d-flex flex-column" id="nav-firmware" role="tabpanel">
                                     <div class="d-flex flex-column flex-grow-1 min-h-0">
                                         <div class="fw-upgrade-card">
                                             <h6 class="pane-section-title"><i class="bi bi-file-earmark-binary"></i> 固件文件</h6>
@@ -940,7 +953,11 @@
                             </div>
                         </div>
                     </div>
+                    <!--最右侧停靠图标栏：每个已注册面板一个按钮-->
+                    <div id="wb-dock-bar" role="toolbar" aria-label="工具面板" aria-orientation="vertical"></div>
                 </div>
+                <!--底部状态栏：连接时长 / 收发字节 / 后台任务-->
+                <div id="serial-statusbar" role="status" aria-live="off"></div>
             </div>
 
             <!--功耗分析视图（独立 Web Serial，BLU 100k）-->
@@ -1639,6 +1656,7 @@
     <script src="js/random-rw-test.js"></script>
     <script src="js/batch-config.js"></script>
     <script src="js/collapsible-cards.js"></script>
+    <script src="js/workbench.js"></script>
     <script src="js/command-palette.js"></script>
     <script src="js/firmware-upgrade.js"></script>
     <script src="js/hdiffi.js"></script>
