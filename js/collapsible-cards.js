@@ -1,12 +1,14 @@
-// 协议下发面板内卡片可折叠: 各协议的下行下发 / 一键工位测试
+// 协议Tab内卡片可折叠: 下行下发 / 随机读写测试 / 批量配置写入
 // 通过重新挂载已有 DOM 节点实现(不克隆), 不影响卡内控件的 id 与已绑定事件
 ;(function () {
 	'use strict'
 
 	const STATE_KEY = 'sk-card-collapse'
-	// 首次默认状态: 未列出的卡片也按展开处理
+	// 首次默认状态: 下行下发展开, 其余折叠
 	const DEFAULT_COLLAPSED = {
 		'sk-down-card': false,
+		'sk-rw-card': true,
+		'sk-batch-card': true,
 		'gz-down-card': false,
 		'gz-auto-card': false,
 	}
@@ -32,8 +34,7 @@
 	function init() {
 		const container = document.getElementById('nav-protocol')
 		if (!container) return
-		// data-dock-own 的卡片会被 js/workbench.js 搬成独立面板，不需要折叠头
-		const cards = container.querySelectorAll(':scope > .protocol-down-card:not([data-dock-own])')
+		const cards = container.querySelectorAll(':scope > .protocol-down-card')
 		if (!cards.length) return
 
 		const saved = loadCollapseMap()
