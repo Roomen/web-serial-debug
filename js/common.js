@@ -585,6 +585,12 @@
 		if (select) select.value = val
 		updateLogSettingsSummary()
 	}
+	// 自动滚动按钮:按下态即开启。别把状态写回按钮文案,命令面板也要读同一个 aria-pressed
+	function setAutoScrollUi(btn, on) {
+		if (!btn) return
+		btn.setAttribute('aria-pressed', on ? 'true' : 'false')
+		btn.title = on ? '日志自动滚动到底部 · 点击暂停' : '日志滚动已暂停 · 点击恢复'
+	}
 	function applyLogOptionsToUI() {
 		const opts = activeLogOptions()
 		LOG_OPTION_KEYS.forEach(function (k) { toolOptions[k] = opts[k] })
@@ -597,7 +603,8 @@
 		updateLogSettingsSummary()
 		applyLogView()
 		const a = document.getElementById('serial-auto-scroll')
-		if (a) a.innerText = opts.autoScroll ? '自动滚动' : '暂停滚动'
+		// 状态只存在 aria-pressed 上,文案固定(改这里同步 command-palette.js 的同名命令)
+		if (a) setAutoScrollUi(a, opts.autoScroll)
 	}
 
 	function applyLogView() {
@@ -946,8 +953,9 @@
 			<button type="button" title="移除" class="btn quick-remove" aria-label="移除"><i class="bi bi-x-lg"></i></button>
 			<input class="form-control form-control-sm quick-content" placeholder="发送内容" value="${content}">
 			<button type="button" class="btn btn-sm quick-send" title="发送: ${nameAttr}">${name}</button>
-			<label class="quick-hex" title="HEX 模式">
+			<label class="quick-hex ctl-chip ctl-chip--mono ctl-chip--micro" title="HEX 模式">
 				<input type="checkbox" aria-label="HEX 模式" ${item.hex ? 'checked' : ''}>
+				<span>HEX</span>
 			</label>
 		</div>`
 	}
@@ -2215,8 +2223,8 @@
 		}
 	})()
 	document.getElementById('serial-auto-scroll').addEventListener('click', function (e) {
-		let autoScroll = this.innerText != '自动滚动'
-		this.innerText = autoScroll ? '自动滚动' : '暂停滚动'
+		const autoScroll = this.getAttribute('aria-pressed') !== 'true'
+		setAutoScrollUi(this, autoScroll)
 		changeOption('autoScroll', autoScroll)
 	})
 	document.getElementById('serial-send-content').addEventListener('change', function (e) {
