@@ -20,6 +20,8 @@
 
 保持现有的原生 HTML/CSS/JavaScript 风格。`js/common.js` 使用浏览器全局 API、`let`/`const`、单引号、无分号和 Tab 缩进。CSS 也使用 Tab 缩进和简单选择器规则。HTML 使用四空格缩进，并大量使用 Bootstrap 工具类。新增元素 ID 优先沿用 `serial-*` 命名模式，例如 `serial-logs`、`serial-baud`。
 
+布尔类控件按语义选形态，不按外观拉平，统一的类在 `css/style.css` 末尾「统一控件」段：`.ctl-switch` 用于改完立即生效并持久化的设置（实时解析、失败继续、打包为 ZIP 之类）；`.ctl-chip` 用于修饰「待发送 / 待生成内容」的表单项（HEX、+\r\n、前导码、输出包类型、去 DC），选中态除了变色还加一个 ✓，不能只靠颜色区分，另有 `--mono`（协议字面量用等宽）、`--sm`、`--micro` 三个尺寸/字体修饰类，拿不到 `<input>` 的地方（JS 拼出来的工具条按钮，如 BLU 串口发送面板的 HEX/CRLF）用同款视觉的 `.ctl-chip-btn`，状态同样只认 `aria-pressed`；`.ctl-toggle` 用于工具栏上的视图/工具按下态（自动滚动、暂停滚动、均值带、±1σ、Y 轴锁定、全屏、上电），状态源**只认 `aria-pressed`**，不要再用 `.active` / `.is-on` / 按钮文案存状态——`#serial-auto-scroll` 以前把状态存在 innerText 里，`common.js` 和 `command-palette.js` 三处各读一遍，改文案就会让自动滚动静默反向；`.ctl-seg` 用于 N 选一（单路/双路、主发 A/B），选中态是实心填充，跟 `.ctl-toggle` 的描边按下态必须看得出区别。展开/收起（`aria-expanded`，如协议解析折叠、停靠栏开合）不属于以上任何一类，不要套这些类。`.ctl-switch` 把 Bootstrap `form-switch` 的 float + 负 margin 排版换成了 flex，所以同时清掉了 `padding-left` / `float` / `margin`，少清一项 label 就会压到开关上。
+
 不要设置鼠标指针样式（CSS `cursor`、JS `style.cursor`），`css/style.css` 末尾已把 Bootstrap 给按钮加的手型还原为默认；也不要给悬停状态加位移或缩放（`transform`）。指针在相邻元素间来回切换样式、元素悬停时移动导致鼠标在进出之间反复触发，移动鼠标会显得发抖。各视图顶栏统一用 `.view-bar`（功耗分析的 `.blu-connect-bar` 同样式），与串口调试的连接条同高、贴边。
 
 小改动不要引入框架、打包器或转译工具。若调整 CDN 依赖，应直接修改 `index.html` 并确认无需本地包安装也能运行。

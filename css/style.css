@@ -1208,7 +1208,7 @@ body {
 /* 紧凑列表：一行一条，分隔线代替卡片；删除键放行尾、悬停才出现 */
 .quick-item {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) var(--qs-name-w) 20px 20px;
+  grid-template-columns: 14px minmax(0, 1fr) var(--qs-name-w) 46px 20px;
   align-items: center;
   gap: 4px;
   min-height: 30px;
@@ -1300,16 +1300,6 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
-  margin: 0;
-}
-
-.quick-item .quick-hex input {
-  width: 13px;
-  height: 13px;
-  margin: 0;
-  accent-color: var(--accent);
 }
 
 .quick-item .quick-remove {
@@ -2183,10 +2173,6 @@ select option {
 .protocol-switch-inline .form-check {
   margin-bottom: 0;
   white-space: nowrap;
-}
-
-.protocol-switch-inline .form-check-label {
-  font-size: 0.78rem;
 }
 
 .protocol-advanced {
@@ -4087,56 +4073,6 @@ hr {
   gap: 8px;
 }
 
-.fw-check-pill {
-  position: relative;
-  margin: 0;
-}
-
-.fw-check-pill input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.fw-check-pill-content {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 7px 14px;
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--text-secondary);
-  background: var(--bg-surface-hover);
-  border: 1.5px solid var(--border-color);
-  border-radius: 22px;
-  transition: all var(--transition-fast);
-  user-select: none;
-}
-
-.fw-check-pill input:checked + .fw-check-pill-content {
-  color: var(--accent);
-  background: var(--accent-light);
-  border-color: var(--accent);
-}
-
-/* 选中态加勾，避免只靠颜色区分 */
-.fw-check-pill input:checked + .fw-check-pill-content::after {
-  content: '\F26E';
-  font-family: 'bootstrap-icons';
-  font-size: 0.9rem;
-  line-height: 1;
-  margin-left: 2px;
-}
-
-.fw-check-pill input:focus-visible + .fw-check-pill-content {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.fw-check-pill:hover .fw-check-pill-content {
-  border-color: var(--text-muted);
-}
-
 .fw-diff-hint {
   display: none;
   align-items: center;
@@ -4846,7 +4782,7 @@ hr {
   color: var(--danger, #ef4444) !important;
 }
 
-#blu-dut-power.is-on {
+#blu-dut-power[aria-pressed="true"] {
   border-color: color-mix(in srgb, #22c55e 55%, var(--border-color));
   color: #16a34a;
   background: color-mix(in srgb, #22c55e 12%, var(--bg-surface));
@@ -5674,15 +5610,7 @@ body.blu-wave-fullscreen-open {
   font-size: 0.7rem;
 }
 
-.blu-wave-toggle.active {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg-surface));
-}
-
-.blu-wave-toggle:disabled {
-  opacity: 0.35;
-}
+/* 按下态由 .ctl-toggle 统一提供 */
 
 .blu-y-scale-group {
   gap: 4px;
@@ -5699,12 +5627,6 @@ body.blu-wave-fullscreen-open {
   background: var(--bg-surface);
   color: var(--text-primary);
   font-family: var(--font-mono);
-}
-
-#blu-y-lock.active {
-  color: var(--accent, #3b82f6);
-  border-color: var(--accent, #3b82f6);
-  background: rgba(59, 130, 246, 0.12);
 }
 
 .blu-y-scale-hint {
@@ -6376,41 +6298,7 @@ body.blu-wave-fullscreen-open {
 
 /* ========== Dual Serial Monitor ========== */
 
-/* Mode Toggle */
-.serial-mode-toggle {
-  display: inline-flex;
-  background: var(--bg-surface-hover);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.serial-mode-btn {
-  padding: 5px 14px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 0.75rem;
-  font-weight: 600;
-  font-family: var(--font-sans);
-  transition: all var(--transition-fast);
-  white-space: nowrap;
-}
-
-.serial-mode-btn + .serial-mode-btn {
-  border-left: 1px solid var(--border-color);
-}
-
-.serial-mode-btn:hover {
-  color: var(--text-primary);
-  background: var(--accent-light);
-}
-
-.serial-mode-btn.active {
-  color: #fff;
-  background: var(--accent);
-}
+/* Mode Toggle：容器与基础按钮样式来自 .ctl-seg */
 
 /* Connect bar: single/dual toggling */
 #serial-connect-bar #serial-single-ctrl.serial-hidden,
@@ -6551,44 +6439,20 @@ body.blu-wave-fullscreen-open {
   white-space: nowrap;
 }
 
-/* 主发口 pill 组：替代原窄 select，与 .serial-mode-toggle 同款样式 */
-.dual-send-toggle {
-  display: inline-flex;
-  background: var(--bg-surface-hover);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
+/* 主发口 pill 组：容器与基础按钮样式来自 .ctl-seg，这里只压小一号 */
 .dual-send-btn {
   padding: 3px 10px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
   font-size: 0.7rem;
   font-weight: 700;
-  font-family: var(--font-sans);
-  transition: all var(--transition-fast);
-  white-space: nowrap;
 }
 
 .dual-send-btn[hidden] {
   display: none !important;
 }
 
-.dual-send-btn:not([hidden]) + .dual-send-btn {
-  border-left: 1px solid var(--border-color);
-}
-
-.dual-send-btn:hover {
-  color: var(--text-primary);
-  background: var(--accent-light);
-}
-
-.dual-send-btn.active {
-  color: #fff;
-  background: var(--accent);
+/* 隐藏的 A/B 不应留下分隔线 */
+.ctl-seg > .dual-send-btn[hidden] + .dual-send-btn {
+  border-left: 0;
 }
 
 /* A/B 选中态与悬停态都与日志右侧图例(.serial-log-legend.is-dual)同色 */
@@ -7009,31 +6873,12 @@ body.blu-wave-fullscreen-open {
   min-width: 0;
 }
 
-.blu-cmd-pill {
+/* HEX / CRLF：与串口发送面板的同名 chip 是同一件事，样式来自 .ctl-chip-btn，
+   这里只把高度撑到和本面板的输入框一致 */
+.blu-cmd-sheet .blu-cmd-pill {
   flex: 0 0 auto;
   height: 31px;
   min-width: 44px;
-  padding: 0 8px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  line-height: 1;
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
-  background: var(--bg-surface);
-  color: var(--text-muted);
-  user-select: none;
-}
-
-.blu-cmd-pill:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.blu-cmd-pill.is-on {
-  background: var(--accent-light);
-  color: var(--accent);
-  border-color: var(--accent);
 }
 
 .blu-cmd-custom-row .blu-cmd-send-custom,
@@ -7180,7 +7025,6 @@ body.blu-wave-fullscreen-open {
 /* 当前协议不支持的面板：按钮禁用，不可打开 */
 .wb-dock-btn:disabled {
   opacity: 0.4;
-  cursor: not-allowed;
 }
 
 .wb-dock-btn:disabled:hover {
@@ -7873,48 +7717,6 @@ summary {
   margin-top: 6px;
 }
 
-.send-chip {
-  position: relative;
-  margin: 0;
-}
-
-.send-chip input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.send-chip span {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 10px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  font-weight: 600;
-  user-select: none;
-}
-
-.send-chip:hover span {
-  border-color: var(--text-muted);
-}
-
-.send-chip input:checked + span {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-light);
-}
-
-.send-chip input:focus-visible + span {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 .send-loop-time {
   width: auto;
   flex-wrap: nowrap;
@@ -8028,4 +7830,234 @@ summary {
     flex-direction: row;
     margin-top: 0;
   }
+}
+
+/* =============================================
+   统一控件：开关 / 勾选胶囊 / 按下态 / 分段
+   按语义选控件，不按外观：
+   · .ctl-switch  改完立即生效并持久化的「设置」
+   · .ctl-chip    修饰「待提交内容」的表单项
+   · .ctl-toggle  工具栏上的「视图 / 工具状态」，状态源只认 aria-pressed
+   · .ctl-seg     N 选一，选中态是实心填充，跟 .ctl-toggle 的描边明显区分
+   展开 / 收起（aria-expanded）不属于以上任何一类，不要套这些类。
+   ============================================= */
+
+/* ① 开关 */
+/* Bootstrap 的 form-switch 靠 float + 负 margin 排版,这里换成 flex,
+   所以必须同时清掉 padding-left / float / 负 margin,否则 label 会压到开关上 */
+.ctl-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 1.5rem;
+  margin-bottom: 0;
+  padding-left: 0;
+}
+
+.ctl-switch .form-check-input {
+  flex: 0 0 auto;
+  float: none;
+  margin: 0;
+}
+
+.ctl-switch .form-check-label {
+  font-size: 0.75rem;
+  line-height: 1.2;
+  color: var(--text-secondary);
+}
+
+.ctl-switch .form-check-input:checked ~ .form-check-label {
+  color: var(--text-primary);
+}
+
+.ctl-switch .form-check-input:disabled ~ .form-check-label {
+  opacity: 0.5;
+}
+
+/* ② 勾选胶囊 */
+.ctl-chip {
+  position: relative;
+  margin: 0;
+}
+
+.ctl-chip input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ctl-chip > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  user-select: none;
+  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.ctl-chip:hover > span {
+  border-color: var(--text-muted);
+}
+
+.ctl-chip input:checked + span {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+/* 选中态加勾，不只靠颜色区分 */
+.ctl-chip input:checked + span::after {
+  content: '\F26E';
+  font-family: 'bootstrap-icons';
+  font-size: 0.8rem;
+  line-height: 1;
+  margin-left: 1px;
+}
+
+.ctl-chip input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ctl-chip input:disabled + span {
+  opacity: 0.45;
+}
+
+/* 按钮形态的勾选胶囊：语义同 .ctl-chip，用在拿不到 <input> 的地方
+   （JS 动态拼的工具条按钮）。状态源同样只认 aria-pressed */
+.ctl-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.ctl-chip-btn:hover {
+  border-color: var(--text-muted);
+}
+
+.ctl-chip-btn[aria-pressed='true'] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+.ctl-chip-btn[aria-pressed='true']::after {
+  content: '\F26E';
+  font-family: 'bootstrap-icons';
+  font-size: 0.8rem;
+  line-height: 1;
+  margin-left: 1px;
+}
+
+.ctl-chip-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* 协议字面量（HEX、+\r\n 之类）用等宽，是有理由的差异 */
+.ctl-chip--mono > span,
+.ctl-chip-btn.ctl-chip--mono {
+  font-family: var(--font-mono);
+}
+
+/* 密集工具条里的小一号 */
+.ctl-chip--sm > span {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 0.68rem;
+}
+
+/* 快捷发送行这种极密集列表 */
+.ctl-chip--micro > span {
+  height: 20px;
+  padding: 0 5px;
+  gap: 2px;
+  font-size: 0.6rem;
+  letter-spacing: 0;
+}
+
+.ctl-chip--micro input:checked + span::after {
+  font-size: 0.65rem;
+  margin-left: 0;
+}
+
+/* ③ 按下态按钮 */
+.ctl-toggle[aria-pressed='true'] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-surface));
+}
+
+.ctl-toggle:disabled {
+  opacity: 0.35;
+}
+
+/* ④ 分段选择。状态源是 .active（三处分段组已经统一用它，不要再引入第二种） */
+.ctl-seg {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  background: var(--bg-surface-hover);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.ctl-seg > button {
+  padding: 5px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.ctl-seg > button + button {
+  border-left: 1px solid var(--border-color);
+}
+
+.ctl-seg > button:hover:not(.active) {
+  color: var(--text-primary);
+  background: var(--accent-light);
+}
+
+.ctl-seg > button.active {
+  color: #fff;
+  background: var(--accent);
+}
+
+.ctl-seg > button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 循环发送：进行中给 chip 运行态，区别于普通选中，免得忘了关 */
+#serial-send-panel.is-looping .ctl-chip--run input:checked + span {
+  color: var(--warning);
+  border-color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
 }

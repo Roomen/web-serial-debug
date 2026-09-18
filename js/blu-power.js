@@ -1282,7 +1282,7 @@
 		bluPowered = !!on
 		const btn = E('blu-dut-power')
 		if (!btn) return
-		btn.classList.toggle('is-on', bluPowered)
+		btn.setAttribute('aria-pressed', String(bluPowered))
 		btn.innerHTML = bluPowered
 			? '<i class="bi bi-lightning-charge-fill"></i> 下电'
 			: '<i class="bi bi-lightning-charge"></i> 上电'
@@ -1629,7 +1629,7 @@
 			el.innerHTML = scrollPaused
 				? '<i class="bi bi-play-fill"></i> 继续滚动'
 				: '<i class="bi bi-pause-fill"></i> 暂停滚动'
-			el.classList.toggle('active', scrollPaused)
+			el.setAttribute('aria-pressed', String(scrollPaused))
 		}
 		scheduleUIUpdate()
 	}
@@ -1840,7 +1840,6 @@
 		if (legacy) legacy.checked = yScaleMode === 'log'
 		const lockBtn = E('blu-y-lock')
 		if (lockBtn) {
-			lockBtn.classList.toggle('active', yAxisLocked)
 			lockBtn.setAttribute('aria-pressed', yAxisLocked ? 'true' : 'false')
 			lockBtn.title = yAxisLocked
 				? 'Y 轴已锁定（Live 不再自动跟范围）· 点击解锁'
@@ -5576,13 +5575,11 @@
 	function syncWaveStyleUi() {
 		const band = E('blu-wave-band')
 		if (band) {
-			band.classList.toggle('active', waveStyle.band)
 			band.setAttribute('aria-pressed', String(waveStyle.band))
 		}
 		const sigma = E('blu-wave-sigma')
 		if (sigma) {
-			sigma.classList.toggle('active', waveStyle.band && waveStyle.sigma)
-			sigma.setAttribute('aria-pressed', String(waveStyle.sigma))
+			sigma.setAttribute('aria-pressed', String(!!(waveStyle.band && waveStyle.sigma)))
 			sigma.disabled = !waveStyle.band
 		}
 	}

@@ -52,7 +52,7 @@
 					'<span class="blu-cmd-sheet-title"><i class="bi bi-terminal"></i> 串口发送</span>' +
 					'<div class="blu-cmd-sheet-actions">' +
 						'<span class="blu-cmd-status" id="blu-cmd-status">--</span>' +
-						'<div class="form-check form-switch blu-cmd-auto-close-switch" title="发送成功后自动收起面板">' +
+						'<div class="form-check form-switch ctl-switch blu-cmd-auto-close-switch" title="发送成功后自动收起面板">' +
 							'<input class="form-check-input" type="checkbox" id="blu-cmd-auto-close">' +
 							'<label class="form-check-label" for="blu-cmd-auto-close">自动收起</label>' +
 						'</div>' +
@@ -78,8 +78,8 @@
 						'</div>' +
 						'<div class="blu-cmd-row blu-cmd-custom-row">' +
 							'<input type="text" id="blu-cmd-custom" class="form-control form-control-sm" placeholder="或输入 HEX / 文本…" autocomplete="off" spellcheck="false">' +
-							'<button type="button" class="blu-cmd-pill is-on" id="blu-cmd-hex-mode" aria-pressed="true" title="HEX 发送">HEX</button>' +
-							'<button type="button" class="blu-cmd-pill" id="blu-cmd-add-crlf" aria-pressed="false" title="末尾加回车换行">CRLF</button>' +
+							'<button type="button" class="blu-cmd-pill ctl-chip-btn ctl-chip--mono" id="blu-cmd-hex-mode" aria-pressed="true" title="HEX 发送">HEX</button>' +
+							'<button type="button" class="blu-cmd-pill ctl-chip-btn ctl-chip--mono" id="blu-cmd-add-crlf" aria-pressed="false" title="末尾加回车换行">CRLF</button>' +
 							'<button class="btn btn-sm btn-outline-secondary" id="blu-cmd-send-custom" title="发送自定义内容">发送</button>' +
 						'</div>' +
 						'<div class="blu-cmd-result" id="blu-cmd-result"></div>' +
@@ -148,7 +148,6 @@
 		function setPill(el, on) {
 			if (!el) return
 			el.setAttribute('aria-pressed', on ? 'true' : 'false')
-			el.classList.toggle('is-on', !!on)
 		}
 
 		// CRLF 开关写全局 addCRLF（与串口页共用同一偏好，两页联动）
@@ -223,7 +222,6 @@
 		function setPill(el, on) {
 			if (!el) return
 			el.setAttribute('aria-pressed', on ? 'true' : 'false')
-			el.classList.toggle('is-on', !!on)
 		}
 		// CRLF 开关绑定全局 addCRLF（与串口页共用同一偏好）
 		if (crlfCheck && window.serialApi && typeof window.serialApi.getAddCRLF === 'function') {

@@ -142,7 +142,7 @@
                 <div id="serial-connect-bar">
                     <!-- 单路/双路模式切换 -->
                     <div class="connect-bar-section connect-bar-mode">
-                        <div class="serial-mode-toggle">
+                        <div class="serial-mode-toggle ctl-seg">
                             <button class="serial-mode-btn active" data-mode="single" id="serial-mode-single">单路</button>
                             <button class="serial-mode-btn" data-mode="dual" id="serial-mode-dual">双路</button>
                         </div>
@@ -280,7 +280,7 @@
                         <!-- 主发口（与 A/B 同行靠右） -->
                         <div class="dual-active-send">
                             <span class="dual-active-send-label">主发:</span>
-                            <div class="dual-send-toggle" id="serial-active-send" role="group" aria-label="选择主发送口">
+                            <div class="dual-send-toggle ctl-seg" id="serial-active-send" role="group" aria-label="选择主发送口">
                                 <button type="button" class="dual-send-btn active" data-sid="S" aria-label="单路串口">单</button>
                                 <button type="button" class="dual-send-btn" data-sid="A" aria-label="双路 A">A</button>
                                 <button type="button" class="dual-send-btn" data-sid="B" aria-label="双路 B">B</button>
@@ -353,7 +353,7 @@
                                 </div>
 
                                 <div class="btn-group serial-log-actions">
-                                    <button class="btn btn-sm btn-outline-secondary" id="serial-auto-scroll">自动滚动</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary ctl-toggle" id="serial-auto-scroll" aria-pressed="true" title="日志自动滚动到底部">自动滚动</button>
                                     <button class="btn btn-sm btn-outline-secondary" id="serial-clear">清空</button>
                                     <button class="btn btn-sm btn-outline-secondary" id="serial-copy">复制</button>
                                     <button class="btn btn-sm btn-outline-secondary" id="serial-save">导出</button>
@@ -427,13 +427,13 @@
                                     </button>
                                 </div>
                                 <div class="send-options">
-                                    <label class="send-chip" title="按 HEX 解析输入内容（空格可有可无）">
+                                    <label class="ctl-chip ctl-chip--mono" title="按 HEX 解析输入内容（空格可有可无）">
                                         <input type="checkbox" id="serial-hex-send"><span>HEX</span>
                                     </label>
-                                    <label class="send-chip" title="发送时在末尾追加回车换行 0D 0A">
+                                    <label class="ctl-chip ctl-chip--mono" title="发送时在末尾追加回车换行 0D 0A">
                                         <input type="checkbox" id="serial-add-crlf"><span>+ \r\n</span>
                                     </label>
-                                    <label class="send-chip" title="勾选后立即按间隔重复发送，取消勾选即停止">
+                                    <label class="ctl-chip ctl-chip--mono ctl-chip--run" title="勾选后立即按间隔重复发送，取消勾选即停止">
                                         <input type="checkbox" id="serial-loop-send"><span><i class="bi bi-repeat"></i> 循环</span>
                                     </label>
                                     <div class="input-group input-group-sm send-loop-time" id="serial-loop-send-time-group">
@@ -512,11 +512,11 @@
                                     <div class="protocol-basic-card mb-2">
                                         <div class="protocol-basic-row">
                                             <div class="protocol-switch-inline">
-                                                <div class="form-check form-switch">
+                                                <div class="form-check form-switch ctl-switch">
                                                     <input class="form-check-input" type="checkbox" id="serial-protocol-enable">
                                                     <label class="form-check-label" for="serial-protocol-enable">实时解析</label>
                                                 </div>
-                                                <div class="form-check form-switch" title="开启后日志 HEX 视图的每个字节可悬停查看其协议字段含义,不展开文本">
+                                                <div class="form-check form-switch ctl-switch" title="开启后日志 HEX 视图的每个字节可悬停查看其协议字段含义,不展开文本">
                                                     <input class="form-check-input" type="checkbox" id="serial-protocol-hover">
                                                     <label class="form-check-label" for="serial-protocol-hover">悬停提示</label>
                                                 </div>
@@ -585,7 +585,7 @@
                                         <textarea class="form-control form-control-sm" rows="4" id="serial-protocol-down-tlv"
                                             placeholder='TLV JSON，例如：[{"tag":10,"items":[{"id":1,"value":[]}]}]，value 可为空数组(查询) 或 十六进制字符串 或 字节数组'></textarea>
                                         <div class="d-flex flex-wrap align-items-center gap-2 mt-1">
-                                            <div class="form-check form-switch mb-0" title="关闭时始终明文下发(ctrl 不置加密位)；开启后用上方密钥加密数据域。解析/解密密钥可单独保留。">
+                                            <div class="form-check form-switch ctl-switch" title="关闭时始终明文下发(ctrl 不置加密位)；开启后用上方密钥加密数据域。解析/解密密钥可单独保留。">
                                                 <input class="form-check-input" type="checkbox" id="serial-protocol-down-encrypt">
                                                 <label class="form-check-label" for="serial-protocol-down-encrypt">下发加密</label>
                                             </div>
@@ -675,7 +675,7 @@
                                             </div>
                                         </div>
                                         <div class="d-flex flex-wrap align-items-center gap-3 mb-2">
-                                            <div class="form-check form-switch mb-0" title="在查询前先下发设置唯一码(0x0A)">
+                                            <div class="form-check form-switch ctl-switch" title="在查询前先下发设置唯一码(0x0A)">
                                                 <input class="form-check-input" type="checkbox" id="gz-auto-set-uid">
                                                 <label class="form-check-label" for="gz-auto-set-uid">先写唯一码</label>
                                             </div>
@@ -788,10 +788,10 @@
                                                 <span class="input-group-text">序号</span>
                                                 <input type="number" class="form-control" id="cjt188-down-seq" min="0" max="255" style="width:5rem;" title="每次生成HEX/立即下发后自动+1(可手动改)">
                                             </div>
-                                            <div class="form-check form-check-inline m-0">
-                                                <input class="form-check-input" type="checkbox" id="cjt188-down-preamble" checked>
-                                                <label class="form-check-label small" for="cjt188-down-preamble" title="帧头前发送 FE FE FE, 不参与校验和">前导码 FE FE FE</label>
-                                            </div>
+                                            <label class="ctl-chip" title="帧头前发送 FE FE FE, 不参与校验和">
+                                                <input type="checkbox" id="cjt188-down-preamble" checked>
+                                                <span>前导码 FE FE FE</span>
+                                            </label>
                                             <div class="input-group input-group-sm" style="width: auto;">
                                                 <span class="input-group-text">功能码</span>
                                                 <select class="form-select" id="cjt188-down-cmd">
@@ -842,11 +842,11 @@
                                             </div>
                                         </div>
                                         <div class="d-flex flex-wrap align-items-center gap-3 mb-2">
-                                            <div class="form-check form-switch mb-0">
+                                            <div class="form-check form-switch ctl-switch">
                                                 <input class="form-check-input" type="checkbox" id="sk-rw-continue" checked>
                                                 <label class="form-check-label" for="sk-rw-continue">失败继续</label>
                                             </div>
-                                            <div class="form-check form-switch mb-0">
+                                            <div class="form-check form-switch ctl-switch">
                                                 <input class="form-check-input" type="checkbox" id="sk-rw-restore" checked>
                                                 <label class="form-check-label" for="sk-rw-restore">写后恢复原值</label>
                                             </div>
@@ -885,7 +885,7 @@
                                                 <span class="input-group-text">间隔ms</span>
                                                 <input type="number" class="form-control" id="sk-batch-gap" value="200" min="0" max="10000" style="width:5rem;">
                                             </div>
-                                            <div class="form-check form-switch mb-0">
+                                            <div class="form-check form-switch ctl-switch">
                                                 <input class="form-check-input" type="checkbox" id="sk-batch-continue" checked>
                                                 <label class="form-check-label" for="sk-batch-continue">失败继续</label>
                                             </div>
@@ -1003,7 +1003,7 @@
                             <input type="number" id="blu-voltage-set" class="blu-voltage-input" value="" placeholder="—" step="1" min="500" max="5000" title="打开设备后从设备读取 · 可改 500–5000 mV · 回车/失焦写入">
                             <span class="blu-voltage-unit">mV</span>
                         </div>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-dut-power" title="DUT 上电 / 下电">
+                        <button type="button" class="btn btn-sm btn-outline-secondary ctl-toggle" id="blu-dut-power" aria-pressed="false" title="DUT 上电 / 下电">
                             <i class="bi bi-lightning-charge"></i> 上电
                         </button>
                         <select id="blu-sample-rate" class="blu-sample-rate-select" title="主机抽稀目标">
@@ -1141,17 +1141,17 @@
                                 </div>
                                 <span class="blu-ctl-sep"></span>
                                 <div class="blu-ctl-group">
-                                    <button class="btn btn-sm btn-outline-secondary" id="blu-pause-scroll" title="暂停波形滚动（数据仍在采集）">
+                                    <button type="button" class="btn btn-sm btn-outline-secondary ctl-toggle" id="blu-pause-scroll" aria-pressed="false" title="暂停波形滚动（数据仍在采集）">
                                         <i class="bi bi-pause-fill"></i> 暂停滚动
                                     </button>
                                     <button class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-view-reset" title="视图复位：X 回默认窗口并回到 Live，Y 回自动量程">
                                         <i class="bi bi-arrow-repeat"></i>
                                     </button>
-                                    <button class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-fullscreen" title="全屏查看波形（F）" aria-pressed="false">
+                                    <button class="btn btn-sm btn-outline-secondary blu-icon-btn ctl-toggle" id="blu-fullscreen" title="全屏查看波形（F）" aria-pressed="false">
                                         <i class="bi bi-arrows-fullscreen"></i>
                                     </button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-wave-toggle" id="blu-wave-band" aria-pressed="false" title="缩小时画均值线 + 最小~最大值色带（Joulescope / Otii 式）；关闭为 PPK 式包络折线">均值带</button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-wave-toggle" id="blu-wave-sigma" aria-pressed="false" title="在均值带上叠加 ±1σ 深色带（仅均值带模式）">±1σ</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-wave-toggle ctl-toggle" id="blu-wave-band" aria-pressed="false" title="缩小时画均值线 + 最小~最大值色带（Joulescope / Otii 式）；关闭为 PPK 式包络折线">均值带</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-wave-toggle ctl-toggle" id="blu-wave-sigma" aria-pressed="false" title="在均值带上叠加 ±1σ 深色带（仅均值带模式）">±1σ</button>
                                 </div>
                                 <span class="blu-ctl-sep"></span>
                                 <div class="blu-ctl-group blu-y-scale-group">
@@ -1161,7 +1161,7 @@
                                         <option value="log">Log</option>
                                         <option value="symlog">Symlog</option>
                                     </select>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-y-lock" title="锁定当前 Y 范围（Live 不再自动跟）" aria-pressed="false">
+                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-icon-btn ctl-toggle" id="blu-y-lock" title="锁定当前 Y 范围（Live 不再自动跟）" aria-pressed="false">
                                         <i class="bi bi-lock"></i>
                                     </button>
                                     <button type="button" class="blu-y-scale-hint" id="blu-y-scale-hint" hidden title="">建议 Log</button>
@@ -1399,8 +1399,9 @@
                                                     <option value="rect">Rect</option>
                                                 </select>
                                             </label>
-                                            <label class="blu-events-field">
-                                                <input type="checkbox" id="blu-fft-remove-dc" checked> 去 DC
+                                            <label class="ctl-chip ctl-chip--sm" title="计算前先去掉直流分量">
+                                                <input type="checkbox" id="blu-fft-remove-dc" checked>
+                                                <span>去 DC</span>
                                             </label>
                                             <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-fft-refresh">计算</button>
                                             <span class="blu-events-meta" id="blu-fft-meta"></span>
@@ -1480,7 +1481,7 @@
                         <span class="view-bar-sub">原始包 · 压缩包 · 双向差分包</span>
                     </div>
                     <div class="view-bar-actions">
-                        <div class="form-check form-switch fw-zip-switch" title="生成的所有文件打成一个 ZIP 下载">
+                        <div class="form-check form-switch ctl-switch fw-zip-switch" title="生成的所有文件打成一个 ZIP 下载">
                             <input class="form-check-input" type="checkbox" id="fp-gen-zip" checked>
                             <label class="form-check-label" for="fp-gen-zip">打包为 ZIP</label>
                         </div>
@@ -1539,17 +1540,17 @@
                             <div class="fw-config-item">
                                 <label class="fw-config-label"><i class="bi bi-gear"></i> 输出包类型</label>
                                 <div class="fw-output-types">
-                                    <label class="fw-check-pill">
+                                    <label class="ctl-chip">
                                         <input type="checkbox" id="fp-gen-origin">
-                                        <span class="fw-check-pill-content"><i class="bi bi-file-earmark"></i> 原始包</span>
+                                        <span><i class="bi bi-file-earmark"></i> 原始包</span>
                                     </label>
-                                    <label class="fw-check-pill">
+                                    <label class="ctl-chip">
                                         <input type="checkbox" id="fp-gen-compress" checked>
-                                        <span class="fw-check-pill-content"><i class="bi bi-file-zip"></i> 压缩包</span>
+                                        <span><i class="bi bi-file-zip"></i> 压缩包</span>
                                     </label>
-                                    <label class="fw-check-pill">
+                                    <label class="ctl-chip">
                                         <input type="checkbox" id="fp-gen-diff" checked>
-                                        <span class="fw-check-pill-content"><i class="bi bi-arrow-left-right"></i> 差分包</span>
+                                        <span><i class="bi bi-arrow-left-right"></i> 差分包</span>
                                     </label>
                                 </div>
                                 <p class="fw-diff-hint"><i class="bi bi-info-circle"></i> 差分包需要旧固件，未选择时会跳过</p>

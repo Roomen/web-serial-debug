@@ -190,10 +190,12 @@
 		} else {
 			warnMissing('serial-log-type')
 		}
-		const scrollText = textOf('serial-auto-scroll')
+		// 自动滚动的状态源是按钮的 aria-pressed(见 common.js setAutoScrollUi),不是按钮文案
+		const scrollBtn = document.getElementById('serial-auto-scroll')
+		const scrollOn = !!(scrollBtn && scrollBtn.getAttribute('aria-pressed') === 'true')
 		list.push({
 			group: '日志',
-			title: scrollText === '自动滚动' ? '暂停日志滚动' : '恢复自动滚动',
+			title: scrollOn ? '暂停日志滚动' : '恢复自动滚动',
 			alias: 'gundong scroll auto pause',
 			run: function () { clickEl('serial-auto-scroll') }
 		})
