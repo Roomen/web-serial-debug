@@ -1,22 +1,22 @@
-// Run: node tests/sk188-protocol.cjs — synthetic data only, no device logs.
+// Run: node tests/cjt188-protocol.cjs — synthetic data only, no device logs.
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const vm = require('node:vm')
 const path = require('node:path')
 const window = { registerProtocol() {} }
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/sk188-protocol.js'), 'utf8'), {
+vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/cjt188-protocol.js'), 'utf8'), {
 	window, Uint8Array, document: { getElementById() { return null } },
 })
-const parse = window.sk188ParseFrame
-const find = window.sk188FindFrame
-const byteMap = window.sk188ByteMap
+const parse = window.cjt188ParseFrame
+const find = window.cjt188FindFrame
+const byteMap = window.cjt188ByteMap
 const hex = s => Uint8Array.from(s.split(' ').map(x => parseInt(x, 16)))
 const seal = bytes => Uint8Array.from([...bytes, bytes.reduce((sum, b) => (sum + b) & 255, 0), 0x16])
 const ack = seal(hex('68 10 12 34 56 78 90 12 34 83 03 81 0A 01'))
 const read = seal([...hex('68 10 12 34 56 78 90 12 34 81 16 90 1F 02'),
 	...hex('01 00 00 00 29 02 00 00 00 29 00 00 00 00 00 00 00 00 03')])
 const write = seal(hex('68 10 12 34 56 78 90 12 34 95 03 A0 18 03'))
-const request = window.sk188BuildDownFrame({ cmd: 3, addr: 'AA AA AA AA AA AA AA', seq: 1 })
+const request = window.cjt188BuildDownFrame({ cmd: 3, addr: 'AA AA AA AA AA AA AA', seq: 1 })
 
 for (const frame of [request, ack, read, write]) {
 	const expected = parse(frame)
@@ -78,4 +78,4 @@ assert.ok(byteMap(result).slice(3).every(label => label === ''))
 const corrupted = malformed.slice()
 corrupted[17] ^= 1
 assert.doesNotMatch(parse(corrupted).errors.join(), /地址偏移/)
-console.log('SK188 regression checks passed')
+console.log('CJ/T 188 regression checks passed')

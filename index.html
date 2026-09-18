@@ -22,12 +22,12 @@
     <link rel="mask-icon" href="imgs/logo.svg" color="#007aff">
     <script>
         (function () {
+            // 主题三档：light / dark 为手动选择，其余(未设置)跟随系统；首屏前就定下，避免闪烁
             var t = localStorage.getItem('serial-debug-theme')
-            if (t) {
-                document.documentElement.setAttribute('data-theme', t)
-            } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-                document.documentElement.setAttribute('data-theme', 'dark')
+            if (t !== 'light' && t !== 'dark') {
+                t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
             }
+            document.documentElement.setAttribute('data-theme', t)
         })()
     </script>
     <script>
@@ -103,26 +103,25 @@
                 </button>
             </div>
             <div class="rail-bottom">
-                <button class="rail-item" id="serial-import" title="导入配置">
-                    <i class="bi bi-folder-plus"></i>
-                    <span class="rail-label">导入配置</span>
-                </button>
-                <button class="rail-item" id="serial-export" title="导出配置">
-                    <i class="bi bi-folder-symlink"></i>
-                    <span class="rail-label">导出配置</span>
-                </button>
-                <button class="rail-item" id="serial-reset" title="重置所有参数">
-                    <i class="bi bi-arrow-repeat"></i>
-                    <span class="rail-label">重置参数</span>
-                </button>
+                <div class="dropend rail-config">
+                    <button class="rail-item" id="rail-config-btn" type="button" title="配置：导入 / 导出 / 重置"
+                        data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-sliders"></i>
+                        <span class="rail-label">配置</span>
+                    </button>
+                    <ul class="dropdown-menu rail-config-menu" aria-labelledby="rail-config-btn">
+                        <li><button class="dropdown-item" type="button" id="serial-import"><i class="bi bi-folder-plus"></i> 导入配置…</button></li>
+                        <li><button class="dropdown-item" type="button" id="serial-export"><i class="bi bi-folder-symlink"></i> 导出配置</button></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><button class="dropdown-item text-danger" type="button" id="serial-reset"><i class="bi bi-arrow-counterclockwise"></i> 重置所有参数…</button></li>
+                    </ul>
+                </div>
                 <div class="rail-divider"></div>
-                <button id="theme-toggle" class="theme-toggle-btn" title="切换亮色/暗色模式">
-                    <span class="theme-toggle-track">
-                        <i class="bi bi-sun-fill"></i>
-                        <i class="bi bi-moon-stars-fill"></i>
-                        <span class="theme-toggle-thumb"></span>
-                    </span>
-                </button>
+                <div class="theme-switch" id="theme-switch" role="radiogroup" aria-label="主题">
+                    <button type="button" role="radio" data-theme-choice="auto" title="主题：跟随系统" aria-label="跟随系统"><i class="bi bi-circle-half"></i></button>
+                    <button type="button" role="radio" data-theme-choice="light" title="主题：浅色" aria-label="浅色"><i class="bi bi-sun"></i></button>
+                    <button type="button" role="radio" data-theme-choice="dark" title="主题：深色" aria-label="深色"><i class="bi bi-moon-stars"></i></button>
+                </div>
                 <a href="https://github.com/Roomen/web-serial-debug/issues/new" target="_blank" rel="noopener" class="rail-item" title="提交建议 / Bug">
                     <i class="bi bi-chat-dots"></i>
                     <span class="rail-label">反馈</span>
@@ -143,7 +142,7 @@
                 <div id="serial-connect-bar">
                     <!-- 单路/双路模式切换 -->
                     <div class="connect-bar-section connect-bar-mode">
-                        <div class="serial-mode-toggle">
+                        <div class="serial-mode-toggle ctl-seg">
                             <button class="serial-mode-btn active" data-mode="single" id="serial-mode-single">单路</button>
                             <button class="serial-mode-btn" data-mode="dual" id="serial-mode-dual">双路</button>
                         </div>
@@ -281,12 +280,24 @@
                         <!-- 主发口（与 A/B 同行靠右） -->
                         <div class="dual-active-send">
                             <span class="dual-active-send-label">主发:</span>
-                            <div class="dual-send-toggle" id="serial-active-send" role="group" aria-label="选择主发送口">
+                            <div class="dual-send-toggle ctl-seg" id="serial-active-send" role="group" aria-label="选择主发送口">
                                 <button type="button" class="dual-send-btn active" data-sid="S" aria-label="单路串口">单</button>
                                 <button type="button" class="dual-send-btn" data-sid="A" aria-label="双路 A">A</button>
                                 <button type="button" class="dual-send-btn" data-sid="B" aria-label="双路 B">B</button>
                             </div>
                         </div>
+                    </div>
+                    <!-- 右侧：当前协议(全局唯一的协议选择) + 命令面板入口 -->
+                    <div class="connect-bar-section connect-bar-tools">
+                        <label class="connect-bar-proto" title="当前协议：决定实时解析、协议下发与测试面板使用的协议">
+                            <span class="connect-bar-proto-label">协议</span>
+                            <select class="form-select form-select-sm" id="serial-protocol-select" aria-label="当前协议">
+                                <option value="sek">SEK（默认）</option>
+                            </select>
+                        </label>
+                        <button type="button" class="btn connect-bar-palette" id="wb-palette-btn" title="命令面板（Ctrl/⌘+K）">
+                            <i class="bi bi-command"></i><span class="connect-bar-palette-text">命令</span><kbd>K</kbd>
+                        </button>
                     </div>
                     <input type="file" id="serial-import-file" style="display: none;" accept="application/json" />
                 </div>
@@ -342,7 +353,7 @@
                                 </div>
 
                                 <div class="btn-group serial-log-actions">
-                                    <button class="btn btn-sm btn-outline-secondary" id="serial-auto-scroll">自动滚动</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary ctl-toggle" id="serial-auto-scroll" aria-pressed="true" title="日志自动滚动到底部">自动滚动</button>
                                     <button class="btn btn-sm btn-outline-secondary" id="serial-clear">清空</button>
                                     <button class="btn btn-sm btn-outline-secondary" id="serial-copy">复制</button>
                                     <button class="btn btn-sm btn-outline-secondary" id="serial-save">导出</button>
@@ -366,11 +377,17 @@
                             <div id="serial-parse-header" title="点击折叠/展开">
                                 <span class="serial-parse-title">
                                     <i class="bi bi-chevron-right serial-parse-chevron"></i>
-                                    <i class="bi bi-diagram-3"></i> 协议解析
+                                    <span class="wb-bottom-tabs" id="wb-bottom-tabs" role="tablist" aria-label="底部面板"></span>
                                 </span>
                                 <span class="serial-parse-actions">
                                     <button class="btn btn-sm btn-outline-secondary" id="serial-parse-clear"
                                         type="button">清空</button>
+                                    <button class="wb-dock-action" id="wb-bottom-move" type="button" title="移到右侧" hidden>
+                                        <i class="bi bi-layout-sidebar-reverse"></i>
+                                    </button>
+                                    <button class="wb-dock-action" id="wb-bottom-close" type="button" title="收起底部面板">
+                                        <i class="bi bi-chevron-down"></i>
+                                    </button>
                                 </span>
                             </div>
                             <div id="serial-parse-body">
@@ -389,39 +406,50 @@
                                 <div id="serial-protocol-output" class="rounded p-2 overflow-auto">
                                 </div>
                             </div>
+                            <!-- 停靠到底部的其它面板挂在这里 -->
+                            <div id="wb-bottom-body" class="tab-content wb-dock-body"></div>
                         </div>
                         <div id="serial-send-panel" class="serial-send-area">
                             <div id="serial-send-header" title="点击折叠/展开">
                                 <span class="serial-send-title">
                                     <i class="bi bi-chevron-down serial-send-chevron"></i>
                                     <i class="bi bi-send"></i> 串口发送
+                                    <span class="serial-send-target" id="serial-send-target" hidden></span>
                                 </span>
                             </div>
                             <div id="serial-send-body">
-                                <textarea class="form-control serial-send-textarea" rows="3" id="serial-send-content"
-                                    placeholder="在此输入要发送的内容,可以是字符串(如:你好,世界!),也可以是HEX(如:49544c4447)"></textarea>
-                                <div
-                                    class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
-                                    <div class="btn-toolbar">
-                                        <div class="form-check align-self-center me-2">
-                                            <input class="form-check-input" type="checkbox" id="serial-add-crlf">
-                                            <label class="form-check-label" for="serial-add-crlf">末尾加回车换行</label>
-                                        </div>
-                                        <div class="form-check align-self-center me-2">
-                                            <input class="form-check-input" type="checkbox" id="serial-hex-send">
-                                            <label class="form-check-label" for="serial-hex-send">HEX发送</label>
-                                        </div>
-                                        <div class="form-check align-self-center me-2">
-                                            <input class="form-check-input" type="checkbox" id="serial-loop-send">
-                                            <label class="form-check-label" for="serial-loop-send">循环发送</label>
-                                        </div>
-                                        <div class="input-group input-group-sm">
-                                            <span class="input-group-text">发送间隔(MS)</span>
-                                            <input type="number" id="serial-loop-send-time" class="form-control" min="1" value="1000" style="width: 90px;" />
-                                        </div>
+                                <div class="send-compose">
+                                    <textarea class="form-control serial-send-textarea" rows="2" id="serial-send-content"
+                                        spellcheck="false" placeholder="输入 HEX，如 41 54 0D 0A"></textarea>
+                                    <button id="serial-send" class="btn btn-primary serial-send-btn" type="button">
+                                        <span class="send-btn-main"><i class="bi bi-send-fill"></i> 发送</span>
+                                        <span class="send-btn-kbd" id="serial-send-kbd">Ctrl+Enter</span>
+                                    </button>
+                                </div>
+                                <div class="send-options">
+                                    <label class="ctl-chip ctl-chip--mono" title="按 HEX 解析输入内容（空格可有可无）">
+                                        <input type="checkbox" id="serial-hex-send"><span>HEX</span>
+                                    </label>
+                                    <label class="ctl-chip ctl-chip--mono" title="发送时在末尾追加回车换行 0D 0A">
+                                        <input type="checkbox" id="serial-add-crlf"><span>+ \r\n</span>
+                                    </label>
+                                    <label class="ctl-chip ctl-chip--mono ctl-chip--run" title="勾选后立即按间隔重复发送，取消勾选即停止">
+                                        <input type="checkbox" id="serial-loop-send"><span><i class="bi bi-repeat"></i> 循环</span>
+                                    </label>
+                                    <div class="input-group input-group-sm send-loop-time" id="serial-loop-send-time-group">
+                                        <input type="number" id="serial-loop-send-time" class="form-control" min="1" value="1000" aria-label="循环发送间隔（毫秒）">
+                                        <span class="input-group-text">ms</span>
                                     </div>
-                                    <button id="serial-send" class="btn btn-primary serial-send-btn h-10 px-4">
-                                        <i class="bi bi-send-fill"></i> 发送
+                                    <span class="send-info" id="serial-send-info" aria-live="polite"></span>
+                                    <div class="dropdown">
+                                        <button class="btn btn-sm send-tool" type="button" id="serial-send-history-btn" data-bs-toggle="dropdown"
+                                            aria-expanded="false" title="发送历史（输入框里按 ↑ / ↓ 翻阅）" aria-label="发送历史">
+                                            <i class="bi bi-clock-history"></i>
+                                        </button>
+                                        <ul class="dropdown-menu dropdown-menu-end send-history-menu" id="serial-send-history-menu"></ul>
+                                    </div>
+                                    <button class="btn btn-sm send-tool" type="button" id="serial-send-clear" title="清空输入" aria-label="清空输入">
+                                        <i class="bi bi-x-lg"></i>
                                     </button>
                                 </div>
                             </div>
@@ -434,75 +462,61 @@
                         </button>
                         <div class="collapse show overflow-hidden sidebar-body">
 
-                            <nav>
-                                <div class="nav nav-tabs" id="nav-tab" role="tablist">
-                                    <button class="nav-link active" id="nav-quick-send-tab" data-bs-toggle="tab"
-                                        data-bs-target="#nav-quick-send" type="button" role="tab" aria-controls="nav-quick-send"
-                                        aria-selected="true">快捷发送</button>
-                                    <button class="nav-link" id="nav-protocol-tab" data-bs-toggle="tab"
-                                        data-bs-target="#nav-protocol" type="button" role="tab" aria-controls="nav-protocol"
-                                         aria-selected="false">第三方协议</button>
-                                    <button class="nav-link" id="nav-firmware-tab" data-bs-toggle="tab"
-                                        data-bs-target="#nav-firmware" type="button" role="tab" aria-controls="nav-firmware"
-                                        aria-selected="false">固件升级</button>
-                                </div>
-                            </nav>
-                            <div class="tab-content flex-fill" id="nav-tabContent">
-                                <div class="tab-pane fade show active d-flex flex-column" id="nav-quick-send" role="tabpanel"
-                                    aria-labelledby="nav-quick-send-tab">
-                                    <div class="btn-toolbar">
-                                        <div class="flex-grow-1 input-group input-group-sm me-2">
-                                            <span class="input-group-text">选择分组</span>
+                            <!-- 右侧停靠区：标题栏 + 当前面板；面板由 js/workbench.js 注册与切换 -->
+                            <div class="wb-dock-head" id="wb-right-head">
+                                <span class="wb-dock-title" id="wb-right-title"></span>
+                                <button class="wb-dock-action" id="wb-right-move" type="button" title="移到底部">
+                                    <i class="bi bi-layout-split"></i>
+                                </button>
+                                <button class="wb-dock-action" id="wb-right-close" type="button" title="收起右侧面板">
+                                    <i class="bi bi-chevron-bar-right"></i>
+                                </button>
+                            </div>
+                            <div class="tab-content flex-fill wb-dock-body" id="nav-tabContent">
+                                <div class="tab-pane show active d-flex flex-column" id="nav-quick-send" role="tabpanel">
+                                    <div class="quick-send-toolbar">
+                                        <div class="input-group input-group-sm quick-send-group">
+                                            <span class="input-group-text">分组</span>
                                             <select class="form-select" id="serial-quick-send">
                                             </select>
                                         </div>
-
-                                        <div class="btn-group">
-                                            <button class="btn btn-sm btn-outline-secondary"
-                                                id="serial-quick-send-add-group">新增</button>
-                                            <button class="btn btn-sm btn-outline-secondary"
-                                                id="serial-quick-send-rename-group">改名</button>
-                                            <button class="btn btn-sm btn-outline-secondary"
-                                                id="serial-quick-send-remove-group">删除</button>
+                                        <button id="serial-quick-send-add" class="btn btn-sm btn-outline-secondary" type="button" title="在当前分组末尾增加一条">
+                                            <i class="bi bi-plus-lg"></i> 增加
+                                        </button>
+                                        <div class="dropdown">
+                                            <button class="btn btn-sm btn-outline-secondary quick-send-more" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="分组管理 / 导入导出" aria-label="分组管理">
+                                                <i class="bi bi-three-dots"></i>
+                                            </button>
+                                            <ul class="dropdown-menu dropdown-menu-end quick-send-menu">
+                                                <li><button class="dropdown-item" type="button" id="serial-quick-send-add-group"><i class="bi bi-folder-plus"></i> 新建分组…</button></li>
+                                                <li><button class="dropdown-item" type="button" id="serial-quick-send-rename-group"><i class="bi bi-pencil"></i> 重命名分组…</button></li>
+                                                <li><button class="dropdown-item text-danger" type="button" id="serial-quick-send-remove-group"><i class="bi bi-trash"></i> 删除当前分组</button></li>
+                                                <li><hr class="dropdown-divider"></li>
+                                                <li><button class="dropdown-item" type="button" id="serial-quick-send-import-btn"><i class="bi bi-box-arrow-in-down"></i> 导入到当前分组…</button></li>
+                                                <li><button class="dropdown-item" type="button" id="serial-quick-send-export"><i class="bi bi-box-arrow-up"></i> 导出当前分组</button></li>
+                                            </ul>
                                         </div>
-                                    </div>
-                                    <div class="d-flex mt-2 gap-2">
-                                        <button id="serial-quick-send-add" class="btn btn-sm btn-outline-secondary"><i
-                                                class="bi bi-plus-square"></i> 增加一条</button>
-                                        <button class="btn btn-sm btn-outline-secondary flex-grow-1"
-                                            id="serial-quick-send-import-btn"><i class="bi bi-folder-plus"></i>
-                                            导入</button>
                                         <input type="file" id="serial-quick-send-import" style="display: none;"
                                             accept="application/json" />
-                                        <button class="btn btn-sm btn-outline-secondary flex-grow-1"
-                                            id="serial-quick-send-export"><i class="bi bi-folder-symlink"></i>
-                                            导出</button>
                                     </div>
-                                    <div class="quick-send-head mt-2">
-                                        <span class="col-content">内容 · 单击编辑 / 双击改名</span>
-                                        <span class="col-name">发送</span>
+                                    <div class="quick-send-head">
+                                        <span class="col-content">内容（单击编辑）</span>
+                                        <span class="col-name" title="双击发送按钮可改名">发送 · 双击改名</span>
                                         <span class="col-hex" title="HEX 模式">HEX</span>
                                     </div>
                                     <div id="serial-quick-send-content"
                                         class="flex-grow-1 overflow-auto">
                                     </div>
                                 </div>
-                                <div class="tab-pane d-flex flex-column fade flex-grow-1" id="nav-protocol" role="tabpanel"
-                                    aria-labelledby="nav-protocol-tab">
+                                <div class="tab-pane d-flex flex-column flex-grow-1" id="nav-protocol" role="tabpanel">
                                     <div class="protocol-basic-card mb-2">
                                         <div class="protocol-basic-row">
-                                            <div class="input-group input-group-sm protocol-basic-proto">
-                                                <span class="input-group-text">协议</span>
-                                                <select class="form-select" id="serial-protocol-select">
-                                                    <option value="sek">SEK（默认）</option>
-                                                </select>
-                                            </div>
                                             <div class="protocol-switch-inline">
-                                                <div class="form-check form-switch">
+                                                <div class="form-check form-switch ctl-switch">
                                                     <input class="form-check-input" type="checkbox" id="serial-protocol-enable">
                                                     <label class="form-check-label" for="serial-protocol-enable">实时解析</label>
                                                 </div>
-                                                <div class="form-check form-switch" title="开启后日志 HEX 视图的每个字节可悬停查看其协议字段含义,不展开文本">
+                                                <div class="form-check form-switch ctl-switch" title="开启后日志 HEX 视图的每个字节可悬停查看其协议字段含义,不展开文本">
                                                     <input class="form-check-input" type="checkbox" id="serial-protocol-hover">
                                                     <label class="form-check-label" for="serial-protocol-hover">悬停提示</label>
                                                 </div>
@@ -571,7 +585,7 @@
                                         <textarea class="form-control form-control-sm" rows="4" id="serial-protocol-down-tlv"
                                             placeholder='TLV JSON，例如：[{"tag":10,"items":[{"id":1,"value":[]}]}]，value 可为空数组(查询) 或 十六进制字符串 或 字节数组'></textarea>
                                         <div class="d-flex flex-wrap align-items-center gap-2 mt-1">
-                                            <div class="form-check form-switch mb-0" title="关闭时始终明文下发(ctrl 不置加密位)；开启后用上方密钥加密数据域。解析/解密密钥可单独保留。">
+                                            <div class="form-check form-switch ctl-switch" title="关闭时始终明文下发(ctrl 不置加密位)；开启后用上方密钥加密数据域。解析/解密密钥可单独保留。">
                                                 <input class="form-check-input" type="checkbox" id="serial-protocol-down-encrypt">
                                                 <label class="form-check-label" for="serial-protocol-down-encrypt">下发加密</label>
                                             </div>
@@ -661,7 +675,7 @@
                                             </div>
                                         </div>
                                         <div class="d-flex flex-wrap align-items-center gap-3 mb-2">
-                                            <div class="form-check form-switch mb-0" title="在查询前先下发设置唯一码(0x0A)">
+                                            <div class="form-check form-switch ctl-switch" title="在查询前先下发设置唯一码(0x0A)">
                                                 <input class="form-check-input" type="checkbox" id="gz-auto-set-uid">
                                                 <label class="form-check-label" for="gz-auto-set-uid">先写唯一码</label>
                                             </div>
@@ -759,46 +773,51 @@
                                             <button class="btn btn-sm btn-primary flex-grow-1" id="wmbus-down-send">立即下发</button>
                                         </div>
                                     </div>
-                                    <div class="protocol-down-card mb-2" id="sk188-down-card" style="display:none;">
-                                        <h6 class="pane-section-title"><i class="bi bi-arrow-down-circle"></i> <span id="sk188-down-title">188协议下行下发</span></h6>
+                                    <div class="protocol-down-card mb-2" id="cjt188-down-card" style="display:none;">
+                                        <h6 class="pane-section-title"><i class="bi bi-arrow-down-circle"></i> <span id="cjt188-down-title">188协议下行下发</span></h6>
                                         <p class="sk-rw-hint mb-2">68 10 表号7B 控制码 数据长度 数据标识 序号 数据 校验和 16 · 工具扮演平台/主机角色</p>
                                         <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
                                             <div class="input-group input-group-sm" style="width: auto; min-width: 16rem; flex: 1 1 16rem;">
                                                 <span class="input-group-text">表号(7B HEX)</span>
-                                                <input type="text" class="form-control" id="sk188-down-addr" title="全 AA = 广播,所有设备都会应答" placeholder="AA AA AA AA AA AA AA = 广播(所有设备都会应答)">
-                                                <button class="btn btn-outline-secondary" type="button" id="sk188-down-addr-reset" title="重置为广播地址(全 AA)"><i class="bi bi-arrow-repeat"></i></button>
+                                                <input type="text" class="form-control" id="cjt188-down-addr" title="全 AA = 广播,所有设备都会应答" placeholder="AA AA AA AA AA AA AA = 广播(所有设备都会应答)">
+                                                <button class="btn btn-outline-secondary" type="button" id="cjt188-down-addr-reset" title="重置为广播地址(全 AA)"><i class="bi bi-arrow-repeat"></i></button>
                                             </div>
                                         </div>
                                         <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
                                             <div class="input-group input-group-sm" style="width: auto;">
                                                 <span class="input-group-text">序号</span>
-                                                <input type="number" class="form-control" id="sk188-down-seq" min="0" max="255" style="width:5rem;" title="每次生成HEX/立即下发后自动+1(可手动改)">
+                                                <input type="number" class="form-control" id="cjt188-down-seq" min="0" max="255" style="width:5rem;" title="每次生成HEX/立即下发后自动+1(可手动改)">
                                             </div>
+                                            <label class="ctl-chip" title="帧头前发送 FE FE FE, 不参与校验和">
+                                                <input type="checkbox" id="cjt188-down-preamble" checked>
+                                                <span>前导码 FE FE FE</span>
+                                            </label>
                                             <div class="input-group input-group-sm" style="width: auto;">
                                                 <span class="input-group-text">功能码</span>
-                                                <select class="form-select" id="sk188-down-cmd">
+                                                <select class="form-select" id="cjt188-down-cmd">
                                                     <option value="0x01" selected>0x01 读数据</option>
                                                     <option value="0x03">0x03 读表号</option>
                                                     <option value="0x04">0x04 阀控</option>
+                                                    <option value="time" title="CJ/T 188 写标准时间, 地址全 AA 为广播校时">0x04 写标准时间 (A015)</option>
                                                     <option value="0x15">0x15 写表号</option>
                                                     <option value="0x16">0x16 写底度</option>
                                                 </select>
                                             </div>
                                         </div>
-                                        <div class="input-group input-group-sm mb-2" id="sk188-down-param-group" style="display:none;">
-                                            <span class="input-group-text" id="sk188-down-param-label">参数</span>
-                                            <input type="text" class="form-control" id="sk188-down-param-val" style="width:120px;" placeholder="值">
-                                            <select class="form-select" id="sk188-down-param-sel" style="display:none;"></select>
+                                        <div class="input-group input-group-sm mb-2" id="cjt188-down-param-group" style="display:none;">
+                                            <span class="input-group-text" id="cjt188-down-param-label">参数</span>
+                                            <input type="text" class="form-control" id="cjt188-down-param-val" style="width:120px;" placeholder="值">
+                                            <select class="form-select" id="cjt188-down-param-sel" style="display:none;"></select>
                                         </div>
-                                        <div class="small text-danger" id="sk188-down-err"></div>
+                                        <div class="small text-danger" id="cjt188-down-err"></div>
                                         <div class="d-flex flex-wrap align-items-center gap-2 mt-1">
-                                            <button class="btn btn-sm btn-outline-secondary" id="sk188-down-build">生成HEX</button>
-                                            <button class="btn btn-sm btn-primary flex-grow-1" id="sk188-down-send">立即下发</button>
+                                            <button class="btn btn-sm btn-outline-secondary" id="cjt188-down-build">生成HEX</button>
+                                            <button class="btn btn-sm btn-primary flex-grow-1" id="cjt188-down-send">立即下发</button>
                                         </div>
-                                        <textarea class="form-control form-control-sm mt-1 sk-hex-copyable" rows="2" id="sk188-down-preview"
+                                        <textarea class="form-control form-control-sm mt-1 sk-hex-copyable" rows="2" id="cjt188-down-preview"
                                             readonly placeholder="待发送的完整 HEX（空格分隔，点击可复制）" title="点击复制生成的 HEX"></textarea>
                                     </div>
-                                    <div class="protocol-down-card mb-2 sk-rw-card" id="sk-rw-card">
+                                    <div class="protocol-down-card mb-2 sk-rw-card" id="sk-rw-card" data-dock-own="rw">
                                         <h6 class="pane-section-title">
                                             <i class="bi bi-shuffle"></i> 随机读写测试
                                             <span class="sk-rw-proto-badge" id="sk-rw-proto-name">SEK</span>
@@ -823,11 +842,11 @@
                                             </div>
                                         </div>
                                         <div class="d-flex flex-wrap align-items-center gap-3 mb-2">
-                                            <div class="form-check form-switch mb-0">
+                                            <div class="form-check form-switch ctl-switch">
                                                 <input class="form-check-input" type="checkbox" id="sk-rw-continue" checked>
                                                 <label class="form-check-label" for="sk-rw-continue">失败继续</label>
                                             </div>
-                                            <div class="form-check form-switch mb-0">
+                                            <div class="form-check form-switch ctl-switch">
                                                 <input class="form-check-input" type="checkbox" id="sk-rw-restore" checked>
                                                 <label class="form-check-label" for="sk-rw-restore">写后恢复原值</label>
                                             </div>
@@ -843,7 +862,7 @@
                                         <div class="sk-rw-summary" id="sk-rw-summary"></div>
                                         <div class="sk-rw-log" id="sk-rw-log"></div>
                                     </div>
-                                    <div class="protocol-down-card mb-2 sk-rw-card" id="sk-batch-card">
+                                    <div class="protocol-down-card mb-2 sk-rw-card" id="sk-batch-card" data-dock-own="batch">
                                         <h6 class="pane-section-title">
                                             <i class="bi bi-list-check"></i> 批量配置写入
                                             <span class="sk-rw-proto-badge" id="sk-batch-proto-name">SEK</span>
@@ -866,7 +885,7 @@
                                                 <span class="input-group-text">间隔ms</span>
                                                 <input type="number" class="form-control" id="sk-batch-gap" value="200" min="0" max="10000" style="width:5rem;">
                                             </div>
-                                            <div class="form-check form-switch mb-0">
+                                            <div class="form-check form-switch ctl-switch">
                                                 <input class="form-check-input" type="checkbox" id="sk-batch-continue" checked>
                                                 <label class="form-check-label" for="sk-batch-continue">失败继续</label>
                                             </div>
@@ -885,8 +904,7 @@
                                         <div class="sk-rw-log" id="sk-batch-log"></div>
                                     </div>
                                 </div>
-                                <div class="tab-pane d-flex flex-column fade" id="nav-firmware" role="tabpanel"
-                                    aria-labelledby="nav-firmware-tab">
+                                <div class="tab-pane d-flex flex-column" id="nav-firmware" role="tabpanel">
                                     <div class="d-flex flex-column flex-grow-1 min-h-0">
                                         <div class="fw-upgrade-card">
                                             <h6 class="pane-section-title"><i class="bi bi-file-earmark-binary"></i> 固件文件</h6>
@@ -940,136 +958,150 @@
                             </div>
                         </div>
                     </div>
+                    <!--最右侧停靠图标栏：每个已注册面板一个按钮-->
+                    <div id="wb-dock-bar" role="toolbar" aria-label="工具面板" aria-orientation="vertical"></div>
                 </div>
+                <!--底部状态栏：连接时长 / 收发字节 / 后台任务-->
+                <div id="serial-statusbar" role="status" aria-live="off"></div>
             </div>
 
             <!--功耗分析视图（独立 Web Serial，BLU 100k）-->
             <div id="view-blu" class="app-view">
-                <div class="blu-wrapper">
-                    <!--
-                      工具条按使用流：连接 → 供电/参数 → 采样动作 → 数据工具
-                      采样率、模式、电压等配置放在「开始采样」前（先设后采）
-                    -->
-                    <div class="blu-connect-bar">
-                        <div class="blu-tb-group blu-tb-connect">
-                            <!-- 点击 BLU 弹出设备列表 / 添加；隐藏原生 select 仅作兼容同步 -->
-                            <div class="blu-device-menu" id="blu-device-menu">
-                                <button type="button" class="blu-device-trigger" id="blu-device-btn" title="选择设备或添加新 BLU" aria-haspopup="listbox" aria-expanded="false">
-                                    <i class="bi bi-speedometer2 blu-banner-icon"></i>
-                                    <span class="blu-banner-title">BLU</span>
-                                    <span class="blu-device-label" id="blu-device-label">未选设备</span>
-                                    <i class="bi bi-chevron-down blu-device-caret"></i>
+                <!--
+                  工具条按使用流：连接 → 供电/参数 → 采样动作 → 数据工具
+                  采样率、模式、电压等配置放在「开始采样」前（先设后采）
+                -->
+                <div class="blu-connect-bar">
+                    <div class="blu-tb-group blu-tb-connect">
+                        <!-- 点击 BLU 弹出设备列表 / 添加；隐藏原生 select 仅作兼容同步 -->
+                        <div class="blu-device-menu" id="blu-device-menu">
+                            <button type="button" class="blu-device-trigger" id="blu-device-btn" title="选择设备或添加新 BLU" aria-haspopup="listbox" aria-expanded="false">
+                                <i class="bi bi-speedometer2 blu-banner-icon"></i>
+                                <span class="blu-banner-title">BLU</span>
+                                <span class="blu-device-label" id="blu-device-label">未选设备</span>
+                                <i class="bi bi-chevron-down blu-device-caret"></i>
+                            </button>
+                            <div class="blu-device-pop" id="blu-device-pop" hidden role="listbox">
+                                <div class="blu-device-pop-list" id="blu-device-list"></div>
+                                <button type="button" class="blu-device-add" id="blu-select-port">
+                                    <i class="bi bi-plus-lg"></i> 添加设备
                                 </button>
-                                <div class="blu-device-pop" id="blu-device-pop" hidden role="listbox">
-                                    <div class="blu-device-pop-list" id="blu-device-list"></div>
-                                    <button type="button" class="blu-device-add" id="blu-select-port">
-                                        <i class="bi bi-plus-lg"></i> 添加设备
-                                    </button>
-                                </div>
-                            </div>
-                            <select id="blu-port-select" class="blu-port-select-hidden" tabindex="-1" aria-hidden="true">
-                                <option value="">检测中…</option>
-                            </select>
-                            <button class="btn btn-sm btn-primary" id="blu-open" title="打开 / 关闭串口">
-                                <i class="bi bi-plug"></i> 打开
-                            </button>
-                        </div>
-
-                        <span class="blu-toolbar-sep" aria-hidden="true"></span>
-
-                        <div class="blu-tb-group blu-tb-setup" id="blu-setup-group" title="采样前先配置供电与参数">
-                            <div class="blu-voltage-set" id="blu-voltage-wrap">
-                                <input type="number" id="blu-voltage-set" class="blu-voltage-input" value="" placeholder="—" step="1" min="500" max="5000" title="打开设备后从设备读取 · 可改 500–5000 mV · 回车/失焦写入">
-                                <span class="blu-voltage-unit">mV</span>
-                            </div>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-dut-power" title="DUT 上电 / 下电">
-                                <i class="bi bi-lightning-charge"></i> 上电
-                            </button>
-                            <select id="blu-sample-rate" class="blu-sample-rate-select" title="主机抽稀目标">
-                                <option value="100k" selected>100K</option>
-                                <option value="10k">10K</option>
-                                <option value="1k">1K</option>
-                                <option value="100">100Hz</option>
-                                <option value="10">10Hz</option>
-                                <option value="1">1Hz</option>
-                            </select>
-                            <select id="blu-record-mode" class="blu-mode-select" title="波形：RAM+冷归档 · 长期统计：只记累计">
-                                <option value="wave" selected>波形</option>
-                                <option value="long">长期</option>
-                            </select>
-                            <div class="blu-storage-set" id="blu-storage-set" title="波形存储预算（GB）">
-                                <select id="blu-ram-gb" class="blu-storage-select" title="RAM 预算">
-                                    <option value="0.5">0.5G</option>
-                                    <option value="1">1G</option>
-                                    <option value="2" selected>2G</option>
-                                    <option value="4">4G</option>
-                                    <option value="8">8G</option>
-                                </select>
-                                <select id="blu-disk-gb" class="blu-storage-select" title="磁盘预算；0=RAM 满即停">
-                                    <option value="0">盘0</option>
-                                    <option value="1">盘1G</option>
-                                    <option value="2">盘2G</option>
-                                    <option value="4" selected>盘4G</option>
-                                    <option value="8">盘8G</option>
-                                    <option value="16">盘16G</option>
-                                </select>
-                                <span id="blu-storage-hint" class="blu-storage-hint" hidden></span>
                             </div>
                         </div>
+                        <select id="blu-port-select" class="blu-port-select-hidden" tabindex="-1" aria-hidden="true">
+                            <option value="">检测中…</option>
+                        </select>
+                        <button class="btn btn-sm btn-primary" id="blu-open" title="打开 / 关闭串口">
+                            <i class="bi bi-plug"></i> 打开
+                        </button>
+                    </div>
 
-                        <span class="blu-toolbar-sep" aria-hidden="true"></span>
+                    <span class="blu-toolbar-sep" aria-hidden="true"></span>
 
-                        <div class="blu-tb-group blu-tb-action">
-                            <div class="blu-acq-trig-group" id="blu-acq-trig-group" title="采样沿触发：设备先 START，等沿再入库 / 遇沿自动 STOP。电平与波形「触发」共用（Auto 或手动 µA）">
-                                <span class="blu-acq-trig-label">沿启</span>
-                                <select id="blu-acq-trig-start" class="blu-acq-trig-select" title="沿启动入库：关 / ↑ / ↓ / 任意（点采样后先 Arm，命中沿才写波形）">
-                                    <option value="off" selected>关</option>
-                                    <option value="rise">↑</option>
-                                    <option value="fall">↓</option>
-                                    <option value="either">↕</option>
-                                </select>
-                                <span class="blu-acq-trig-label">沿停</span>
-                                <select id="blu-acq-trig-stop" class="blu-acq-trig-select" title="沿停止采样：关 / ↑ / ↓ / 任意（入库后命中沿自动 STOP）">
-                                    <option value="off" selected>关</option>
-                                    <option value="rise">↑</option>
-                                    <option value="fall">↓</option>
-                                    <option value="either">↕</option>
-                                </select>
-                            </div>
-                            <button class="btn btn-sm btn-success" id="blu-start" title="开始 / 停止采样">
-                                <i class="bi bi-play-fill"></i> 采样
-                            </button>
+                    <div class="blu-tb-group blu-tb-setup" id="blu-setup-group" title="采样前先配置供电与参数">
+                        <div class="blu-voltage-set" id="blu-voltage-wrap">
+                            <input type="number" id="blu-voltage-set" class="blu-voltage-input" value="" placeholder="—" step="1" min="500" max="5000" title="打开设备后从设备读取 · 可改 500–5000 mV · 回车/失焦写入">
+                            <span class="blu-voltage-unit">mV</span>
                         </div>
-
-                        <div class="blu-connect-bar-right blu-tb-group blu-tb-tools">
-                            <button class="btn btn-sm btn-outline-secondary" id="blu-clear" title="清空波形与统计">
-                                <i class="bi bi-eraser"></i> 清空
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" id="blu-export" title="导出全部 CSV">
-                                <i class="bi bi-download"></i> 导出
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" id="blu-export-sel" title="导出选择区间 CSV">
-                                <i class="bi bi-scissors"></i> 选区
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" id="blu-export-report" title="导出分析报告（JSON）">
-                                <i class="bi bi-file-earmark-text"></i> 报告
-                            </button>
-                            <label class="btn btn-sm btn-outline-secondary blu-import-label" id="blu-import-label" title="导入 CSV 回放（timestamp_s,current_uA）">
-                                <i class="bi bi-upload"></i> 导入
-                                <input type="file" id="blu-import" accept=".csv,text/csv,text/plain" hidden>
-                            </label>
-                            <button class="btn btn-sm btn-outline-secondary" id="blu-clear-log" title="清空运行日志">
-                                <i class="bi bi-journal-text"></i> 日志
-                            </button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary ctl-toggle" id="blu-dut-power" aria-pressed="false" title="DUT 上电 / 下电">
+                            <i class="bi bi-lightning-charge"></i> 上电
+                        </button>
+                        <select id="blu-sample-rate" class="blu-sample-rate-select" title="主机抽稀目标">
+                            <option value="100k" selected>100K</option>
+                            <option value="10k">10K</option>
+                            <option value="1k">1K</option>
+                            <option value="100">100Hz</option>
+                            <option value="10">10Hz</option>
+                            <option value="1">1Hz</option>
+                        </select>
+                        <select id="blu-record-mode" class="blu-mode-select" title="波形：RAM+冷归档 · 长期统计：只记累计">
+                            <option value="wave" selected>波形</option>
+                            <option value="long">长期</option>
+                        </select>
+                        <div class="blu-storage-set" id="blu-storage-set" title="波形存储预算（GB）">
+                            <span class="blu-field-label">内存</span>
+                            <select id="blu-ram-gb" class="blu-storage-select" title="RAM 预算">
+                                <option value="0.5">0.5G</option>
+                                <option value="1">1G</option>
+                                <option value="2" selected>2G</option>
+                                <option value="4">4G</option>
+                                <option value="8">8G</option>
+                            </select>
+                            <span class="blu-field-label">磁盘</span>
+                            <select id="blu-disk-gb" class="blu-storage-select" title="磁盘预算；关=内存满即停">
+                                <option value="0">关</option>
+                                <option value="1">1G</option>
+                                <option value="2">2G</option>
+                                <option value="4" selected>4G</option>
+                                <option value="8">8G</option>
+                                <option value="16">16G</option>
+                            </select>
+                            <span id="blu-storage-hint" class="blu-storage-hint" hidden></span>
                         </div>
                     </div>
 
+                    <span class="blu-toolbar-sep" aria-hidden="true"></span>
+
+                    <div class="blu-tb-group blu-tb-action">
+                        <div class="blu-acq-trig-group" id="blu-acq-trig-group" title="采样沿触发：设备先 START，等沿再入库 / 遇沿自动 STOP。电平与波形「触发」共用（Auto 或手动 µA）">
+                            <span class="blu-acq-trig-label">开始沿</span>
+                            <select id="blu-acq-trig-start" class="blu-acq-trig-select" title="沿启动入库：关 / ↑ / ↓ / 任意（点采样后先 Arm，命中沿才写波形）">
+                                <option value="off" selected>关</option>
+                                <option value="rise">↑</option>
+                                <option value="fall">↓</option>
+                                <option value="either">↕</option>
+                            </select>
+                            <span class="blu-acq-trig-label">停止沿</span>
+                            <select id="blu-acq-trig-stop" class="blu-acq-trig-select" title="沿停止采样：关 / ↑ / ↓ / 任意（入库后命中沿自动 STOP）">
+                                <option value="off" selected>关</option>
+                                <option value="rise">↑</option>
+                                <option value="fall">↓</option>
+                                <option value="either">↕</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-sm btn-success" id="blu-start" title="开始 / 停止采样">
+                            <i class="bi bi-play-fill"></i> 采样
+                        </button>
+                    </div>
+
+                    <div class="blu-connect-bar-right blu-tb-group blu-tb-tools">
+                        <button class="btn btn-sm btn-outline-secondary" id="blu-clear" title="清空波形与统计">
+                            <i class="bi bi-eraser"></i> 清空
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" id="blu-export" title="导出全部 CSV">
+                            <i class="bi bi-download"></i> 导出
+                        </button>
+                        <div class="dropdown">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-more-btn" data-bs-toggle="dropdown" aria-expanded="false" title="更多数据操作">
+                                更多 <i class="bi bi-chevron-down"></i>
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end blu-more-menu" aria-labelledby="blu-more-btn">
+                                <li><button type="button" class="dropdown-item" id="blu-export-sel"><i class="bi bi-scissors"></i> 导出选择区间 CSV</button></li>
+                                <li><button type="button" class="dropdown-item" id="blu-export-report"><i class="bi bi-file-earmark-text"></i> 导出分析报告（JSON）</button></li>
+                                <li>
+                                    <label class="dropdown-item blu-import-label" id="blu-import-label" title="CSV 列：timestamp_s,current_uA">
+                                        <i class="bi bi-upload"></i> 导入 CSV 回放…
+                                        <input type="file" id="blu-import" accept=".csv,text/csv,text/plain" hidden>
+                                    </label>
+                                </li>
+                                <li><hr class="dropdown-divider"></li>
+                                <li><button type="button" class="dropdown-item" id="blu-clear-log"><i class="bi bi-journal-x"></i> 清空运行日志</button></li>
+                            </ul>
+                        </div>
+                        <span class="blu-toolbar-sep" aria-hidden="true"></span>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-cmd-open" title="打开串口发送面板（向设备发指令）">
+                            <i class="bi bi-send"></i> 串口发送
+                        </button>
+                    </div>
+                </div>
+
+                <div class="blu-wrapper">
                     <div class="blu-metrics">
                         <div class="blu-metric blu-metric-primary">
                             <span class="blu-metric-label">电流</span>
                             <span class="blu-metric-value" id="blu-current">--</span>
                         </div>
-                        <div class="blu-metric blu-metric-primary">
+                        <div class="blu-metric">
                             <span class="blu-metric-label">设定电压</span>
                             <span class="blu-metric-value" id="blu-voltage" title="源电压 mV">--</span>
                         </div>
@@ -1109,17 +1141,17 @@
                                 </div>
                                 <span class="blu-ctl-sep"></span>
                                 <div class="blu-ctl-group">
-                                    <button class="btn btn-sm btn-outline-secondary" id="blu-pause-scroll" title="暂停波形滚动（数据仍在采集）">
+                                    <button type="button" class="btn btn-sm btn-outline-secondary ctl-toggle" id="blu-pause-scroll" aria-pressed="false" title="暂停波形滚动（数据仍在采集）">
                                         <i class="bi bi-pause-fill"></i> 暂停滚动
                                     </button>
                                     <button class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-view-reset" title="视图复位：X 回默认窗口并回到 Live，Y 回自动量程">
                                         <i class="bi bi-arrow-repeat"></i>
                                     </button>
-                                    <button class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-fullscreen" title="放大波形区（Esc 退出）">
+                                    <button class="btn btn-sm btn-outline-secondary blu-icon-btn ctl-toggle" id="blu-fullscreen" title="全屏查看波形（F）" aria-pressed="false">
                                         <i class="bi bi-arrows-fullscreen"></i>
                                     </button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-wave-toggle" id="blu-wave-band" aria-pressed="false" title="缩小时画均值线 + 最小~最大值色带（Joulescope / Otii 式）；关闭为 PPK 式包络折线">均值带</button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-wave-toggle" id="blu-wave-sigma" aria-pressed="false" title="在均值带上叠加 ±1σ 深色带（仅均值带模式）">±1σ</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-wave-toggle ctl-toggle" id="blu-wave-band" aria-pressed="false" title="缩小时画均值线 + 最小~最大值色带（Joulescope / Otii 式）；关闭为 PPK 式包络折线">均值带</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-wave-toggle ctl-toggle" id="blu-wave-sigma" aria-pressed="false" title="在均值带上叠加 ±1σ 深色带（仅均值带模式）">±1σ</button>
                                 </div>
                                 <span class="blu-ctl-sep"></span>
                                 <div class="blu-ctl-group blu-y-scale-group">
@@ -1129,7 +1161,7 @@
                                         <option value="log">Log</option>
                                         <option value="symlog">Symlog</option>
                                     </select>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-icon-btn" id="blu-y-lock" title="锁定当前 Y 范围（Live 不再自动跟）" aria-pressed="false">
+                                    <button type="button" class="btn btn-sm btn-outline-secondary blu-icon-btn ctl-toggle" id="blu-y-lock" title="锁定当前 Y 范围（Live 不再自动跟）" aria-pressed="false">
                                         <i class="bi bi-lock"></i>
                                     </button>
                                     <button type="button" class="blu-y-scale-hint" id="blu-y-scale-hint" hidden title="">建议 Log</button>
@@ -1310,6 +1342,7 @@
                                     </select>
                                 </label>
                                 <span class="blu-analysis-scope-hint" id="blu-analysis-scope-hint" title="当前分析区间来源"></span>
+                                <i class="bi bi-info-circle blu-analysis-info" tabindex="0" title="功率 / 电荷 / 能量按设定电压计算 · 区间：自动 / 选择 / 窗口 · Y 轴：Linear / Log / Symlog · 导入 CSV 可离线回放 · 采样率以实测为准"></i>
                                 <div class="blu-analysis-tabs" role="tablist">
                                     <button type="button" class="blu-analysis-tab is-active" data-tab="readout" role="tab" aria-selected="true">读数</button>
                                     <button type="button" class="blu-analysis-tab" data-tab="events" role="tab">事件</button>
@@ -1366,8 +1399,9 @@
                                                     <option value="rect">Rect</option>
                                                 </select>
                                             </label>
-                                            <label class="blu-events-field">
-                                                <input type="checkbox" id="blu-fft-remove-dc" checked> 去 DC
+                                            <label class="ctl-chip ctl-chip--sm" title="计算前先去掉直流分量">
+                                                <input type="checkbox" id="blu-fft-remove-dc" checked>
+                                                <span>去 DC</span>
                                             </label>
                                             <button type="button" class="btn btn-sm btn-outline-secondary" id="blu-fft-refresh">计算</button>
                                             <span class="blu-events-meta" id="blu-fft-meta"></span>
@@ -1426,7 +1460,6 @@
                             </div>
                         </div>
                     </div>
-                    <div class="blu-pwr-note-foot">功率 / 电荷 / 能量按设定电压计算 · 分析面板默认可折叠 · 区间：自动/选择/窗口 · Y：Linear/Log/Symlog · 导入 CSV 可离线回放 · 速率以实测为准</div>
 
                     <div class="blu-log-card" id="blu-log-card">
                         <div class="blu-log-title" id="blu-log-toggle" title="悬停展开 · 点击固定/收起">
@@ -1440,16 +1473,24 @@
 
             <!--固件打包视图（独立工具，与串口无关）-->
             <div id="view-fw-pack" class="app-view">
-                <div class="tool-view-inner fw-pack-wrapper">
-                    <div class="fw-banner">
-                        <div class="fw-banner-content">
-                            <div class="fw-banner-icon"><i class="bi bi-box-seam"></i></div>
-                            <div>
-                                <h2 class="fw-banner-title">固件打包工具</h2>
-                                <p class="fw-banner-sub">原始包 · 压缩包 · 双向差分包 — 支持拖拽上传固件文件</p>
-                            </div>
-                        </div>
+                <!--顶栏：与串口调试的连接条同高同样式；生成动作放右侧-->
+                <div class="view-bar">
+                    <div class="view-bar-title">
+                        <i class="bi bi-box-seam"></i>
+                        <span>固件打包</span>
+                        <span class="view-bar-sub">原始包 · 压缩包 · 双向差分包</span>
                     </div>
+                    <div class="view-bar-actions">
+                        <div class="form-check form-switch ctl-switch fw-zip-switch" title="生成的所有文件打成一个 ZIP 下载">
+                            <input class="form-check-input" type="checkbox" id="fp-gen-zip" checked>
+                            <label class="form-check-label" for="fp-gen-zip">打包为 ZIP</label>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-primary fw-start-btn" id="fp-start">
+                            <i class="bi bi-play-fill"></i> 开始生成
+                        </button>
+                    </div>
+                </div>
+                <div class="tool-view-inner fw-pack-wrapper">
                     <div class="fw-drop-grid">
                         <div class="fw-drop-card fw-drop-optional" id="fp-drop-old">
                             <div class="fw-drop-card-header">
@@ -1499,23 +1540,20 @@
                             <div class="fw-config-item">
                                 <label class="fw-config-label"><i class="bi bi-gear"></i> 输出包类型</label>
                                 <div class="fw-output-types">
-                                    <label class="fw-check-pill">
+                                    <label class="ctl-chip">
                                         <input type="checkbox" id="fp-gen-origin">
-                                        <span class="fw-check-pill-content"><i class="bi bi-file-earmark"></i> 原始包</span>
+                                        <span><i class="bi bi-file-earmark"></i> 原始包</span>
                                     </label>
-                                    <label class="fw-check-pill">
+                                    <label class="ctl-chip">
                                         <input type="checkbox" id="fp-gen-compress" checked>
-                                        <span class="fw-check-pill-content"><i class="bi bi-file-zip"></i> 压缩包</span>
+                                        <span><i class="bi bi-file-zip"></i> 压缩包</span>
                                     </label>
-                                    <label class="fw-check-pill">
+                                    <label class="ctl-chip">
                                         <input type="checkbox" id="fp-gen-diff" checked>
-                                        <span class="fw-check-pill-content"><i class="bi bi-arrow-left-right"></i> 差分包</span>
+                                        <span><i class="bi bi-arrow-left-right"></i> 差分包</span>
                                     </label>
                                 </div>
-                                <label class="fw-check-pill fw-zip-row">
-                                    <input type="checkbox" id="fp-gen-zip" checked>
-                                    <span class="fw-check-pill-content"><i class="bi bi-file-zip-fill"></i> 打包下载（ZIP）</span>
-                                </label>
+                                <p class="fw-diff-hint"><i class="bi bi-info-circle"></i> 差分包需要旧固件，未选择时会跳过</p>
                             </div>
                             <div class="fw-config-item" id="fp-blank-row">
                                 <label class="fw-config-label"><i class="bi bi-file-earmark-code"></i> BLANK.bin 参考文件</label>
@@ -1527,13 +1565,6 @@
                             </div>
                         </div>
                     </div>
-                    <button class="fw-generate-btn" id="fp-start">
-                        <div class="fw-generate-btn-inner">
-                            <i class="bi bi-stars"></i>
-                            <span>开始生成固件包</span>
-                        </div>
-                        <div class="fw-generate-btn-glow"></div>
-                    </button>
                     <div class="fw-log-card">
                         <div class="fw-log-header">
                             <span><i class="bi bi-terminal"></i> 生成日志</span>
@@ -1634,11 +1665,12 @@
     <script src="js/wmbus-transaction.js"></script>
     <script src="js/gz-protocol.js"></script>
     <script src="js/gz-transaction.js"></script>
-    <script src="js/sk188-protocol.js"></script>
+    <script src="js/cjt188-protocol.js"></script>
     <script src="js/sek-transaction.js"></script>
     <script src="js/random-rw-test.js"></script>
     <script src="js/batch-config.js"></script>
     <script src="js/collapsible-cards.js"></script>
+    <script src="js/workbench.js"></script>
     <script src="js/command-palette.js"></script>
     <script src="js/firmware-upgrade.js"></script>
     <script src="js/hdiffi.js"></script>

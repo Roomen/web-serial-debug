@@ -254,27 +254,10 @@
 			var idx = parseInt(btn.getAttribute('data-fw-idx'), 10)
 			var item = window._fwPackOutputs[idx]
 			if (!item || !item.buffer) return
-			var rail = document.querySelector('.rail-item[data-view="view-serial"]')
-			if (rail) rail.click()
-			var fwTab = document.getElementById('nav-firmware-tab')
-			setTimeout(function () {
-				if (!fwTab) return
-				if (fwTab.classList.contains('active')) {
-					if (window.setFwUpgradeFile) {
-						window.setFwUpgradeFile(item.buffer, item.name)
-					}
-				} else {
-					var onShown = function () {
-						if (window.setFwUpgradeFile) {
-							window.setFwUpgradeFile(item.buffer, item.name)
-						}
-						fwTab.removeEventListener('shown.bs.tab', onShown)
-					}
-					fwTab.addEventListener('shown.bs.tab', onShown)
-					var tab = new bootstrap.Tab(fwTab)
-					tab.show()
-				}
-			}, 100)
+			if (window.Workbench) window.Workbench.open('firmware')
+			if (window.setFwUpgradeFile) {
+				window.setFwUpgradeFile(item.buffer, item.name)
+			}
 		})
 	}
 
