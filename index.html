@@ -788,6 +788,10 @@
                                                 <span class="input-group-text">序号</span>
                                                 <input type="number" class="form-control" id="cjt188-down-seq" min="0" max="255" style="width:5rem;" title="每次生成HEX/立即下发后自动+1(可手动改)">
                                             </div>
+                                            <div class="form-check form-check-inline m-0">
+                                                <input class="form-check-input" type="checkbox" id="cjt188-down-preamble" checked>
+                                                <label class="form-check-label small" for="cjt188-down-preamble" title="帧头前发送 FE FE FE, 不参与校验和">前导码 FE FE FE</label>
+                                            </div>
                                             <div class="input-group input-group-sm" style="width: auto;">
                                                 <span class="input-group-text">功能码</span>
                                                 <select class="form-select" id="cjt188-down-cmd">

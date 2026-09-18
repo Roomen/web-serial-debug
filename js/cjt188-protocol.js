@@ -61,6 +61,7 @@
 	const HEADER = [0x68, 0x10]
 	const END_BYTE = 0x16
 	const ADDR_SIZE = 7
+	const PREAMBLE = [0xfe, 0xfe, 0xfe]
 	const BROADCAST_ADDR = 'AA AA AA AA AA AA AA'
 
 	const CMD_TABLE = {
@@ -194,7 +195,12 @@
 		const cs = checksum(frame, 14 + content.length)
 		frame[14 + content.length] = cs
 		frame[15 + content.length] = END_BYTE
-		return frame
+		if (!opt.preamble) return frame
+		// 前导码 FE FE FE 在帧头之前, 不参与校验和
+		const withPre = new Uint8Array(PREAMBLE.length + frame.length)
+		withPre.set(PREAMBLE, 0)
+		withPre.set(frame, PREAMBLE.length)
+		return withPre
 	}
 
 	W.skUltrasonicBuildDownFrame = function (opt) {
@@ -469,6 +475,7 @@
 		const addrEl = document.getElementById('cjt188-down-addr')
 		const addrResetBtn = document.getElementById('cjt188-down-addr-reset')
 		const seqEl = document.getElementById('cjt188-down-seq')
+		const preambleEl = document.getElementById('cjt188-down-preamble')
 		const paramGroup = document.getElementById('cjt188-down-param-group')
 		const paramLabel = document.getElementById('cjt188-down-param-label')
 		const paramVal = document.getElementById('cjt188-down-param-val')
@@ -480,6 +487,10 @@
 
 		addrEl.value = localStorage.getItem('cjt188DownAddr') || BROADCAST_ADDR
 		seqEl.value = localStorage.getItem('cjt188DownSeq') || '1'
+		if (preambleEl) {
+			preambleEl.checked = localStorage.getItem('cjt188DownPreamble') !== '0'
+			preambleEl.addEventListener('change', () => localStorage.setItem('cjt188DownPreamble', preambleEl.checked ? '1' : '0'))
+		}
 
 		if (addrResetBtn) {
 			addrResetBtn.addEventListener('click', () => {
@@ -542,6 +553,7 @@
 					addr: addrEl.value,
 					cmd,
 					seq: parseInt(seqEl.value, 10) || 0,
+					preamble: preambleEl ? preambleEl.checked : true,
 				}
 				if (isTime) opt.time = parseTimeInput(paramVal.value)
 				if (cmd === 0x04 && !isTime) opt.valveOp = parseInt(paramSel.value, 16)
