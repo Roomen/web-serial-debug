@@ -936,6 +936,15 @@
                                                 </div>
                                                 <button class="btn btn-sm btn-outline-secondary" id="fw-parse">解析固件</button>
                                                 <button class="btn btn-sm btn-outline-secondary" id="fw-diagnose">诊断固件</button>
+                                                <div class="form-check form-switch ctl-switch" title="关闭后不解析固件包头，直接整文件升级，版本号需手动填写">
+                                                    <input class="form-check-input" type="checkbox" id="fw-parse-info" checked>
+                                                    <label class="form-check-label" for="fw-parse-info">读取固件信息</label>
+                                                </div>
+                                            </div>
+                                            <div class="input-group input-group-sm mt-2 d-none" id="fw-version-row" style="width: auto;">
+                                                <span class="input-group-text">升级版本号</span>
+                                                <input type="text" class="form-control" id="fw-version" maxlength="16"
+                                                    placeholder="手动填写版本号" style="max-width: 220px;">
                                             </div>
                                             <pre id="fw-info"
                                                 class="p-2 mb-0 small text-monospace mt-2" style="min-height: 60px; white-space: pre-wrap;"></pre>

@@ -30,6 +30,9 @@
 		fileCard: document.getElementById('fw-file-card'),
 		fileClear: document.getElementById('fw-file-clear'),
 		chunkSize: document.getElementById('fw-chunk-size'),
+		parseInfo: document.getElementById('fw-parse-info'),
+		versionRow: document.getElementById('fw-version-row'),
+		version: document.getElementById('fw-version'),
 		parse: document.getElementById('fw-parse'),
 		diagnose: document.getElementById('fw-diagnose'),
 		info: document.getElementById('fw-info'),
@@ -46,6 +49,36 @@
 		if (bytes < 1024) return bytes + ' B'
 		if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
 		return (bytes / (1024 * 1024)).toFixed(2) + ' MB'
+	}
+
+	// 读取固件信息开关: 关闭后不解析包头, 整个文件当作固件数据, 版本号由用户手填
+	function parseInfoEnabled() {
+		return el.parseInfo.checked
+	}
+
+	// 文件名去扩展名作为默认版本号(版本号字段最长 16 字节)
+	function defaultVersionFromName(name) {
+		return String(name || '').replace(/\.[^.]*$/, '').slice(0, 16)
+	}
+
+	function manualInfoText(name, size, version) {
+		return [
+			'文件: ' + (name || ''),
+			'版本: ' + (version || '(未填写)'),
+			'数据大小: ' + size + ' 字节 (不解析包头, 整文件下发)',
+		].join('\n')
+	}
+
+	// 升级实际使用的版本号: 手动模式取输入框当前值
+	function effectiveVersion() {
+		return parseInfoEnabled() ? fw.version : el.version.value.trim()
+	}
+
+	function applyParseMode() {
+		const on = parseInfoEnabled()
+		el.versionRow.classList.toggle('d-none', on)
+		el.diagnose.disabled = !on
+		el.parse.textContent = on ? '解析固件' : '载入固件'
 	}
 
 	function showFileCard(name, size) {
@@ -65,6 +98,7 @@
 	function loadFwFile(file) {
 		if (!file) return
 		el.fileName.dataset.name = file.name
+		el.version.value = defaultVersionFromName(file.name)
 		const reader = new FileReader()
 		reader.onload = function () {
 			fwFileBuffer = reader.result
@@ -104,6 +138,7 @@
 		hideFileCard()
 		el.file.value = ''
 		el.info.textContent = ''
+		el.version.value = ''
 		el.start.disabled = true
 		log('已清除固件文件', 'info')
 	})
@@ -133,6 +168,21 @@
 			log('请先选择固件文件', 'error')
 			return
 		}
+		if (!parseInfoEnabled()) {
+			const name = el.fileName.dataset.name
+			if (!el.version.value.trim()) el.version.value = defaultVersionFromName(name)
+			fw = {
+				ok: true,
+				raw: true,
+				fileName: name,
+				firmwareData: new Uint8Array(fwFileBuffer),
+				version: el.version.value.trim(),
+			}
+			el.info.textContent = manualInfoText(name, fw.firmwareData.length, fw.version)
+			log('已载入固件(不解析包头), ' + fw.firmwareData.length + ' 字节', 'success')
+			el.start.disabled = !serialApi.isOpen()
+			return
+		}
 		const r = FirmwareParser.parse(fwFileBuffer)
 		if (!r.ok) {
 			log('固件解析失败: ' + r.error, 'error')
@@ -151,6 +201,10 @@
 		if (!fw) {
 			el.parse.click()
 			if (!fw) return
+		}
+		if (fw.raw) {
+			el.info.textContent = manualInfoText(fw.fileName, fw.firmwareData.length, effectiveVersion())
+			return
 		}
 		el.info.textContent = FirmwareParser.diagnose(fw)
 	})
@@ -187,15 +241,41 @@
 		el.chunkSize.addEventListener('change', function () {
 			localStorage.setItem('fwChunkSize', this.value)
 		})
+		el.parseInfo.checked = localStorage.getItem('fwParseInfo') !== '0'
+		applyParseMode()
+		el.parseInfo.addEventListener('change', function () {
+			localStorage.setItem('fwParseInfo', this.checked ? '1' : '0')
+			applyParseMode()
+			// 模式变了, 已载入的文件要按新模式重新处理
+			fw = null
+			el.info.textContent = ''
+			el.start.disabled = true
+			if (fwFileBuffer) el.parse.click()
+		})
+		el.version.addEventListener('input', function () {
+			if (fw && fw.raw) {
+				fw.version = this.value.trim()
+				el.info.textContent = manualInfoText(fw.fileName, fw.firmwareData.length, fw.version)
+			}
+		})
 	})()
 
 	el.start.addEventListener('click', async () => {
 		if (!fw) {
-			log('请先解析固件', 'error')
+			log(parseInfoEnabled() ? '请先解析固件' : '请先载入固件', 'error')
 			return
 		}
 		if (!serialApi.isOpen()) {
 			log('请先打开串口', 'error')
+			return
+		}
+		const ver = effectiveVersion()
+		if (!ver) {
+			log('请先填写升级版本号', 'error')
+			return
+		}
+		if (new TextEncoder().encode(ver).length > 16) {
+			log('版本号超过 16 字节', 'error')
 			return
 		}
 		running = true
@@ -288,11 +368,11 @@
 	}
 
 	async function runUpgrade() {
-		const parser = fw
 		const chunkSize = parseInt(el.chunkSize.value) || 128
 		const firmwareData = fw.firmwareData
 		const totalChunks = Math.ceil(firmwareData.length / chunkSize)
-		log('开始固件升级, 版本: ' + parser.version + ', 分片: ' + totalChunks, 'info')
+		const version = effectiveVersion()
+		log('开始固件升级, 版本: ' + version + ', 分片: ' + totalChunks, 'info')
 
 		// 步骤1: 查询设备版本
 		if (stopFlag) return
@@ -314,7 +394,7 @@
 		if (stopFlag) return
 		try {
 			const resp = await sendAndWait(
-				PCP.buildNewVersionNotify(parser.version, chunkSize, totalChunks),
+				PCP.buildNewVersionNotify(version, chunkSize, totalChunks),
 				PCPMessageCode.NEW_VERSION_NOTIFY, 5000)
 			const res = PCP.parseNewVersionNotifyResponse(resp)
 			const errMap = {
@@ -378,7 +458,7 @@
 					padded.fill(0xFF, chunk.length)
 					chunk = padded
 				}
-				const resp = PCP.buildDownloadResponse(idx, chunk, parser.version)
+				const resp = PCP.buildDownloadResponse(idx, chunk, version)
 				// 收到设备请求后延时 200ms 再回复, 提升传输鲁棒性
 				await sleep(200)
 				await serialApi.writeData(resp)
@@ -467,6 +547,7 @@
 		fw = null
 		fwFileBuffer = arrayBuffer
 		el.fileName.dataset.name = fileName || 'packed_fw.bin'
+		el.version.value = defaultVersionFromName(fileName || 'packed_fw.bin')
 		showFileCard(fileName || 'packed_fw.bin', arrayBuffer.byteLength)
 		log('已载入固件(来自打包): ' + (fileName || 'packed_fw.bin') + ' (' + fmtSize(arrayBuffer.byteLength) + ')', 'info')
 		var parseBtn = document.getElementById('fw-parse')
