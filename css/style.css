@@ -431,6 +431,28 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* 有新版本：版本号就地变成刷新入口，圆点呼吸提示 */
+.rail-version--update {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.rail-version-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 3px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: rail-version-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes rail-version-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
 #views {
   flex: 1 1 auto;
   position: relative;
