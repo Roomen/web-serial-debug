@@ -549,15 +549,20 @@
 			}
 		} catch (e) {}
 	}
+	// logType 的展示文案,与旧 #serial-log-type 的 option 文案保持一致
+	const LOG_TYPE_LABELS = {
+		'hex': 'Hex',
+		'text': 'Text',
+		'hex&text': 'Hex和Text',
+		'ansi': '彩色Ansi',
+		'term': '终端',
+	}
 	function updateLogSettingsSummary() {
 		const text = document.getElementById('serial-log-settings-text')
-		const typeSel = document.getElementById('serial-log-type')
 		const timeoutEl = document.getElementById('serial-timer-out')
 		const rowsEl = document.getElementById('serial-max-rows')
 		if (!text) return
-		const typeLabel = typeSel && typeSel.selectedIndex >= 0
-			? typeSel.options[typeSel.selectedIndex].textContent
-			: 'Hex'
+		const typeLabel = LOG_TYPE_LABELS[activeLogOptions().logType] || 'Hex'
 		const timeout = timeoutEl ? parseInt(timeoutEl.value, 10) : 0
 		const timeoutTxt = !timeout ? '不分包' : timeout + 'ms'
 		let rows = rowsEl ? parseInt(rowsEl.value, 10) : 10000
@@ -579,11 +584,58 @@
 			right.textContent = 'RX'
 		}
 	}
-	// 日志类型下拉的 UI 同步
+	// logType 拆成「视图」(行日志/终端) + 「格式」(Hex/Text/Hex+Text) + ANSI 三组控件的 UI 同步。
+	// logType 仍是唯一状态源,这里只是把它拆开点亮;视图=终端时格式那行整体禁用,但记住切走前的行格式,
+	// 切回行日志/切换格式时要按记忆恢复,所以要记两份内存(不持久化): 每种 mode 的上一次行格式 + 上一次 ansi 开关
+	const lastRowLogType = { single: 'hex', dual: 'hex' }
+	const lastAnsiOn = { single: false, dual: false }
 	let applyLogTypeUi = function (val) {
-		const select = document.getElementById('serial-log-type')
-		if (select) select.value = val
+		const modeKey = logModeKey()
+		const isTerm = val === 'term'
+		if (!isTerm) {
+			lastRowLogType[modeKey] = val
+			if (val === 'text') lastAnsiOn[modeKey] = false
+			if (val === 'ansi') lastAnsiOn[modeKey] = true
+		}
+		const rowType = isTerm ? (lastRowLogType[modeKey] || 'hex') : val
+		const isTextFormat = rowType === 'text' || rowType === 'ansi'
+		const viewRow = document.getElementById('serial-log-view-row')
+		const viewTerm = document.getElementById('serial-log-view-term')
+		if (viewRow) viewRow.setAttribute('aria-pressed', isTerm ? 'false' : 'true')
+		if (viewTerm) viewTerm.setAttribute('aria-pressed', isTerm ? 'true' : 'false')
+		const formatHex = document.getElementById('serial-log-format-hex')
+		const formatText = document.getElementById('serial-log-format-text')
+		const formatHexText = document.getElementById('serial-log-format-hextext')
+		const ansiBtn = document.getElementById('serial-log-ansi')
+		if (formatHex) formatHex.setAttribute('aria-pressed', rowType === 'hex' ? 'true' : 'false')
+		if (formatText) formatText.setAttribute('aria-pressed', isTextFormat ? 'true' : 'false')
+		if (formatHexText) formatHexText.setAttribute('aria-pressed', rowType === 'hex&text' ? 'true' : 'false')
+		if (ansiBtn) ansiBtn.setAttribute('aria-pressed', rowType === 'ansi' ? 'true' : 'false');
+		[formatHex, formatText, formatHexText].forEach(function (b) {
+			if (!b) return
+			b.disabled = isTerm
+			b.setAttribute('aria-disabled', isTerm ? 'true' : 'false')
+		})
+		if (ansiBtn) {
+			const ansiDisabled = isTerm || !isTextFormat
+			ansiBtn.disabled = ansiDisabled
+			ansiBtn.setAttribute('aria-disabled', ansiDisabled ? 'true' : 'false')
+		}
 		updateLogSettingsSummary()
+	}
+	// logType 的统一写入口:校验 + 落盘 + 同步控件 + 应用视图 + 重渲历史日志正文。
+	// 按钮点击和(以后任何)代码路径改 logType 都应该走这里,不要绕过去直接 changeOption('logType', ...)
+	window.setLogType = function (v) {
+		if (['hex', 'text', 'hex&text', 'ansi', 'term'].indexOf(v) === -1) return
+		if (activeLogOptions().logType === v) {
+			applyLogTypeUi(v)
+			return
+		}
+		changeOption('logType', v)
+		applyLogTypeUi(v)
+		applyLogView()
+		rerenderLogBodies(SerialHub.getLogContainer(), v)
+		persistLogsNow()
 	}
 	// 自动滚动按钮:按下态即开启。别把状态写回按钮文案,命令面板也要读同一个 aria-pressed
 	function setAutoScrollUi(btn, on) {
@@ -2194,10 +2246,26 @@
 		trimLogRows(SerialHub.getLogContainerFor('dual'))
 		updateLogSettingsSummary()
 	})
-	document.getElementById('serial-log-type').addEventListener('change', function (e) {
-		changeOption('logType', e.target.value)
-		updateLogSettingsSummary()
-		applyLogView()
+	// 视图/格式/ANSI 按钮统一走 setLogType,由它负责校验、落盘、同步 UI、重渲历史
+	document.getElementById('serial-log-view-row').addEventListener('click', function () {
+		setLogType(lastRowLogType[logModeKey()] || 'hex')
+	})
+	document.getElementById('serial-log-view-term').addEventListener('click', function () {
+		setLogType('term')
+	})
+	document.getElementById('serial-log-format-hex').addEventListener('click', function () {
+		setLogType('hex')
+	})
+	document.getElementById('serial-log-format-text').addEventListener('click', function () {
+		setLogType(lastAnsiOn[logModeKey()] ? 'ansi' : 'text')
+	})
+	document.getElementById('serial-log-format-hextext').addEventListener('click', function () {
+		setLogType('hex&text')
+	})
+	document.getElementById('serial-log-ansi').addEventListener('click', function () {
+		const cur = activeLogOptions().logType
+		if (cur !== 'text' && cur !== 'ansi') return
+		setLogType(cur === 'ansi' ? 'text' : 'ansi')
 	})
 	updateLogSettingsSummary()
 	;(function () {
@@ -4402,20 +4470,19 @@
 		}
 		schedulePersistLogs()
 	}
-	//添加日志
-	function addLog(data, isReceive = true, atTime = null, sid = null) {
-		sid = sid || SerialHub.activeSendPhys()
-		const logType = getLogTypeForSid(sid)
-		// term 模式不走行日志；TX 也不写进 xterm（设备自己 echo）
-		if (logType === 'term') return
-		let form = isReceive ? 'RX' : 'TX'
-		//无论当前 logType 是什么都算出 HEX,点击行解析要用
+	//字节数组转16进制字符串数组(补0),行日志正文渲染和 data-hex 属性共用
+	function bytesToHexArr(data) {
 		let dataHex = []
 		for (const d of data) {
 			//转16进制并补0
 			dataHex.push(('0' + d.toString(16).toLocaleUpperCase()).slice(-2))
 		}
-		newmsg = ''
+		return dataHex
+	}
+	//按 logType 把原始字节渲染成日志正文 HTML,不依赖具体某一行,可无损重算(历史日志切换类型用)
+	function renderLogBody(data, logType) {
+		const dataHex = bytesToHexArr(data)
+		let newmsg = ''
 		if (logType.includes('hex')) {
 			if (logType.includes('&')) {
 				newmsg += 'HEX:'
@@ -4461,6 +4528,35 @@
 		}
 		//行尾多余的换行会撑出一条空行
 		newmsg = newmsg.replace(/<br\/?>$/i, '')
+		return newmsg
+	}
+	//按容器当前所有行的 data-hex 重算正文,用于历史日志随类型切换重渲(HEX/TEXT/HEX&TEXT/ANSI 四种都是无损可逆的)
+	function rerenderLogBodies(container, logType) {
+		if (!container) return
+		// term 不是行日志格式,渲染出来会是空正文,会把历史行洗白,必须挡在这里
+		if (!isRowLogType(logType)) return
+		for (let i = 0; i < container.children.length; i++) {
+			const row = container.children[i]
+			if (!row || !row.classList || !row.classList.contains('log-row')) continue
+			const hexAttr = row.getAttribute('data-hex')
+			if (!hexAttr) continue
+			const bytes = hexAttr.split(' ').filter(Boolean).map(function (h) { return parseInt(h, 16) })
+			if (!bytes.length) continue
+			const body = row.querySelector('.log-body')
+			if (!body) continue
+			body.innerHTML = renderLogBody(bytes, logType)
+		}
+	}
+	//添加日志
+	function addLog(data, isReceive = true, atTime = null, sid = null) {
+		sid = sid || SerialHub.activeSendPhys()
+		const logType = getLogTypeForSid(sid)
+		// term 模式不走行日志；TX 也不写进 xterm（设备自己 echo）
+		if (logType === 'term') return
+		let form = isReceive ? 'RX' : 'TX'
+		//无论当前 logType 是什么都算出 HEX,点击行解析要用
+		const dataHex = bytesToHexArr(data)
+		const newmsg = renderLogBody(data, logType)
 		const when = atTime || new Date()
 		const ts = when.getTime ? when.getTime() : Date.now()
 		let time = toolOptions.showTime ? formatDate(when) : ''

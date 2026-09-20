@@ -3191,6 +3191,20 @@ hr {
   margin-bottom: 0;
 }
 
+/* 日志设置里的「格式」行：ctl-seg + ANSI chip 挤在一起，允许换行 */
+.serial-log-format-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+#serial-log-ansi:disabled {
+  opacity: 0.4;
+}
+
 /* TX / RX (or dual A/B) color legend next to the log title */
 .serial-log-legend {
   display: inline-flex;
@@ -8040,14 +8054,20 @@ summary {
   border-left: 1px solid var(--border-color);
 }
 
-.ctl-seg > button:hover:not(.active) {
+.ctl-seg > button:hover:not(:disabled):not(.active):not([aria-pressed='true']) {
   color: var(--text-primary);
   background: var(--accent-light);
 }
 
-.ctl-seg > button.active {
+/* 选中态两种写法并存：老的三处分段组用 .active，新的用 aria-pressed。视觉只有这一处定义，别再复制一份 */
+.ctl-seg > button.active,
+.ctl-seg > button[aria-pressed='true'] {
   color: #fff;
   background: var(--accent);
+}
+
+.ctl-seg > button:disabled {
+  opacity: 0.4;
 }
 
 .ctl-seg > button:focus-visible {
