@@ -440,15 +440,15 @@
 	}
 
 	// Tag1-ID13 调试信息：固定 32B 的最近一次 MCU 异常现场（Cortex-M33）。
-	// 该 ID 在协议文档里只写「预留」，格式是本工具与固件自行约定的，首字段高 24 位的
-	// magic 同时充当格式版本；magic 对不上或长度不是 32 就返回 '' 退回 hex 显示，
-	// 不要报错，也不要中断整帧解析。
-	const FAULT_MAGIC = 0x464c54
+	// 该 ID 在协议文档里只写「预留」，格式是本工具与固件自行约定的：raw[0..1] 是 magic
+	// 'FL'，raw[2] 是格式版本。换布局会递增版本字节，所以只解析已知版本；长度不是 32、
+	// magic 不符、版本不认识，一律返回 '' 退回 hex 显示，不要报错，也不要中断整帧解析。
+	const FAULT_VER = 1
 	const FAULT_TYPES = { 1: 'HardFault', 2: 'MemManage', 3: 'BusFault' }
 	const MMFSR_BITS = [[0, 'IACCVIOL'], [1, 'DACCVIOL'], [3, 'MUNSTKERR'], [4, 'MSTKERR'], [5, 'MLSPERR'], [7, 'MMARVALID']]
 	const BFSR_BITS = [[8, 'IBUSERR'], [9, 'PRECISERR'], [10, 'IMPRECISERR'], [11, 'UNSTKERR'], [12, 'STKERR'], [13, 'LSPERR'], [15, 'BFARVALID']]
+	// STKOF 实际不会出现: 固件的栈溢出走 PSPLIM 检测，不经过这条记录。位留着但别指望它。
 	const UFSR_BITS = [[16, 'UNDEFINSTR'], [17, 'INVSTATE'], [18, 'INVPC'], [19, 'NOCP'], [20, 'STKOF'], [24, 'UNALIGNED'], [25, 'DIVBYZERO']]
-	const HFSR_BITS = [[1, 'VECTTBL'], [30, 'FORCED'], [31, 'DEBUGEVT']]
 	function hex32(v) {
 		return '0x' + (v >>> 0).toString(16).toUpperCase().padStart(8, '0')
 	}
@@ -470,28 +470,29 @@
 	}
 	function renderFaultRec(raw) {
 		if (!raw || raw.length !== 32) return ''
-		const head = u32leRead(raw, 0)
-		if ((head >>> 8) !== FAULT_MAGIC) return ''
-		const kind = head & 0xff
+		if (raw[0] !== 0x46 || raw[1] !== 0x4c || raw[2] !== FAULT_VER) return ''
+		const fl = raw[3]
+		const kind = fl & 0x03
+		const noFrame = (fl >>> 3) & 1
 		const cfsr = u32leRead(raw, 8)
-		const hfsr = u32leRead(raw, 12)
-		const mmfar = u32leRead(raw, 16)
-		const bfar = u32leRead(raw, 20)
-		const pc = u32leRead(raw, 24)
-		const lr = u32leRead(raw, 28)
+		const addr = u32leRead(raw, 12)
 		const flags = faultBits(cfsr, MMFSR_BITS).concat(faultBits(cfsr, BFSR_BITS), faultBits(cfsr, UFSR_BITS))
-		const hf = faultBits(hfsr, HFSR_BITS)
 		const parts = [
 			FAULT_TYPES[kind] || ('未知异常类型' + kind),
-			faultTime(u32leRead(raw, 4)),
-			'CFSR=' + hex32(cfsr) + (flags.length ? '(' + flags.join(' ') + ')' : ''),
-			'HFSR=' + hex32(hfsr) + (hf.length ? '(' + hf.join(' ') + ')' : ''),
-			// MMFAR/BFAR 只在对应 VALID 位置位时才是地址，否则是残留值，不能当地址用
-			'MMFAR=' + (((cfsr >>> 7) & 1) ? hex32(mmfar) : '无效'),
-			'BFAR=' + (((cfsr >>> 15) & 1) ? hex32(bfar) : '无效')
+			faultTime(u32leRead(raw, 28)),
+			// 栈帧不可读时 PC/LR/IPSR 都是垃圾值，只有 SP 仍然有效（SP 被写坏本身就是线索）
+			noFrame ? '栈帧不可读(PC/LR/IPSR无效)' : (raw[4] | (raw[5] << 8)) === 0 ? '线程模式' : ('IPSR=' + (raw[4] | (raw[5] << 8)))
 		]
-		// PC=0 表示异常时栈帧不可读，此时 PC/LR 都无意义
-		parts.push(pc === 0 ? 'PC/LR=栈帧不可读' : 'PC=' + hex32(pc) + ' LR=' + hex32(lr))
+		if (!noFrame) parts.push('PC=' + hex32(u32leRead(raw, 16)), 'LR=' + hex32(u32leRead(raw, 20)))
+		parts.push('SP=' + hex32(u32leRead(raw, 24)) + '(' + (((fl >>> 4) & 1) ? 'PSP' : 'MSP') + ')')
+		parts.push('CFSR=' + hex32(cfsr) + (flags.length ? '(' + flags.join(' ') + ')' : ''))
+		// MMFAR/BFAR 共用一个槽，由 CFSR 指明装的是哪个；都没置位时该字段无意义，不能当地址
+		if ((cfsr >>> 7) & 1) parts.push('MMFAR=' + hex32(addr))
+		else if ((cfsr >>> 15) & 1) parts.push('BFAR=' + hex32(addr))
+		else parts.push('出错地址=无')
+		if ((fl >>> 2) & 1) parts.push('VECTTBL(向量表读取失败)')
+		// T 位为 0 = 跳到了非 Thumb 地址，INVSTATE 类故障的典型成因
+		if ((fl >>> 5) & 1) parts.push('⚠T位为0(跳转到非Thumb地址)')
 		return parts.join(' ')
 	}
 
