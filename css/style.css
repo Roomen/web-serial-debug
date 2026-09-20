@@ -4447,7 +4447,9 @@ hr {
   text-align: left;
   box-shadow: var(--shadow-md);
   opacity: 0;
-  pointer-events: auto;
+  /* 隐藏态只是 opacity:0，元素永远留在 body 里。不关掉命中就会有一个看不见的盒子
+     钉在右上角，盖住停靠栏最上面那颗按钮（快捷发送），只剩上下几像素能点。 */
+  pointer-events: none;
   transition: opacity 0.18s ease, transform 0.18s ease, background-color var(--transition-normal), color var(--transition-normal);
 }
 
@@ -4466,6 +4468,7 @@ hr {
 .serial-toast.is-show {
   opacity: 1;
   transform: translateX(0) translateY(0);
+  pointer-events: auto;
 }
 
 /* ========== BLU 100k Power Analysis ========== */
