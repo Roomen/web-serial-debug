@@ -534,7 +534,7 @@
 		return (logOptionsForSid(sid).logType) || 'hex'
 	}
 	function isRowLogType(t) {
-		return t === 'hex' || t === 'text' || t === 'hex&text' || t === 'ansi'
+		return t === 'hex' || t === 'text' || t === 'hex&text' || t === 'ansi' || t === 'hex&ansi'
 	}
 	function getTermHost() {
 		return document.getElementById(logModeKey() === 'dual' ? 'serial-term-dual' : 'serial-term-single')
@@ -555,6 +555,7 @@
 		'text': 'Text',
 		'hex&text': 'Hex和Text',
 		'ansi': '彩色Ansi',
+		'hex&ansi': 'Hex和Ansi',
 		'term': '终端',
 	}
 	function updateLogSettingsSummary() {
@@ -562,7 +563,13 @@
 		const timeoutEl = document.getElementById('serial-timer-out')
 		const rowsEl = document.getElementById('serial-max-rows')
 		if (!text) return
-		const typeLabel = LOG_TYPE_LABELS[activeLogOptions().logType] || 'Hex'
+		const logType = activeLogOptions().logType
+		// 终端不走分包/行数裁剪,拼上去是在说假话,只显示视图名
+		if (logType === 'term') {
+			text.textContent = LOG_TYPE_LABELS.term
+			return
+		}
+		const typeLabel = LOG_TYPE_LABELS[logType] || 'Hex'
 		const timeout = timeoutEl ? parseInt(timeoutEl.value, 10) : 0
 		const timeoutTxt = !timeout ? '不分包' : timeout + 'ms'
 		let rows = rowsEl ? parseInt(rowsEl.value, 10) : 10000
@@ -584,52 +591,69 @@
 			right.textContent = 'RX'
 		}
 	}
-	// logType 拆成「视图」(行日志/终端) + 「格式」(Hex/Text/Hex+Text) + ANSI 三组控件的 UI 同步。
-	// logType 仍是唯一状态源,这里只是把它拆开点亮;视图=终端时格式那行整体禁用,但记住切走前的行格式,
-	// 切回行日志/切换格式时要按记忆恢复,所以要记两份内存(不持久化): 每种 mode 的上一次行格式 + 上一次 ansi 开关
+	// logType 拆成「视图」(行日志/终端) + 「格式」(HEX/TEXT 复选 + ANSI 修饰) 两组控件的 UI 同步。
+	// logType 仍是唯一状态源,这里只是把它拆开点亮;视图=终端时格式、分包、行数整体禁用(term 不走 addLog,
+	// 这些开关对它无效),但记住切走前的行格式,切回行日志时按记忆恢复,所以要记两份内存(不持久化):
+	// 每种 mode 的上一次行格式 + 上一次 ansi 开关(TEXT 取消勾选时记住 ANSI 意愿,重新勾上 TEXT 时恢复)
 	const lastRowLogType = { single: 'hex', dual: 'hex' }
 	const lastAnsiOn = { single: false, dual: false }
 	let applyLogTypeUi = function (val) {
 		const modeKey = logModeKey()
 		const isTerm = val === 'term'
-		if (!isTerm) {
-			lastRowLogType[modeKey] = val
-			if (val === 'text') lastAnsiOn[modeKey] = false
-			if (val === 'ansi') lastAnsiOn[modeKey] = true
-		}
+		if (!isTerm) lastRowLogType[modeKey] = val
 		const rowType = isTerm ? (lastRowLogType[modeKey] || 'hex') : val
-		const isTextFormat = rowType === 'text' || rowType === 'ansi'
+		const hasHex = rowType.includes('hex')
+		const hasAnsi = rowType.includes('ansi')
+		const hasText = rowType.includes('text') || hasAnsi
 		const viewRow = document.getElementById('serial-log-view-row')
 		const viewTerm = document.getElementById('serial-log-view-term')
 		if (viewRow) viewRow.setAttribute('aria-pressed', isTerm ? 'false' : 'true')
 		if (viewTerm) viewTerm.setAttribute('aria-pressed', isTerm ? 'true' : 'false')
-		const formatHex = document.getElementById('serial-log-format-hex')
-		const formatText = document.getElementById('serial-log-format-text')
-		const formatHexText = document.getElementById('serial-log-format-hextext')
+		const fmtHex = document.getElementById('serial-log-fmt-hex')
+		const fmtText = document.getElementById('serial-log-fmt-text')
 		const ansiBtn = document.getElementById('serial-log-ansi')
-		if (formatHex) formatHex.setAttribute('aria-pressed', rowType === 'hex' ? 'true' : 'false')
-		if (formatText) formatText.setAttribute('aria-pressed', isTextFormat ? 'true' : 'false')
-		if (formatHexText) formatHexText.setAttribute('aria-pressed', rowType === 'hex&text' ? 'true' : 'false')
-		if (ansiBtn) ansiBtn.setAttribute('aria-pressed', rowType === 'ansi' ? 'true' : 'false');
-		[formatHex, formatText, formatHexText].forEach(function (b) {
+		if (fmtHex) fmtHex.setAttribute('aria-pressed', hasHex ? 'true' : 'false')
+		if (fmtText) fmtText.setAttribute('aria-pressed', hasText ? 'true' : 'false')
+		if (ansiBtn) ansiBtn.setAttribute('aria-pressed', hasAnsi ? 'true' : 'false');
+		[fmtHex, fmtText].forEach(function (b) {
 			if (!b) return
 			b.disabled = isTerm
 			b.setAttribute('aria-disabled', isTerm ? 'true' : 'false')
 		})
 		if (ansiBtn) {
-			const ansiDisabled = isTerm || !isTextFormat
+			const ansiDisabled = isTerm || !hasText
 			ansiBtn.disabled = ansiDisabled
 			ansiBtn.setAttribute('aria-disabled', ansiDisabled ? 'true' : 'false')
 		}
+		// term 下分包超时和行数裁剪都不生效,一并禁用,别留假开关
+		const timeoutEl = document.getElementById('serial-timer-out')
+		const rowsEl = document.getElementById('serial-max-rows');
+		[timeoutEl, rowsEl].forEach(function (el) {
+			if (!el) return
+			el.disabled = isTerm
+			el.setAttribute('aria-disabled', isTerm ? 'true' : 'false')
+		})
 		updateLogSettingsSummary()
 	}
 	// logType 的统一写入口:校验 + 落盘 + 同步控件 + 应用视图 + 重渲历史日志正文。
 	// 按钮点击和(以后任何)代码路径改 logType 都应该走这里,不要绕过去直接 changeOption('logType', ...)
 	window.setLogType = function (v) {
-		if (['hex', 'text', 'hex&text', 'ansi', 'term'].indexOf(v) === -1) return
-		if (activeLogOptions().logType === v) {
+		if (['hex', 'text', 'hex&text', 'ansi', 'hex&ansi', 'term'].indexOf(v) === -1) return
+		const cur = activeLogOptions().logType
+		if (cur === v) {
 			applyLogTypeUi(v)
 			return
+		}
+		if (v === 'term') {
+			const container = SerialHub.getLogContainer()
+			if (container && container.childElementCount > 0) {
+				const ok = confirm('切换到终端将清空当前日志历史，是否继续？')
+				if (!ok) {
+					applyLogTypeUi(cur)
+					return
+				}
+			}
+			clearCurrentLogs()
 		}
 		changeOption('logType', v)
 		applyLogTypeUi(v)
@@ -671,7 +695,7 @@
 		const isTerm = type === 'term'
 		if (logs) {
 			logs.hidden = isTerm
-			logs.classList.toggle('ansi', type === 'ansi')
+			logs.classList.toggle('ansi', type === 'ansi' || type === 'hex&ansi')
 			logs.classList.toggle('is-dual', mode === 'dual')
 		}
 		updateLogLegend()
@@ -2246,26 +2270,55 @@
 		trimLogRows(SerialHub.getLogContainerFor('dual'))
 		updateLogSettingsSummary()
 	})
-	// 视图/格式/ANSI 按钮统一走 setLogType,由它负责校验、落盘、同步 UI、重渲历史
+	// 视图/格式/ANSI 按钮统一走 setLogType,由它负责校验、落盘、同步 UI、重渲历史。
+	// HEX/TEXT 是复选,读当前 aria-pressed 算出下一个 logType;两个都不选时忽略这次点击
+	function currentLogFmtState() {
+		const fmtHex = document.getElementById('serial-log-fmt-hex')
+		const fmtText = document.getElementById('serial-log-fmt-text')
+		const ansiBtn = document.getElementById('serial-log-ansi')
+		return {
+			hasHex: !!fmtHex && fmtHex.getAttribute('aria-pressed') === 'true',
+			hasText: !!fmtText && fmtText.getAttribute('aria-pressed') === 'true',
+			hasAnsi: !!ansiBtn && ansiBtn.getAttribute('aria-pressed') === 'true',
+		}
+	}
+	function composeLogType(hasHex, hasText, hasAnsi) {
+		if (hasHex && hasText) return hasAnsi ? 'hex&ansi' : 'hex&text'
+		if (hasText) return hasAnsi ? 'ansi' : 'text'
+		return 'hex'
+	}
 	document.getElementById('serial-log-view-row').addEventListener('click', function () {
 		setLogType(lastRowLogType[logModeKey()] || 'hex')
 	})
 	document.getElementById('serial-log-view-term').addEventListener('click', function () {
 		setLogType('term')
 	})
-	document.getElementById('serial-log-format-hex').addEventListener('click', function () {
-		setLogType('hex')
+	document.getElementById('serial-log-fmt-hex').addEventListener('click', function () {
+		const s = currentLogFmtState()
+		const hasHex = !s.hasHex
+		if (!hasHex && !s.hasText) return
+		setLogType(composeLogType(hasHex, s.hasText, s.hasAnsi))
 	})
-	document.getElementById('serial-log-format-text').addEventListener('click', function () {
-		setLogType(lastAnsiOn[logModeKey()] ? 'ansi' : 'text')
-	})
-	document.getElementById('serial-log-format-hextext').addEventListener('click', function () {
-		setLogType('hex&text')
+	document.getElementById('serial-log-fmt-text').addEventListener('click', function () {
+		const s = currentLogFmtState()
+		const hasText = !s.hasText
+		if (!hasText && !s.hasHex) return
+		const modeKey = logModeKey()
+		let hasAnsi
+		if (hasText) {
+			hasAnsi = !!lastAnsiOn[modeKey]
+		} else {
+			lastAnsiOn[modeKey] = s.hasAnsi
+			hasAnsi = false
+		}
+		setLogType(composeLogType(s.hasHex, hasText, hasAnsi))
 	})
 	document.getElementById('serial-log-ansi').addEventListener('click', function () {
-		const cur = activeLogOptions().logType
-		if (cur !== 'text' && cur !== 'ansi') return
-		setLogType(cur === 'ansi' ? 'text' : 'ansi')
+		const s = currentLogFmtState()
+		if (!s.hasText) return
+		const hasAnsi = !s.hasAnsi
+		lastAnsiOn[logModeKey()] = hasAnsi
+		setLogType(composeLogType(s.hasHex, s.hasText, hasAnsi))
 	})
 	updateLogSettingsSummary()
 	;(function () {
@@ -4522,6 +4575,9 @@
 			newmsg += HTMLEncode(dataText)
 		}
 		if (logType.includes('ansi')) {
+			if (logType.includes('&')) {
+				newmsg += 'TEXT:'
+			}
 			const dataText = textdecoder.decode(Uint8Array.from(data))
 			const html = ansi_up.ansi_to_html(dataText)
 			newmsg += html

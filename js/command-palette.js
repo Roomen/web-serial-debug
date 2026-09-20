@@ -184,6 +184,7 @@
 				{ value: 'hex', label: 'Hex' },
 				{ value: 'text', label: 'Text' },
 				{ value: 'ansi', label: '彩色Ansi' },
+				{ value: 'hex&ansi', label: 'Hex和Ansi' },
 				{ value: 'term', label: '终端' },
 			].forEach(function (t) {
 				list.push({

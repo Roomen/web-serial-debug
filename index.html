@@ -315,10 +315,14 @@
                             </h1>
 
                             <div class="btn-toolbar">
+                                <div class="ctl-seg me-2" id="serial-log-view-seg" role="group" aria-label="日志视图">
+                                    <button type="button" id="serial-log-view-row" aria-pressed="true">行日志</button>
+                                    <button type="button" id="serial-log-view-term" aria-pressed="false">终端</button>
+                                </div>
                                 <div class="dropdown me-2" id="serial-log-settings">
                                     <button type="button" class="serial-log-settings-summary" id="serial-log-settings-btn"
                                         data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false"
-                                        title="日志设置（视图 / 格式 / 分包 / 行数）">
+                                        title="日志设置（格式 / 分包 / 行数）">
                                         <i class="bi bi-sliders2"></i>
                                         <span id="serial-log-settings-text">Hex · 200ms · 10000行</span>
                                         <i class="bi bi-chevron-down serial-log-settings-arrow"></i>
@@ -329,20 +333,10 @@
                                                 <i class="bi bi-journal-text"></i> 日志设置
                                             </div>
                                             <div class="serial-field">
-                                                <span class="serial-field-label">视图</span>
-                                                <div class="ctl-seg" id="serial-log-view-seg" role="group" aria-label="日志视图">
-                                                    <button type="button" id="serial-log-view-row" aria-pressed="true">行日志</button>
-                                                    <button type="button" id="serial-log-view-term" aria-pressed="false">终端</button>
-                                                </div>
-                                            </div>
-                                            <div class="serial-field">
                                                 <span class="serial-field-label">格式</span>
                                                 <div class="serial-log-format-controls">
-                                                    <div class="ctl-seg" id="serial-log-format-seg" role="group" aria-label="日志格式">
-                                                        <button type="button" id="serial-log-format-hex" aria-pressed="true">Hex</button>
-                                                        <button type="button" id="serial-log-format-text" aria-pressed="false">Text</button>
-                                                        <button type="button" id="serial-log-format-hextext" aria-pressed="false">Hex+Text</button>
-                                                    </div>
+                                                    <button type="button" class="ctl-chip-btn" id="serial-log-fmt-hex" aria-pressed="true">HEX</button>
+                                                    <button type="button" class="ctl-chip-btn" id="serial-log-fmt-text" aria-pressed="false">TEXT</button>
                                                     <button type="button" class="ctl-chip-btn" id="serial-log-ansi" aria-pressed="false">ANSI 彩色</button>
                                                 </div>
                                             </div>

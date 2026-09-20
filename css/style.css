@@ -3201,10 +3201,6 @@ hr {
   flex-wrap: wrap;
 }
 
-#serial-log-ansi:disabled {
-  opacity: 0.4;
-}
-
 /* TX / RX (or dual A/B) color legend next to the log title */
 .serial-log-legend {
   display: inline-flex;
@@ -7987,6 +7983,10 @@ summary {
 .ctl-chip-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+.ctl-chip-btn:disabled {
+  opacity: 0.4;
 }
 
 /* 协议字面量（HEX、+\r\n 之类）用等宽，是有理由的差异 */
