@@ -439,6 +439,62 @@
 		return 'BADJ1=' + raw[0] + ' BADJ2=' + raw[1] + ' 采样周期(HIGH SAMPLE)=' + raw[2] + ' 预留=' + raw[3] + ' 测量时长(CHC TIM)=' + u16leRead(raw, 4)
 	}
 
+	// Tag1-ID13 调试信息：固定 32B 的最近一次 MCU 异常现场（Cortex-M33）。
+	// 该 ID 在协议文档里只写「预留」，格式是本工具与固件自行约定的，首字段高 24 位的
+	// magic 同时充当格式版本；magic 对不上或长度不是 32 就返回 '' 退回 hex 显示，
+	// 不要报错，也不要中断整帧解析。
+	const FAULT_MAGIC = 0x464c54
+	const FAULT_TYPES = { 1: 'HardFault', 2: 'MemManage', 3: 'BusFault' }
+	const MMFSR_BITS = [[0, 'IACCVIOL'], [1, 'DACCVIOL'], [3, 'MUNSTKERR'], [4, 'MSTKERR'], [5, 'MLSPERR'], [7, 'MMARVALID']]
+	const BFSR_BITS = [[8, 'IBUSERR'], [9, 'PRECISERR'], [10, 'IMPRECISERR'], [11, 'UNSTKERR'], [12, 'STKERR'], [13, 'LSPERR'], [15, 'BFARVALID']]
+	const UFSR_BITS = [[16, 'UNDEFINSTR'], [17, 'INVSTATE'], [18, 'INVPC'], [19, 'NOCP'], [20, 'STKOF'], [24, 'UNALIGNED'], [25, 'DIVBYZERO']]
+	const HFSR_BITS = [[1, 'VECTTBL'], [30, 'FORCED'], [31, 'DEBUGEVT']]
+	function hex32(v) {
+		return '0x' + (v >>> 0).toString(16).toUpperCase().padStart(8, '0')
+	}
+	function faultBits(v, table) {
+		const out = []
+		for (const [bit, name] of table) if ((v >>> bit) & 1) out.push(name)
+		return out
+	}
+	// 固件 RTC 存的是本地墙钟、当 UTC 算出来的时间戳，所以按 UTC 格式化，不叠加本机时区
+	function faultTime(sec) {
+		if (sec === 0) return '时间未知'
+		const d = new Date(sec * 1000)
+		if (isNaN(d.getTime())) return '时间未知'
+		// 2000 年内=故障时 RTC 尚未初始化
+		if (d.getUTCFullYear() <= 2000) return '时间未知'
+		const p = n => String(n).padStart(2, '0')
+		return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate()) +
+			' ' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds())
+	}
+	function renderFaultRec(raw) {
+		if (!raw || raw.length !== 32) return ''
+		const head = u32leRead(raw, 0)
+		if ((head >>> 8) !== FAULT_MAGIC) return ''
+		const kind = head & 0xff
+		const cfsr = u32leRead(raw, 8)
+		const hfsr = u32leRead(raw, 12)
+		const mmfar = u32leRead(raw, 16)
+		const bfar = u32leRead(raw, 20)
+		const pc = u32leRead(raw, 24)
+		const lr = u32leRead(raw, 28)
+		const flags = faultBits(cfsr, MMFSR_BITS).concat(faultBits(cfsr, BFSR_BITS), faultBits(cfsr, UFSR_BITS))
+		const hf = faultBits(hfsr, HFSR_BITS)
+		const parts = [
+			FAULT_TYPES[kind] || ('未知异常类型' + kind),
+			faultTime(u32leRead(raw, 4)),
+			'CFSR=' + hex32(cfsr) + (flags.length ? '(' + flags.join(' ') + ')' : ''),
+			'HFSR=' + hex32(hfsr) + (hf.length ? '(' + hf.join(' ') + ')' : ''),
+			// MMFAR/BFAR 只在对应 VALID 位置位时才是地址，否则是残留值，不能当地址用
+			'MMFAR=' + (((cfsr >>> 7) & 1) ? hex32(mmfar) : '无效'),
+			'BFAR=' + (((cfsr >>> 15) & 1) ? hex32(bfar) : '无效')
+		]
+		// PC=0 表示异常时栈帧不可读，此时 PC/LR 都无意义
+		parts.push(pc === 0 ? 'PC/LR=栈帧不可读' : 'PC=' + hex32(pc) + ' LR=' + hex32(lr))
+		return parts.join(' ')
+	}
+
 	function renderValue(def, raw) {
 		if (!raw || raw.length === 0) return ''
 		const dec = def && def.dec
@@ -494,6 +550,7 @@
 				case 'sensorParam': return renderSensorParam(raw)
 				case 'busMeters': return renderBusMeters(raw, dec.rec || 14)
 				case 'imgPack': return renderImgPack(raw)
+				case 'faultRec': return renderFaultRec(raw)
 			}
 		}
 		if (/YYYYMMDDhhmmss|YYMMDDhhmmss/.test(desc) || (def && def.unit === 'BCD' && (raw.length === 7 || raw.length === 6))) return bcdTime(raw)

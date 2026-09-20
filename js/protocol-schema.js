@@ -62,7 +62,7 @@ window.SK_TAGS = {
 		{ id: 10, name: 'NB模组固件版本号', type: 'Char[32]', desc: 'ASCII 不足32位补0x00' },
 		{ id: 11, name: '蓝牙表MAC地址', type: 'BYTE[6]', desc: 'HEX码 高位在前' },
 		{ id: 12, name: '通讯模组型号', type: 'BYTE[16]', desc: '16位ASCII' },
-		{ id: 13, name: '调试信息（预留）', type: 'BYTE[32]', desc: '设备预留调试信息' },
+		{ id: 13, name: '调试信息', type: 'BYTE[32]', desc: '协议预留 本工具按 MCU 异常现场解析: 4B 标志(高24位magic)+异常类型 4B 时间戳(UTC) CFSR HFSR MMFAR BFAR PC LR 各4B LE; magic 不符或长度非32按原始 hex 显示', dec: { t: 'faultRec' } },
 		{ id: 14, name: '传感器ID号', type: 'BYTE[10]', desc: 'BCD 高位补0' }
 	],
 	'2': [
