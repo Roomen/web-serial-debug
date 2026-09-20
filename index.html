@@ -306,19 +306,21 @@
                     <div id="log-main">
                         <div
                             class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
-                            <h1 class="h4 serial-log-title">
-                                <i class="bi bi-journal-text"></i> 串口日志
+                            <div class="serial-log-headline">
+                                <h1 class="h4 serial-log-title">
+                                    <i class="bi bi-journal-text"></i> 串口日志
+                                </h1>
+                                <div class="ctl-seg" id="serial-log-view-seg" role="group" aria-label="日志视图">
+                                    <button type="button" id="serial-log-view-row" aria-pressed="true">行日志</button>
+                                    <button type="button" id="serial-log-view-term" aria-pressed="false">终端</button>
+                                </div>
                                 <span class="serial-log-legend" id="serial-log-legend" aria-hidden="true">
                                     <span class="serial-log-legend-item" data-leg="left" id="serial-log-legend-left">TX</span>
                                     <span class="serial-log-legend-item" data-leg="right" id="serial-log-legend-right">RX</span>
                                 </span>
-                            </h1>
+                            </div>
 
                             <div class="btn-toolbar">
-                                <div class="ctl-seg me-2" id="serial-log-view-seg" role="group" aria-label="日志视图">
-                                    <button type="button" id="serial-log-view-row" aria-pressed="true">行日志</button>
-                                    <button type="button" id="serial-log-view-term" aria-pressed="false">终端</button>
-                                </div>
                                 <div class="dropdown me-2" id="serial-log-settings">
                                     <button type="button" class="serial-log-settings-summary" id="serial-log-settings-btn"
                                         data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false"

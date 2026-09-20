@@ -3586,6 +3586,14 @@ hr {
 }
 
 /* Serial Log Title */
+/* 标题 + 视图切换 + TX/RX 图例：视图 seg 紧跟固定宽度的标题，右侧工具栏文案变长变短都不会推着它跑 */
+.serial-log-headline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .serial-log-title {
   display: flex;
   align-items: center;
