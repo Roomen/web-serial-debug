@@ -465,7 +465,7 @@
 		//分包合并时间
 		timeOut: 200,
 		//日志最大行数,超出后从顶部裁剪
-		maxLogRows: 5000,
+		maxLogRows: 10000,
 		//末尾加回车换行
 		addCRLF: false,
 		//HEX发送
@@ -500,7 +500,7 @@
 	const TOOL_OPTIONS_DUAL_KEY = 'toolOptionsDual'
 	const LOG_OPTION_KEYS = ['timeOut', 'maxLogRows', 'logType', 'autoScroll']
 	function pickLogOptions(src) {
-		const out = { timeOut: 200, maxLogRows: 5000, logType: 'hex', autoScroll: true }
+		const out = { timeOut: 200, maxLogRows: 10000, logType: 'hex', autoScroll: true }
 		if (!src || typeof src !== 'object') return out
 		const t = parseInt(src.timeOut, 10)
 		if (!isNaN(t) && t >= 0) out.timeOut = t
@@ -560,8 +560,8 @@
 			: 'Hex'
 		const timeout = timeoutEl ? parseInt(timeoutEl.value, 10) : 0
 		const timeoutTxt = !timeout ? '不分包' : timeout + 'ms'
-		let rows = rowsEl ? parseInt(rowsEl.value, 10) : 5000
-		if (isNaN(rows)) rows = 5000
+		let rows = rowsEl ? parseInt(rowsEl.value, 10) : 10000
+		if (isNaN(rows)) rows = 10000
 		text.textContent = typeLabel + ' · ' + timeoutTxt + ' · ' + rows + '行'
 	}
 	function updateLogLegend() {
