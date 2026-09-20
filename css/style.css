@@ -7970,7 +7970,7 @@ summary {
   transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
 }
 
-.ctl-chip-btn:hover {
+.ctl-chip-btn:hover:not(:disabled) {
   border-color: var(--text-muted);
 }
 
