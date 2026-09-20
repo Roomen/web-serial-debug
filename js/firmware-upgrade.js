@@ -57,8 +57,12 @@
 	}
 
 	// 文件名去扩展名作为默认版本号(版本号字段最长 16 字节)
+	// 差分包名形如 "旧版本_时间戳_to_新版本_时间戳", 升级目标是 to 后面那个版本
 	function defaultVersionFromName(name) {
-		return String(name || '').replace(/\.[^.]*$/, '').slice(0, 16)
+		let s = String(name || '').replace(/\.[^.]*$/, '')
+		const parts = s.split(/[\s_-]+to[\s_-]+/i)
+		if (parts.length > 1) s = parts[parts.length - 1].replace(/_\d+$/, '')
+		return s.slice(0, 16)
 	}
 
 	function manualInfoText(name, size, version) {
