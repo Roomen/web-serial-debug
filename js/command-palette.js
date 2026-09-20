@@ -177,18 +177,25 @@
 			alias: 'rizhi shezhi log settings type timeout rows',
 			run: function () { clickEl('serial-log-settings-btn') }
 		})
-		const typeSel = el('serial-log-type')
-		if (typeSel) {
-			Array.prototype.forEach.call(typeSel.options, function (opt) {
+		// logType 唯一状态源在 common.js,这里不再枚举下拉框(已拆成视图/格式按钮组),直接调 setLogType
+		if (typeof window.setLogType === 'function') {
+			[
+				{ value: 'hex&text', label: 'Hex和Text' },
+				{ value: 'hex', label: 'Hex' },
+				{ value: 'text', label: 'Text' },
+				{ value: 'ansi', label: '彩色Ansi' },
+				{ value: 'hex&ansi', label: 'Hex和Ansi' },
+				{ value: 'term', label: '终端' },
+			].forEach(function (t) {
 				list.push({
 					group: '日志',
-					title: '日志类型：' + opt.textContent,
-					alias: 'rizhi leixing log type ' + opt.value,
-					run: function () { setValue('serial-log-type', opt.value) }
+					title: '日志类型：' + t.label,
+					alias: 'rizhi leixing log type ' + t.value,
+					run: function () { window.setLogType(t.value) }
 				})
 			})
 		} else {
-			warnMissing('serial-log-type')
+			warnMissing('setLogType')
 		}
 		// 自动滚动的状态源是按钮的 aria-pressed(见 common.js setAutoScrollUi),不是按钮文案
 		const scrollBtn = document.getElementById('serial-auto-scroll')
