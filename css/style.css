@@ -1790,6 +1790,11 @@ body {
   font-weight: 500;
 }
 
+/* Tag5-ID20 设底度事件行: 跨该点的差值不是真实用水 */
+.sk-parse-series-table tr.sk-ser-reset td {
+  background: color-mix(in srgb, var(--warning, #f0ad4e) 18%, transparent);
+}
+
 .sk-parse-errors {
   color: var(--danger);
   margin-top: 2px;

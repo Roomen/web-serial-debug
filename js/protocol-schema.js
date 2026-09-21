@@ -379,7 +379,8 @@ window.SK_TAGS = {
 		{ id: 16, name: '记录值', type: 'BYTE[1+7]', desc: 'BYTE0状态bit0未抄到 BYTE1-7无符号LE 逆累积(大口径) 单位同基准水量' },
 		{ id: 17, name: '记录值', type: 'BYTE[1+3]', desc: 'BYTE0状态bit0未抄到 BYTE1-3有符号LE 瞬时流量(大口径)' },
 		{ id: 18, name: '起始时间', type: 'BYTE[7]+BYTE[8]', desc: '周期历史数据(外贸): BCD起始时间+UTC时间戳8B+数据格式+起始值8B+记录个数2B+增量值' },
-		{ id: 19, name: '记录值', type: 'BYTE[20]', desc: '用水量: 起始hhmmss3B+持续s2B+起始累计7B+用水量4B+最小瞬时2B+最大瞬时2B' }
+		{ id: 19, name: '记录值', type: 'BYTE[20]', desc: '用水量: 起始hhmmss3B+持续s2B+起始累计7B+用水量4B+最小瞬时2B+最大瞬时2B' },
+		{ id: 20, name: '正逆累计历史', type: 'BYTE[n]', desc: '正逆双累计周期历史: BCD起始时间7B+UTC时间戳8B+间隔2B+数据格式1B(bit7-5当量)+起始正累计8B+起始逆累计8B+后续点数2B+N条变长记录(状态1B+正/逆数据)', dec: { t: 'period20' } }
 	],
 	'6': [
 		{ id: 0, name: '起始时间', type: 'BYTE[7]', desc: 'BCD YYYYMMDDhhmmss 可设置' },

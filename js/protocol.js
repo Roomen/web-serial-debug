@@ -931,12 +931,28 @@
 			h += '</div>'
 		}
 		const timeCol = escHtml(it.seriesTimeCol || '序号')
+		// 多列明细(如 Tag5-ID20 的正/逆双累计); 缺省仍是「时间 + 数值」两列
+		const cols = it.seriesCols && it.seriesCols.length ? it.seriesCols : null
 		h += '<details class="sk-series-details"' + (chartable ? '' : ' open') + '>'
 		h += '<summary>明细表 ' + serRows.length + ' 条' + (chartable ? '（默认折叠，点开查看）' : '') + '</summary>'
-		h += '<div class="sk-parse-series-wrap"><table class="sk-parse-series-table"><thead><tr><th>' +
-			timeCol + '</th><th>数值</th></tr></thead><tbody>'
+		h += '<div class="sk-parse-series-wrap"><table class="sk-parse-series-table"><thead><tr>'
+		if (cols) {
+			for (let ci = 0; ci < cols.length; ci++) h += '<th>' + escHtml(cols[ci]) + '</th>'
+		} else {
+			h += '<th>' + timeCol + '</th><th>数值</th>'
+		}
+		h += '</tr></thead><tbody>'
 		for (let ri = 0; ri < serRows.length; ri++) {
 			const row = serRows[ri]
+			if (cols && row.cells) {
+				h += '<tr' + (row.reset ? ' class="sk-ser-reset"' : '') + '>'
+				for (let ci = 0; ci < cols.length; ci++) {
+					h += '<td class="' + (ci === 0 ? 'sk-ser-t' : 'sk-ser-v') + '">' +
+						escHtml(row.cells[ci] != null ? row.cells[ci] : '') + '</td>'
+				}
+				h += '</tr>'
+				continue
+			}
 			h += '<tr><td class="sk-ser-t">' + escHtml(row.label) + '</td><td class="sk-ser-v">' +
 				escHtml(row.value) + '</td></tr>'
 		}
@@ -956,6 +972,235 @@
 		const key = '0x' + (fc & 0xff).toString(16).toUpperCase().padStart(2, '0')
 		const def = W.SK_FUNC_CODES && W.SK_FUNC_CODES[key]
 		return !!(def && def.resultValue)
+	}
+
+	// ===== Tag5-ID20 正逆累计历史 =====
+	// 固定头 36B(不含 Tag 外壳 3B 与 ID 1B, 合计 40B) + N 条变长记录。
+	// 累计值是非负 int64, 超出 Number 安全整数, 解码/差分/当量换算全程 BigInt, 不落到 Number。
+	const PERIOD20_HEADER = 36
+	const PERIOD20_UNIT_LABEL = { 1: '0.001L', 2: '0.01L', 3: '0.1L', 4: '1L', 5: '10L', 6: '100L', 7: '1000L' }
+	const PERIOD20_INT64_MAX = BigInt('9223372036854775807')
+
+	function u64leBig(b, o) {
+		let v = BigInt(0)
+		for (let i = 7; i >= 0; i--) v = (v << BigInt(8)) | BigInt(b[o + i])
+		return v
+	}
+
+	// 小数点左移 shift 位(除以 10^shift), 纯字符串运算避免浮点丢精度
+	function shiftDecimalLeft(intPart, fracPart, shift) {
+		let all = intPart + fracPart
+		let pos = intPart.length - shift
+		if (pos <= 0) {
+			all = '0'.repeat(1 - pos) + all
+			pos = 1
+		}
+		const i = all.slice(0, pos).replace(/^0+(?=\d)/, '')
+		const f = all.slice(pos).replace(/0+$/, '')
+		return f ? i + '.' + f : i
+	}
+
+	// count × 10^(code-4) 升, 精确十进制字符串; >=1000L 改写为 m³
+	function period20Liters(count, code) {
+		const e = (code >= 1 && code <= 7 ? code : 4) - 4
+		let intPart = count.toString()
+		let fracPart = ''
+		if (e >= 0) {
+			intPart += '0'.repeat(e)
+		} else {
+			const d = -e
+			const s = intPart.padStart(d + 1, '0')
+			intPart = s.slice(0, s.length - d)
+			fracPart = s.slice(s.length - d)
+		}
+		if (intPart.length >= 4) return shiftDecimalLeft(intPart, fracPart, 3) + ' m³'
+		const f = fracPart.replace(/0+$/, '')
+		return (f ? intPart + '.' + f : intPart) + ' L'
+	}
+
+	// ZigZag+varint: 低 7 位先发, 最高位 1 继续; 最多 10B 且第 10B 只允许合法 64 位内容
+	function period20Varint(payload, cur) {
+		let z = BigInt(0)
+		let shift = BigInt(0)
+		for (let k = 0; k < 10; k++) {
+			if (cur.o >= payload.length) return { err: 'varint 截断' }
+			const byte = payload[cur.o++]
+			if (k === 9) {
+				if (byte & 0x80) return { err: 'varint 超过 10 字节' }
+				if ((byte & 0x7f) > 0x01) return { err: 'varint 超出 64 位' }
+			}
+			z |= BigInt(byte & 0x7f) << shift
+			shift += BigInt(7)
+			if (!(byte & 0x80)) return { z: z }
+		}
+		return { err: 'varint 超过 10 字节' }
+	}
+
+	function period20Channel(payload, cur, prev, mode) {
+		if (mode === 0) return { v: prev, note: '不变' }
+		if (mode === 3) return { err: '编码 11 为保留值' }
+		if (mode === 2) {
+			if (cur.o + 8 > payload.length) return { err: '绝对值不足 8 字节' }
+			const v = u64leBig(payload, cur.o)
+			cur.o += 8
+			if (v > PERIOD20_INT64_MAX) return { err: '绝对值超出 int64' }
+			return { v: v, note: '绝对值' }
+		}
+		const r = period20Varint(payload, cur)
+		if (r.err) return { err: r.err }
+		const z = r.z
+		const delta = (z & BigInt(1)) ? -(z >> BigInt(1)) - BigInt(1) : z >> BigInt(1)
+		const v = prev + delta
+		if (v < BigInt(0) || v > PERIOD20_INT64_MAX) return { err: '累加后超出 0..INT64_MAX' }
+		return { v: v, note: (delta >= BigInt(0) ? '+' : '') + delta.toString() }
+	}
+
+	// 墙钟秒 → 'YYYY-MM-DD HH:MM:SS', 全程取 UTC 分量: 本地 Date 会在夏令时跳变点
+	// 把不存在的墙钟时刻(如纽约 2026-03-08 02:00)悄悄挪成 03:00。
+	function period20WallText(sec) {
+		const d = new Date(sec * 1000)
+		if (isNaN(d.getTime())) return null
+		const p = function (n) { return String(n).padStart(2, '0') }
+		return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate()) +
+			' ' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds())
+	}
+	// 'YYYY-MM-DD HH:MM:SS' 按 UTC 解释成秒, 只用于和时间戳做差、再做整秒步进
+	function period20WallSeconds(str) {
+		const m = String(str || '').match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/)
+		if (!m) return null
+		return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) / 1000
+	}
+	function period20OffsetText(sec) {
+		const sign = sec < 0 ? '-' : '+'
+		const a = Math.abs(sec)
+		const p = function (n) { return String(n).padStart(2, '0') }
+		return 'UTC' + sign + p(Math.floor(a / 3600)) + ':' + p(Math.floor((a % 3600) / 60))
+	}
+
+	// 返回 { head, rows, notes, error, consumed }; 出错即停, 不猜测后续字节
+	function decodePeriod20(payload, start) {
+		const avail = payload.length - start
+		if (avail < PERIOD20_HEADER) {
+			return { error: '头部不足 ' + PERIOD20_HEADER + ' 字节(实际 ' + avail + ')', consumed: avail, rows: [], notes: [] }
+		}
+		let o = start
+		const startStr = bcdTime(payload.subarray(o, o + 7)); o += 7
+		const ts = u64leBig(payload, o); o += 8
+		const interval = u16leRead(payload, o); o += 2
+		const fmt = payload[o]; o += 1
+		const f0 = u64leBig(payload, o); o += 8
+		const r0 = u64leBig(payload, o); o += 8
+		const n = u16leRead(payload, o); o += 2
+		const unitCode = (fmt >> 5) & 0x07
+		const reserved = fmt & 0x1f
+		const head = { startStr, ts, interval, fmt, unitCode, reserved, f0, r0, n }
+		const notes = []
+		if (unitCode === 0) notes.push('⚠ 当量码 0 为非法值')
+		if (reserved !== 0) notes.push('⚠ 数据格式低 5 位保留应为 0(实为 0x' + reserved.toString(16).toUpperCase() + ')')
+		if (interval === 0) notes.push('⚠ 记录间隔为 0')
+		if (f0 > PERIOD20_INT64_MAX || r0 > PERIOD20_INT64_MAX) notes.push('⚠ 起始累计超出非负 int64 范围')
+		const rows = [{ idx: 0, forward: f0, reverse: r0, reset: false, note: '起始点' }]
+		let error = null
+		const cur = { o: o }
+		let pf = f0
+		let pr = r0
+		for (let i = 1; i <= n; i++) {
+			if (cur.o >= payload.length) {
+				error = '第 ' + i + ' 点缺少状态字节(声明 ' + n + ' 点)'
+				break
+			}
+			const status = payload[cur.o++]
+			const fMode = status & 0x03
+			const rMode = (status >> 2) & 0x03
+			const reset = !!(status & 0x10)
+			if (status & 0xe0) notes.push('⚠ 第 ' + i + ' 点状态 bit7-5 保留应为 0(状态 0x' + status.toString(16).toUpperCase() + ')')
+			const fr = period20Channel(payload, cur, pf, fMode)
+			if (fr.err) { error = '第 ' + i + ' 点正向: ' + fr.err; break }
+			const rr = period20Channel(payload, cur, pr, rMode)
+			if (rr.err) { error = '第 ' + i + ' 点逆向: ' + rr.err; break }
+			pf = fr.v
+			pr = rr.v
+			rows.push({ idx: i, forward: pf, reverse: pr, reset: reset, note: '正' + fr.note + ' 逆' + rr.note })
+		}
+		if (!error && cur.o < payload.length) {
+			notes.push('⚠ 记录结束后仍有 ' + (payload.length - cur.o) + " 字节未消费")
+		}
+		return { head, rows, notes, error, consumed: (error ? payload.length : cur.o) - start }
+	}
+
+	function buildPeriod20Item(payload, start) {
+		const d = decodePeriod20(payload, start)
+		const head = d.head
+		const unitLabel = head ? (PERIOD20_UNIT_LABEL[head.unitCode] || ('非法码' + head.unitCode)) : '?'
+		const cols = ['时间', '正累计', '逆累计', '说明']
+		const notes = d.notes.slice()
+		// 时间轴按 8B UTC 秒时间戳步进(第 i 点 = T0 + i*间隔*60), 不用本地 Date 加分钟。
+		// 设备时区偏移 = BCD 墙钟 − 时间戳, 加回去后标签仍是设备本地读数, 且与浏览器时区无关。
+		let baseSec = null
+		let tzOffset = 0
+		if (head) {
+			const wall = period20WallSeconds(head.startStr)
+			const ts = Number(head.ts)
+			if (ts >= 946684800 && ts <= 4102444800) {
+				baseSec = ts
+				if (wall != null) tzOffset = wall - ts
+				if (Math.abs(tzOffset) > 14 * 3600) {
+					notes.push('⚠ BCD 起始时间与 UTC 时间戳相差超过 14 小时，时间轴按 UTC 显示')
+					tzOffset = 0
+				}
+			} else if (wall != null) {
+				baseSec = wall
+				notes.push('⚠ UTC 时间戳不在 2000-2100 范围，时间轴改按 BCD 起始时间推算')
+			}
+		}
+		const rows = []
+		for (let i = 0; i < d.rows.length; i++) {
+			const r = d.rows[i]
+			let label = '#' + r.idx
+			if (baseSec != null && head.interval) {
+				const t = period20WallText(baseSec + tzOffset + r.idx * head.interval * 60)
+				if (t) label = t
+			}
+			const fTxt = period20Liters(r.forward, head ? head.unitCode : 4)
+			const rTxt = period20Liters(r.reverse, head ? head.unitCode : 4)
+			const note = (r.reset ? '设底度事件 · ' : '') + r.note
+			rows.push({
+				label: label,
+				value: '正 ' + fTxt + ' / 逆 ' + rTxt,
+				cells: [label, fTxt, rTxt, note],
+				// 图表 y 值统一为升; BigInt 超出精度时只影响绘图, 表格与说明仍是精确值
+				num: Number(r.forward) * Math.pow(10, (head ? head.unitCode : 4) - 4),
+				raw: null,
+				reset: r.reset
+			})
+		}
+		let summary = ''
+		if (head) {
+			summary = '起始点+' + head.n + ' 后续点(实得 ' + Math.max(0, d.rows.length - 1) + ')'
+			summary += ' · 间隔' + head.interval + '分钟'
+			if (head.startStr) summary += ' · 起' + head.startStr
+			summary += ' · UTC ' + head.ts.toString()
+			summary += ' · 当量' + unitLabel
+			summary += ' · 起始正' + period20Liters(head.f0, head.unitCode)
+			summary += '/逆' + period20Liters(head.r0, head.unitCode)
+			const resets = d.rows.filter(function (r) { return r.reset }).length
+			if (resets) summary += ' · 设底度事件' + resets + '次'
+			if (tzOffset !== 0) summary += ' · 设备时区' + period20OffsetText(tzOffset)
+		}
+		if (d.error) notes.push('✕ ' + d.error)
+		if (notes.length) summary += (summary ? ' · ' : '') + notes.join(' ')
+		const lines = [summary]
+		for (let i = 0; i < rows.length && i < 8; i++) lines.push(rows[i].cells.join(' | '))
+		if (rows.length > 8) lines.push('…共' + rows.length + '条')
+		return {
+			decoded: lines.join('\n'),
+			summary: summary,
+			rows: rows,
+			cols: cols,
+			consumed: d.consumed,
+			error: d.error,
+			notes: notes
+		}
 	}
 
 	function parseTagItems(tag, payload, opt) {
@@ -991,6 +1236,32 @@
 					off: idOff,
 					span: 2
 				})
+				continue
+			}
+			// Tag5-ID20 正逆累计历史: 自带头部与变长记录, 不能按定长字段消费
+			if (tag === 5 && id === 20) {
+				const p20 = buildPeriod20Item(payload, j)
+				const raw = payload.subarray(j, j + p20.consumed)
+				j += p20.consumed
+				items.push({
+					id,
+					name: def ? def.name : ('ID' + id),
+					raw: Array.from(raw),
+					decoded: p20.decoded,
+					partial: !!p20.error,
+					series: true,
+					seriesSummary: p20.summary,
+					seriesRows: p20.rows,
+					seriesCols: p20.cols,
+					seriesTimeCol: '时间',
+					seriesDaily: false,
+					seriesStats: null,
+					seriesChartable: p20.rows.length >= 2,
+					seriesBase: false,
+					off: idOff,
+					span: 1 + raw.length
+				})
+				if (p20.error) break
 				continue
 			}
 			// 总线表列表: 按个数×记录长度消费
@@ -1429,6 +1700,11 @@
 		}
 	}
 
+	// 仅 TLV 段(不含帧头帧尾)的解析入口，供交叉测试与外部工具直接调用
+	W.skParseTlv = function (bytes, opt) {
+		return parseTlv(bytes, opt)
+	}
+
 	W.skParseFrame = function (bytes, opt) {
 		opt = opt || {}
 		const b = toBytes(bytes)
@@ -1766,7 +2042,13 @@
 			const needBase = (p.tlv || []).some(function (t) {
 				return (t.items || []).some(function (it) { return it.seriesBase || (it.decoded && String(it.decoded).indexOf('1L默认') >= 0) })
 			})
-			if (needBase || (p.tlv || []).some(function (t) { return t.tag === 5 || t.tag === 9 || (t.tag >= 94 && t.tag <= 99) })) {
+			// Tag5-ID20 自带当量, 整个 Tag5 只有 ID20 时不该催用户去读基准水量
+			const tagNeedsBase = function (t) {
+				if (t.tag === 9 || (t.tag >= 94 && t.tag <= 99)) return true
+				if (t.tag !== 5) return false
+				return (t.items || []).some(function (it) { return it.id !== 20 })
+			}
+			if (needBase || (p.tlv || []).some(tagNeedsBase)) {
 				h += '<div class="sk-base-banner is-warn">⚠ 未读到基准水量(Tag2/3 ID29)，流量暂按 <b>1L/圈</b> 显示 · 建议先「查询核心数据」或「查询终端参数」</div>'
 			}
 		}
