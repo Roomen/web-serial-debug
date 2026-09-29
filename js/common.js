@@ -3875,13 +3875,17 @@
 	const RECOVERABLE_READ_ERRORS = ['BufferOverrunError', 'BreakError', 'FramingError', 'ParityError']
 	const READ_RECOVER_WINDOW_MS = 10000
 	const READ_RECOVER_MAX = 20
+	const READ_STREAM_SWAP_WAIT_MS = 2000
+	// 每次启动读循环递增，等待换流期间若已关闭重开过，旧循环据此退出，不跨连接去抢新流
+	const readGenBySid = { S: 0, A: 0, B: 0 }
 	// 卡死检测超时:读循环异常退出或线路错误后,等待此长时间仍无数据则判定 USB IN 卡死
 	const RX_STALL_MS = 2000
 	const REOPEN_DELAYS = [300, 1000, 3000]
+	const REOPEN_STABLE_MS = 10000
 	const reopenAttemptBySid = { S: 0, A: 0, B: 0 }
 
 	function makeRxWatch() {
-		return { lastRxAt: 0, openedAt: 0, kick: false, kickTried: false, timer: null, deferTimer: null }
+		return { lastRxAt: 0, openedAt: 0, kick: false, kickTried: false, swapping: 0, timer: null, deferTimer: null }
 	}
 	function addLogErrSafe(msg, sid) {
 		try { addLogErr(msg, sid) } catch (e) {}
@@ -3917,6 +3921,7 @@
 		w.openedAt = 0
 		w.kick = false
 		w.kickTried = false
+		w.swapping = 0
 		if (w.deferTimer) {
 			clearInterval(w.deferTimer)
 			w.deferTimer = null
@@ -3976,6 +3981,9 @@
 			scheduleDeferredRecover(sid, reasonMsg)
 			return
 		}
+		// 上次(重)开后已稳定运行一段时间才出事，说明不是连环失败：退避计数从头来，否则设备空闲时每次成功重开都会被累计成"失败"
+		const openedAt = rxWatch(sid).openedAt
+		if (SerialHub.isOpen(sid) && openedAt && Date.now() - openedAt > REOPEN_STABLE_MS) reopenAttemptBySid[sid] = 0
 		SerialHub.setOpening(sid, true)
 		try {
 			SerialHub.setOpen(sid, false)
@@ -4021,10 +4029,12 @@
 		if (lastActive && Date.now() - lastActive < 5000) return
 		const r = SerialHub.getReader(sid)
 		if (!r) {
+			// 正在等 cancel 后的新流，读循环还活着
+			if (w.swapping) return
 			// 刚 setOpen 时 readData 可能还没取到 reader,延迟确认后再判定循环已死
 			setTimeout(function () {
 				if (!SerialHub.isOpen(sid) || SerialHub.isOpening(sid) || SerialHub.isManualClose(sid)) return
-				if (rxWatchSuppressed() || SerialHub.getReader(sid)) return
+				if (rxWatchSuppressed() || SerialHub.getReader(sid) || w.swapping) return
 				addLogErr('切回前台时读取循环已停止，正在重新打开串口', sid)
 				recoverDeadReadLoop(sid, null)
 			}, 500)
@@ -4041,8 +4051,12 @@
 		let streamClosed = false
 		let recoverCount = 0
 		let recoverWindowTs = 0
+		let prevStream = null
+		let softClosed = false
 		const port = SerialHub.getPort(sid)
 		const w = rxWatch(sid)
+		const gen = ++readGenBySid[sid]
+		const alive = function () { return SerialHub.isOpen(sid) && readGenBySid[sid] === gen }
 
 		while (SerialHub.isOpen(sid) && port) {
 			if (!port.readable) {
@@ -4050,9 +4064,27 @@
 				addLogErr('串口读取流不可用(' + sid + ')，将尝试重新打开', sid)
 				break
 			}
+			// cancel 后 Chromium 要等底层异步清理完才换新流，这之前 readable 仍是旧的已关闭流，
+			// 立刻 getReader 会马上读到 done：切回前台踢读器后被误判成「读取流已关闭」而整口重开
+			if (port.readable === prevStream) {
+				const t0 = Date.now()
+				// 存代次而非布尔：旧循环醒来时不能清掉新循环的等待标志
+				w.swapping = gen
+				while (alive() && port.readable === prevStream && Date.now() - t0 < READ_STREAM_SWAP_WAIT_MS) {
+					await new Promise(function (resolve) { setTimeout(resolve, 50) })
+				}
+				if (w.swapping === gen) w.swapping = 0
+				if (!alive()) return
+				if (!port.readable || port.readable === prevStream) {
+					streamError = true
+					addLogErr('串口读取流未能重建(' + sid + ')，将尝试重新打开', sid)
+					break
+				}
+			}
+			prevStream = port.readable
 			let r
 			try {
-				r = port.readable.getReader()
+				r = prevStream.getReader()
 			} catch (error) {
 				const errorType = error.name || 'UnknownError'
 				const errorMsg = error.message || '未知错误'
@@ -4061,12 +4093,24 @@
 				break
 			}
 			SerialHub.setReader(sid, r)
+			if (softClosed) {
+				softClosed = false
+				addLogErr('串口读取流被系统关闭(' + sid + ')，已自动恢复继续接收', sid)
+			}
 			try {
 				while (true) {
 					const { value, done } = await r.read()
 					if (done) {
 						if (w.kick) break
-						streamClosed = true
+						// 非主动 cancel 的 done：端口仍在就等新流换 reader 接着读，不整口重开
+						const now = Date.now()
+						if (now - recoverWindowTs > READ_RECOVER_WINDOW_MS) {
+							recoverCount = 0
+							recoverWindowTs = now
+						}
+						recoverCount++
+						if (recoverCount > READ_RECOVER_MAX) streamClosed = true
+						else softClosed = true
 						break
 					}
 					if (!value || !value.length) continue
