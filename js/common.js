@@ -3878,6 +3878,7 @@
 	// 卡死检测超时:读循环异常退出或线路错误后,等待此长时间仍无数据则判定 USB IN 卡死
 	const RX_STALL_MS = 2000
 	const REOPEN_DELAYS = [300, 1000, 3000]
+	const REOPEN_STABLE_MS = 10000
 	const reopenAttemptBySid = { S: 0, A: 0, B: 0 }
 
 	function makeRxWatch() {
@@ -3976,6 +3977,9 @@
 			scheduleDeferredRecover(sid, reasonMsg)
 			return
 		}
+		// 上次(重)开后已稳定运行一段时间才出事，说明不是连环失败：退避计数从头来，否则设备空闲时每次成功重开都会被累计成"失败"
+		const openedAt = rxWatch(sid).openedAt
+		if (SerialHub.isOpen(sid) && openedAt && Date.now() - openedAt > REOPEN_STABLE_MS) reopenAttemptBySid[sid] = 0
 		SerialHub.setOpening(sid, true)
 		try {
 			SerialHub.setOpen(sid, false)
@@ -4066,7 +4070,15 @@
 					const { value, done } = await r.read()
 					if (done) {
 						if (w.kick) break
-						streamClosed = true
+						// 系统休眠/USB 挂起恢复后底层会直接关掉读流(done)，端口本身仍在：换新 reader 接着读，不整口重开
+						const now = Date.now()
+						if (now - recoverWindowTs > READ_RECOVER_WINDOW_MS) {
+							recoverCount = 0
+							recoverWindowTs = now
+						}
+						recoverCount++
+						if (recoverCount > READ_RECOVER_MAX) streamClosed = true
+						else addLogErr('串口读取流被系统关闭(' + sid + ')，已自动恢复继续接收', sid)
 						break
 					}
 					if (!value || !value.length) continue
