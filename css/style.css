@@ -8119,3 +8119,226 @@ summary {
   border-color: var(--warning);
   background: color-mix(in srgb, var(--warning) 12%, transparent);
 }
+
+/* =============================================
+   STS 表端 / CIU 模拟面板
+   ============================================= */
+.sts-sim {
+  gap: 8px;
+  padding: 2px 2px 8px;
+}
+
+.sts-sim [hidden] {
+  display: none !important;
+}
+
+.sts-sim-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sts-sim-status {
+  color: var(--text-secondary);
+}
+
+.sts-sim-status.is-ok {
+  color: var(--success);
+}
+
+.sts-sim-status.is-bad {
+  color: var(--danger);
+}
+
+.sts-sim-hint {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.sts-sim-card {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  padding: 8px 10px;
+}
+
+.sts-sim-card > summary {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.sts-sim-card-title {
+  margin: 6px 0 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.sts-sim-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 6px;
+}
+
+.sts-sim-field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+
+.sts-sim-field-name {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.sts-sim-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.sts-sim-token {
+  width: 200px;
+  font-family: var(--font-mono);
+}
+
+.sts-sim-kv {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 12px;
+  font-size: 0.75rem;
+}
+
+.sts-sim-k {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.sts-sim-v {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.sts-sim-rec {
+  display: grid;
+  grid-template-columns: 2.5em 11em minmax(0, 1fr);
+  gap: 8px;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+}
+
+.sts-sim-empty {
+  color: var(--text-secondary);
+}
+
+.sts-sim-phase {
+  color: var(--text-secondary);
+  min-height: 1.2em;
+}
+
+.sts-sim-result:empty {
+  display: none;
+}
+
+.sts-sim-result {
+  border-top: 1px dashed var(--border-color);
+  margin-top: 4px;
+  padding-top: 6px;
+}
+
+.sts-sim-result-head {
+  font-size: 0.8rem;
+  margin-bottom: 4px;
+}
+
+.sts-sim-badge {
+  display: inline-block;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--text-secondary);
+}
+
+.sts-sim-result-head.is-ok .sts-sim-badge {
+  background: var(--success);
+}
+
+.sts-sim-result-head.is-bad .sts-sim-badge {
+  background: var(--danger);
+}
+
+.sts-sim-tl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) repeat(4, max-content);
+  gap: 2px 10px;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+}
+
+.sts-sim-tl-h {
+  color: var(--text-secondary);
+}
+
+.sts-sim-tl .is-ok {
+  color: var(--success);
+}
+
+.sts-sim-tl .is-bad {
+  color: var(--danger);
+}
+
+.sts-sim-logcard {
+  display: flex;
+  flex-direction: column;
+  min-height: 160px;
+}
+
+.sts-sim-log {
+  flex: 1 1 auto;
+  min-height: 120px;
+  max-height: 320px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+.sts-sim-log-line {
+  display: flex;
+  gap: 8px;
+}
+
+.sts-sim-log-time {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.sts-sim-log-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.sts-sim-lv-warn .sts-sim-log-text {
+  color: var(--warning);
+}
+
+.sts-sim-lv-error .sts-sim-log-text {
+  color: var(--danger);
+}
+
+.sts-sim .form-control:disabled,
+.sts-sim .form-select:disabled {
+  background-color: var(--bg-surface-hover);
+  color: var(--text-secondary);
+  opacity: 0.75;
+}

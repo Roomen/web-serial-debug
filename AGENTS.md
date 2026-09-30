@@ -6,10 +6,15 @@
 
 串口调试视图的工具面板由 `js/workbench.js` 管理：每个工具是一个面板，用 `Workbench.registerPanel({ id, title, label, icon, el })` 注册，可停靠在右栏或底栏（底栏与协议解析共用外壳），最右侧停靠栏负责开合，底部状态栏显示连接时长、收发字节和运行中的后台任务。面板 DOM 是原样搬进停靠区的（不克隆），所以面板内控件的 id 和已绑定事件不受影响。新增工具时注册成面板，不要再往右栏里加 Bootstrap tab；需要跳到某个面板时调用 `Workbench.open(id)`，不要去点 DOM 按钮。右栏/底栏的开合状态沿用 `common.js` 里的 `serialRightPane` / `parsePanelDock`，不要另写一套。协议选择只有顶栏的 `#serial-protocol-select` 一处，不要在面板里再放一份镜像。随机读写、批量配置面板的「协议不支持」提示和停靠栏图标变暗，靠的是 CSS 匹配卡片上的内联 `style="display: none"`（协议模块用 `el.style.display` 控制显隐）；如果把协议模块改成切 class，要同步改 `css/style.css` 里 Workbench 段的这两个选择器，否则提示会不报错地失效。
 
+hostProto 模组协议与 STS 应用层协议各占一组文件：`js/hostproto-protocol.js` 是模组指令层的帧编解码，并注册成顶栏的 `hostproto` 日志解析协议；`js/hostproto-transaction.js` 是主机端事务层（串行请求应答、逐字节同帧重发、EVT 分发），平台依赖全部注入；`js/sts-ciu-protocol.js` 是应用层报文的编解码与接收判定，只导出 `window.stsCiu` 供嵌套解码和引擎使用，不单独注册成顶栏协议；`js/sts-sim.js` 是表端和 CIU 两个模拟引擎，不碰 DOM、localStorage 和 `serialApi`，只经注入的 link 与时钟工作；`js/sts-sim-panel.js` 才是「STS 模拟」面板的界面与串口接线。改引擎行为时不要把 DOM 或串口依赖带进 `js/sts-sim.js`，否则 node 里的端到端测试就跑不起来。模拟器不做钥表下发，也不接触主密钥，PAK 输入框不落盘，PAK、钥表密钥在解析展示里一律脱敏。协议事务发整帧走 `serialApi.writeRaw(data, { logData })`：不追加 CRLF，日志只显示 `logData` 给的脱敏副本，真实串口仍写原帧；不要为了发整帧去改用户的「追加 CRLF」偏好，那个开关会被持久化，运行中用户也能重新打开，而且普通 `writeData` 会把含密钥的原帧写进日志和 sessionStorage。
+
 ## 运行与测试
 
 - `python3 -m http.server 8000` 起本地静态服务后用 Chrome 或 Edge 打开（Web Serial API 只有 Chromium 系支持）；`open index.html` 走 `file://` 只适合快速看布局。
 - `node tests/cjt188-protocol.cjs`：CJ/T 188 协议解析的回归测试，改 `js/cjt188-protocol.js` 后必须跑。测试只用合成数据，不要放真实设备日志。
+- `node tests/sts-ciu-protocol.cjs`：STS 应用层协议（`js/sts-ciu-protocol.js`）的编解码、接收判定与边界回归，改该文件后必须跑。
+- `node tests/hostproto-protocol.cjs`：hostProto 模组指令层（`js/hostproto-protocol.js`）的 CRC/组帧/找帧重同步/解析展示，以及事务层（`js/hostproto-transaction.js`，假时钟）回归，改这两个文件后必须跑。
+- `node tests/sts-sim.cjs`：STS 表端与 CIU 两个模拟引擎（`js/sts-sim.js`）经假模组对的端到端回归，含会话丢弃注入、表端重启、预算耗尽，改引擎后必须跑；这三个测试同样只用合成数据，不要放真实钥表、PAK 或设备标识。
 - 其余没有自动化测试，涉及 UI 或串口逻辑的修改要在浏览器里连接真实或虚拟串口手动验证：日志相关检查 HEX、TEXT、ANSI 三种显示模式；发送路径检查 HEX/TEXT 输入、循环发送、CRLF 追加和快捷发送按钮；配置相关刷新页面，确认 localStorage 中的设置能正确恢复。
 
 ## 编码风格
