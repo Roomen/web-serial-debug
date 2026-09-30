@@ -8133,13 +8133,9 @@ summary {
 	container: sts-sim / inline-size;
 }
 
-.sts-sim > .sts-sim {
-	flex: 0 0 auto;
-	padding: 0;
-}
-
-.sts-sim > .sts-sim-channelbar,
-.sts-sim > .sts-sim-hint {
+.sts-sim > .sts-sim-dualbar,
+.sts-sim > .sts-sim-hint,
+.sts-sim > .sts-sim-card {
 	flex-shrink: 0;
 }
 
@@ -8147,39 +8143,120 @@ summary {
 	display: none !important;
 }
 
-.sts-sim-top,
-.sts-sim-channelbar {
-	display: flex;
-	align-items: center;
+/* 三个会话各一套面板：单路 S、双路 A / B。默认上下堆叠，容器够宽时 A / B 并排 */
+.sts-sim-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
 	gap: 8px;
-	flex-wrap: wrap;
+	flex: 0 0 auto;
+	min-width: 0;
 }
 
-.sts-sim-channelbar {
+.sts-sim-chan {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	min-width: 0;
+}
+
+.sts-sim-body {
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 auto;
+	gap: 8px;
+	min-width: 0;
+}
+
+.sts-sim-mergedcard {
+	grid-column: 1 / -1;
+}
+
+.sts-sim-head,
+.sts-sim-dualbar {
+	display: flex;
+	align-items: center;
+	gap: 6px 8px;
+	flex-wrap: wrap;
+	min-width: 0;
+}
+
+.sts-sim-head {
+	padding: 5px 8px;
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	background: var(--bg-surface-hover);
+}
+
+.sts-sim-head > *,
+.sts-sim-dualbar > * {
+	min-width: 0;
+	max-width: 100%;
+}
+
+.sts-sim-title {
+	font-size: 0.8rem;
+	font-weight: 600;
+	color: var(--text-primary);
+	overflow-wrap: anywhere;
+}
+
+/* 展开 / 收起（aria-expanded）不属于 ctl-* 任何一类 */
+.sts-sim-collapse {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 4px;
+	border: 0;
+	background: transparent;
+	color: var(--text-primary);
+	text-align: left;
+}
+
+.sts-sim-collapse:focus-visible,
+.sts-sim-summary-item:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.sts-sim-status {
+	flex: 1 1 8em;
+}
+
+.sts-sim-summary {
+	display: flex;
+	flex: 1 1 auto;
+	flex-wrap: wrap;
+	gap: 6px;
+	min-width: 0;
+}
+
+.sts-sim-summary-item {
+	flex: 1 1 10em;
+	min-width: 0;
+	padding: 4px 8px;
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-sm);
+	background: var(--bg-surface);
+	color: var(--text-primary);
+	font-size: 0.72rem;
+	line-height: 1.5;
+	text-align: left;
+	overflow-wrap: anywhere;
+}
+
+.sts-sim-summary-item:hover {
+	background: var(--bg-surface-hover);
+}
+
+.sts-sim-dualbar {
 	padding: 6px 8px;
 	border: 1px solid var(--border-color);
 	border-radius: var(--radius-md);
 	background: var(--bg-surface-hover);
 }
 
-.sts-sim-channelbar > .ctl-seg {
-	flex: 1 1 100%;
-	width: 100%;
-}
-
-.sts-sim-channelbar > .ctl-seg > button {
-	flex: 1 1 0;
-	min-width: 0;
-	padding: 5px 8px;
-	line-height: 1.5;
-	white-space: normal;
-	overflow-wrap: anywhere;
-}
-
-.sts-sim-top > *,
-.sts-sim-channelbar > * {
-	min-width: 0;
-	max-width: 100%;
+.sts-sim-viewseg {
+	margin-left: auto;
 }
 
 .sts-sim-status {
@@ -8443,6 +8520,28 @@ summary {
 	border-bottom: 1px solid var(--border-color);
 }
 
+.sts-sim-log-line--merged {
+	grid-template-columns: max-content max-content minmax(0, 1fr);
+}
+
+.sts-sim-log-src {
+	display: inline-block;
+	min-width: 1.8em;
+	padding: 0 6px;
+	border: 1px solid var(--accent);
+	border-radius: var(--radius-sm);
+	background: color-mix(in srgb, var(--accent) 20%, var(--bg-surface));
+	color: var(--text-primary);
+	font-size: 0.66rem;
+	font-weight: 700;
+	text-align: center;
+}
+
+.sts-sim-log-src.is-b {
+	border-color: var(--warning);
+	background: color-mix(in srgb, var(--warning) 22%, var(--bg-surface));
+}
+
 .sts-sim-log-line:nth-child(even) {
 	background: var(--bg-surface-hover);
 }
@@ -8623,6 +8722,14 @@ details.sts-sim-alarm-picker {
 		grid-template-columns: minmax(0, 1fr);
 		gap: 0;
 	}
+
+	.sts-sim-log-line--merged {
+		grid-template-columns: max-content minmax(0, 1fr);
+	}
+
+	.sts-sim-log-line--merged > .sts-sim-log-text {
+		grid-column: 1 / -1;
+	}
 }
 
 @container sts-sim (min-width: 700px) {
@@ -8632,5 +8739,33 @@ details.sts-sim-alarm-picker {
 
 	.sts-sim-form {
 		gap: 8px 14px;
+	}
+}
+
+/* 容器 >= 720px: A / B 两列等宽并排，每列内日志区吃剩余高度，摘要条隐藏 */
+@container sts-sim (min-width: 720px) {
+	.sts-sim-grid.is-dual {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		align-items: stretch;
+	}
+
+	.sts-sim-summary {
+		display: none;
+	}
+
+	.sts-sim-grid.is-dual .sts-sim-chan > .sts-sim-body > .sts-sim-logcard {
+		flex: 1 1 auto;
+	}
+
+	.sts-sim-grid.is-dual .sts-sim-chan .sts-sim-log {
+		flex: 1 1 0;
+		max-height: none;
+		min-height: 160px;
+	}
+
+	.sts-sim-grid.is-dual > .sts-sim-mergedcard .sts-sim-log {
+		flex: 0 0 auto;
+		min-height: 120px;
+		max-height: 320px;
 	}
 }

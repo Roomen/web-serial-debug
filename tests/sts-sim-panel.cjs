@@ -26,7 +26,9 @@ class FakeElement {
 		this.checked = false
 		this.disabled = false
 		this.hidden = false
+		this.open = false
 		this.scrollTop = 0
+		this.scrollIntoViewCalls = []
 		this._text = ''
 		this.classList = {
 			add: (...names) => { this.className = [...new Set(this.className.split(/\s+/).filter(Boolean).concat(names))].join(' ') },
@@ -53,6 +55,15 @@ class FakeElement {
 	}
 	append(...children) { children.forEach(child => this.appendChild(child)) }
 	prepend(child) { this.appendChild(child); this.children.unshift(this.children.pop()) }
+	insertBefore(child, ref) {
+		if (child.parentNode) child.parentNode.removeChild(child)
+		const index = ref ? this.children.indexOf(ref) : -1
+		child.parentNode = this
+		if (index === -1) this.children.push(child)
+		else this.children.splice(index, 0, child)
+		return child
+	}
+	scrollIntoView(options) { this.scrollIntoViewCalls.push(options) }
 	removeChild(child) {
 		const index = this.children.indexOf(child)
 		assert.notEqual(index, -1)
@@ -143,6 +154,7 @@ function makeWorld(options = {}) {
 	const sent = []
 	const sessions = new Set(options.open || [])
 	let mode = options.mode || 'dual'
+	const labels = { A: '', B: '', ...(options.labels || {}) }
 	let root
 	const presets = [{ code: '0001', label: '低电池告警' }, { code: '0002', label: '合成标签 ' + unsafe + '告警' }]
 	const split = value => String(value || '').trim().split(/\s+/).filter(Boolean)
@@ -207,6 +219,7 @@ function makeWorld(options = {}) {
 	const window = {
 		_activeProtocol: 'hostproto',
 		Workbench: { registerPanel(panel) { assert.equal(panel.id, 'sts-sim'); assert.equal(root, undefined); root = panel.el } },
+		SerialHub: { getLabelA: () => labels.A, getLabelB: () => labels.B },
 		serialApi: { getMode: () => mode, isSessionOpen: sid => sessions.has(sid) },
 		hostProtoSerialLink(args) {
 			assert.ok(['A', 'B', 'S'].includes(args.sid))
@@ -251,16 +264,21 @@ function makeWorld(options = {}) {
 	function panel(channel) {
 		const element = root.querySelector('#wb-pane-sts-sim-' + channel)
 		assert.ok(element, 'channel ' + channel + ' exists')
+		const suffix = channel === 'S' ? '' : '.' + channel
 		return {
-			root: element,
+			root: element, suffix,
 			input(group, name) { const input = element.querySelector('#sts-sim-' + group + '-' + name + '-' + channel); assert.ok(input, group + '.' + name); return input },
 			start: element.querySelector('.ctl-toggle'),
-			role(role) { element.querySelector('.sts-sim-top').querySelectorAll('button')[role === 'meter' ? 0 : 1].click() },
+			role(role) { element.querySelector('.ctl-seg').querySelectorAll('button')[role === 'meter' ? 0 : 1].click() },
+			cfg: element.querySelector('details'),
+			body: element.querySelector('.sts-sim-body'),
+			toggle: element.querySelector('.sts-sim-collapse'),
+			title: element.querySelector('.sts-sim-title'),
 			log: element.querySelector('.sts-sim-log'),
 			status: element.querySelector('.sts-sim-status'),
 		}
 	}
-	return { root, panel, storage, writes, clock, engines, factoryCalls, failingSids, startFailures, startAttempts, targetCalls, links, sent, sessions, setMode(value) { mode = value }, saved: key => JSON.parse(storage.get(key) || 'null') }
+	return { root, panel, labels, storage, writes, clock, engines, factoryCalls, failingSids, startFailures, startAttempts, targetCalls, links, sent, sessions, setMode(value) { mode = value }, saved: key => JSON.parse(storage.get(key) || 'null') }
 }
 
 function change(input, value) {
@@ -280,8 +298,9 @@ test('A/B roles, configuration, logs and manual start/stop are independent', asy
 	change(channelA.input('meter', 'remaining'), 321)
 	change(channelB.input('ciu', 'localAddr'), 42)
 	assert.equal(world.saved('stsSim.role.B'), 'ciu')
-	assert.equal(channelA.root.querySelector('.sts-sim-top').querySelector('button').getAttribute('aria-pressed'), 'true')
-	assert.equal(world.saved('stsSim.meter2').remaining, '321')
+	assert.equal(channelA.root.querySelector('.ctl-seg').querySelector('button').getAttribute('aria-pressed'), 'true')
+	assert.equal(world.saved('stsSim.meter2.A').remaining, '321')
+	assert.equal(world.saved('stsSim.meter2'), null, 'dual A no longer shares the single-mode key')
 	assert.equal(world.saved('stsSim.ciu.B').localAddr, '42')
 	assert.equal(channelB.input('meter', 'remaining').value, '100')
 	assert.equal(channelA.input('ciu', 'localAddr').value, '2')
@@ -300,25 +319,53 @@ test('A/B roles, configuration, logs and manual start/stop are independent', asy
 	channelA.start.click()
 	assert.equal(world.engines[0].stops, 1)
 	assert.equal(world.engines[1].stops, 0)
-	assert.equal(world.saved('stsSim.running'), false)
+	assert.equal(world.saved('stsSim.running.A'), false)
 	assert.equal(world.saved('stsSim.running.B'), true)
 	channelB.start.click()
 	assert.equal(world.engines[1].stops, 1)
 	assert.equal(world.saved('stsSim.running.B'), false)
 })
 
-test('single mode disables B and binds A to S', async () => {
-	const world = makeWorld({ mode: 'single', open: ['S', 'B'], storage: new Map([['stsSim.channel', '"B"']]) })
-	const buttons = world.root.querySelector('.sts-sim-channelbar').querySelectorAll('button')
-	assert.equal(buttons[1].disabled, true)
-	buttons[1].click()
-	assert.equal(world.panel('A').root.hidden, false)
+test('single mode shows only the S panel with unsuffixed keys; A/B panels are hidden and inert', async () => {
+	const world = makeWorld({ mode: 'single', open: ['S', 'A', 'B'] })
+	assert.equal(world.panel('S').root.hidden, false)
+	assert.equal(world.panel('A').root.hidden, true)
 	assert.equal(world.panel('B').root.hidden, true)
+	assert.equal(world.root.querySelector('.sts-sim-dualbar').hidden, true, 'no A/B summary or log view in single mode')
+	assert.equal(world.root.querySelector('.sts-sim-channelbar'), null)
+	assert.equal(world.panel('S').toggle, null, 'single panel has no collapse button')
+	assert.equal(world.panel('S').title.textContent, '单路')
+	world.panel('A').start.click()
 	world.panel('B').start.click()
 	assert.equal(world.engines.length, 0)
-	world.panel('A').start.click()
+	assert.equal(world.saved('stsSim.running.A'), null)
+	change(world.panel('S').input('meter', 'remaining'), 77)
+	world.panel('S').role('ciu')
+	world.panel('S').start.click()
 	await flush()
 	assert.deepEqual(world.links.map(link => link.sid), ['S'])
+	assert.equal(world.saved('stsSim.meter2').remaining, '77')
+	assert.equal(world.saved('stsSim.role'), 'ciu')
+	assert.equal(world.saved('stsSim.running'), true)
+	for (const key of ['stsSim.meter2.A', 'stsSim.role.A', 'stsSim.running.A', 'stsSim.running.B', 'stsSim.channel']) assert.equal(world.storage.has(key), false, key)
+})
+
+test('S and A configurations do not leak into each other; legacy unsuffixed keys belong to S', async () => {
+	const storage = new Map([['stsSim.meter2', JSON.stringify({ remaining: '111' })], ['stsSim.role', '"ciu"']])
+	const world = makeWorld({ storage, open: ['A', 'S'] })
+	assert.equal(world.panel('S').input('meter', 'remaining').value, '111')
+	assert.equal(world.panel('A').input('meter', 'remaining').value, '100')
+	assert.equal(world.panel('S').root.querySelector('.ctl-seg').querySelector('button').getAttribute('aria-pressed'), 'false')
+	assert.equal(world.panel('A').root.querySelector('.ctl-seg').querySelector('button').getAttribute('aria-pressed'), 'true')
+	change(world.panel('A').input('meter', 'remaining'), 222)
+	change(world.panel('B').input('meter', 'remaining'), 333)
+	assert.equal(world.saved('stsSim.meter2').remaining, '111')
+	assert.equal(world.saved('stsSim.meter2.A').remaining, '222')
+	assert.equal(world.saved('stsSim.meter2.B').remaining, '333')
+	const refreshed = makeWorld({ storage: new Map(world.storage) })
+	assert.deepEqual(['S', 'A', 'B'].map(sid => refreshed.panel(sid).input('meter', 'remaining').value), ['111', '222', '333'])
+	change(world.panel('S').input('meter', 'pak'), PAK)
+	assert.equal(world.panel('A').input('meter', 'pak').value, '', 'PAK inputs are per session')
 })
 
 for (const roles of [['meter', 'ciu'], ['ciu', 'meter'], ['meter', 'meter']]) {
@@ -330,7 +377,6 @@ for (const roles of [['meter', 'ciu'], ['ciu', 'meter'], ['meter', 'meter']]) {
 		}
 		assert.equal(world.engines.length, 2, 'B does not wait for A startup')
 		assert.deepEqual(world.sent.map(entry => entry.sid), ['A', 'B'])
-		world.root.querySelector('.sts-sim-channelbar').querySelectorAll('button')[1].click()
 		world.engines[1].completeStart()
 		await flush()
 		assert.match(world.panel('B').status.textContent, /运行中/)
@@ -373,9 +419,9 @@ test('refresh persists wanted and configuration; each channel resumes only after
 })
 
 test('manual cancel while waiting clears wanted without touching the other channel', async () => {
-	const world = makeWorld({ storage: new Map([['stsSim.running', 'true'], ['stsSim.running.B', 'true']]) })
+	const world = makeWorld({ storage: new Map([['stsSim.running.A', 'true'], ['stsSim.running.B', 'true']]) })
 	world.panel('A').start.click()
-	assert.equal(world.saved('stsSim.running'), false)
+	assert.equal(world.saved('stsSim.running.A'), false)
 	assert.equal(world.saved('stsSim.running.B'), true)
 	world.sessions.add('A')
 	world.sessions.add('B')
@@ -396,7 +442,7 @@ test('disconnecting A stops only A, keeps wanted and reconnects only A', async (
 	assert.equal(world.links[0].closes, 1)
 	assert.equal(world.engines[1].stops, 0)
 	assert.equal(world.links[1].closed, false)
-	assert.equal(world.saved('stsSim.running'), true)
+	assert.equal(world.saved('stsSim.running.A'), true)
 	assert.match(world.panel('B').status.textContent, /运行中/)
 	world.sessions.add('A')
 	await world.clock.advance(500)
@@ -404,7 +450,7 @@ test('disconnecting A stops only A, keeps wanted and reconnects only A', async (
 	assert.equal(world.engines[1].starts, 1)
 })
 
-test('mode changes close old links and never redirect operations to another sid', async () => {
+test('dual -> single -> dual: each session keeps its own wanted, resumes on return and never redirects to another sid', async () => {
 	const world = makeWorld({ open: ['A', 'B', 'S'] })
 	world.panel('A').role('ciu')
 	world.panel('A').start.click()
@@ -412,20 +458,37 @@ test('mode changes close old links and never redirect operations to another sid'
 	await flush()
 	world.setMode('single')
 	await world.clock.advance(500)
-	assert.deepEqual(world.engines.slice(0, 2).map(engine => engine.stops), [1, 1])
-	assert.ok(world.links.slice(0, 2).every(link => link.closed))
-	assert.deepEqual(world.links.map(link => link.sid), ['A', 'B', 'S'])
+	assert.deepEqual(world.engines.map(engine => engine.stops), [1, 1])
+	assert.ok(world.links.every(link => link.closed))
+	assert.deepEqual(world.links.map(link => link.sid), ['A', 'B'], 'S has no wanted, so nothing opens on it')
+	assert.equal(world.saved('stsSim.running.A'), true)
+	assert.equal(world.saved('stsSim.running.B'), true)
+	assert.equal(world.saved('stsSim.running'), null)
 	world.panel('A').input('ciu', 'status').click()
 	await flush()
+	assert.equal(world.sent.filter(entry => entry.operation === 'status').length, 0, 'stopped A cannot send via S')
+	world.panel('S').role('ciu')
+	world.panel('S').start.click()
+	await flush()
+	assert.deepEqual(world.links.map(link => link.sid), ['A', 'B', 'S'])
+	world.panel('S').input('ciu', 'status').click()
+	await flush()
 	assert.equal(world.sent.at(-1).sid, 'S')
+	await world.clock.advance(2000)
+	assert.deepEqual(world.links.map(link => link.sid), ['A', 'B', 'S'], 'A/B do not restart in single mode')
 	world.setMode('dual')
 	await world.clock.advance(500)
 	assert.equal(world.links[2].closed, true)
+	assert.equal(world.engines[2].stops, 1)
+	assert.equal(world.saved('stsSim.running'), true, 'S keeps its own wanted')
 	assert.deepEqual(world.links.map(link => link.sid), ['A', 'B', 'S', 'A', 'B'])
 	world.panel('A').input('ciu', 'status').click()
 	await flush()
 	assert.equal(world.sent.at(-1).sid, 'A')
 	assert.equal(world.sent.filter(entry => entry.operation === 'status' && entry.sid === 'B').length, 0)
+	world.setMode('single')
+	await world.clock.advance(500)
+	assert.deepEqual(world.links.map(link => link.sid), ['A', 'B', 'S', 'A', 'B', 'S'], 'S resumes after coming back')
 })
 
 test('mode switch during pending startup ignores stale completion', async () => {
@@ -434,25 +497,26 @@ test('mode switch during pending startup ignores stale completion', async () => 
 	world.panel('B').start.click()
 	world.setMode('single')
 	await world.clock.advance(500)
-	assert.equal(world.engines.length, 3)
+	assert.equal(world.engines.length, 2)
 	world.engines[0].completeStart()
 	world.engines[1].completeStart()
 	await flush()
-	assert.match(world.panel('A').status.textContent, /启动中/)
-	assert.doesNotMatch(world.panel('B').status.textContent, /运行中/)
-	assert.ok(world.links.slice(0, 2).every(link => link.closed))
+	for (const sid of ['A', 'B']) assert.doesNotMatch(world.panel(sid).status.textContent, /运行中/)
+	assert.ok(world.links.every(link => link.closed))
+	world.panel('S').start.click()
+	assert.equal(world.engines.length, 3)
 	world.engines[2].completeStart()
 	await flush()
-	assert.match(world.panel('A').status.textContent, /运行中/)
+	assert.match(world.panel('S').status.textContent, /运行中/)
 	assert.equal(world.links[2].sid, 'S')
 })
 
 for (const [channel, role] of [['A', 'meter'], ['B', 'ciu']]) {
 	test(channel + ' ' + role + ' construction failure clears wanted and does not automatically retry', async () => {
-		const suffix = channel === 'A' ? '' : '.B'
+		const suffix = '.' + channel
 		const other = channel === 'A' ? 'B' : 'A'
 		const storage = new Map([
-			['stsSim.running', 'true'], ['stsSim.running.B', 'true'],
+			['stsSim.running.A', 'true'], ['stsSim.running.B', 'true'],
 			['stsSim.role' + suffix, JSON.stringify(role)],
 		])
 		const world = makeWorld({ storage, open: ['A', 'B'], failingSids: [channel] })
@@ -484,7 +548,7 @@ for (const [channel, role] of [['A', 'meter'], ['B', 'ciu']]) {
 
 for (const [channel, role] of [['A', 'meter'], ['B', 'ciu']]) {
 	test(channel + ' ' + role + ' timeouts retain wanted and retry at 5/10/20/30/30 seconds, then succeed', async () => {
-		const suffix = channel === 'A' ? '' : '.B'
+		const suffix = '.' + channel
 		const world = makeWorld({ open: [channel], startFailures: { [channel]: Array(5).fill('timeout') } })
 		const panel = world.panel(channel)
 		panel.role(role)
@@ -520,10 +584,10 @@ test('manual cancel during timeout backoff clears wanted and cancels all automat
 	panel.start.click()
 	await flush()
 	await world.clock.advance(1000)
-	assert.equal(world.saved('stsSim.running'), true)
+	assert.equal(world.saved('stsSim.running.A'), true)
 	assert.match(panel.start.textContent, /取消(?:等待|重试)/)
 	panel.start.click()
-	assert.equal(world.saved('stsSim.running'), false)
+	assert.equal(world.saved('stsSim.running.A'), false)
 	assert.equal(panel.start.getAttribute('aria-pressed'), 'false')
 	const logCount = panel.log.children.length
 	await world.clock.advance(120000)
@@ -536,7 +600,7 @@ test('manual cancel during timeout backoff clears wanted and cancels all automat
 	panel.start.click()
 	await flush()
 	assert.match(panel.status.textContent, /运行中/)
-	assert.equal(world.saved('stsSim.running'), true)
+	assert.equal(world.saved('stsSim.running.A'), true)
 })
 
 test('non-timeout authorization failure clears wanted and never retries', async () => {
@@ -595,7 +659,7 @@ test('PAK is passed to engines but never persisted or restored for either role/c
 	assert.ok(world.engines.every(engine => engine.args.config.pak === PAK))
 	assert.ok(world.writes.every(write => !write.value.includes(PAK) && !write.value.includes('"pak"')))
 	for (const channel of ['A', 'B']) {
-		const suffix = channel === 'A' ? '' : '.B'
+		const suffix = '.' + channel
 		for (const key of ['stsSim.meter2', 'stsSim.ciu']) {
 			const config = world.saved(key + suffix)
 			assert.equal(Object.hasOwn(config, 'pak'), false)
@@ -638,7 +702,7 @@ test('alarm selection persists, renders selected summary, restores, and separate
 	change(alarm('0002'), true)
 	change(alarm('0001'), true)
 	change(alarm('other'), '9999')
-	assert.equal(world.saved('stsSim.meter2').alarmCodes, '0001 0002 9999')
+	assert.equal(world.saved('stsSim.meter2.A').alarmCodes, '0001 0002 9999')
 	assert.deepEqual(summary.querySelectorAll('.sts-sim-alarm-code').map(node => node.textContent), ['0001', '0002', '9999'])
 	assert.match(summary.textContent, /9999自定义/)
 	assert.match(summary.textContent, /<img/)
@@ -653,7 +717,7 @@ test('alarm selection persists, renders selected summary, restores, and separate
 	world.engines[0].emitState({ alarms: ['0001'] })
 	change(channelA.root.querySelector('#sts-sim-live-alarm-other-A'), '8888')
 	assert.deepEqual(world.engines[0].state.alarms, ['0001', '8888'])
-	assert.equal(world.saved('stsSim.meter2').alarmCodes, '0001 0002 9999')
+	assert.equal(world.saved('stsSim.meter2.A').alarmCodes, '0001 0002 9999')
 })
 
 test('manual stop and restart clear old CIU results without clearing the other channel', async () => {
@@ -719,7 +783,7 @@ test('successful setTarget clears old CIU results and persists the accepted targ
 	await flush()
 	assert.equal(result.textContent, '')
 	assert.equal(targetInput.disabled, false)
-	assert.equal(world.saved('stsSim.ciu').targetDrn, target)
+	assert.equal(world.saved('stsSim.ciu.A').targetDrn, target)
 })
 
 for (const completion of ['resolve', 'reject']) {
@@ -743,12 +807,12 @@ for (const completion of ['resolve', 'reject']) {
 		assert.equal(targetInput.disabled, true)
 		const newCall = world.targetCalls[1]
 		assert.notEqual(oldCall.engine, newCall.engine)
-		const savedBefore = world.storage.get('stsSim.ciu')
+		const savedBefore = world.storage.get('stsSim.ciu.A')
 		const logCount = panel.log.children.length
 		if (completion === 'resolve') oldCall.resolve()
 		else oldCall.reject(new Error('合成迟到切换失败'))
 		await flush()
-		assert.equal(world.storage.get('stsSim.ciu'), savedBefore, 'stale switch does not overwrite new configuration')
+		assert.equal(world.storage.get('stsSim.ciu.A'), savedBefore, 'stale switch does not overwrite new configuration')
 		assert.equal(targetInput.value, newTarget)
 		assert.equal(panel.log.children.length, logCount)
 		assert.equal(targetInput.disabled, true)
@@ -757,7 +821,7 @@ for (const completion of ['resolve', 'reject']) {
 		newCall.resolve()
 		await flush()
 		assert.equal(targetInput.disabled, false)
-		assert.equal(world.saved('stsSim.ciu').targetDrn, newTarget)
+		assert.equal(world.saved('stsSim.ciu.A').targetDrn, newTarget)
 	})
 }
 
@@ -777,6 +841,144 @@ test('untrusted logs, meter state, alarm labels and CIU results use textContent'
 	assert.match(world.panel('B').log.textContent, /<img/)
 	assert.equal(world.root.querySelectorAll('img').length, 0)
 })
+
+function mergedBox(world) { return world.root.querySelector('#sts-sim-merged-log').querySelector('.sts-sim-log') }
+function mergedRows(world) {
+	return mergedBox(world).children.map(line => line.querySelector('.sts-sim-log-src').textContent + ':' + line.querySelector('.sts-sim-log-text').textContent)
+}
+function chooseView(world, index) { world.root.querySelector('.sts-sim-viewseg').querySelectorAll('button')[index].click() }
+
+test('merged log mixes A and B newest first with A/B badges, stays safe, keeps reading position and clears both', async () => {
+	const world = makeWorld({ open: ['A', 'B'] })
+	world.panel('A').start.click()
+	world.panel('B').start.click()
+	await flush()
+	const t = world.clock.now()
+	const emit = (index, offset, text, level) => world.engines[index].args.onLog({ at: t + offset, level: level || 'info', text })
+	const mergedCard = world.root.querySelector('#sts-sim-merged-log')
+	assert.equal(mergedCard.hidden, true, 'split view is the default')
+	assert.equal(world.panel('A').root.querySelector('.sts-sim-logcard').hidden, false)
+	emit(0, 1000, 'a1')
+	emit(1, 2000, 'b1')
+	chooseView(world, 1)
+	assert.equal(world.saved('stsSim.logView'), 'merged')
+	assert.equal(mergedCard.hidden, false)
+	assert.equal(world.panel('A').root.querySelector('.sts-sim-logcard').hidden, true)
+	assert.equal(world.panel('B').root.querySelector('.sts-sim-logcard').hidden, true)
+	assert.deepEqual(mergedRows(world).slice(0, 2), ['B:b1', 'A:a1'])
+	assert.equal(mergedBox(world).children[0].querySelector('.sts-sim-log-src').classList.contains('is-b'), true)
+	assert.equal(mergedBox(world).children[1].querySelector('.sts-sim-log-src').classList.contains('is-a'), true)
+	emit(0, 3000, 'a2')
+	emit(1, 1500, 'b-late') // 后到但时间更早: 按时间插到 b1 之后
+	emit(1, 4000, unsafe, 'error')
+	assert.deepEqual(mergedRows(world).slice(0, 5), ['B:' + unsafe, 'A:a2', 'B:b1', 'B:b-late', 'A:a1'])
+	assert.equal(mergedBox(world).children[0].querySelector('.sts-sim-log-text').textContent, unsafe)
+	assert.match(mergedBox(world).children[0].className, /sts-sim-lv-error/)
+	assert.equal(world.root.querySelectorAll('img').length, 0)
+	// 阅读位置: 用户滚离顶部时新条目不把视图顶走
+	const box = mergedBox(world)
+	box.scrollTop = 60
+	emit(0, 5000, 'a3')
+	assert.equal(box.scrollTop, 80)
+	box.scrollTop = 0
+	emit(1, 6000, 'b3')
+	assert.equal(box.scrollTop, 0)
+	// 回到分列再切回合并: 从各路缓冲重建，顺序不变
+	const before = mergedRows(world)
+	chooseView(world, 0)
+	assert.equal(mergedCard.hidden, true)
+	assert.equal(box.children.length, 0)
+	assert.equal(world.panel('A').root.querySelector('.sts-sim-logcard').hidden, false)
+	chooseView(world, 1)
+	assert.deepEqual(mergedRows(world), before)
+	// 各路裁剪旧条目时合并视图同步
+	for (let index = 0; index < 505; index++) emit(0, 10000 + index, 'flood-' + index)
+	assert.equal(world.panel('A').log.children.length, 500)
+	assert.equal(mergedBox(world).children.filter(line => line.querySelector('.sts-sim-log-src').textContent === 'A').length, 500)
+	// 清空两路
+	world.root.querySelector('#sts-sim-merged-clear').click()
+	assert.equal(mergedBox(world).children.length, 0)
+	assert.equal(world.panel('A').log.children.length, 0)
+	assert.equal(world.panel('B').log.children.length, 0)
+	emit(1, 20000, 'after')
+	assert.deepEqual(mergedRows(world), ['B:after'])
+	// 单路模式不显示合并卡
+	world.setMode('single')
+	await world.clock.advance(500)
+	assert.equal(mergedCard.hidden, true)
+	assert.equal(world.panel('S').root.querySelector('.sts-sim-logcard').hidden, false)
+	const refreshed = makeWorld({ storage: new Map(world.storage) })
+	assert.equal(refreshed.root.querySelector('#sts-sim-merged-log').hidden, false, 'log view choice survives refresh')
+})
+
+test('per-session collapse state persists; summary strip expands and scrolls to a panel', async () => {
+	const world = makeWorld({ open: ['A', 'B'] })
+	const a = world.panel('A')
+	assert.equal(a.toggle.getAttribute('aria-expanded'), 'true')
+	assert.equal(a.body.hidden, false)
+	assert.equal(a.toggle.classList.contains('ctl-toggle'), false, 'expand/collapse is not a ctl-* control')
+	a.toggle.click()
+	assert.equal(a.toggle.getAttribute('aria-expanded'), 'false')
+	assert.equal(a.body.hidden, true)
+	assert.equal(world.saved('stsSim.collapsed.A'), true)
+	assert.equal(world.saved('stsSim.collapsed.B'), null)
+	assert.equal(world.saved('stsSim.collapsed'), null)
+	assert.equal(a.start.hidden, false, 'header controls stay visible when collapsed')
+	const refreshed = makeWorld({ storage: new Map(world.storage) })
+	assert.equal(refreshed.panel('A').body.hidden, true)
+	assert.equal(refreshed.panel('A').toggle.getAttribute('aria-expanded'), 'false')
+	assert.equal(refreshed.panel('B').body.hidden, false)
+	const items = refreshed.root.querySelector('.sts-sim-summary').querySelectorAll('button')
+	assert.equal(items.length, 2)
+	assert.equal(items[0].textContent, 'A · 表端 · 已停止')
+	items[0].click()
+	assert.equal(refreshed.panel('A').body.hidden, false)
+	assert.equal(refreshed.saved('stsSim.collapsed.A'), false)
+	assert.equal(refreshed.panel('A').root.scrollIntoViewCalls.length, 1)
+	assert.equal(refreshed.panel('B').root.scrollIntoViewCalls.length, 0)
+})
+
+test('display names follow serial labels and the summary reflects role and state', async () => {
+	const world = makeWorld({ open: ['A', 'B'], labels: { A: 'COM3' } })
+	assert.equal(world.panel('A').title.textContent, 'A · COM3')
+	assert.equal(world.panel('B').title.textContent, 'B')
+	world.panel('B').role('ciu')
+	world.panel('A').start.click()
+	await flush()
+	await world.clock.advance(500)
+	const items = world.root.querySelector('.sts-sim-summary').querySelectorAll('button')
+	assert.equal(items[0].textContent, 'A · COM3 · 表端 · 运行中')
+	assert.equal(items[1].textContent, 'B · CIU · 已停止')
+	world.labels.B = '/dev/cu.usbserial-1'
+	world.labels.A = ''
+	await world.clock.advance(500)
+	assert.equal(world.panel('A').title.textContent, 'A')
+	assert.equal(world.panel('B').title.textContent, 'B · /dev/cu.usbserial-1')
+	assert.match(world.panel('B').root.querySelector('.sts-sim-logcard').textContent, /B · \/dev\/cu\.usbserial-1 日志/)
+	assert.equal(world.panel('S').title.textContent, '单路')
+	assert.doesNotMatch(world.panel('A').root.textContent, /通道/)
+})
+
+for (const [mode, sid] of [['single', 'S'], ['dual', 'A']]) {
+	test(sid + ' configuration section collapses after start and is not reopened after stop', async () => {
+		const world = makeWorld({ mode, open: [sid] })
+		const panel = world.panel(sid)
+		assert.equal(panel.cfg.open, true)
+		panel.start.click()
+		assert.equal(panel.cfg.open, true, 'still open while starting')
+		await flush()
+		assert.match(panel.status.textContent, /运行中/)
+		assert.equal(panel.cfg.open, false)
+		panel.cfg.open = true // 用户手动展开随意
+		panel.start.click()
+		assert.equal(panel.cfg.open, true)
+		panel.cfg.open = false
+		panel.start.click()
+		await flush()
+		panel.start.click()
+		assert.equal(panel.cfg.open, false, 'stopping does not reopen it')
+	})
+}
 
 ;(async function () {
 	let failures = 0

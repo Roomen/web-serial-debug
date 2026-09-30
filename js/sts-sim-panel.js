@@ -3,11 +3,14 @@
 // PAK 输入框不持久化；其余配置存 localStorage（stsSim.* 前缀，读写包 try/catch）
 ;(function () {
 	'use strict'
-	function createPanel(channel) {
+	// sid: 物理会话。'S' 单路模式，'A' / 'B' 双路模式；三套面板各自独立配置、启停与日志，sid 固定不随模式映射
+	function createPanel(channel, hooks) {
 		const W = window
 		const SIM = W.stsSim
 		const S = W.stsCiu
-		const suffix = channel === 'A' ? '' : '.B'
+		const MODE = channel === 'S' ? 'single' : 'dual'
+		const suffix = channel === 'S' ? '' : '.' + channel // S 沿用已上线的无后缀键，不迁移
+		const KEY_COLLAPSED = 'stsSim.collapsed' + suffix
 		const KEY_ROLE = 'stsSim.role' + suffix
 		const KEY_METER = 'stsSim.meter2' + suffix
 		const KEY_CIU = 'stsSim.ciu' + suffix
@@ -67,6 +70,9 @@
 		const ui = {
 			wanted: lsGet(KEY_RUNNING) === true,
 			sid: null,
+			name: channel === 'S' ? '单路' : channel, // 短名，用于提示文案
+			title: channel === 'S' ? '单路' : channel, // 头部显示名，A/B 有串口标签时附上
+			collapsed: channel !== 'S' && lsGet(KEY_COLLAPSED) === true,
 			retryAt: 0,
 			retryCount: 0,
 			role: 'meter',
@@ -208,12 +214,27 @@
 		}
 
 		function build() {
-			const root = el('div', 'tab-pane d-flex flex-column wb-pane-scroll sts-sim')
+			const root = el('div', 'sts-sim-chan')
 			root.id = 'wb-pane-sts-sim'
-			root.setAttribute('role', 'tabpanel')
+			root.setAttribute('role', 'region')
 
-			// 顶部: 角色分段 + 启停
-			const top = el('div', 'sts-sim-top')
+			// 头部: 显示名(A/B 可折叠) + 角色分段 + 启停 + 状态，一行放下，窄时换行
+			const head = el('div', 'sts-sim-head')
+			let toggle = null
+			let nameEl
+			if (channel === 'S') {
+				nameEl = el('span', 'sts-sim-title', ui.title)
+				head.appendChild(nameEl)
+			} else {
+				toggle = el('button', 'sts-sim-collapse')
+				toggle.type = 'button'
+				const chevron = el('i', 'bi bi-chevron-down')
+				chevron.setAttribute('aria-hidden', 'true')
+				nameEl = el('span', 'sts-sim-title', ui.title)
+				toggle.append(chevron, nameEl)
+				toggle.chevron = chevron
+				head.appendChild(toggle)
+			}
 			const seg = el('div', 'ctl-seg')
 			seg.setAttribute('role', 'group')
 			seg.setAttribute('aria-label', '模拟角色')
@@ -229,10 +250,12 @@
 			const startText = el('span', null, '启动')
 			startBtn.append(startIcon, startText)
 			const status = el('span', 'sts-sim-status small')
-			top.append(seg, startBtn, status)
-			root.appendChild(top)
-			const hint = el('div', 'sts-sim-hint small', '通道 ' + channel + ' · 独立串口收发 · 115200 8N1')
-			root.appendChild(hint)
+			head.append(seg, startBtn, status)
+			root.appendChild(head)
+			const body = el('div', 'sts-sim-body')
+			root.appendChild(body)
+			const hint = el('div', 'sts-sim-hint small', ui.name + ' · 独立串口收发 · 115200 8N1')
+			body.appendChild(hint)
 
 			// 配置
 			const cfg = el('details', 'sts-sim-card')
@@ -248,7 +271,7 @@
 			alarmCfgBox.style.width = '100%'
 			meterForm.appendChild(alarmCfgBox)
 			cfg.append(meterForm, ciuForm)
-			root.appendChild(cfg)
+			body.appendChild(cfg)
 
 			// 表端运行视图
 			const meterView = el('div', 'sts-sim-card sts-sim-meter-view')
@@ -355,28 +378,30 @@
 			const resultCard = el('div', 'sts-sim-result')
 			ciuView.append(tokRow, opRow, readRow, phase, resultCard)
 
-			root.append(meterView, ciuView)
+			body.append(meterView, ciuView)
 
 			// 日志
 			const logCard = el('div', 'sts-sim-card sts-sim-logcard')
 			const logHead = el('div', 'sts-sim-row')
-			logHead.appendChild(el('span', 'sts-sim-card-title', '通道 ' + channel + ' 日志 · 最新在前'))
+			const logTitle = el('span', 'sts-sim-card-title', ui.title + ' 日志 · 最新在前')
+			logHead.appendChild(logTitle)
 			const clearBtn = buildToggleRow('清空', 'sts-sim-log-clear')
 			clearBtn.classList.add('ms-auto')
 			logHead.appendChild(clearBtn)
 			const logBox = el('div', 'sts-sim-log')
 			logBox.setAttribute('role', 'log')
 			logCard.append(logHead, logBox)
-			root.appendChild(logCard)
+			body.appendChild(logCard)
 
 			Object.assign(ui.refs, {
-				root, bMeter, bCiu, startBtn, startText, startIcon, status, cfg, meterForm, ciuForm, meterView, ciuView, kv, recTable,
+				root, head, body, toggle, nameEl, hint, logCard, logTitle, bMeter, bCiu, startBtn, startText, startIcon, status, cfg, meterForm, ciuForm, meterView, ciuView, kv, recTable,
 				tokenInput, tokenBtn, statusBtn, recBtn, valveOpenBtn, valveCloseBtn, unbindBtn, readStart, readCount, readBtn, abortBtn,
 				phase, resultCard, logBox, clearBtn,
 			})
 			root.querySelectorAll('[id]').forEach(function (node) { node.id += '-' + channel })
 			root.querySelectorAll('label[for]').forEach(function (node) { node.htmlFor += '-' + channel })
 			root.id += '-' + channel
+			root.setAttribute('aria-label', '模拟' + ui.name)
 			return root
 		}
 
@@ -438,18 +463,48 @@
 			if (!box) return
 			const nearTop = box.scrollTop < 24
 			const oldTop = box.scrollTop
+			const at = entry.at || Date.now()
 			const line = el('div', 'sts-sim-log-line sts-sim-lv-' + (entry.level || 'info'))
-			line.appendChild(el('span', 'sts-sim-log-time', fmtTime(entry.at || Date.now())))
+			line.appendChild(el('span', 'sts-sim-log-time', fmtTime(at)))
 			line.appendChild(el('span', 'sts-sim-log-text', String(entry.text)))
+			line.stsEntry = { at: at, level: entry.level || 'info', text: String(entry.text) } // 合并日志从各路自己的缓冲取数，不另存一份
 			box.prepend(line)
 			ui.logCount++
+			if (hooks && hooks.onAdd) hooks.onAdd(channel, line)
 			while (ui.logCount > MAX_LOG && box.lastChild) {
-				box.removeChild(box.lastChild)
+				const old = box.lastChild
+				box.removeChild(old)
 				ui.logCount--
+				if (hooks && hooks.onTrim) hooks.onTrim(old)
 			}
 			box.scrollTop = nearTop ? 0 : oldTop + line.offsetHeight
 		}
 		function plog(level, text) { appendLog({ at: Date.now(), level: level, text: text }) }
+		function clearLog() {
+			ui.refs.logBox.textContent = ''
+			ui.logCount = 0
+			if (hooks && hooks.onClear) hooks.onClear(channel)
+		}
+		function logLines() { return Array.prototype.slice.call(ui.refs.logBox.children) }
+		function applyCollapsed() {
+			const r = ui.refs
+			r.body.hidden = ui.collapsed
+			if (!r.toggle) return
+			r.toggle.setAttribute('aria-expanded', String(!ui.collapsed))
+			r.toggle.chevron.className = 'bi ' + (ui.collapsed ? 'bi-chevron-right' : 'bi-chevron-down')
+		}
+		function setCollapsed(v) {
+			if (channel === 'S') return
+			ui.collapsed = !!v
+			lsSet(KEY_COLLAPSED, ui.collapsed)
+			applyCollapsed()
+		}
+		function waitText() { return '等待' + ui.name + '串口重连' }
+		// 面板是否处在自己的模式且串口已打开；不在本模式时按串口不可用处理，不会去借用别的会话
+		function available() {
+			const api = W.serialApi
+			return !!api && api.getMode() === MODE && api.isSessionOpen(channel)
+		}
 
 		// ===== 渲染 =====
 		function setStatus(text, cls) {
@@ -628,10 +683,9 @@
 		function tick() {
 			if (!ui.running) return
 			// 串口断开: 引擎自动停止
-			const api = W.serialApi
-			if (api && !api.isSessionOpen(ui.sid)) {
+			if (!available()) {
 				plog('error', '串口已断开，模拟器自动停止')
-				stopSim('等待本通道串口重连', true)
+				stopSim(waitText(), true)
 				return
 			}
 			renderPhase()
@@ -663,9 +717,8 @@
 		}
 		async function startSim() {
 			if (ui.running || ui.starting) return
-			const api = W.serialApi
-			const sid = api && api.getMode() === 'single' ? (channel === 'A' ? 'S' : null) : channel
-			if (!api || !sid || !api.isSessionOpen(sid)) {
+			const sid = channel
+			if (!available()) {
 				setStatus('请先连接串口', 'is-bad')
 				plog('warn', '串口未连接：请先在顶栏打开串口（115200 8N1）再启动模拟')
 				return
@@ -706,7 +759,7 @@
 			try {
 				await engine.start()
 				if (ui.engine !== engine) return // 启动期间被手动停止
-				if (!api.isSessionOpen(sid)) { stopSim('等待本通道串口重连', true); return }
+				if (!available()) { stopSim(waitText(), true); return }
 				ui.running = true
 				ui.starting = false
 				ui.retryAt = 0
@@ -730,7 +783,7 @@
 					ui.retryCount++
 					ui.retryAt = Date.now() + Math.min(30000, 5000 * Math.pow(2, Math.min(ui.retryCount - 1, 3)))
 				}
-				stopSim('启动失败: ' + msg, timedOut || !api.isSessionOpen(sid))
+				stopSim('启动失败: ' + msg, timedOut || !available())
 				ui.refs.status.classList.add('is-bad')
 			}
 		}
@@ -819,7 +872,8 @@
 			r.startBtn.addEventListener('click', function () {
 				if (ui.running || ui.starting || ui.wanted) { plog('info', '手动停止'); stopSim('已停止') } else startSim()
 			})
-			r.clearBtn.addEventListener('click', function () { r.logBox.textContent = ''; ui.logCount = 0 })
+			r.clearBtn.addEventListener('click', clearLog)
+			if (r.toggle) r.toggle.addEventListener('click', function () { setCollapsed(!ui.collapsed) })
 			Object.keys(ui.inputs.meter).forEach(function (k) {
 				ui.inputs.meter[k].addEventListener('change', function () { saveGroup('meter', METER_FIELDS, KEY_METER); applyRole() })
 			})
@@ -880,85 +934,211 @@
 			ui.role = savedRole === 'ciu' ? 'ciu' : 'meter'
 			bind()
 			applyRole()
+			applyCollapsed()
 			applyRunning()
-			setStatus(ui.wanted ? '等待本通道串口重连' : '未启动')
+			setStatus(ui.wanted ? waitText() : '未启动')
 			return root
 		}
 		const root = init()
 		return {
 			root: root,
+			channel: channel,
+			logLines: logLines,
+			clearLog: clearLog,
+			setCollapsed: setCollapsed,
+			setLogHidden: function (b) { ui.refs.logCard.hidden = !!b },
+			setLabel: function (label) {
+				const title = channel === 'S' ? '单路' : (label && label !== channel ? channel + ' · ' + label : channel)
+				if (title === ui.title) return
+				ui.title = title
+				ui.refs.nameEl.textContent = title
+				ui.refs.logTitle.textContent = title + ' 日志 · 最新在前'
+			},
 			poll: function () {
 				const api = W.serialApi
-				const sid = api && api.getMode() === 'single' ? (channel === 'A' ? 'S' : null) : channel
-				if ((ui.running || ui.starting) && (!api || ui.sid !== sid || !api.isSessionOpen(ui.sid))) stopSim('等待本通道串口重连', true)
-				if (ui.wanted && !ui.running && !ui.starting && Date.now() >= ui.retryAt && api && sid && api.isSessionOpen(sid)) startSim()
+				const usable = available()
+				if ((ui.running || ui.starting) && (!api || ui.sid !== channel || !usable)) stopSim(waitText(), true)
+				if (ui.wanted && !ui.running && !ui.starting && Date.now() >= ui.retryAt && usable) startSim()
 				if (ui.wanted && !ui.running && !ui.starting) {
-					const retrying = ui.retryAt > Date.now() && api && sid && api.isSessionOpen(sid)
+					const retrying = ui.retryAt > Date.now() && usable
 					ui.refs.startText.textContent = retrying ? '取消重试' : '取消等待'
 					ui.refs.startIcon.className = 'bi bi-hourglass-split'
 					ui.refs.startBtn.setAttribute('aria-pressed', 'true')
 					if (retrying) setStatus('模组暂未应答，' + Math.ceil((ui.retryAt - Date.now()) / 1000) + ' 秒后自动重试', 'is-bad')
 				}
-				return channel + ' · ' + (ui.role === 'meter' ? '表端' : 'CIU') + ' · ' + (ui.running ? '运行中' : ui.starting ? '启动中' : ui.wanted ? (ui.retryAt > Date.now() ? '待重试' : '待重连') : '已停止')
+				return ui.title + ' · ' + (ui.role === 'meter' ? '表端' : 'CIU') + ' · ' + (ui.running ? '运行中' : ui.starting ? '启动中' : ui.wanted ? (ui.retryAt > Date.now() ? '待重试' : '待重连') : '已停止')
 			},
 		}
 	}
 
 	const W = window
 	if (!W.stsSim || !W.hostProtoSerialLink || typeof document === 'undefined') return
-	const root = document.createElement('div')
-	root.className = 'tab-pane d-flex flex-column wb-pane-scroll sts-sim'
+	function lsRead(key) {
+		try { return JSON.parse(localStorage.getItem(key) || 'null') } catch (e) { return null }
+	}
+	function lsWrite(key, v) {
+		try { localStorage.setItem(key, JSON.stringify(v)) } catch (e) { /* 存储不可用时静默 */ }
+	}
+	function mk(tag, cls, text) {
+		const e = document.createElement(tag)
+		if (cls) e.className = cls
+		if (text != null) e.textContent = text
+		return e
+	}
+	function fmtT(ms) {
+		const d = new Date(ms)
+		const p2 = function (n, w) { return String(n).padStart(w || 2, '0') }
+		return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()) + '.' + p2(d.getMilliseconds(), 3)
+	}
+
+	const root = mk('div', 'tab-pane d-flex flex-column wb-pane-scroll sts-sim')
 	root.id = 'wb-pane-sts-sim'
 	root.setAttribute('role', 'tabpanel')
-	const bar = document.createElement('div')
-	bar.className = 'sts-sim-channelbar'
-	const seg = document.createElement('div')
-	seg.className = 'ctl-seg'
-	seg.setAttribute('role', 'group')
-	seg.setAttribute('aria-label', '模拟通道')
-	const panels = { A: createPanel('A'), B: createPanel('B') }
-	const buttons = {}
-	let selected = 'A'
-	try { if (JSON.parse(localStorage.getItem('stsSim.channel')) === 'B') selected = 'B' } catch (e) {}
-	Object.keys(panels).forEach(function (channel) {
-		const button = document.createElement('button')
-		button.type = 'button'
-		button.addEventListener('click', function () {
-			selected = channel
-			try { localStorage.setItem('stsSim.channel', JSON.stringify(channel)) } catch (e) {}
-			refreshChannels()
-		})
-		buttons[channel] = button
-		seg.appendChild(button)
-		panels[channel].root.classList.remove('tab-pane', 'wb-pane-scroll')
-		panels[channel].root.setAttribute('role', 'region')
-		panels[channel].root.setAttribute('aria-label', '模拟通道 ' + channel)
-	})
-	bar.appendChild(seg)
-	const help = document.createElement('details')
-	help.className = 'sts-sim-card'
-	const helpTitle = document.createElement('summary')
-	helpTitle.textContent = '接线与刷新说明'
-	const hint = document.createElement('div')
-	hint.className = 'sts-sim-hint small'
-	hint.textContent = '双路模式：A / B 独立设置角色、启停与日志，支持 CIU + 表端或两路表端。需分别连接两个 hostProto 模组；单路使用 A。运行时保持本页在前台，不要让其他工具占用同一串口。'
-	const restoreHint = document.createElement('div')
-	restoreHint.className = 'sts-sim-hint small'
-	restoreHint.textContent = '刷新后等待对应串口重连，再自动重新启动。使用配置初值，不恢复运行值、充值记录、阀门保持期或在飞事务。PAK 不保存；需要认证时重新输入并手动启动。'
-	help.append(helpTitle, hint, restoreHint)
-	root.append(bar, help, panels.A.root, panels.B.root)
-	function refreshChannels() {
-		const dual = W.serialApi && W.serialApi.getMode() === 'dual'
-		if (!dual) selected = 'A'
-		Object.keys(panels).forEach(function (channel) {
-			buttons[channel].textContent = panels[channel].poll()
-			buttons[channel].disabled = channel === 'B' && !dual
-			buttons[channel].setAttribute('aria-pressed', String(selected === channel))
-			panels[channel].root.hidden = channel !== selected
-		})
+
+	const help = mk('details', 'sts-sim-card')
+	help.appendChild(mk('summary', null, '接线与刷新说明'))
+	help.appendChild(mk('div', 'sts-sim-hint small', '单路与双路是不同的串口，各自独立保存配置。双路模式下 A / B 并排（窄栏时上下堆叠）显示，独立设置角色、启停与日志，支持 CIU + 表端或两路表端，需分别连接两个 hostProto 模组。运行时保持本页在前台，不要让其他工具占用同一串口。'))
+	help.appendChild(mk('div', 'sts-sim-hint small', '刷新后等待对应串口重连，再自动重新启动。使用配置初值，不恢复运行值、充值记录、阀门保持期或在飞事务。PAK 不保存；需要认证时重新输入并手动启动。'))
+
+	// ===== 合并日志: 数据取自 A / B 各自的日志缓冲(每路 ≤500)，这里只维护按时间混排的视图 =====
+	const merged = { active: false, box: null, mirror: new Map() }
+	function mergedLine(sid, srcLine) {
+		const e = srcLine.stsEntry
+		const line = mk('div', 'sts-sim-log-line sts-sim-log-line--merged sts-sim-lv-' + e.level)
+		line.appendChild(mk('span', 'sts-sim-log-src is-' + sid.toLowerCase(), sid))
+		line.appendChild(mk('span', 'sts-sim-log-time', fmtT(e.at)))
+		line.appendChild(mk('span', 'sts-sim-log-text', e.text))
+		line.stsAt = e.at
+		line.stsSid = sid
+		merged.mirror.set(srcLine, line)
+		return line
 	}
-	refreshChannels()
-	setInterval(refreshChannels, 500)
+	function mergedRebuild() {
+		const all = []
+		Object.keys(panels).forEach(function (sid) {
+			if (sid === 'S') return
+			panels[sid].logLines().forEach(function (l) { all.push({ sid: sid, line: l }) })
+		})
+		all.sort(function (a, b) { return b.line.stsEntry.at - a.line.stsEntry.at }) // 稳定排序: 同一时刻保持各路原有先后
+		merged.mirror.clear()
+		merged.box.textContent = ''
+		all.forEach(function (x) { merged.box.appendChild(mergedLine(x.sid, x.line)) })
+	}
+	function mergedAdd(sid, srcLine) {
+		if (!merged.active || sid === 'S') return
+		const box = merged.box
+		const line = mergedLine(sid, srcLine)
+		const nearTop = box.scrollTop < 24
+		const oldTop = box.scrollTop
+		let ref = null
+		for (let i = 0; i < box.children.length; i++) {
+			if (box.children[i].stsAt <= line.stsAt) { ref = box.children[i]; break }
+		}
+		if (ref) box.insertBefore(line, ref)
+		else box.appendChild(line)
+		box.scrollTop = nearTop ? 0 : oldTop + line.offsetHeight
+	}
+	function mergedTrim(srcLine) {
+		const m = merged.mirror.get(srcLine)
+		if (!m) return
+		merged.mirror.delete(srcLine)
+		if (m.parentNode) m.parentNode.removeChild(m)
+	}
+	function mergedClear(sid) {
+		if (!merged.active) return
+		Array.prototype.slice.call(merged.box.children).forEach(function (m) {
+			if (m.stsSid === sid) merged.box.removeChild(m)
+		})
+		merged.mirror.forEach(function (m, k) { if (m.stsSid === sid) merged.mirror.delete(k) })
+	}
+
+	const panels = {}
+	const hooks = { onAdd: mergedAdd, onTrim: mergedTrim, onClear: mergedClear }
+	;['S', 'A', 'B'].forEach(function (sid) { panels[sid] = createPanel(sid, hooks) })
+
+	// ===== 双路顶栏: 摘要条(窄栏堆叠时显示) + 日志分列 / 合并 =====
+	const dualbar = mk('div', 'sts-sim-dualbar')
+	const summary = mk('div', 'sts-sim-summary')
+	summary.setAttribute('role', 'group')
+	summary.setAttribute('aria-label', '双路状态摘要')
+	const summaryItems = {}
+	;['A', 'B'].forEach(function (sid) {
+		const b = mk('button', 'sts-sim-summary-item')
+		b.type = 'button'
+		b.addEventListener('click', function () {
+			panels[sid].setCollapsed(false)
+			const node = panels[sid].root
+			if (node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'nearest' })
+		})
+		summaryItems[sid] = b
+		summary.appendChild(b)
+	})
+	const viewSeg = mk('div', 'ctl-seg sts-sim-viewseg')
+	viewSeg.setAttribute('role', 'group')
+	viewSeg.setAttribute('aria-label', '双路日志显示')
+	let logView = lsRead('stsSim.logView') === 'merged' ? 'merged' : 'split'
+	const viewBtns = {}
+	;[['split', '分列'], ['merged', '合并']].forEach(function (x) {
+		const b = mk('button', null, x[1])
+		b.type = 'button'
+		b.addEventListener('click', function () {
+			logView = x[0]
+			lsWrite('stsSim.logView', logView)
+			refresh()
+		})
+		viewBtns[x[0]] = b
+		viewSeg.appendChild(b)
+	})
+	dualbar.append(summary, viewSeg)
+
+	const grid = mk('div', 'sts-sim-grid')
+	;['S', 'A', 'B'].forEach(function (sid) { grid.appendChild(panels[sid].root) })
+
+	// 合并日志卡: 跨两列，最新在前，A / B 徽标
+	const mergedCard = mk('div', 'sts-sim-card sts-sim-logcard sts-sim-mergedcard')
+	mergedCard.id = 'sts-sim-merged-log'
+	const mergedHead = mk('div', 'sts-sim-row')
+	mergedHead.appendChild(mk('span', 'sts-sim-card-title', 'A + B 合并日志 · 最新在前'))
+	const mergedClearBtn = mk('button', 'btn btn-sm btn-outline-secondary ms-auto', '清空')
+	mergedClearBtn.type = 'button'
+	mergedClearBtn.id = 'sts-sim-merged-clear'
+	mergedClearBtn.addEventListener('click', function () { panels.A.clearLog(); panels.B.clearLog() })
+	mergedHead.appendChild(mergedClearBtn)
+	merged.box = mk('div', 'sts-sim-log')
+	merged.box.setAttribute('role', 'log')
+	mergedCard.append(mergedHead, merged.box)
+	grid.appendChild(mergedCard)
+
+	root.append(help, dualbar, grid)
+
+	function readLabel(fn) {
+		try { const hub = W.SerialHub; return hub && typeof hub[fn] === 'function' ? String(hub[fn]() || '') : '' } catch (e) { return '' }
+	}
+	function refresh() {
+		const dual = !!(W.serialApi && W.serialApi.getMode() === 'dual')
+		panels.A.setLabel(readLabel('getLabelA'))
+		panels.B.setLabel(readLabel('getLabelB'))
+		Object.keys(panels).forEach(function (sid) {
+			const text = panels[sid].poll()
+			if (summaryItems[sid] && summaryItems[sid].textContent !== text) summaryItems[sid].textContent = text
+			panels[sid].root.hidden = sid === 'S' ? dual : !dual
+		})
+		dualbar.hidden = !dual
+		grid.classList.remove('is-dual', 'is-single')
+		grid.classList.add(dual ? 'is-dual' : 'is-single')
+		Object.keys(viewBtns).forEach(function (k) { viewBtns[k].setAttribute('aria-pressed', String(logView === k)) })
+		const on = dual && logView === 'merged'
+		if (on !== merged.active) {
+			merged.active = on
+			if (on) mergedRebuild()
+			else { merged.box.textContent = ''; merged.mirror.clear() }
+		}
+		panels.A.setLogHidden(on)
+		panels.B.setLogHidden(on)
+		mergedCard.hidden = !on
+	}
+	refresh()
+	setInterval(refresh, 500)
 
 	// Workbench 可能尚未就绪（脚本在 workbench.js 之前加载）: 等 DOMContentLoaded 之后再注册，仍未就绪就轮询
 	function register(root) {
