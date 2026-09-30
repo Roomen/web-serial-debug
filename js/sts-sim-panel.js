@@ -4,7 +4,7 @@
 ;(function () {
 	'use strict'
 	// sid: 物理会话。'S' 单路模式，'A' / 'B' 双路模式；三套面板各自独立配置、启停与日志，sid 固定不随模式映射
-	function createPanel(channel, hooks) {
+	function createPanel(channel) {
 		const W = window
 		const SIM = W.stsSim
 		const S = W.stsCiu
@@ -467,15 +467,11 @@
 			const line = el('div', 'sts-sim-log-line sts-sim-lv-' + (entry.level || 'info'))
 			line.appendChild(el('span', 'sts-sim-log-time', fmtTime(at)))
 			line.appendChild(el('span', 'sts-sim-log-text', String(entry.text)))
-			line.stsEntry = { at: at, level: entry.level || 'info', text: String(entry.text) } // 合并日志从各路自己的缓冲取数，不另存一份
 			box.prepend(line)
 			ui.logCount++
-			if (hooks && hooks.onAdd) hooks.onAdd(channel, line)
 			while (ui.logCount > MAX_LOG && box.lastChild) {
-				const old = box.lastChild
-				box.removeChild(old)
+				box.removeChild(box.lastChild)
 				ui.logCount--
-				if (hooks && hooks.onTrim) hooks.onTrim(old)
 			}
 			box.scrollTop = nearTop ? 0 : oldTop + line.offsetHeight
 		}
@@ -483,9 +479,7 @@
 		function clearLog() {
 			ui.refs.logBox.textContent = ''
 			ui.logCount = 0
-			if (hooks && hooks.onClear) hooks.onClear(channel)
 		}
-		function logLines() { return Array.prototype.slice.call(ui.refs.logBox.children) }
 		function applyCollapsed() {
 			const r = ui.refs
 			r.body.hidden = ui.collapsed
@@ -943,10 +937,7 @@
 		return {
 			root: root,
 			channel: channel,
-			logLines: logLines,
-			clearLog: clearLog,
 			setCollapsed: setCollapsed,
-			setLogHidden: function (b) { ui.refs.logCard.hidden = !!b },
 			setLabel: function (label) {
 				const title = channel === 'S' ? '单路' : (label && label !== channel ? channel + ' · ' + label : channel)
 				if (title === ui.title) return
@@ -973,22 +964,11 @@
 
 	const W = window
 	if (!W.stsSim || !W.hostProtoSerialLink || typeof document === 'undefined') return
-	function lsRead(key) {
-		try { return JSON.parse(localStorage.getItem(key) || 'null') } catch (e) { return null }
-	}
-	function lsWrite(key, v) {
-		try { localStorage.setItem(key, JSON.stringify(v)) } catch (e) { /* 存储不可用时静默 */ }
-	}
 	function mk(tag, cls, text) {
 		const e = document.createElement(tag)
 		if (cls) e.className = cls
 		if (text != null) e.textContent = text
 		return e
-	}
-	function fmtT(ms) {
-		const d = new Date(ms)
-		const p2 = function (n, w) { return String(n).padStart(w || 2, '0') }
-		return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()) + '.' + p2(d.getMilliseconds(), 3)
 	}
 
 	const root = mk('div', 'tab-pane d-flex flex-column wb-pane-scroll sts-sim')
@@ -1000,63 +980,10 @@
 	help.appendChild(mk('div', 'sts-sim-hint small', '单路与双路是不同的串口，各自独立保存配置。双路模式下 A / B 并排（窄栏时上下堆叠）显示，独立设置角色、启停与日志，支持 CIU + 表端或两路表端，需分别连接两个 hostProto 模组。运行时保持本页在前台，不要让其他工具占用同一串口。'))
 	help.appendChild(mk('div', 'sts-sim-hint small', '刷新后等待对应串口重连，再自动重新启动。使用配置初值，不恢复运行值、充值记录、阀门保持期或在飞事务。PAK 不保存；需要认证时重新输入并手动启动。'))
 
-	// ===== 合并日志: 数据取自 A / B 各自的日志缓冲(每路 ≤500)，这里只维护按时间混排的视图 =====
-	const merged = { active: false, box: null, mirror: new Map() }
-	function mergedLine(sid, srcLine) {
-		const e = srcLine.stsEntry
-		const line = mk('div', 'sts-sim-log-line sts-sim-log-line--merged sts-sim-lv-' + e.level)
-		line.appendChild(mk('span', 'sts-sim-log-src is-' + sid.toLowerCase(), sid))
-		line.appendChild(mk('span', 'sts-sim-log-time', fmtT(e.at)))
-		line.appendChild(mk('span', 'sts-sim-log-text', e.text))
-		line.stsAt = e.at
-		line.stsSid = sid
-		merged.mirror.set(srcLine, line)
-		return line
-	}
-	function mergedRebuild() {
-		const all = []
-		Object.keys(panels).forEach(function (sid) {
-			if (sid === 'S') return
-			panels[sid].logLines().forEach(function (l) { all.push({ sid: sid, line: l }) })
-		})
-		all.sort(function (a, b) { return b.line.stsEntry.at - a.line.stsEntry.at }) // 稳定排序: 同一时刻保持各路原有先后
-		merged.mirror.clear()
-		merged.box.textContent = ''
-		all.forEach(function (x) { merged.box.appendChild(mergedLine(x.sid, x.line)) })
-	}
-	function mergedAdd(sid, srcLine) {
-		if (!merged.active || sid === 'S') return
-		const box = merged.box
-		const line = mergedLine(sid, srcLine)
-		const nearTop = box.scrollTop < 24
-		const oldTop = box.scrollTop
-		let ref = null
-		for (let i = 0; i < box.children.length; i++) {
-			if (box.children[i].stsAt <= line.stsAt) { ref = box.children[i]; break }
-		}
-		if (ref) box.insertBefore(line, ref)
-		else box.appendChild(line)
-		box.scrollTop = nearTop ? 0 : oldTop + line.offsetHeight
-	}
-	function mergedTrim(srcLine) {
-		const m = merged.mirror.get(srcLine)
-		if (!m) return
-		merged.mirror.delete(srcLine)
-		if (m.parentNode) m.parentNode.removeChild(m)
-	}
-	function mergedClear(sid) {
-		if (!merged.active) return
-		Array.prototype.slice.call(merged.box.children).forEach(function (m) {
-			if (m.stsSid === sid) merged.box.removeChild(m)
-		})
-		merged.mirror.forEach(function (m, k) { if (m.stsSid === sid) merged.mirror.delete(k) })
-	}
-
 	const panels = {}
-	const hooks = { onAdd: mergedAdd, onTrim: mergedTrim, onClear: mergedClear }
-	;['S', 'A', 'B'].forEach(function (sid) { panels[sid] = createPanel(sid, hooks) })
+	;['S', 'A', 'B'].forEach(function (sid) { panels[sid] = createPanel(sid) })
 
-	// ===== 双路顶栏: 摘要条(窄栏堆叠时显示) + 日志分列 / 合并 =====
+	// ===== 双路摘要条: 窄栏上下堆叠时显示，点击展开并定位到对应面板 =====
 	const dualbar = mk('div', 'sts-sim-dualbar')
 	const summary = mk('div', 'sts-sim-summary')
 	summary.setAttribute('role', 'group')
@@ -1073,41 +1000,10 @@
 		summaryItems[sid] = b
 		summary.appendChild(b)
 	})
-	const viewSeg = mk('div', 'ctl-seg sts-sim-viewseg')
-	viewSeg.setAttribute('role', 'group')
-	viewSeg.setAttribute('aria-label', '双路日志显示')
-	let logView = lsRead('stsSim.logView') === 'merged' ? 'merged' : 'split'
-	const viewBtns = {}
-	;[['split', '分列'], ['merged', '合并']].forEach(function (x) {
-		const b = mk('button', null, x[1])
-		b.type = 'button'
-		b.addEventListener('click', function () {
-			logView = x[0]
-			lsWrite('stsSim.logView', logView)
-			refresh()
-		})
-		viewBtns[x[0]] = b
-		viewSeg.appendChild(b)
-	})
-	dualbar.append(summary, viewSeg)
+	dualbar.appendChild(summary)
 
 	const grid = mk('div', 'sts-sim-grid')
 	;['S', 'A', 'B'].forEach(function (sid) { grid.appendChild(panels[sid].root) })
-
-	// 合并日志卡: 跨两列，最新在前，A / B 徽标
-	const mergedCard = mk('div', 'sts-sim-card sts-sim-logcard sts-sim-mergedcard')
-	mergedCard.id = 'sts-sim-merged-log'
-	const mergedHead = mk('div', 'sts-sim-row')
-	mergedHead.appendChild(mk('span', 'sts-sim-card-title', 'A + B 合并日志 · 最新在前'))
-	const mergedClearBtn = mk('button', 'btn btn-sm btn-outline-secondary ms-auto', '清空')
-	mergedClearBtn.type = 'button'
-	mergedClearBtn.id = 'sts-sim-merged-clear'
-	mergedClearBtn.addEventListener('click', function () { panels.A.clearLog(); panels.B.clearLog() })
-	mergedHead.appendChild(mergedClearBtn)
-	merged.box = mk('div', 'sts-sim-log')
-	merged.box.setAttribute('role', 'log')
-	mergedCard.append(mergedHead, merged.box)
-	grid.appendChild(mergedCard)
 
 	root.append(help, dualbar, grid)
 
@@ -1126,17 +1022,39 @@
 		dualbar.hidden = !dual
 		grid.classList.remove('is-dual', 'is-single')
 		grid.classList.add(dual ? 'is-dual' : 'is-single')
-		Object.keys(viewBtns).forEach(function (k) { viewBtns[k].setAttribute('aria-pressed', String(logView === k)) })
-		const on = dual && logView === 'merged'
-		if (on !== merged.active) {
-			merged.active = on
-			if (on) mergedRebuild()
-			else { merged.box.textContent = ''; merged.mirror.clear() }
-		}
-		panels.A.setLogHidden(on)
-		panels.B.setLogHidden(on)
-		mergedCard.hidden = !on
+		syncProtocol()
 	}
+
+	// 打开面板时顶栏协议切到 hostproto，关闭后恢复打开前的协议。打开前的协议存 localStorage，
+	// 面板开着刷新页面后关闭仍能恢复；期间用户手动换过协议就尊重用户选择，不再恢复。
+	// 改值后必须派发 change：common.js 与各协议模块都只在 change 里切换解析器和持久化。
+	const KEY_PREV_PROTO = 'stsSim.prevProtocol'
+	let panelShown = false
+	function setProtocol(sel, value) {
+		if (sel.value === value || !Array.prototype.some.call(sel.options, function (o) { return o.value === value })) return
+		sel.value = value
+		sel.dispatchEvent(new Event('change', { bubbles: true }))
+	}
+	function syncProtocol() {
+		const wb = W.Workbench
+		const sel = document.getElementById('serial-protocol-select')
+		if (!wb || typeof wb.isShown !== 'function' || !sel) return
+		const shown = wb.isShown('sts-sim')
+		if (shown === panelShown) return
+		panelShown = shown
+		try {
+			if (shown) {
+				if (sel.value !== 'hostproto') localStorage.setItem(KEY_PREV_PROTO, JSON.stringify(sel.value))
+				setProtocol(sel, 'hostproto')
+			} else {
+				const prev = JSON.parse(localStorage.getItem(KEY_PREV_PROTO) || 'null')
+				localStorage.removeItem(KEY_PREV_PROTO)
+				if (prev && sel.value === 'hostproto') setProtocol(sel, prev)
+			}
+		} catch (e) { /* 存储不可用时只做切换，不记忆 */ if (shown) setProtocol(sel, 'hostproto') }
+	}
+	// 停靠栏按钮、关闭按钮都是点击触发，这里跟一次，免得等 500ms 轮询
+	if (typeof document.addEventListener === 'function') document.addEventListener('click', function () { setTimeout(syncProtocol, 0) })
 	refresh()
 	setInterval(refresh, 500)
 

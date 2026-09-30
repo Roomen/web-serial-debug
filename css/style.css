@@ -8167,10 +8167,6 @@ summary {
 	min-width: 0;
 }
 
-.sts-sim-mergedcard {
-	grid-column: 1 / -1;
-}
-
 .sts-sim-head,
 .sts-sim-dualbar {
 	display: flex;
@@ -8253,10 +8249,6 @@ summary {
 	border: 1px solid var(--border-color);
 	border-radius: var(--radius-md);
 	background: var(--bg-surface-hover);
-}
-
-.sts-sim-viewseg {
-	margin-left: auto;
 }
 
 .sts-sim-status {
@@ -8520,28 +8512,6 @@ summary {
 	border-bottom: 1px solid var(--border-color);
 }
 
-.sts-sim-log-line--merged {
-	grid-template-columns: max-content max-content minmax(0, 1fr);
-}
-
-.sts-sim-log-src {
-	display: inline-block;
-	min-width: 1.8em;
-	padding: 0 6px;
-	border: 1px solid var(--accent);
-	border-radius: var(--radius-sm);
-	background: color-mix(in srgb, var(--accent) 20%, var(--bg-surface));
-	color: var(--text-primary);
-	font-size: 0.66rem;
-	font-weight: 700;
-	text-align: center;
-}
-
-.sts-sim-log-src.is-b {
-	border-color: var(--warning);
-	background: color-mix(in srgb, var(--warning) 22%, var(--bg-surface));
-}
-
 .sts-sim-log-line:nth-child(even) {
 	background: var(--bg-surface-hover);
 }
@@ -8722,14 +8692,6 @@ details.sts-sim-alarm-picker {
 		grid-template-columns: minmax(0, 1fr);
 		gap: 0;
 	}
-
-	.sts-sim-log-line--merged {
-		grid-template-columns: max-content minmax(0, 1fr);
-	}
-
-	.sts-sim-log-line--merged > .sts-sim-log-text {
-		grid-column: 1 / -1;
-	}
 }
 
 @container sts-sim (min-width: 700px) {
@@ -8749,7 +8711,7 @@ details.sts-sim-alarm-picker {
 		align-items: stretch;
 	}
 
-	.sts-sim-summary {
+	.sts-sim-dualbar {
 		display: none;
 	}
 
@@ -8761,11 +8723,5 @@ details.sts-sim-alarm-picker {
 		flex: 1 1 0;
 		max-height: none;
 		min-height: 160px;
-	}
-
-	.sts-sim-grid.is-dual > .sts-sim-mergedcard .sts-sim-log {
-		flex: 0 0 auto;
-		min-height: 120px;
-		max-height: 320px;
 	}
 }

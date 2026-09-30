@@ -155,6 +155,12 @@ function makeWorld(options = {}) {
 	const sessions = new Set(options.open || [])
 	let mode = options.mode || 'dual'
 	const labels = { A: '', B: '', ...(options.labels || {}) }
+	let shown = !!options.shown
+	const protocol = {
+		value: options.protocol || 'sek', changes: [],
+		options: ['sek', 'cjt188', 'hostproto'].map(value => ({ value })),
+		dispatchEvent(event) { assert.equal(event.type, 'change'); this.changes.push(this.value) },
+	}
 	let root
 	const presets = [{ code: '0001', label: '低电池告警' }, { code: '0002', label: '合成标签 ' + unsafe + '告警' }]
 	const split = value => String(value || '').trim().split(/\s+/).filter(Boolean)
@@ -214,11 +220,14 @@ function makeWorld(options = {}) {
 	const document = {
 		readyState: 'complete', activeElement: null,
 		createElement: tag => new FakeElement(tag),
-		getElementById: id => root?.id === id ? root : root?.querySelector('#' + id) || null,
+		getElementById: id => id === 'serial-protocol-select' ? protocol : root?.id === id ? root : root?.querySelector('#' + id) || null,
 	}
 	const window = {
 		_activeProtocol: 'hostproto',
-		Workbench: { registerPanel(panel) { assert.equal(panel.id, 'sts-sim'); assert.equal(root, undefined); root = panel.el } },
+		Workbench: {
+			registerPanel(panel) { assert.equal(panel.id, 'sts-sim'); assert.equal(root, undefined); root = panel.el },
+			isShown: id => id === 'sts-sim' && shown,
+		},
 		SerialHub: { getLabelA: () => labels.A, getLabelB: () => labels.B },
 		serialApi: { getMode: () => mode, isSessionOpen: sid => sessions.has(sid) },
 		hostProtoSerialLink(args) {
@@ -252,9 +261,11 @@ function makeWorld(options = {}) {
 	class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [clock.now()])) } static now() { return clock.now() } }
 	const context = vm.createContext({
 		window, document, Date: FakeDate,
+		Event: class { constructor(type) { this.type = type } },
 		localStorage: {
 			getItem: key => storage.get(key) ?? null,
 			setItem(key, value) { writes.push({ key, value }); storage.set(key, String(value)) },
+			removeItem(key) { storage.delete(key) },
 		},
 		setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
 		setInterval: clock.setInterval, clearInterval: clock.clearInterval,
@@ -278,7 +289,7 @@ function makeWorld(options = {}) {
 			status: element.querySelector('.sts-sim-status'),
 		}
 	}
-	return { root, panel, labels, storage, writes, clock, engines, factoryCalls, failingSids, startFailures, startAttempts, targetCalls, links, sent, sessions, setMode(value) { mode = value }, saved: key => JSON.parse(storage.get(key) || 'null') }
+	return { root, panel, labels, protocol, setShown(value) { shown = value }, storage, writes, clock, engines, factoryCalls, failingSids, startFailures, startAttempts, targetCalls, links, sent, sessions, setMode(value) { mode = value }, saved: key => JSON.parse(storage.get(key) || 'null') }
 }
 
 function change(input, value) {
@@ -842,73 +853,38 @@ test('untrusted logs, meter state, alarm labels and CIU results use textContent'
 	assert.equal(world.root.querySelectorAll('img').length, 0)
 })
 
-function mergedBox(world) { return world.root.querySelector('#sts-sim-merged-log').querySelector('.sts-sim-log') }
-function mergedRows(world) {
-	return mergedBox(world).children.map(line => line.querySelector('.sts-sim-log-src').textContent + ':' + line.querySelector('.sts-sim-log-text').textContent)
-}
-function chooseView(world, index) { world.root.querySelector('.sts-sim-viewseg').querySelectorAll('button')[index].click() }
-
-test('merged log mixes A and B newest first with A/B badges, stays safe, keeps reading position and clears both', async () => {
-	const world = makeWorld({ open: ['A', 'B'] })
-	world.panel('A').start.click()
-	world.panel('B').start.click()
-	await flush()
-	const t = world.clock.now()
-	const emit = (index, offset, text, level) => world.engines[index].args.onLog({ at: t + offset, level: level || 'info', text })
-	const mergedCard = world.root.querySelector('#sts-sim-merged-log')
-	assert.equal(mergedCard.hidden, true, 'split view is the default')
-	assert.equal(world.panel('A').root.querySelector('.sts-sim-logcard').hidden, false)
-	emit(0, 1000, 'a1')
-	emit(1, 2000, 'b1')
-	chooseView(world, 1)
-	assert.equal(world.saved('stsSim.logView'), 'merged')
-	assert.equal(mergedCard.hidden, false)
-	assert.equal(world.panel('A').root.querySelector('.sts-sim-logcard').hidden, true)
-	assert.equal(world.panel('B').root.querySelector('.sts-sim-logcard').hidden, true)
-	assert.deepEqual(mergedRows(world).slice(0, 2), ['B:b1', 'A:a1'])
-	assert.equal(mergedBox(world).children[0].querySelector('.sts-sim-log-src').classList.contains('is-b'), true)
-	assert.equal(mergedBox(world).children[1].querySelector('.sts-sim-log-src').classList.contains('is-a'), true)
-	emit(0, 3000, 'a2')
-	emit(1, 1500, 'b-late') // 后到但时间更早: 按时间插到 b1 之后
-	emit(1, 4000, unsafe, 'error')
-	assert.deepEqual(mergedRows(world).slice(0, 5), ['B:' + unsafe, 'A:a2', 'B:b1', 'B:b-late', 'A:a1'])
-	assert.equal(mergedBox(world).children[0].querySelector('.sts-sim-log-text').textContent, unsafe)
-	assert.match(mergedBox(world).children[0].className, /sts-sim-lv-error/)
-	assert.equal(world.root.querySelectorAll('img').length, 0)
-	// 阅读位置: 用户滚离顶部时新条目不把视图顶走
-	const box = mergedBox(world)
-	box.scrollTop = 60
-	emit(0, 5000, 'a3')
-	assert.equal(box.scrollTop, 80)
-	box.scrollTop = 0
-	emit(1, 6000, 'b3')
-	assert.equal(box.scrollTop, 0)
-	// 回到分列再切回合并: 从各路缓冲重建，顺序不变
-	const before = mergedRows(world)
-	chooseView(world, 0)
-	assert.equal(mergedCard.hidden, true)
-	assert.equal(box.children.length, 0)
-	assert.equal(world.panel('A').root.querySelector('.sts-sim-logcard').hidden, false)
-	chooseView(world, 1)
-	assert.deepEqual(mergedRows(world), before)
-	// 各路裁剪旧条目时合并视图同步
-	for (let index = 0; index < 505; index++) emit(0, 10000 + index, 'flood-' + index)
-	assert.equal(world.panel('A').log.children.length, 500)
-	assert.equal(mergedBox(world).children.filter(line => line.querySelector('.sts-sim-log-src').textContent === 'A').length, 500)
-	// 清空两路
-	world.root.querySelector('#sts-sim-merged-clear').click()
-	assert.equal(mergedBox(world).children.length, 0)
-	assert.equal(world.panel('A').log.children.length, 0)
-	assert.equal(world.panel('B').log.children.length, 0)
-	emit(1, 20000, 'after')
-	assert.deepEqual(mergedRows(world), ['B:after'])
-	// 单路模式不显示合并卡
-	world.setMode('single')
+test('opening the panel switches the top protocol to hostproto and closing restores the previous one', async () => {
+	const world = makeWorld({ protocol: 'cjt188' })
+	world.setShown(true)
 	await world.clock.advance(500)
-	assert.equal(mergedCard.hidden, true)
-	assert.equal(world.panel('S').root.querySelector('.sts-sim-logcard').hidden, false)
-	const refreshed = makeWorld({ storage: new Map(world.storage) })
-	assert.equal(refreshed.root.querySelector('#sts-sim-merged-log').hidden, false, 'log view choice survives refresh')
+	assert.equal(world.protocol.value, 'hostproto')
+	assert.deepEqual(world.protocol.changes, ['hostproto'], 'change is dispatched so parsers and persistence follow')
+	await world.clock.advance(1000)
+	assert.equal(world.protocol.changes.length, 1, 'no repeated switching while shown')
+	world.setShown(false)
+	await world.clock.advance(500)
+	assert.equal(world.protocol.value, 'cjt188')
+	assert.equal(world.storage.has('stsSim.prevProtocol'), false)
+
+	// 面板开着刷新：打开前的协议从 localStorage 取回，关闭后仍能恢复
+	world.setShown(true)
+	await world.clock.advance(500)
+	const refreshed = makeWorld({ storage: new Map(world.storage), protocol: 'hostproto', shown: true })
+	await refreshed.clock.advance(500)
+	assert.deepEqual(refreshed.protocol.changes, [])
+	refreshed.setShown(false)
+	await refreshed.clock.advance(500)
+	assert.equal(refreshed.protocol.value, 'cjt188')
+
+	// 打开期间用户手动换了协议：关闭时不覆盖用户选择
+	const manual = makeWorld({ protocol: 'sek' })
+	manual.setShown(true)
+	await manual.clock.advance(500)
+	manual.protocol.value = 'cjt188'
+	manual.setShown(false)
+	await manual.clock.advance(500)
+	assert.equal(manual.protocol.value, 'cjt188')
+	assert.deepEqual(manual.protocol.changes, ['hostproto'])
 })
 
 test('per-session collapse state persists; summary strip expands and scrolls to a panel', async () => {
