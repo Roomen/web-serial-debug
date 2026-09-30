@@ -745,7 +745,8 @@
 			// DRN 留空时以模组回读值为准；填了就以面板为准，不一致时（有 PAK）写入模组
 			const dev0 = await mod.devIdGet()
 			const want = cfg.drn ? BigInt(cfg.drn) : dev0.drn
-			if (want === 0n) throw new Error('DRN 未设置：在面板填写 DRN 并填写 PAK 由模拟器写入，或用 keytool 写入')
+			if (!cfg.drn) log('info', '面板 DRN 留空，从模组读取: ' + dev0.drn)
+			if (want === 0n) throw new Error('DRN 未设置：已从模组读取 DRN，结果为 0（模组还没置备 DRN）。在面板填写 DRN 并填写 PAK 由模拟器写入，或用 keytool 写入')
 			drnToMeterNo(want)
 			if (!drnCheckOk(want)) log('warn', 'DRN ' + want + ' 的校验位不符合 Luhn 规则，仍按此地址继续')
 			const pv = await mod.provision(1, want, cfg.pak, 1)
