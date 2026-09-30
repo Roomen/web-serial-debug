@@ -102,13 +102,52 @@
 	// ===== 配置规范化 =====
 	const METER_DEFAULTS = {
 		drn: '', pak: '', // drn 留空 = 以模组 DEV_ID_GET 回读值为准
-		tokenDelayS: 6, tokenMode: 'exec', creditAmount: 500, stsBlockHex: DEFAULT_BLOCK, valveDelayS: 3,
-		remaining: 5000, totalUsed: 12345, totalPurchased: 20000, batteryCv: 328, alarmCodes: '',
+		tokenDelayS: 6, tokenMode: 'exec', creditAmount: 500, stsBlockHex: DEFAULT_BLOCK, valveDelayS: 30,
+		remaining: 5000, totalUsed: 12345, totalPurchased: 20000, batteryCv: 368, alarmCodes: '',
 		tariffCurrency: false, tariffDec: 2, protoVersion: 2,
 	}
 	const CIU_DEFAULTS = {
 		targetDrn: '', localAddr: '2', pak: '',
 		ackTimeoutS: 15, upTimeoutS: 12, busyWaitS: 30, sessionRetries: 3,
+	}
+	// 按产品错误码对照表预置，码表不在协议内枚举；CIU 原样送显，不认识的码走「其他码」输入。
+	// 顺序即显示优先级（从高到低），组包进寄存器 0x17 的告警码列表时保持这个顺序
+	const ALARM_PRESETS = [
+		['0801', '低电告警（通讯电池，二级 10%）'], ['0803', '低电量告警（一级 20%）'], ['0802', '计量电池低电异常'],
+		['1301', '空管告警'], ['1302', '换能器异常'], ['1401', '逆流告警'], ['1403', '漏水告警'], ['1405', '爆管告警'],
+		['9601', '拆表告警'], ['9701', '水温高告警'], ['9702', '水温低告警'],
+		['0701', '开阀超时'], ['0702', '关阀超时'], ['0703', '阀门堵转'], ['0704', '阀门开度异常'],
+		['1201', '通信模块异常'], ['0301', 'Flash 存储异常'], ['0105', 'RTC 时钟异常'], ['5401', '剩余水量不足告警'],
+	].map(function (x) { return { code: x[0], label: x[1] } })
+	// 预置码按表内顺序在前，其他码（4 位十进制，空格分隔）追加在后
+	function composeAlarmCodes(checked, otherText) {
+		// 勾选和其他码合并去重后：已知预置码统一按 ALARM_PRESETS 顺序排前面（即使写在其他码框里），未知码按输入顺序在后
+		const all = []
+		;(checked || []).concat(String(otherText || '').split(/[\s,，;；]+/).filter(Boolean)).forEach(function (c) { if (all.indexOf(c) === -1) all.push(c) })
+		const known = ALARM_PRESETS.map(function (p) { return p.code }).filter(function (c) { return all.indexOf(c) !== -1 })
+		return known.concat(all.filter(function (c) { return known.indexOf(c) === -1 })).join(' ')
+	}
+	function splitAlarmCodes(text) {
+		const list = String(text || '').split(/[\s,，;；]+/).filter(Boolean)
+		const known = ALARM_PRESETS.map(function (p) { return p.code })
+		return { checked: list.filter(function (c) { return known.indexOf(c) !== -1 }), other: list.filter(function (c) { return known.indexOf(c) === -1 }).join(' ') }
+	}
+	// 可在运行中修改的四个量值 + 告警码，配置与 setLive 共用这一套校验
+	function normalizeLiveFields(o) {
+		o.remaining = clampInt(o.remaining, -INT32_MAX, INT32_MAX, 5000)
+		o.totalUsed = clampInt(o.totalUsed, 0, 4294967295, 12345)
+		o.totalPurchased = clampInt(o.totalPurchased, 0, 4294967295, 20000)
+		o.batteryCv = clampInt(o.batteryCv, 0, 65535, 368)
+		const raw = Array.isArray(o.alarmCodes) ? o.alarmCodes.join(' ') : String(o.alarmCodes || '')
+		const codes = []
+		raw.split(/[\s,，;；]+/).filter(Boolean).forEach(function (c2) {
+			if (!/^\d{4}$/.test(c2)) throw new Error('告警码需 4 位十进制: ' + c2)
+			if (codes.indexOf(c2) === -1) codes.push(c2)
+		})
+		if (codes.length > S.ALARM_MAX_CODES) throw new Error('告警码最多 27 个')
+		o.alarmCodes = codes.join(' ')
+		o.alarmList = codes
+		return o
 	}
 	function normalizeMeterConfig(c) {
 		const o = Object.assign({}, METER_DEFAULTS, c || {})
@@ -120,23 +159,16 @@
 		}
 		o.pak = String(o.pak || '').replace(/\s+/g, '')
 		o.tokenDelayS = clampInt(o.tokenDelayS, 0, 3600, 6)
-		o.valveDelayS = clampInt(o.valveDelayS, 0, 600, 3)
+		o.valveDelayS = clampInt(o.valveDelayS, 0, 600, 30)
 		o.tokenMode = o.tokenMode === 'reject' ? 'reject' : 'exec'
 		o.creditAmount = clampInt(o.creditAmount, 0, INT32_MAX, 500)
-		o.remaining = clampInt(o.remaining, -INT32_MAX, INT32_MAX, 5000)
-		o.totalUsed = clampInt(o.totalUsed, 0, 4294967295, 12345)
-		o.totalPurchased = clampInt(o.totalPurchased, 0, 4294967295, 20000)
-		o.batteryCv = clampInt(o.batteryCv, 0, 65535, 328)
+		normalizeLiveFields(o)
 		o.protoVersion = clampInt(o.protoVersion, 0, 255, 2) // 仅测试用: <2 时表体对 RESULT 回 NAK 0x01
 		o.tariffCurrency = !!o.tariffCurrency
 		o.tariffDec = o.tariffCurrency ? clampInt(o.tariffDec, 0, 9, 2) : 1 // 体积模式下小数位恒为 1
 		const blk = S.hexToBytes(o.stsBlockHex)
 		if (!blk || blk.length < 1 || blk.length > STS_BLOCK_MAX_CFG) throw new Error('STS 结果块需 1..' + STS_BLOCK_MAX_CFG + ' 字节 HEX')
 		o.stsBlockHex = hexSpaced(blk)
-		const codes = String(o.alarmCodes || '').split(/[\s,，;；]+/).filter(Boolean)
-		if (codes.length > S.ALARM_MAX_CODES) throw new Error('告警码最多 27 个')
-		codes.forEach(function (c2) { if (!/^\d{4}$/.test(c2)) throw new Error('告警码需 4 位十进制: ' + c2) })
-		o.alarmList = codes
 		return o
 	}
 	function normalizeCiuConfig(c) {
@@ -378,7 +410,7 @@
 			remaining: cfg.remaining, totalUsed: cfg.totalUsed, totalPurchased: cfg.totalPurchased,
 			batteryCv: cfg.batteryCv, alarms: cfg.alarmList.slice(),
 			tariffCurrency: cfg.tariffCurrency, tariffDec: cfg.tariffDec,
-			valve: S.VALVE_POS_OPEN, valveTestActive: false, valvePre: S.VALVE_POS_OPEN, valveRestoreAt: 0,
+			valve: S.VALVE_POS_OPEN, valveFault: false, valveMoving: null, valveHold: null, valveWorkPending: false, valveSeq: 0, restoredPre: null,
 			records: Array.from({ length: RECORDS }, function () { return { empty: true, minutes: S.RECORD_EPOCH_UNSET, amount: 0 } }),
 			recordCount: 0, dedup: [], dedupSeq: 0, work: null, unbound: 0, drn: cfg.drn || '0',
 		}
@@ -393,7 +425,9 @@
 			if (a.alarms.length) v |= S.MST_ALARM_LIST
 			return v
 		}
-		function valveByte() { return a.valve | (a.valveTestActive ? S.VALVE_TEST_ACTIVE : 0) }
+		// 动作中位置报 00 不明；bit2 在动作中和关阀保持期内都置位（表示阀控测试进行中）
+		function reportedValve() { return a.valveMoving ? 0 : a.valve }
+		function valveByte() { return reportedValve() | ((a.valveMoving || a.valveHold) ? S.VALVE_TEST_ACTIVE : 0) | (a.valveFault ? S.VALVE_FAULT : 0) }
 		function bcdDigits(str, bytes) { return S.bcdPack(String(str).padStart(bytes * 2, '0').slice(-bytes * 2)) }
 		function timeBcd() {
 			const d = new Date(clock.now())
@@ -494,9 +528,21 @@
 				if (reg === R.VALVE_TEST) {
 					if (val.length !== 1) return { kind: 'nak', reason: S.NAK.BAD_LENGTH }
 					if (val[0] > 1) return { kind: 'nak', reason: S.NAK.OUT_OF_RANGE }
-					// 阀门动作是机械过程，先回 0xFE 再由轮询取终局
-					a.work = { kind: 'valve', open: val[0] === 1 }
-					return { kind: 'pending', delayMs: cfg.valveDelayS * 1000 }
+					// 阀控测试规则（需求方确认，有意偏离协议 §7 与 C 参考：阀控测试的目的只是防止产线测试后表以关阀状态出厂）：
+					// 每条 WRITE 0x80 都真实动作：受理 0xFE -> 动作中（位置报 00 不明 + bit2）-> 经 valveDelayS 到位 -> 终局 0x00。
+					// 关阀到位后开始 10 分钟保持期（bit2 保持），到期恢复成指令前状态，恢复本身也走动作过程；
+					// 开阀到位后不设保持期，并取消关阀保持期/恢复。
+					// 「是否保持期内的同方向重发」在收到指令这一刻判定并锁进这笔工作，不在完成时再判断
+					const now = clock.now()
+					const open = val[0] === 1
+					const holdLive = !!a.valveHold && now < a.valveHold.restoreAt
+					const work = { open: open, repeat: !open && holdLive, prePos: a.valve }
+					const remainMs = holdLive ? a.valveHold.restoreAt - now : 0
+					// 开阀受理即取消关阀保持期/延期恢复，不等到位（保持定时器到点时会发现保持已不在，自然作废）
+					if (open) { a.valveHold = null; a.restoredPre = null }
+					a.valveMoving = { kind: 'cmd', target: open ? S.VALVE_POS_OPEN : S.VALVE_POS_CLOSED, doneAt: now + cfg.valveDelayS * 1000, id: ++a.valveSeq, work: work }
+					a.valveWorkPending = true
+					return { kind: 'pending', delayMs: cfg.valveDelayS * 1000, valve: true, repeat: work.repeat, remainMs: remainMs }
 				}
 				if (reg === R.UNBIND) {
 					if (val.length !== 0) return { kind: 'nak', reason: S.NAK.BAD_LENGTH }
@@ -531,35 +577,97 @@
 					dedupStore(w.digits, payload, replayable)
 					return { kind: 'token', payload: payload, executed: rsp.procStatus === S.TOKEN_DONE_EXEC }
 				}
-				// 阀控测试带持久化状态，不是幂等操作
-				if (a.valveTestActive) {
-					// 保持期内再次收到: 不覆盖测试前状态、不重设恢复截止时刻，也不再次动作，只回当前结果
-					return { kind: 'valve', payload: S.writeRspEncode(R.VALVE_TEST, S.WRITE_OK), repeated: true }
-				}
-				a.valvePre = a.valve
-				a.valveRestoreAt = clock.now() + VALVE_HOLD_MS
-				a.valveTestActive = true
-				a.valve = w.open ? S.VALVE_POS_OPEN : S.VALVE_POS_CLOSED
-				return { kind: 'valve', payload: S.writeRspEncode(R.VALVE_TEST, S.WRITE_OK), repeated: false }
+				return null
 			},
-			// 保持到期恢复测试前状态
-			tick() {
-				if (a.valveTestActive && clock.now() >= a.valveRestoreAt) {
-					a.valve = a.valvePre
-					a.valveTestActive = false
-					a.valveRestoreAt = 0
-					return true
+			// 阀门动作到位（timer 到点由引擎调用）；id 不符说明已被手动改动或新指令取代，直接忽略
+			completeMove(id) {
+				const m = a.valveMoving
+				if (!m || m.id !== id) return null
+				const now = clock.now()
+				a.valveMoving = null
+				if (m.kind === 'restore') {
+					a.valve = a.valveHold ? a.valveHold.pre : m.target
+					a.valveHold = null
+					return { kind: 'restore', pos: a.valve }
 				}
-				return false
+				a.valveWorkPending = false
+				a.valve = m.target
+				const w = m.work
+				const info = { kind: 'cmd', open: w.open, payload: S.writeRspEncode(R.VALVE_TEST, S.WRITE_OK), holdCancelled: false, holdKept: false, newHold: false, expiredRepeat: false }
+				if (w.open) {
+					info.holdCancelled = !!a.valveHold
+					a.valveHold = null
+					a.restoredPre = null
+				} else if (w.repeat && a.valveHold && now < a.valveHold.restoreAt) {
+					info.holdKept = true // 保持期内的同方向重发: 照样动作，指令前状态与恢复截止时刻都不重设
+				} else {
+					// 新的关阀指令。指令前状态: 有保持期在（恢复动作中被新指令顶掉）取它的原值；
+					// 重发的保持期在动作期间已到期则取当时应恢复到的值；否则取受理时的稳定位置
+					const pre = a.valveHold ? a.valveHold.pre : (a.restoredPre != null ? a.restoredPre : w.prePos)
+					info.expiredRepeat = w.repeat
+					a.restoredPre = null
+					a.valveHold = { pre: pre, restoreAt: now + VALVE_HOLD_MS }
+					info.newHold = true
+				}
+				return info
 			},
-			// 重启立即恢复测试前状态并清除该对值，不续计时
+			// 保持期到点: 动作中（一条关阀指令在走）就记下应恢复到的值、让那条指令按新指令收尾；否则开始恢复动作
+			holdExpire() {
+				const h = a.valveHold
+				const now = clock.now()
+				if (!h || now < h.restoreAt) return null
+				if (a.valveMoving && a.valveMoving.kind === 'cmd') {
+					a.restoredPre = h.pre
+					a.valveHold = null
+					return { deferred: true }
+				}
+				if (a.valveMoving) return null
+				a.valveMoving = { kind: 'restore', target: h.pre, doneAt: now + cfg.valveDelayS * 1000, id: ++a.valveSeq }
+				return { restoring: true, target: h.pre }
+			},
+			// 重启立即恢复到指令前状态并清掉动作/保持期，不续计时
 			reboot() {
 				a.work = null
-				if (a.valveTestActive) {
-					a.valve = a.valvePre
-					a.valveTestActive = false
-					a.valveRestoreAt = 0
-				}
+				// 应恢复到的位置: 保持期原值；保持期已在动作期间到期则取延期记下的值（该值此时只存在 restoredPre 里）
+				if (a.valveHold) a.valve = a.valveHold.pre
+				else if (a.restoredPre != null) a.valve = a.restoredPre
+				a.valveMoving = null
+				a.valveHold = null
+				a.valveWorkPending = false
+				a.restoredPre = null
+				a.valveSeq++
+			},
+			// 手动改阀门位置（不是协议写）: 取消正在进行的动作工作和任何保持期/恢复，完成回调靠 valveSeq 失效，不会再覆盖手动值
+			setValve(pos) {
+				if (pos !== 'open' && pos !== 'closed' && pos !== 'unknown') throw new Error('阀门位置需为 open / closed / unknown')
+				const v = pos === 'open' ? S.VALVE_POS_OPEN : pos === 'closed' ? S.VALVE_POS_CLOSED : 0
+				const cancelled = !!(a.valveMoving || a.valveHold)
+				const cancelledPending = a.valveWorkPending
+				a.valveMoving = null
+				a.valveHold = null
+				a.valveWorkPending = false
+				a.restoredPre = null
+				a.valveSeq++
+				const changed = v !== a.valve
+				a.valve = v
+				return { changed: changed, cancelled: cancelled, cancelledPending: cancelledPending }
+			},
+			setValveFault(on) { a.valveFault = !!on },
+			// 运行中改量值: 只改运行值，不回写配置；表计状态位域每次读都按当前值重算。
+			// 这是唯一的写入口，合并现有状态后走 normalizeLiveFields，没有无校验路径。
+			// 计价模式与小数位只允许停止时改: 存量数值（余额、记录、去重的终局载荷）都按旧标度存着，运行中换标度会让它们的含义悄悄变掉
+			setLive(patch) {
+				const p = patch || {}
+				if ('tariffCurrency' in p || 'tariffDec' in p) throw new Error('计价模式与小数位只能在停止时修改')
+				const o = normalizeLiveFields(Object.assign({
+					remaining: a.remaining, totalUsed: a.totalUsed, totalPurchased: a.totalPurchased,
+					batteryCv: a.batteryCv, alarmCodes: a.alarms.join(' '),
+				}, p))
+				a.remaining = o.remaining
+				a.totalUsed = o.totalUsed
+				a.totalPurchased = o.totalPurchased
+				a.batteryCv = o.batteryCv
+				a.alarms = o.alarmList.slice()
 			},
 			setDrn(v) { a.drn = String(v) },
 			regValue: regValue,
@@ -587,6 +695,7 @@
 		let unsubEvt = null
 		let workTimer = null
 		let holdTimer = null
+		let moveTimer = null
 		let lastKind3At = 0
 		const info = { role: null, drn: null, fw: null, lastSession: null, sessions: 0, startedAt: 0 }
 
@@ -601,7 +710,11 @@
 				running: running, meterNo: meterNo, drn: info.drn, role: info.role,
 				remaining: a.remaining, totalUsed: a.totalUsed, totalPurchased: a.totalPurchased,
 				tariff: { currency: a.tariffCurrency, dec: a.tariffDec },
-				valve: a.valve, valveTestActive: a.valveTestActive, valveRestoreAt: a.valveRestoreAt,
+				valve: a.valveMoving ? 0 : a.valve, valveFault: a.valveFault,
+				valveTestActive: !!(a.valveMoving || a.valveHold), valveRestoreAt: a.valveHold ? a.valveHold.restoreAt : 0,
+				valveMoving: a.valveMoving ? { kind: a.valveMoving.kind, target: a.valveMoving.target, remainMs: Math.max(0, a.valveMoving.doneAt - clock.now()) } : null,
+				valveHold: a.valveHold ? { pre: a.valveHold.pre, remainMs: Math.max(0, a.valveHold.restoreAt - clock.now()) } : null,
+				meterStatus: app.regValue(S.REG.METER_STATUS).val[0],
 				batteryCv: a.batteryCv, alarms: a.alarms.slice(),
 				records: a.records.map(function (r) { return { empty: r.empty, minutes: r.minutes, amount: r.amount } }),
 				recordCount: a.recordCount,
@@ -613,15 +726,42 @@
 		}
 		function pushState() { try { onStateCb(snapshot()) } catch (e) { /* 界面回调异常不影响引擎 */ } }
 
-		function armHold() {
-			if (holdTimer != null) clock.clearTimeout(holdTimer)
-			holdTimer = null
+		// 阀门两个定时器各管一件事: moveTimer 管当前动作到位，holdTimer 管关阀保持期到点（动作中也要能到点）
+		function armValve() {
 			const a = app.state
-			if (!a.valveTestActive) return
-			holdTimer = clock.setTimeout(function () {
-				holdTimer = null
-				if (app.tick()) { log('info', '阀控测试保持期到，阀门恢复测试前状态'); pushState() }
-			}, Math.max(0, a.valveRestoreAt - clock.now()))
+			if (moveTimer != null) { clock.clearTimeout(moveTimer); moveTimer = null }
+			if (holdTimer != null) { clock.clearTimeout(holdTimer); holdTimer = null }
+			if (a.valveMoving) {
+				const id = a.valveMoving.id
+				moveTimer = clock.setTimeout(function () { moveTimer = null; onMoveDone(id) }, Math.max(0, a.valveMoving.doneAt - clock.now()))
+			}
+			if (a.valveHold) {
+				holdTimer = clock.setTimeout(function () { holdTimer = null; onHoldDue() }, Math.max(0, a.valveHold.restoreAt - clock.now()))
+			}
+		}
+		function posName(v) { return v === S.VALVE_POS_OPEN ? '开' : v === S.VALVE_POS_CLOSED ? '关' : '位置不明' }
+		function onMoveDone(id) {
+			const r = app.completeMove(id)
+			if (!r) return
+			if (r.kind === 'restore') {
+				log('info', '恢复动作完成，阀门回到指令前状态（' + posName(r.pos) + '），保持期结束')
+			} else {
+				try { policy.pendingClose(r.payload) } catch (e) { log('error', '待办存档失败: ' + e.message) }
+				if (r.open) log('info', '开阀到位，不设保持期' + (r.holdCancelled ? '；原关阀保持期已取消，之后保持开阀' : ''))
+				else if (r.holdKept) log('info', '关阀到位；保持期内的同方向重发，指令前状态与恢复截止时刻都不重设')
+				else if (r.expiredRepeat) log('warn', '关阀到位；这笔同方向指令收到时还在保持期内，但动作期间保持期已到期，按新的关阀指令处理：重新记录指令前状态并开始新的 10 分钟')
+				else log('info', '关阀到位，保持 10 分钟后自动恢复到指令前状态')
+			}
+			armValve()
+			pushState()
+		}
+		function onHoldDue() {
+			const r = app.holdExpire()
+			if (!r) return
+			if (r.deferred) log('info', '保持期到点，但有一条阀控指令仍在动作中：稍后按新的关阀指令收尾')
+			else log('info', '保持期到，开始恢复到指令前状态（' + posName(r.target) + '），恢复也需要动作时间')
+			armValve()
+			pushState()
 		}
 
 		function finishWork() {
@@ -633,9 +773,7 @@
 			} catch (e) {
 				log('error', '待办存档失败: ' + e.message)
 			}
-			if (out.kind === 'token') log('info', '令牌处理完成: ' + (out.executed ? '已执行，余额 ' + app.state.remaining : '未执行') + '，终局结果已存档')
-			else log('info', out.repeated ? '阀控测试保持期内重复写: 不覆盖测试前状态、不重设截止时刻，只回当前结果' : '阀控测试动作完成，保持 10 分钟后恢复')
-			armHold()
+			log('info', '令牌处理完成: ' + (out.executed ? '已执行，余额 ' + app.state.remaining : '未执行') + '，终局结果已存档')
 			pushState()
 		}
 		function startWork(delayMs) {
@@ -683,7 +821,15 @@
 						return policy.reply(req, out.payload)
 					}
 					// 受理: 先登记待办（这一步会作废同 TGT 的旧存档），再回受理应答
-					const etaFn = startWork(out.delayMs)
+					let etaFn
+					if (out.valve) {
+						const doneAt = app.state.valveMoving.doneAt
+						etaFn = function () { return Math.min(254, Math.max(1, Math.ceil((doneAt - clock.now()) / 1000))) }
+						armValve()
+						log('info', out.repeat ? '阀控测试保持期内（剩余 ' + Math.ceil(out.remainMs / 60000) + ' 分钟）收到同方向关阀：照样动作，指令前状态与恢复截止时刻不重设' : '阀控测试受理，开始动作（位置报不明）')
+					} else {
+						etaFn = startWork(out.delayMs)
+					}
 					policy.pendingOpen(req, etaFn)
 					log('info', '受理 ' + S.TYPE_NAME[req.type] + ' TGT=0x' + req.tgt.toString(16).toUpperCase() + '，' + Math.round(out.delayMs / 100) / 10 + 's 后终局')
 					pushState()
@@ -793,6 +939,7 @@
 			if (unsubEvt) { unsubEvt(); unsubEvt = null }
 			if (workTimer != null) { clock.clearTimeout(workTimer); workTimer = null }
 			if (holdTimer != null) { clock.clearTimeout(holdTimer); holdTimer = null }
+			if (moveTimer != null) { clock.clearTimeout(moveTimer); moveTimer = null }
 			waiter.abortAll() // 不给模组发任何复位类命令
 			log('info', '表端模拟已停止')
 			pushState()
@@ -803,12 +950,40 @@
 			stop: stop,
 			getState: snapshot,
 			handleApp: handleApp, // 直接喂应用帧（测试与诊断用）
+			// 运行中修改量值与告警码，立即生效（校验与配置同一套 normalizeLiveFields）。
+			// 只改运行值，不回写配置表单（下次启动仍以表单为初值）。
+			// 计价模式与小数位只允许停止时改: 存量数值（余额、记录、去重的终局载荷）都按旧标度存的，运行中换标度会让它们的含义悄悄变掉
+			setLive(patch) {
+				app.setLive(patch) // 合并现状并按 normalizeLiveFields 校验，非法值整体拒绝
+				log('info', '运行值已修改: ' + Object.keys(patch || {}).join('、'))
+				pushState()
+				return snapshot()
+			},
+			// 手动设阀门位置: open / closed / unknown。取消正在进行的动作工作和任何保持期/恢复；
+			// 有阀控待办在飞就给它终局 0x00，不留永不结束的待办；完成回调靠 app.valveSeq 失效，不会再覆盖手动值
+			setValve(pos) {
+				const r = app.setValve(pos)
+				armValve()
+				if (r.cancelledPending && policy && policy.state.pending) {
+					try { policy.pendingClose(S.writeRspEncode(S.REG.VALVE_TEST, S.WRITE_OK)) } catch (e) { log('error', '待办存档失败: ' + e.message) }
+				}
+				if (r.cancelled) log('warn', '手动改阀门，阀控动作/测试已取消' + (r.cancelledPending ? '（在飞的阀控待办已给终局 0x00）' : ''))
+				else if (r.changed) log('info', '手动设阀门位置: ' + pos)
+				pushState()
+				return snapshot()
+			},
+			setValveFault(on) {
+				app.setValveFault(on)
+				log('info', '手动' + (on ? '置' : '清') + '阀门动作故障位')
+				pushState()
+				return snapshot()
+			},
 			// 模拟表体重启: 清空待办与存档（去重记录视作已随余额落盘），阀控测试立即恢复
 			simulateReboot() {
 				if (workTimer != null) { clock.clearTimeout(workTimer); workTimer = null }
 				if (policy) policy.reboot()
 				app.reboot()
-				if (holdTimer != null) { clock.clearTimeout(holdTimer); holdTimer = null }
+				armValve()
 				log('warn', '模拟表体重启: 待办与存档已清空')
 				pushState()
 			},
@@ -1018,8 +1193,9 @@
 		const onLogCb = opts.onLog || function () {}
 		const onStateCb = opts.onState || function () {}
 		const waiter = makeWaiter(clock)
-		const policy = createCiuPolicy(cfg.meterNo)
-		const target = BigInt(cfg.targetDrn)
+		let policy = createCiuPolicy(cfg.meterNo)
+		let target = BigInt(cfg.targetDrn)
+		let activeSessions = 0 // 正在进行的唤醒会话数；setTarget 只在为 0 时生效
 		const C = H.CMD
 		let running = false
 		let stopped = false
@@ -1038,7 +1214,7 @@
 				running: running, phase: st.phase, op: st.op, tariff: st.tariff, protoVersion: st.protoVersion,
 				pollAllowed: st.pollAllowed, lastResult: st.lastResult, sessionCount: st.sessionCount,
 				lastTimeline: st.lastTimeline, budgetLeftMs: policy.budgetLeft(clock.now()), role: st.role,
-				pending: policy.hasPending(),
+				pending: policy.hasPending(), targetDrn: cfg.targetDrn,
 			}
 		}
 		function setPhase(p) { st.phase = p; try { onStateCb(snapshot()) } catch (e) { /* 界面回调异常不影响引擎 */ } }
@@ -1053,6 +1229,7 @@
 			const fail = function (reason, stage) { return { ok: false, uplink: null, timeline: tl, reason: reason, stage: stage } }
 			if (frame.length < 1 || frame.length > 64) return fail('应用帧超过 64 字节', 'send')
 			// open: 只有 WAKE_CIU 请求在飞或已受理期间收到的事件才算本轮；BUSY 等待期间到达的旧 kind=2/4 只记日志
+			const tgt = target // 本会话开始时的目标地址副本，来源比较与唤醒都用它，中途换目标也不影响在途会话
 			const sess = { ack: null, up: null, open: false }
 			const waiters = []
 			const notify = function () { waiters.slice().forEach(function (w) { w.check() }) }
@@ -1060,7 +1237,7 @@
 				if (evt.cmd !== H.EVT.WOR_FRAME) return
 				const d = H.decodeWorFrame(evt.payload)
 				if (!d) return
-				if (d.src !== target) { log('info', '忽略其他来源的 EVT src=' + d.src + ' kind=' + d.kind); return }
+				if (d.src !== tgt) { log('info', '忽略其他来源的 EVT src=' + d.src + ' kind=' + d.kind); return }
 				if (!sess.open) { log('info', '本轮 WAKE 尚未受理时收到 kind=' + d.kind + '，属于上一会话，不占本轮接收槽'); return }
 				if (d.kind === 2 && !sess.ack) {
 					sess.ack = { at: clock.now() }
@@ -1113,6 +1290,7 @@
 				const t = Math.max(1, Math.min(1000, l))
 				return { timeoutMs: t, retries: Math.max(0, Math.min(2, Math.floor(l / t) - 1)) }
 			}
+			activeSessions++
 			try {
 				// 1. WAKE_CIU
 				const busyDeadline = clock.now() + cfg.busyWaitS * 1000
@@ -1122,7 +1300,7 @@
 					if (budgetOut()) return fail('总等待预算 60s 已用完', 'budget')
 					tWake = clock.now()
 					sess.ack = null; sess.up = null; sess.open = true
-					const r = await link.request(C.WOR_WAKE_CIU, H.wakePayload(target, 2), reqOpt())
+					const r = await link.request(C.WOR_WAKE_CIU, H.wakePayload(tgt, 2), reqOpt())
 					if (r.status === H.STATUS.OK) break
 					sess.open = false
 					if (r.status === H.STATUS.ERR_BUSY) {
@@ -1168,6 +1346,7 @@
 				if (e && e.code === 'aborted') throw e
 				return fail(e && e.message ? e.message : String(e), 'link')
 			} finally {
+				activeSessions--
 				unsub()
 				waiters.slice().forEach(function (w) { w.abort() })
 			}
@@ -1463,29 +1642,46 @@
 			if (gen !== runGen || stopped) throw abortErr()
 			return snapshot()
 		}
-		async function refreshBasics() {
-			return runOp('basics', async function (res) {
-				res.message = '读取计价模式与协议版本'
-				for (const id of [S.REG.TARIFF, S.REG.PROTO_VER]) {
-					const tl = await readTlvs(res, id, 1, '读 0x' + id.toString(16).toUpperCase())
-					if (!tl) return
-					const v = tlvU8(tl, id)
-					if (id === S.REG.TARIFF && v != null) {
-						st.tariff = { currency: !!(v & 0x80), dec: v & 0x0f }
-						log('info', '计价模式: ' + (st.tariff.currency ? '金额' : '体积') + '，小数位 d=' + st.tariff.dec)
-					}
-					if (id === S.REG.PROTO_VER && v != null) {
-						st.protoVersion = v
-						st.pollAllowed = v >= 2
-						log(v >= 2 ? 'info' : 'warn', '表体协议版本 = ' + v + (v >= 2 ? '' : '（< 2，不支持 RESULT 轮询，待办类操作已禁用）'))
-					}
+		async function loadBasics(res) {
+			res.message = '读取计价模式与协议版本'
+			for (const id of [S.REG.TARIFF, S.REG.PROTO_VER]) {
+				const tl = await readTlvs(res, id, 1, '读 0x' + id.toString(16).toUpperCase())
+				if (!tl) return
+				const v = tlvU8(tl, id)
+				if (id === S.REG.TARIFF && v != null) {
+					st.tariff = { currency: !!(v & 0x80), dec: v & 0x0f }
+					log('info', '计价模式: ' + (st.tariff.currency ? '金额' : '体积') + '，小数位 d=' + st.tariff.dec)
 				}
+				if (id === S.REG.PROTO_VER && v != null) {
+					st.protoVersion = v
+					st.pollAllowed = v >= 2
+					log(v >= 2 ? 'info' : 'warn', '表体协议版本 = ' + v + (v >= 2 ? '' : '（< 2，不支持 RESULT 轮询，待办类操作已禁用）'))
+				}
+			}
+			if (st.tariff && st.protoVersion != null) {
 				res.outcome = 'done'
 				res.message = '计价模式与协议版本已读取'
-			})
+			} else {
+				res.outcome = 'failed'
+				res.message = '计价模式或协议版本寄存器不可读'
+			}
 		}
+		function refreshBasics() { return runOp('basics', loadBasics) }
 
-		function guardPoll(res) {
+		// 待办类操作（令牌、阀控）依赖 RESULT 轮询: 基础信息未知时先重读，仍读不到就拒绝，
+		// 不把「未知的协议版本」当作支持轮询
+		async function ensurePoll(res) {
+			if (st.tariff == null || st.protoVersion == null) {
+				log('info', '计价模式/协议版本未知，先重读再执行')
+				await loadBasics(res)
+				if (st.tariff == null || st.protoVersion == null) {
+					res.outcome = 'failed'
+					res.message = '计价模式/协议版本没读到（' + (res.message || '会话失败') + '），无法确认表体支持 RESULT 轮询，待办类操作已拒绝'
+					return false
+				}
+				res.outcome = 'failed'
+				res.message = ''
+			}
 			if (st.pollAllowed) return true
 			res.outcome = 'unsupported'
 			res.message = '表体协议版本 < 2，不支持 RESULT 轮询，待办类操作已禁用'
@@ -1513,11 +1709,39 @@
 			getState: snapshot,
 			runSession: runSession,
 			refreshBasics: refreshBasics,
+			// 运行中切换目标表: 只在空闲（没有操作、没有待办、没有在飞事务）时生效。
+			// 应用层表号取自 DRN，所以要重建 CIU 策略（TXN 与待办状态随新表重置），
+			// 并对新表重新读一次计价模式与协议版本。校验复用 normalizeCiuConfig
+			async setTarget(drn) {
+				if (!running) throw new Error('CIU 模拟未运行')
+				const n = normalizeCiuConfig(Object.assign({}, cfg, { targetDrn: drn }))
+				if (busyOp || activeSessions > 0 || policy.hasPending() || policy.state.inflight) {
+					const e = new Error('当前操作结束后再切换')
+					e.code = 'busy'
+					throw e
+				}
+				if (n.targetDrn === cfg.targetDrn) return snapshot()
+				cfg.targetDrn = n.targetDrn
+				cfg.meterNo = n.meterNo
+				target = BigInt(n.targetDrn)
+				policy = createCiuPolicy(n.meterNo)
+				st.tariff = null
+				st.protoVersion = null
+				st.pollAllowed = true
+				log('info', '目标表切换为 DRN ' + n.targetDrn + '（表号 ' + n.meterNo + '）')
+				setPhase('idle')
+				const mine = gen
+				const r = await refreshBasics()
+				if (stopped || gen !== mine) throw abortErr() // 切换过程中被停止: 明确 aborted，调用方不得当作已切换
+				// 基础信息读取失败: 保留新目标，由 basicsOk=false 告知；之后的待办类操作会先自动重读
+				if (!r.ok) log('warn', '目标表已切换，但基础信息读取失败: ' + r.message + '（下次待办类操作前会自动重读）')
+				return Object.assign(snapshot(), { basicsOk: !!r.ok })
+			},
 			token(digits) {
 				return runOp('token', async function (res) {
 					const d = String(digits || '')
 					if (!/^\d{20}$/.test(d)) { res.message = '令牌需 20 位数字，不足位数在本地提示，不上线'; return }
-					if (!guardPoll(res)) return
+					if (!(await ensurePoll(res))) return
 					await driveRequest(res, policy.sendToken(d), 'TOKEN')
 				})
 			},
@@ -1571,7 +1795,7 @@
 			},
 			write(reg, value) {
 				return runOp('write', async function (res) {
-					if (!guardPoll(res)) return
+					if (!(await ensurePoll(res))) return
 					const val = value == null ? [] : [value]
 					await driveRequest(res, policy.sendWrite(reg, val), 'WRITE 0x' + reg.toString(16).toUpperCase())
 				})
@@ -1588,6 +1812,10 @@
 		createMeterApp: createMeterApp,
 		createCiuPolicy: createCiuPolicy,
 		normalizeMeterConfig: normalizeMeterConfig,
+		normalizeLiveFields: normalizeLiveFields,
+		ALARM_PRESETS: ALARM_PRESETS,
+		composeAlarmCodes: composeAlarmCodes,
+		splitAlarmCodes: splitAlarmCodes,
 		normalizeCiuConfig: normalizeCiuConfig,
 		drnToMeterNo: drnToMeterNo,
 		drnCheckOk: drnCheckOk,

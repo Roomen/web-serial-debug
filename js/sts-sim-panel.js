@@ -9,7 +9,7 @@
 	const S = W.stsCiu
 
 	const KEY_ROLE = 'stsSim.role'
-	const KEY_METER = 'stsSim.meter'
+	const KEY_METER = 'stsSim.meter2' // 电池改以 V 为单位、告警码改复选后换了新 key，旧值不迁移
 	const KEY_CIU = 'stsSim.ciu'
 	const MAX_LOG = 500
 
@@ -48,8 +48,7 @@
 		{ k: 'valveDelayS', label: '阀门动作耗时(s)', kind: 'num', min: 0, max: 600, w: 72 },
 		{ k: 'remaining', label: '初始剩余量', kind: 'num', w: 96 },
 		{ k: 'totalUsed', label: '初始累计量', kind: 'num', min: 0, w: 96 },
-		{ k: 'batteryCv', label: '电池(0.01V)', kind: 'num', min: 0, max: 65535, w: 80 },
-		{ k: 'alarmCodes', label: '告警码(4 位,空格分隔)', kind: 'text', w: 160 },
+		{ k: 'batteryV', label: '电池(V)', kind: 'num', min: 0, max: 655.35, step: 0.01, w: 80, title: '两位小数，引擎内部换算为 0.01V 整数' },
 		{ k: 'tariffCurrency', label: '计价模式', kind: 'sel', options: [['0', '体积(dL)'], ['1', '金额']] },
 		{ k: 'tariffDec', label: '金额小数位', kind: 'sel', options: [['0', '0'], ['2', '2']] },
 		{ k: 'pak', label: 'PAK(32 位 HEX，不保存)', kind: 'text', maxlength: 32, w: 260, persist: false, sensitive: true, title: '仅当模组角色或 DRN 需要写入时用于 PROV_AUTH，不写入浏览器存储' },
@@ -69,6 +68,7 @@
 		running: false,
 		starting: false,
 		opBusy: false,
+		switching: false, // CIU 目标 DRN 切换进行中
 		engine: null,
 		link: null,
 		timer: null,
@@ -102,6 +102,7 @@
 			input.className = 'form-control form-control-sm'
 			input.type = def.kind === 'num' ? 'number' : (!def.sensitive ? 'text' : 'password')
 			if (def.kind === 'num') {
+				if (def.step) input.step = def.step
 				if (def.min != null) input.min = def.min
 				if (def.max != null) input.max = def.max
 			}
@@ -116,6 +117,50 @@
 		wrap.appendChild(input)
 		ui.inputs[group][def.k] = input
 		return wrap
+	}
+
+	// 告警码复选网格（配置与运行时各一份）：预置码按表内顺序，另有「其他码」文本框（4 位十进制，空格分隔）
+	function buildAlarmGrid(prefix) {
+		const root = el('div', 'sts-sim-alarm-block')
+		const grid = el('div', 'sts-sim-alarms')
+		const checks = {}
+		SIM.ALARM_PRESETS.forEach(function (p) {
+			const wrap = el('div', 'form-check form-switch ctl-switch')
+			const input = document.createElement('input')
+			input.type = 'checkbox'
+			input.className = 'form-check-input'
+			input.id = prefix + '-' + p.code
+			const label = el('label', 'form-check-label', p.code + ' ' + p.label)
+			label.htmlFor = input.id
+			wrap.append(input, label)
+			grid.appendChild(wrap)
+			checks[p.code] = input
+		})
+		const other = document.createElement('input')
+		other.type = 'text'
+		other.className = 'form-control form-control-sm'
+		other.id = prefix + '-other'
+		other.placeholder = '其他码，4 位十进制，空格分隔'
+		other.spellcheck = false
+		other.autocomplete = 'off'
+		other.style.maxWidth = '260px'
+		root.append(grid, other)
+		return {
+			root: root, checks: checks, other: other,
+			get: function () {
+				const on = Object.keys(checks).filter(function (c) { return checks[c].checked })
+				return SIM.composeAlarmCodes(on, other.value)
+			},
+			set: function (str) {
+				const sp = SIM.splitAlarmCodes(str)
+				Object.keys(checks).forEach(function (c) { checks[c].checked = sp.checked.indexOf(c) !== -1 })
+				other.value = sp.other
+			},
+			setDisabled: function (b) {
+				Object.keys(checks).forEach(function (c) { checks[c].disabled = b })
+				other.disabled = b
+			},
+		}
 	}
 
 	function buildToggleRow(text, id) {
@@ -162,6 +207,11 @@
 		METER_FIELDS.forEach(function (d) { meterForm.appendChild(buildField(d, 'meter')) })
 		const ciuForm = el('div', 'sts-sim-form')
 		CIU_FIELDS.forEach(function (d) { ciuForm.appendChild(buildField(d, 'ciu')) })
+		ui.alarmCfg = buildAlarmGrid('sts-sim-cfg-alarm')
+		const alarmCfgBox = el('div', 'sts-sim-field')
+		alarmCfgBox.append(el('span', 'sts-sim-field-name', '初始告警码（按此顺序作显示优先级，从高到低）'), ui.alarmCfg.root)
+		alarmCfgBox.style.width = '100%'
+		meterForm.appendChild(alarmCfgBox)
 		cfg.append(meterForm, ciuForm)
 		root.appendChild(cfg)
 
@@ -170,12 +220,58 @@
 		meterView.appendChild(el('div', 'sts-sim-card-title', '表计状态'))
 		const dl = el('div', 'sts-sim-kv')
 		const kv = {}
-		;['DRN', '表号', '剩余量', '累计使用量', '总购买量', '阀门', '电池', '告警码', '在飞待办', '存档', '最近会话'].forEach(function (name) {
+		;['DRN', '表号', '表计状态位域', '剩余量', '累计使用量', '总购买量', '阀门', '电池', '告警码', '在飞待办', '存档', '最近会话'].forEach(function (name) {
 			dl.appendChild(el('span', 'sts-sim-k', name))
 			kv[name] = el('span', 'sts-sim-v', '-')
 			dl.appendChild(kv[name])
 		})
 		meterView.appendChild(dl)
+		// 运行值: 运行中可随时改、立即生效；只改运行值，不回写上面的配置表单（下次启动仍以表单为初值）
+		meterView.appendChild(el('div', 'sts-sim-card-title', '运行值（立即生效，不回写配置）'))
+		const live = el('div', 'sts-sim-form')
+		ui.live = {}
+		;[['remaining', '剩余量(原始整数)', 1, 110], ['totalUsed', '累计使用量(原始 dL)', 1, 110], ['totalPurchased', '总购买量(原始整数)', 1, 110], ['batteryV', '电池(V)', 0.01, 80]].forEach(function (f) {
+			const wrap = el('label', 'sts-sim-field')
+			wrap.append(el('span', 'sts-sim-field-name', f[1]))
+			const input = document.createElement('input')
+			input.type = 'number'
+			input.step = String(f[2])
+			input.className = 'form-control form-control-sm'
+			input.style.width = f[3] + 'px'
+			input.id = 'sts-sim-live-' + f[0]
+			wrap.htmlFor = input.id
+			wrap.appendChild(input)
+			live.appendChild(wrap)
+			ui.live[f[0]] = input
+		})
+		meterView.appendChild(live)
+		const valveRow = el('div', 'sts-sim-row')
+		valveRow.appendChild(el('span', 'sts-sim-field-name', '阀门位置'))
+		const valveSeg = el('div', 'ctl-seg')
+		valveSeg.setAttribute('role', 'group')
+		valveSeg.setAttribute('aria-label', '阀门位置')
+		ui.valveBtns = {}
+		;[['open', '开'], ['closed', '关'], ['unknown', '不明']].forEach(function (x) {
+			const b = el('button', null, x[1])
+			b.type = 'button'
+			b.dataset.pos = x[0]
+			b.setAttribute('aria-pressed', 'false')
+			valveSeg.appendChild(b)
+			ui.valveBtns[x[0]] = b
+		})
+		const faultWrap = el('div', 'form-check form-switch ctl-switch')
+		ui.valveFault = document.createElement('input')
+		ui.valveFault.type = 'checkbox'
+		ui.valveFault.className = 'form-check-input'
+		ui.valveFault.id = 'sts-sim-live-valve-fault'
+		const faultLabel = el('label', 'form-check-label', '阀门动作故障')
+		faultLabel.htmlFor = ui.valveFault.id
+		faultWrap.append(ui.valveFault, faultLabel)
+		valveRow.append(valveSeg, faultWrap)
+		meterView.appendChild(valveRow)
+		ui.alarmLive = buildAlarmGrid('sts-sim-live-alarm')
+		meterView.appendChild(el('div', 'sts-sim-field-name', '告警码（勾选即写入寄存器 0x17，顺序即优先级）'))
+		meterView.appendChild(ui.alarmLive.root)
 		meterView.appendChild(el('div', 'sts-sim-card-title', '充值记录（最近在前）'))
 		const recTable = el('div', 'sts-sim-records')
 		meterView.appendChild(recTable)
@@ -258,6 +354,7 @@
 	function saveGroup(group, defs, key) {
 		const data = {}
 		defs.forEach(function (d) { if (d.persist !== false) data[d.k] = ui.inputs[group][d.k].value })
+		if (group === 'meter') data.alarmCodes = ui.alarmCfg.get()
 		lsSet(key, data)
 	}
 	function loadGroup(group, defs, key, defaults) {
@@ -268,8 +365,10 @@
 			let v = saved[d.k]
 			if (v == null) v = defaults[d.k]
 			if (d.k === 'tariffCurrency') v = (v === true || v === '1') ? '1' : '0'
+			if (d.k === 'batteryV' && v == null) v = defaults.batteryCv / 100
 			input.value = v == null ? '' : String(v)
 		})
+		if (group === 'meter') ui.alarmCfg.set(saved.alarmCodes != null ? saved.alarmCodes : defaults.alarmCodes)
 	}
 	function collectMeterConfig() {
 		const raw = readGroup('meter', METER_FIELDS)
@@ -280,6 +379,9 @@
 		})
 		c.tariffCurrency = raw.tariffCurrency === '1'
 		c.tariffDec = Number(raw.tariffDec)
+		c.batteryCv = raw.batteryV === '' ? undefined : Math.round(Number(raw.batteryV) * 100)
+		delete c.batteryV
+		c.alarmCodes = ui.alarmCfg.get()
 		return c
 	}
 	function collectCiuConfig() {
@@ -339,6 +441,15 @@
 		Object.keys(ui.inputs).forEach(function (g) {
 			Object.keys(ui.inputs[g]).forEach(function (k) { ui.inputs[g][k].disabled = busy })
 		})
+		// CIU 的目标 DRN 运行中保持可改（空闲时由引擎的 setTarget 决定是否接受）
+		ui.inputs.ciu.targetDrn.disabled = ui.starting || ui.switching // 切换进行中锁住，避免第二次修改与第一次交错
+		ui.alarmCfg.setDisabled(busy)
+		// 表端运行值控件只在运行中可用
+		const liveOn = ui.running && ui.role === 'meter'
+		Object.keys(ui.live).forEach(function (k) { ui.live[k].disabled = !liveOn })
+		Object.keys(ui.valveBtns).forEach(function (k) { ui.valveBtns[k].disabled = !liveOn })
+		ui.valveFault.disabled = !liveOn
+		ui.alarmLive.setDisabled(!liveOn)
 		updateCiuButtons()
 	}
 	function updateCiuButtons() {
@@ -350,6 +461,40 @@
 		r.abortBtn.disabled = !(ui.running && ui.opBusy)
 		r.tokenBtn.disabled = !idle || r.tokenInput.value.length !== 20
 	}
+	// 阀门行: 动作中（正在开/关或恢复，剩余秒数）、关阀保持期剩余时间；剩余时间按快照时刻的剩余毫秒减去已过去的时间
+	function renderValveText(s) {
+		const posName = function (v) { return v === S.VALVE_POS_OPEN ? '开' : v === S.VALVE_POS_CLOSED ? '关' : '不明' }
+		const since = Math.max(0, Date.now() - (s.at || Date.now()))
+		let t
+		if (s.valveMoving) {
+			const left = Math.max(0, Math.ceil((s.valveMoving.remainMs - since) / 1000))
+			t = s.valveMoving.kind === 'restore'
+				? '恢复中（正在恢复到' + posName(s.valveHold ? s.valveHold.pre : s.valveMoving.target) + '，位置报不明，剩余 ' + left + ' 秒）'
+				: '动作中（正在' + (s.valveMoving.target === S.VALVE_POS_OPEN ? '开' : '关') + '阀，位置报不明，剩余 ' + left + ' 秒）'
+		} else {
+			t = posName(s.valve & S.VALVE_POS_MASK)
+			if (s.valveHold) {
+				const left = Math.max(0, Math.ceil((s.valveHold.remainMs - since) / 1000))
+				t += '（阀控测试保持期，剩余 ' + Math.floor(left / 60) + ' 分 ' + pad(left % 60) + ' 秒后恢复到' + posName(s.valveHold.pre) + '）'
+			}
+		}
+		if (s.valveFault) t += '，动作故障'
+		ui.refs.kv['阀门'].textContent = t
+	}
+	// 把引擎当前值同步到运行值控件（正在编辑的那个不动）
+	// force=true: 校验失败时强制还原，连正在聚焦的控件和「其他码」框一起还原
+	function syncLive(s, force) {
+		const set = function (input, v) { if (force || document.activeElement !== input) input.value = v }
+		set(ui.live.remaining, String(s.remaining))
+		set(ui.live.totalUsed, String(s.totalUsed))
+		set(ui.live.totalPurchased, String(s.totalPurchased))
+		set(ui.live.batteryV, S.fmtScaled(s.batteryCv, 2))
+		const pos = s.valve & S.VALVE_POS_MASK
+		const cur = pos === S.VALVE_POS_OPEN ? 'open' : pos === S.VALVE_POS_CLOSED ? 'closed' : 'unknown'
+		Object.keys(ui.valveBtns).forEach(function (k) { ui.valveBtns[k].setAttribute('aria-pressed', String(k === cur)) })
+		ui.valveFault.checked = !!s.valveFault
+		if (force || !ui.alarmLive.root.contains(document.activeElement)) ui.alarmLive.set(s.alarms.join(' '))
+	}
 	function renderMeterState(s) {
 		const kv = ui.refs.kv
 		const t = s.tariff
@@ -358,12 +503,12 @@
 		kv['剩余量'].textContent = fmtQty(s.remaining, t) + '（原始 ' + s.remaining + '）'
 		kv['累计使用量'].textContent = fmtQty(s.totalUsed, { currency: false, dec: 1 })
 		kv['总购买量'].textContent = fmtQty(s.totalPurchased, t)
-		const pos = s.valve & S.VALVE_POS_MASK
-		kv['阀门'].textContent = (pos === S.VALVE_POS_OPEN ? '开' : pos === S.VALVE_POS_CLOSED ? '关' : '不明') +
-			(s.valveTestActive ? '（阀控测试中，到期 ' + fmtTime(s.valveRestoreAt) + ' 恢复）' : '')
+		kv['表计状态位域'].textContent = '0x' + s.meterStatus.toString(16).toUpperCase().padStart(2, '0') + S.meterStatusText(s.meterStatus)
+		renderValveText(s)
+		syncLive(s)
 		kv['电池'].textContent = S.fmtScaled(s.batteryCv, 2) + ' V'
 		kv['告警码'].textContent = s.alarms.length ? s.alarms.join(' ') : '无'
-		kv['在飞待办'].textContent = s.pending ? s.pending.type + ' TGT=0x' + s.pending.tgt.toString(16).toUpperCase() + '，预计剩余 ' + s.pending.etaS + ' s' : '无'
+		renderPendingText(s)
 		kv['存档'].textContent = s.archive.length ? s.archive.map(function (a) { return a.type + ' 0x' + a.tgt.toString(16).toUpperCase() }).join('，') : '空'
 		const ls = s.lastSession
 		kv['最近会话'].textContent = ls ? '共 ' + s.sessions + ' 次；最近一次 SET_UPLINK ' + ls.setUplinkMs + 'ms，自 kind=3 起 ' + ls.sinceKind3Ms + 'ms' : (s.sessions ? '共 ' + s.sessions + ' 次' : '暂无')
@@ -435,6 +580,11 @@
 		r.phase.textContent = t
 		updateCiuButtons()
 	}
+	// 在飞待办的预计剩余秒数随阀门动作倒计时变化，tick 里和阀门行一起刷新，否则停在受理时的值
+	function renderPendingText(s) {
+		const p = s.pending
+		ui.refs.kv['在飞待办'].textContent = p ? p.type + ' TGT=0x' + p.tgt.toString(16).toUpperCase() + '，预计剩余 ' + p.etaS + ' s' : '无'
+	}
 	function tick() {
 		if (!ui.running) return
 		// 串口断开: 引擎自动停止
@@ -445,6 +595,7 @@
 			return
 		}
 		renderPhase()
+		if (ui.engine && ui.role === 'meter') { const st = ui.engine.getState(); st.at = Date.now(); renderValveText(st); renderPendingText(st) }
 	}
 
 	// ===== 启停 =====
@@ -455,6 +606,7 @@
 		ui.running = false
 		ui.starting = false
 		ui.opBusy = false
+		ui.switching = false
 	}
 	function stopSim(msg) {
 		cleanup()
@@ -476,7 +628,7 @@
 			if (ui.role === 'meter') {
 				const cfg = collectMeterConfig()
 				saveGroup('meter', METER_FIELDS, KEY_METER)
-				engine = SIM.createMeterSim({ link: ui.link, clock: ui.clock, config: cfg, onLog: appendLog, onState: function (s) { ui.lastState = s; renderMeterState(s) } })
+				engine = SIM.createMeterSim({ link: ui.link, clock: ui.clock, config: cfg, onLog: appendLog, onState: function (s) { s.at = Date.now(); ui.lastState = s; renderMeterState(s) } })
 			} else {
 				const cfg = collectCiuConfig()
 				saveGroup('ciu', CIU_FIELDS, KEY_CIU)
@@ -489,6 +641,7 @@
 			return
 		}
 		ui.engine = engine
+		ui.ciuTarget = ui.inputs.ciu.targetDrn.value.trim()
 		ui.starting = true
 		setStatus(ui.role === 'meter' ? '启动中：探活与核对模组…' : '启动中：探活、核对模组并读取计价模式与协议版本（每次读取是一次唤醒会话，需数十秒）…')
 		applyRunning()
@@ -540,6 +693,51 @@
 		return Number.isFinite(n) && n >= 0 && n <= 0xff ? n : null
 	}
 
+	function applyLive(patch) {
+		if (!ui.engine || ui.role !== 'meter' || !ui.running) return
+		try {
+			ui.engine.setLive(patch)
+		} catch (e) {
+			plog('warn', '运行值未修改: ' + e.message)
+			setStatus(e.message, 'is-bad')
+			syncLive(ui.engine.getState(), true)
+			return
+		}
+		syncLive(ui.engine.getState())
+	}
+	// CIU 运行中切换目标 DRN: 引擎只在空闲时接受；被拒时把输入框还原为当前目标。
+	// 目标 DRN 本身就是这份配置的一项，切换成功后照常存盘
+	async function switchTarget() {
+		const input = ui.inputs.ciu.targetDrn
+		const want = input.value.trim()
+		const before = ui.ciuTarget
+		const eng = ui.engine // 捕获当前引擎: await 之后引擎已换或已停止就不再写状态、不存配置
+		const stale = function () { return ui.engine !== eng || !ui.running }
+		ui.switching = true
+		applyRunning()
+		try {
+			const r = await eng.setTarget(want)
+			if (stale()) return
+			// 回填并保存引擎实际接受的目标（规范化后的值），不读表单上此刻的内容
+			const accepted = (r && r.targetDrn) || want
+			ui.ciuTarget = accepted
+			input.value = accepted
+			saveGroup('ciu', CIU_FIELDS, KEY_CIU)
+			if (r && r.basicsOk === false) setStatus('目标表已切换，基础信息读取失败（下次操作前会自动重读）', 'is-bad')
+			else setStatus('目标表已切换', 'is-ok')
+		} catch (e) {
+			if (stale() || (e && e.code === 'aborted')) return
+			plog('warn', '目标表未切换: ' + e.message)
+			setStatus(e.message, 'is-bad')
+			input.value = before || ''
+		} finally {
+			ui.switching = false
+			if (!stale()) applyRunning()
+		}
+		updateCiuButtons()
+		renderPhase()
+	}
+
 	function bind() {
 		const r = ui.refs
 		r.bMeter.addEventListener('click', function () { ui.role = 'meter'; lsSet(KEY_ROLE, ui.role); applyRole() })
@@ -552,7 +750,29 @@
 			ui.inputs.meter[k].addEventListener('change', function () { saveGroup('meter', METER_FIELDS, KEY_METER); applyRole() })
 		})
 		Object.keys(ui.inputs.ciu).forEach(function (k) {
-			ui.inputs.ciu[k].addEventListener('change', function () { saveGroup('ciu', CIU_FIELDS, KEY_CIU) })
+			ui.inputs.ciu[k].addEventListener('change', function () {
+				if (k === 'targetDrn' && ui.running && ui.engine) { switchTarget(); return }
+				saveGroup('ciu', CIU_FIELDS, KEY_CIU)
+			})
+		})
+		// 表端运行值: 每个控件改完立即调引擎，校验失败时提示并回退到引擎当前值
+		Object.keys(ui.live).forEach(function (k) {
+			ui.live[k].addEventListener('change', function () {
+				const v = ui.live[k].value
+				if (v === '') { syncLive(ui.engine.getState(), true); return }
+				applyLive(k === 'batteryV' ? { batteryCv: Math.round(Number(v) * 100) } : { [k]: Number(v) })
+			})
+		})
+		const alarmChange = function () { applyLive({ alarmCodes: ui.alarmLive.get() }) }
+		Object.keys(ui.alarmLive.checks).forEach(function (c) { ui.alarmLive.checks[c].addEventListener('change', alarmChange) })
+		ui.alarmLive.other.addEventListener('change', alarmChange)
+		Object.keys(ui.valveBtns).forEach(function (k) {
+			ui.valveBtns[k].addEventListener('click', function () {
+				if (ui.engine && ui.role === 'meter') { ui.engine.setValve(k); syncLive(ui.engine.getState()) }
+			})
+		})
+		ui.valveFault.addEventListener('change', function () {
+			if (ui.engine && ui.role === 'meter') ui.engine.setValveFault(ui.valveFault.checked)
 		})
 		r.tokenInput.addEventListener('input', function () {
 			r.tokenInput.value = r.tokenInput.value.replace(/\D/g, '').slice(0, 20) // 只接受数字

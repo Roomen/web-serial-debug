@@ -77,6 +77,7 @@ function makeWorld(clock, opts) {
 	const meter = newModule('meter', o.meterRole, o.meterDrn, o.meterInit)
 	const ciu = newModule('ciu', o.ciuRole, 0n, false)
 	ciu.addr = CIU_ADDR
+	const meter2 = o.meter2Drn ? newModule('meter2', 1, o.meter2Drn, true) : null
 
 	function emit(mod, frame) {
 		clock.setTimeout(() => { if (mod.cb) mod.cb(frame) }, 1)
@@ -180,7 +181,7 @@ function makeWorld(clock, opts) {
 		s.dead = take('dropSession'); s.dropAck = take('dropAck'); s.dropUplink = take('dropUplink'); s.skipUplink = take('skipUplink'); s.late = take('delayKind3')
 		mod.session = s
 		const anchor = o.anchorDelayMs
-		const target = dst === meter.drn ? meter : null
+		const target = [meter, meter2].find(m => m && m.drn === dst) || null
 		if (!s.dead && target) {
 			clock.setTimeout(() => { if (!s.dropAck) emit(mod, evtFrame(dst, 2, 1, [], -80, 7)) }, anchor + 250)
 			for (let k = 0; k < 5; k++) {
@@ -225,7 +226,7 @@ function makeWorld(clock, opts) {
 		return { write: b => { onWrite(mod, b) }, onReceive: cb => { mod.cb = cb; return () => { mod.cb = null } } }
 	}
 	return {
-		meter, ciu, faults, log, port,
+		meter, meter2, ciu, faults, log, port,
 		injectKind3(data) { emit(meter, evtFrame(CIU_ADDR, 3, 1, data, -80, 7)) },
 	}
 }
@@ -455,29 +456,23 @@ async function tests() {
 	{
 		const t = setup({ meter: { valveDelayS: 3 } })
 		await ready(t)
-		const r1 = await drive(t.clock, t.ciu.valveTest(false)) // 原本开阀，测试关阀
+		const r1 = await drive(t.clock, t.ciu.valveTest(false)) // 原本开阀，关阀指令
 		assert.equal(r1.ok, true, r1.message)
 		let ms = t.meter.getState()
 		assert.equal(ms.valve, S.VALVE_POS_CLOSED)
-		assert.equal(ms.valveTestActive, true)
-		const restoreAt = ms.valveRestoreAt
+		assert.equal(ms.valveTestActive, true) // 关阀保持期内 bit2 保持
 		const st = await drive(t.clock, t.ciu.status())
-		assert.equal(st.status.valve, S.VALVE_POS_CLOSED | S.VALVE_TEST_ACTIVE) // 测试期间 bit2 置位
-		await t.clock.advance(120000)
-		// 保持期内再写: 不覆盖测试前状态、不重设截止时刻（这里故意写相反方向）
+		assert.equal(st.status.valve, S.VALVE_POS_CLOSED | S.VALVE_TEST_ACTIVE)
+		// 开阀指令: 到位后不设保持期，取消关阀保持期，之后保持开阀
 		const r2 = await drive(t.clock, t.ciu.valveTest(true))
 		assert.equal(r2.ok, true)
+		assert.equal(r2.write.result, 0)
 		ms = t.meter.getState()
-		assert.equal(ms.valveRestoreAt, restoreAt)
-		assert.equal(ms.valveTestActive, true)
-		assert.equal(ms.valve, S.VALVE_POS_CLOSED) // 保持期内不再次动作
-		assert.match(logText(t.logs.meter), /保持期内重复写/)
-		// 10 分钟到期恢复测试前状态
-		await t.clock.advance(restoreAt - t.clock.now() + 1000)
-		ms = t.meter.getState()
-		assert.equal(ms.valveTestActive, false)
 		assert.equal(ms.valve, S.VALVE_POS_OPEN)
-		assert.match(logText(t.logs.meter), /阀门恢复测试前状态/)
+		assert.equal(ms.valveTestActive, false)
+		assert.equal(ms.valveHold, null)
+		await t.clock.advance(11 * 60 * 1000)
+		assert.equal(t.meter.getState().valve, S.VALVE_POS_OPEN) // 到期不再恢复
 		// 断开绑定: 直接终局 0x00，不进待办
 		const u = await drive(t.clock, t.ciu.unbind())
 		assert.equal(u.ok, true)
@@ -757,6 +752,294 @@ async function tests() {
 		assert.equal(link.stats.txFrames, sent)
 		assert.equal(eng.getState().running, false)
 		assert.equal(t.world.log.setUplinks.length, 0)
+	}
+	// ---- 运行时参数: setLive / 阀门手动控制 / 默认值 ----
+	{
+		assert.equal(SIM.METER_DEFAULTS.valveDelayS, 30) // 阀门动作耗时默认 30s
+		assert.equal(SIM.METER_DEFAULTS.batteryCv, 368)
+		const t = setup()
+		await ready(t)
+		const m = t.meter
+		const readStatus = async () => (await drive(t.clock, t.ciu.status())).status
+		// 剩余量: STATUS 与 READ 0x03 读到新值
+		m.setLive({ remaining: 7777 })
+		assert.equal((await readStatus()).remaining, 7777)
+		const rd = await drive(t.clock, t.ciu.read(0x03, 1))
+		assert.equal(rd.read[0].text, '777.7（原始 7777，d=1）')
+		// 电池降到 3.00V 以下: 表计状态 bit1 置位；调回后清除
+		assert.equal((await readStatus()).meterStatus & S.MST_LOW_BATTERY, 0)
+		m.setLive({ batteryCv: 250 })
+		assert.equal((await readStatus()).meterStatus & S.MST_LOW_BATTERY, S.MST_LOW_BATTERY)
+		m.setLive({ batteryCv: 368 })
+		assert.equal((await readStatus()).meterStatus & S.MST_LOW_BATTERY, 0)
+		// 低余量 bit0 随剩余量重算
+		m.setLive({ remaining: 50 })
+		assert.equal((await readStatus()).meterStatus & S.MST_LOW_CREDIT, S.MST_LOW_CREDIT)
+		// 告警码: bit6 置位，READ 0x17 按预置优先级顺序返回（与勾选顺序无关），其他码追加在后
+		m.setLive({ alarmCodes: SIM.composeAlarmCodes(['1405', '0801', '0703'], '4321') })
+		const st = await drive(t.clock, t.ciu.status())
+		assert.equal(st.status.meterStatus & S.MST_ALARM_LIST, S.MST_ALARM_LIST)
+		assert.deepEqual(J(st.status.alarms), ['0801', '1405', '0703', '4321'])
+		const al = await drive(t.clock, t.ciu.read(0x17, 1))
+		assert.match(al.read[0].text, /^0801 1405 0703 4321/)
+		m.setLive({ alarmCodes: '' })
+		assert.equal((await readStatus()).meterStatus & S.MST_ALARM_LIST, 0)
+		// 校验复用配置那一套: 非法值整体拒绝且不改运行值；计价模式运行中不可改
+		assert.throws(() => m.setLive({ alarmCodes: '12' }), /4 位十进制/)
+		assert.throws(() => m.setLive({ tariffCurrency: true }), /停止时/)
+		assert.equal(m.getState().remaining, 50)
+		assert.deepEqual(J(SIM.splitAlarmCodes('1405 4321 0801')), { checked: ['1405', '0801'], other: '4321' })
+		// 阀门手动: 开 / 关 / 不明 + 故障位
+		for (const [pos, bits] of [['closed', S.VALVE_POS_CLOSED], ['unknown', 0], ['open', S.VALVE_POS_OPEN]]) {
+			m.setValve(pos)
+			assert.equal((await readStatus()).valve, bits, pos)
+		}
+		m.setValveFault(true)
+		assert.equal((await readStatus()).valve, S.VALVE_POS_OPEN | S.VALVE_FAULT)
+		m.setValveFault(false)
+		assert.equal((await readStatus()).valve, S.VALVE_POS_OPEN)
+		assert.throws(() => m.setValve('half'))
+	}
+	// ---- 阀控测试规则（需求方确认: 每条指令都真实动作）: 直接喂帧、假时钟推进，确定性 ----
+	{
+		const mkv = () => setup({ meter: { drn: METER_DRN.toString(), valveDelayS: 10 } })
+		const wr = (txn, open) => S.buildFrame({ dir: 0, type: S.TYPE.WRITE, txn, meter: METER_NO, payload: S.writeReqEncode(0x80, [open ? 1 : 0]) })
+		const poll = (m, txn, tgtTxn) => S.parseRaw(m.handleApp(S.buildFrame({ dir: 0, type: S.TYPE.RESULT, txn, meter: METER_NO, payload: S.resultReqEncode(S.tgtOf(S.TYPE.WRITE, tgtTxn)) })))
+		const stat = m => S.statusRspDecode(S.parseRaw(m.handleApp(S.buildFrame({ dir: 0, type: S.TYPE.STATUS, txn: 9, meter: METER_NO, payload: [] }))).payload)
+		const BIT2 = S.VALVE_TEST_ACTIVE
+		const sec = ms => ms * 1000
+		// A1: 受理 0xFE -> 动作中（位置报不明 + bit2）-> 到位 -> 终局 0x00
+		{
+			const t = mkv(); const m = t.meter
+			const acc = S.parseRaw(m.handleApp(wr(1, false)))
+			assert.deepEqual(bytes(acc.payload), [0x80, 0xfe])
+			assert.equal(stat(m).valve, BIT2) // 位置 00 不明 + bit2
+			assert.equal(m.getState().valveMoving.kind, 'cmd')
+			await t.clock.advance(sec(9))
+			assert.equal(poll(m, 2, 1).payload[0], 1) // 处理中
+			assert.equal(stat(m).valve, BIT2)
+			await t.clock.advance(sec(1))
+			assert.equal(stat(m).valve, S.VALVE_POS_CLOSED | BIT2) // 关阀到位，保持期内 bit2 保持
+			const done = poll(m, 3, 1)
+			assert.equal(done.payload[0], 2)
+			assert.deepEqual(bytes(done.payload.subarray(2)), [0x80, 0x00])
+			// 动作到位后再收到指令就重新动作（开阀）
+			m.handleApp(wr(4, true))
+			assert.equal(stat(m).valve, BIT2)
+			await t.clock.advance(sec(10))
+			// A3(开阀): 不设保持期，并取消关阀保持期，之后保持开阀
+			assert.equal(stat(m).valve, S.VALVE_POS_OPEN)
+			assert.equal(m.getState().valveHold, null)
+			await t.clock.advance(sec(700))
+			assert.equal(stat(m).valve, S.VALVE_POS_OPEN)
+			assert.doesNotMatch(logText(t.logs.meter), /保持期到，开始恢复/)
+		}
+		// A2: 关阀保持 10 分钟，到期恢复成指令前状态，恢复本身也走动作过程
+		{
+			const t = mkv(); const m = t.meter
+			m.handleApp(wr(1, false))
+			await t.clock.advance(sec(10))
+			const hold = m.getState().valveHold
+			assert.ok(hold && Math.abs(hold.remainMs - 600000) < 50)
+			await t.clock.advance(sec(599))
+			assert.equal(stat(m).valve, S.VALVE_POS_CLOSED | BIT2)
+			await t.clock.advance(sec(1))
+			assert.equal(stat(m).valve, BIT2) // 恢复中: 位置不明 + bit2
+			assert.equal(m.getState().valveMoving.kind, 'restore')
+			await t.clock.advance(sec(10))
+			assert.equal(stat(m).valve, S.VALVE_POS_OPEN) // 恢复完成，bit2 清
+			assert.match(logText(t.logs.meter), /恢复动作完成/)
+		}
+		// A4: 保持期内的同方向关阀（CIU 重发）: 照样动作，指令前状态与恢复截止时刻都不重设
+		{
+			const t = mkv(); const m = t.meter
+			m.handleApp(wr(1, false))
+			await t.clock.advance(sec(10))
+			const restoreAt = m.getState().valveRestoreAt
+			await t.clock.advance(sec(120))
+			m.handleApp(wr(2, false))
+			assert.equal(stat(m).valve, BIT2) // 照样动作
+			await t.clock.advance(sec(10))
+			assert.equal(m.getState().valveRestoreAt, restoreAt)
+			assert.match(logText(t.logs.meter), /保持期内（剩余 \d+ 分钟）收到同方向关阀：照样动作/)
+			await t.clock.advance(restoreAt - t.clock.now() + sec(10))
+			assert.equal(stat(m).valve, S.VALVE_POS_OPEN) // 恢复成最初的指令前状态，不是被重发覆盖成「关」
+		}
+		// A5: 判定在收到指令时锁定——保持期余时(4s) < 动作耗时(10s)，动作完成时保持期已过期，
+		// 按新的关阀指令处理: 重新记录指令前状态（仍是最初的开）并开始新的 10 分钟
+		{
+			const t = mkv(); const m = t.meter
+			m.handleApp(wr(1, false))
+			await t.clock.advance(sec(10))
+			const restoreAt = m.getState().valveRestoreAt
+			await t.clock.advance(restoreAt - t.clock.now() - sec(4))
+			m.handleApp(wr(2, false)) // 收到时还在保持期内
+			await t.clock.advance(sec(4))
+			assert.equal(m.getState().valveMoving.kind, 'cmd') // 保持期到点时这条指令仍在动作，恢复被推迟
+			await t.clock.advance(sec(6))
+			const ms = m.getState()
+			assert.equal(ms.valveMoving, null)
+			assert.equal(ms.valve, S.VALVE_POS_CLOSED)
+			assert.equal(ms.valveTestActive, true)
+			assert.ok(ms.valveRestoreAt > restoreAt)
+			assert.ok(Math.abs(ms.valveHold.remainMs - 600000) < 50) // 新的 10 分钟
+			assert.match(logText(t.logs.meter), /按新的关阀指令处理/)
+			assert.equal(poll(m, 3, 2).payload[0], 2)
+			await t.clock.advance(sec(610))
+			assert.equal(stat(m).valve, S.VALVE_POS_OPEN) // 指令前状态仍是最初的开
+		}
+		// A6: 动作中手动改位置: 待办给终局 0x00，到点不再覆盖手动值，日志写明
+		{
+			const t = mkv(); const m = t.meter
+			m.handleApp(wr(1, false))
+			await t.clock.advance(sec(3))
+			m.setValve('open')
+			assert.equal(m.getState().pending, null) // 没有留下永不结束的待办
+			const done = poll(m, 2, 1)
+			assert.equal(done.payload[0], 2)
+			assert.deepEqual(bytes(done.payload.subarray(2)), [0x80, 0x00])
+			await t.clock.advance(sec(30))
+			assert.equal(stat(m).valve, S.VALVE_POS_OPEN) // 完成回调没有把手动值改回关
+			assert.match(logText(t.logs.meter), /手动改阀门，阀控动作\/测试已取消/)
+			// 保持期内手动改: 取消保持期，到期不再恢复；只改故障位不取消
+			m.handleApp(wr(3, false))
+			await t.clock.advance(sec(10))
+			m.setValveFault(true)
+			assert.equal(m.getState().valveTestActive, true)
+			m.setValve('unknown')
+			assert.equal(m.getState().valveTestActive, false)
+			assert.equal(m.getState().valveRestoreAt, 0)
+			assert.equal(stat(m).valve, S.VALVE_FAULT)
+			await t.clock.advance(sec(700))
+			assert.equal(m.getState().valve, 0)
+			assert.doesNotMatch(logText(t.logs.meter), /保持期到，开始恢复/)
+		}
+		// 表体重启: 立即回到指令前状态，清掉动作与保持期
+		{
+			const t = mkv(); const m = t.meter
+			m.handleApp(wr(1, false))
+			await t.clock.advance(sec(10))
+			m.simulateReboot()
+			assert.equal(stat(m).valve, S.VALVE_POS_OPEN)
+			await t.clock.advance(sec(700))
+			assert.equal(stat(m).valve, S.VALVE_POS_OPEN)
+		}
+		// 表体重启发生在「保持期已在重发动作期间到期、动作尚未到位」时: 应恢复的值只存在延期记录里，仍要回到最初的开
+		{
+			const t = mkv(); const m = t.meter
+			m.handleApp(wr(1, false))
+			await t.clock.advance(sec(10))
+			await t.clock.advance(m.getState().valveRestoreAt - t.clock.now() - sec(4))
+			m.handleApp(wr(2, false))
+			await t.clock.advance(sec(5)) // 保持期已过期，重发的关阀还剩 5s
+			assert.equal(m.getState().valveHold, null)
+			assert.equal(m.getState().valveMoving.kind, 'cmd')
+			m.simulateReboot()
+			assert.equal(stat(m).valve, S.VALVE_POS_OPEN)
+			await t.clock.advance(sec(700))
+			assert.equal(stat(m).valve, S.VALVE_POS_OPEN)
+		}
+		// 开阀一受理就取消关阀保持期，不等到位
+		{
+			const t = mkv(); const m = t.meter
+			m.handleApp(wr(1, false))
+			await t.clock.advance(sec(10))
+			assert.ok(m.getState().valveHold)
+			m.handleApp(wr(2, true))
+			assert.equal(m.getState().valveHold, null)
+			await t.clock.advance(sec(10))
+			assert.equal(stat(m).valve, S.VALVE_POS_OPEN)
+		}
+	}
+	// ---- CIU 运行中切换目标表 ----
+	{
+		const DRN2 = 101876543214n // 表号 87654321
+		const t = setup({ world: { meter2Drn: DRN2 } })
+		const link2 = makeLink(t.clock, t.world.port(t.world.meter2))
+		const meter2 = SIM.createMeterSim({ link: link2, clock: t.clock, onLog() {}, config: { remaining: 4242 } })
+		await drive(t.clock, t.meter.start())
+		await drive(t.clock, meter2.start())
+		await drive(t.clock, t.ciu.start())
+		assert.equal((await drive(t.clock, t.ciu.status())).status.remaining, 5000)
+		// 有操作在进行时拒绝
+		const busyOp = t.ciu.status()
+		await flush()
+		const e = await t.ciu.setTarget(DRN2.toString()).then(() => null, x => x)
+		assert.match(e.message, /当前操作结束后再切换/)
+		await drive(t.clock, busyOp)
+		// 空闲时生效: 新表号进帧，STATUS 读到第二只表的值，基本信息重读
+		const sessBefore = t.ciu.getState().sessionCount
+		await drive(t.clock, t.ciu.setTarget(DRN2.toString()))
+		assert.ok(t.ciu.getState().sessionCount > sessBefore) // 0x18 / 0x27 对新表重读
+		assert.match(logText(t.logs.ciu), /目标表切换为 DRN 101876543214（表号 87654321）/)
+		const r2 = await drive(t.clock, t.ciu.status())
+		assert.equal(r2.ok, true, r2.message)
+		assert.equal(r2.status.remaining, 4242)
+		const sent = t.world.log.kind3.filter(k => S.hexSpaced(k.data.subarray(1, 5)) === '87 65 43 21')
+		assert.ok(sent.length >= 1)
+		// 非法 DRN 拒绝
+		assert.ok(await t.ciu.setTarget('123456789').then(() => null, x => x))
+	}
+	// ---- B4: 告警码合并去重，已知预置码不管写在哪都按预置顺序排前面 ----
+	assert.equal(SIM.composeAlarmCodes(['1405'], '4321 0801 1301 4321'), '0801 1301 1405 4321')
+	assert.equal(SIM.composeAlarmCodes([], '9999 0801'), '0801 9999')
+	// ---- B5: 应用对象的 setLive 自带校验，没有无校验写入口 ----
+	{
+		const t = setup()
+		assert.throws(() => t.meter.app.setLive({ alarmCodes: '12' }), /4 位十进制/)
+		assert.throws(() => t.meter.app.setLive({ tariffDec: 3 }), /停止时/)
+		t.meter.app.setLive({ batteryCv: 400 })
+		assert.equal(t.meter.getState().batteryCv, 400)
+		assert.equal(t.meter.getState().remaining, 5000) // 只改给出的字段，其余保持
+	}
+	// ---- B1/B2/B3: CIU 切目标表——基础信息失败、切换中停止、会话进行中被拒 ----
+	{
+		const DRN2 = 101876543214n
+		const mk = async () => {
+			const t = setup({ world: { meter2Drn: DRN2 } })
+			const link2 = makeLink(t.clock, t.world.port(t.world.meter2))
+			t.meter2 = SIM.createMeterSim({ link: link2, clock: t.clock, onLog() {}, config: { remaining: 4242 } })
+			await drive(t.clock, t.meter.start()); await drive(t.clock, t.meter2.start()); await drive(t.clock, t.ciu.start())
+			return t
+		}
+		// B1: 基础信息读取失败——保留新目标、basicsOk=false；待办类操作先自动重读，仍失败则拒绝且不上线
+		{
+			const t = await mk()
+			t.world.faults.dropSession = 1000
+			const r = await drive(t.clock, t.ciu.setTarget(DRN2.toString()))
+			assert.equal(r.basicsOk, false)
+			assert.equal(t.ciu.getState().tariff, null)
+			assert.equal(t.ciu.getState().protoVersion, null)
+			assert.match(logText(t.logs.ciu), /目标表已切换，但基础信息读取失败/)
+			const before = t.world.log.kind3.length
+			const refused = await drive(t.clock, t.ciu.token(TOKEN_A))
+			assert.equal(refused.ok, false)
+			assert.match(refused.message, /无法确认表体支持 RESULT 轮询/)
+			assert.equal(t.world.log.kind3.filter(k => k.data.length === 16).length, 0) // 令牌没有上线
+			t.world.faults.dropSession = 0
+			await t.clock.advance(20000)
+			const ok = await drive(t.clock, t.ciu.token(TOKEN_A)) // 现在自动重读成功后继续
+			assert.equal(ok.ok, true, ok.message)
+			assert.equal(t.ciu.getState().protoVersion, 2)
+			assert.equal(t.meter2.getState().remaining, 4742)
+		}
+		// B2: 切换过程中停止——setTarget 以 aborted 拒绝，不当作已切换
+		{
+			const t = await mk()
+			const p = t.ciu.setTarget(DRN2.toString()).then(() => 'switched', e => e.code)
+			await flush()
+			t.ciu.stop()
+			assert.equal(await drive(t.clock, p), 'aborted')
+		}
+		// B3: 有会话在进行时 setTarget 被拒，且进行中的会话仍用开始时的目标
+		{
+			const t = await mk()
+			const sess = t.ciu.runSession(hex('38 12 34 56 78 03'))
+			await flush()
+			const e = await t.ciu.setTarget(DRN2.toString()).then(() => null, x => x)
+			assert.equal(e.code, 'busy')
+			await drive(t.clock, sess)
+		}
 	}
 	// ---- 表体协议策略: 待办槽 / 存档 FIFO / TGT 冲突 / 接收判定 ----
 	{

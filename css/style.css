@@ -8342,3 +8342,16 @@ summary {
   color: var(--text-secondary);
   opacity: 0.75;
 }
+
+.sts-sim-alarm-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.sts-sim-alarms {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 2px 10px;
+}
