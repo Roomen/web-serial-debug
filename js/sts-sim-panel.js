@@ -40,8 +40,7 @@
 	// ===== 字段定义 =====
 	// kind: text / num / sel / bool；persist=false 的不落盘
 	const METER_FIELDS = [
-		{ k: 'meterNo', label: '表号(8 位)', kind: 'text', maxlength: 8, w: 96 },
-		{ k: 'drn', label: 'DRN(十进制)', kind: 'text', maxlength: 13, w: 128, title: '仅用于核对与寄存器 0x28；启动后以模组 DEV_ID_GET 回读值为准并回填' },
+		{ k: 'drn', label: 'DRN(留空=以模组为准)', kind: 'text', maxlength: 13, w: 150, title: '13 位 = 4 位厂商码 + 8 位表号 + 1 位校验（11 位为 2 位厂商码）；应用层表号取中间 8 位。与模组不一致且填了 PAK 时写入模组并复位' },
 		{ k: 'tokenDelayS', label: '令牌处理耗时(s)', kind: 'num', min: 0, max: 3600, w: 72 },
 		{ k: 'tokenMode', label: '结果模式', kind: 'sel', options: [['exec', '已执行(充值)'], ['reject', '未执行(拒收)']] },
 		{ k: 'creditAmount', label: '充值量(原始整数)', kind: 'num', min: 0, w: 96, title: '按当前计价模式的最小单位：体积 dL，金额按小数位' },
@@ -53,17 +52,16 @@
 		{ k: 'alarmCodes', label: '告警码(4 位,空格分隔)', kind: 'text', w: 160 },
 		{ k: 'tariffCurrency', label: '计价模式', kind: 'sel', options: [['0', '体积(dL)'], ['1', '金额']] },
 		{ k: 'tariffDec', label: '金额小数位', kind: 'sel', options: [['0', '0'], ['2', '2']] },
-		{ k: 'pak', label: 'PAK(32 位 HEX，不保存)', kind: 'text', maxlength: 32, w: 260, persist: false, secret: true, title: '仅当模组角色不对时用于 PROV_AUTH + ROLE_SET，不写入浏览器存储' },
+		{ k: 'pak', label: 'PAK(32 位 HEX，不保存)', kind: 'text', maxlength: 32, w: 260, persist: false, sensitive: true, title: '仅当模组角色或 DRN 需要写入时用于 PROV_AUTH，不写入浏览器存储' },
 	]
 	const CIU_FIELDS = [
-		{ k: 'targetDrn', label: '目标表 DRN(十进制)', kind: 'text', maxlength: 20, w: 152 },
-		{ k: 'meterNo', label: '表号(8 位)', kind: 'text', maxlength: 8, w: 96 },
+		{ k: 'targetDrn', label: '目标表 DRN', kind: 'text', maxlength: 13, w: 150, title: '唤醒地址用完整 DRN；应用层表号取中间 8 位（13 位去掉 4 位厂商码和末位校验，11 位去掉 2 位厂商码和末位校验）' },
 		{ k: 'localAddr', label: '本机地址(十进制)', kind: 'text', maxlength: 20, w: 120 },
 		{ k: 'ackTimeoutS', label: 'ACK 超时(s)', kind: 'num', min: 1, max: 600, w: 72 },
 		{ k: 'upTimeoutS', label: '上行超时(s)', kind: 'num', min: 1, max: 600, w: 72 },
 		{ k: 'busyWaitS', label: 'BUSY 等待(s)', kind: 'num', min: 0, max: 600, w: 72 },
 		{ k: 'sessionRetries', label: '会话重试次数', kind: 'num', min: 0, max: 20, w: 72 },
-		{ k: 'pak', label: 'PAK(32 位 HEX，不保存)', kind: 'text', maxlength: 32, w: 260, persist: false, secret: true, title: '仅当模组角色不对时用于 PROV_AUTH + ROLE_SET，不写入浏览器存储' },
+		{ k: 'pak', label: 'PAK(32 位 HEX，不保存)', kind: 'text', maxlength: 32, w: 260, persist: false, sensitive: true, title: '仅当模组角色或 DRN 需要写入时用于 PROV_AUTH，不写入浏览器存储' },
 	]
 
 	const ui = {
@@ -102,7 +100,7 @@
 		} else {
 			input = document.createElement('input')
 			input.className = 'form-control form-control-sm'
-			input.type = def.kind === 'num' ? 'number' : (def.secret ? 'password' : 'text')
+			input.type = def.kind === 'num' ? 'number' : (!def.sensitive ? 'text' : 'password')
 			if (def.kind === 'num') {
 				if (def.min != null) input.min = def.min
 				if (def.max != null) input.max = def.max
@@ -172,7 +170,7 @@
 		meterView.appendChild(el('div', 'sts-sim-card-title', '表计状态'))
 		const dl = el('div', 'sts-sim-kv')
 		const kv = {}
-		;['DRN', '剩余量', '累计使用量', '总购买量', '阀门', '电池', '告警码', '在飞待办', '存档', '最近会话'].forEach(function (name) {
+		;['DRN', '表号', '剩余量', '累计使用量', '总购买量', '阀门', '电池', '告警码', '在飞待办', '存档', '最近会话'].forEach(function (name) {
 			dl.appendChild(el('span', 'sts-sim-k', name))
 			kv[name] = el('span', 'sts-sim-v', '-')
 			dl.appendChild(kv[name])
@@ -356,6 +354,7 @@
 		const kv = ui.refs.kv
 		const t = s.tariff
 		kv['DRN'].textContent = s.drn || '-'
+		kv['表号'].textContent = s.meterNo || '-'
 		kv['剩余量'].textContent = fmtQty(s.remaining, t) + '（原始 ' + s.remaining + '）'
 		kv['累计使用量'].textContent = fmtQty(s.totalUsed, { currency: false, dec: 1 })
 		kv['总购买量'].textContent = fmtQty(s.totalPurchased, t)

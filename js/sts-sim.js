@@ -32,6 +32,32 @@
 		const s = String(v == null ? '' : v).trim()
 		return /^\d+$/.test(s) && s.length <= max ? s : null
 	}
+	// DRN（IEC 62055-41）: 13 位 = 4 位厂商码 + 8 位表号 + 1 位校验，11 位 = 2 位厂商码 + 8 位表号 + 1 位校验。
+	// 模组唤醒地址用完整 DRN，应用层帧里的 8 位 BCD 表号取 DRN 中间那 8 位。
+	// 模组里 DRN 是 u64 整数，厂商码的前导 0 会丢（0101…存进去只剩 12 位），所以不能按位数切：
+	// 表号 = (DRN / 10) mod 10^8，11 位和 13 位格式都适用。8 位以内按台架短地址，直接补零当表号；
+	// 正好 9 位分不清是哪种，报错，不截断，截断会把帧悄悄发给另一只表
+	function drnToMeterNo(v) {
+		const n = BigInt(v)
+		if (n <= 0n) throw new Error('DRN 未设置')
+		if (n < 100000000n) return n.toString().padStart(8, '0')
+		if (n < 1000000000n) throw new Error('DRN ' + n + ' 是 9 位：标准 DRN 为 11 或 13 位（厂商码 + 8 位表号 + 校验位），台架短地址不超过 8 位')
+		if (n >= 10000000000000n) throw new Error('DRN ' + n + ' 超过 13 位')
+		return ((n / 10n) % 100000000n).toString().padStart(8, '0')
+	}
+	// Luhn 校验（含校验位整体算，从右往左，不受厂商码前导 0 影响），只用于提示；台架短地址不校验
+	function drnCheckOk(v) {
+		const n = BigInt(v)
+		if (n < 1000000000n) return true
+		const d = n.toString()
+		let sum = 0
+		for (let i = 0; i < d.length; i++) {
+			let x = d.charCodeAt(d.length - 1 - i) - 48
+			if (i % 2 === 1) { x *= 2; if (x > 9) x -= 9 }
+			sum += x
+		}
+		return sum % 10 === 0
+	}
 	function clampInt(v, lo, hi, dflt) {
 		const n = Number(v)
 		if (!Number.isFinite(n)) return dflt
@@ -75,20 +101,23 @@
 
 	// ===== 配置规范化 =====
 	const METER_DEFAULTS = {
-		meterNo: '12345678', drn: '', pak: '',
+		drn: '', pak: '', // drn 留空 = 以模组 DEV_ID_GET 回读值为准
 		tokenDelayS: 6, tokenMode: 'exec', creditAmount: 500, stsBlockHex: DEFAULT_BLOCK, valveDelayS: 3,
 		remaining: 5000, totalUsed: 12345, totalPurchased: 20000, batteryCv: 328, alarmCodes: '',
 		tariffCurrency: false, tariffDec: 2, protoVersion: 2,
 	}
 	const CIU_DEFAULTS = {
-		meterNo: '12345678', targetDrn: '', localAddr: '2', pak: '',
+		targetDrn: '', localAddr: '2', pak: '',
 		ackTimeoutS: 15, upTimeoutS: 12, busyWaitS: 30, sessionRetries: 3,
 	}
 	function normalizeMeterConfig(c) {
 		const o = Object.assign({}, METER_DEFAULTS, c || {})
-		if (!digitsOnly(o.meterNo, 8) || String(o.meterNo).length !== 8) throw new Error('表号需 8 位十进制')
-		o.meterNo = String(o.meterNo).trim()
-		o.drn = o.drn === '' || o.drn == null ? '' : (digitsOnly(o.drn, 13) || (function () { throw new Error('DRN 需 13 位以内十进制') })())
+		o.drn = o.drn === '' || o.drn == null ? '' : String(o.drn).trim()
+		if (o.drn !== '') {
+			if (!digitsOnly(o.drn, 13)) throw new Error('DRN 需为 13 位以内十进制')
+			drnToMeterNo(o.drn)
+			o.drn = BigInt(o.drn).toString()
+		}
 		o.pak = String(o.pak || '').replace(/\s+/g, '')
 		o.tokenDelayS = clampInt(o.tokenDelayS, 0, 3600, 6)
 		o.valveDelayS = clampInt(o.valveDelayS, 0, 600, 3)
@@ -112,10 +141,9 @@
 	}
 	function normalizeCiuConfig(c) {
 		const o = Object.assign({}, CIU_DEFAULTS, c || {})
-		if (!digitsOnly(o.meterNo, 8) || String(o.meterNo).length !== 8) throw new Error('表号需 8 位十进制')
-		o.meterNo = String(o.meterNo).trim()
-		if (!digitsOnly(o.targetDrn, 20)) throw new Error('目标表 DRN 需为十进制数字')
-		o.targetDrn = String(o.targetDrn).trim()
+		if (!digitsOnly(o.targetDrn, 13)) throw new Error('目标表 DRN 需为 13 位以内十进制')
+		o.meterNo = drnToMeterNo(o.targetDrn)
+		o.targetDrn = BigInt(o.targetDrn).toString()
 		if (!digitsOnly(o.localAddr, 20)) throw new Error('本机地址需为十进制数字')
 		o.localAddr = String(o.localAddr).trim()
 		o.pak = String(o.pak || '').replace(/\s+/g, '')
@@ -160,23 +188,48 @@
 				if (r.payload.length < 1) throw new Error('ROLE_GET 结果为空')
 				return r.payload[0]
 			},
-			// 角色不对: 有 PAK 才 AUTH + ROLE_SET。ROLE_SET 应答后模组复位，不得重试，轮询 ECHO 等它回来
+			async devIdGet() {
+				const r = need(await link.request(C.PROV_DEV_ID_GET, []), 'DEV_ID_GET')
+				const d = H.decodeDevId(r.payload)
+				if (!d) throw new Error('DEV_ID_GET 结果长度异常')
+				return d
+			},
 			async ensureRole(want, pak) {
+				return (await this.provision(want, null, pak, 0)).role
+			},
+			// 角色或 DRN 与期望不符时才动模组，而且要有 PAK: PROV_AUTH -> DEV_ID_SET（DRN 不符）-> ROLE_SET（角色不符）。
+			// ROLE_SET 应答后模组自己复位；只改了 DRN 时补一次 REBOOT，METER 上电才会用新 DRN 值守。
+			// ROLE_SET / REBOOT 都不得重试，发出后轮询 ECHO 等模组回来，再回读核对
+			async provision(wantRole, wantDrn, pak, devType) {
 				const role = await this.roleGet()
 				log('info', '模组角色 = ' + role + ' ' + (H.ROLE_NAME[role] || '未知'))
-				if (role === want) return role
-				const wantName = H.ROLE_NAME[want]
+				const dev = wantDrn == null ? null : await this.devIdGet()
+				const needRole = role !== wantRole
+				const needDrn = dev != null && dev.drn !== wantDrn
+				if (!needRole && !needDrn) return { role: role, drn: dev ? dev.drn : null }
+				const wantName = H.ROLE_NAME[wantRole]
 				const pakBytes = S.hexToBytes(pak)
 				if (!pak) {
-					throw new Error('模组角色为 ' + (H.ROLE_NAME[role] || role) + '，请用 keytool 置备为 ' + wantName + ' 或填写 PAK（32 位十六进制）')
+					const why = []
+					if (needRole) why.push('模组角色为 ' + (H.ROLE_NAME[role] || role) + '，需要 ' + wantName)
+					if (needDrn) why.push('模组 DRN 为 ' + dev.drn + '，与配置的 ' + wantDrn + ' 不一致')
+					throw new Error(why.join('；') + '。填写 PAK（32 位十六进制）后由模拟器写入，或用 keytool 置备' + (needDrn ? '，也可以把 DRN 留空以模组为准' : ''))
 				}
 				if (!pakBytes || pakBytes.length !== 16) throw new Error('PAK 需为 32 位十六进制（16 字节）')
-				log('info', '角色不符，PROV_AUTH + ROLE_SET [' + want + '] ...')
 				const a = await link.request(C.PROV_AUTH, pakBytes)
 				if (a.status === H.STATUS.ERR_AUTH) throw new Error('PAK 校验失败（ERR_AUTH），模组未授权')
 				need(a, 'PROV_AUTH')
-				need(await link.request(C.PROV_ROLE_SET, [want], { noRetry: true, timeoutMs: 2000 }), 'ROLE_SET')
-				log('info', 'ROLE_SET 已应答，模组复位中，轮询 ECHO 等待重启（最多 35s，不重试 ROLE_SET）')
+				if (needDrn) {
+					need(await link.request(C.PROV_DEV_ID_SET, H.devIdSetPayload(devType, wantDrn)), 'DEV_ID_SET')
+					log('info', 'DRN 已写入模组: ' + dev.drn + ' -> ' + wantDrn)
+				}
+				if (needRole) {
+					need(await link.request(C.PROV_ROLE_SET, [wantRole], { noRetry: true, timeoutMs: 2000 }), 'ROLE_SET')
+					log('info', 'ROLE_SET [' + wantRole + '] 已应答，模组复位中，轮询 ECHO 等待重启（最多 35s，不重试）')
+				} else {
+					need(await link.request(C.REBOOT, [], { noRetry: true, timeoutMs: 2000 }), 'REBOOT')
+					log('info', 'REBOOT 已应答，让新 DRN 在值守中生效，轮询 ECHO 等待重启（最多 35s，不重试）')
+				}
 				let back = false
 				for (let i = 0; i < 35 && !back; i++) {
 					await waiter.sleep(1000)
@@ -187,11 +240,13 @@
 						if (e && e.code === 'aborted') throw e
 					}
 				}
-				if (!back) throw new Error('ROLE_SET 后 35s 内模组没有回来')
+				if (!back) throw new Error('模组复位后 35s 内没有回来')
 				const again = await this.roleGet()
-				if (again !== want) throw new Error('ROLE_SET 后角色仍为 ' + again + '，期望 ' + want)
-				log('info', '角色已定形为 ' + wantName)
-				return again
+				if (again !== wantRole) throw new Error('复位后角色仍为 ' + again + '，期望 ' + wantRole)
+				const dev2 = wantDrn == null ? null : await this.devIdGet()
+				if (dev2 && dev2.drn !== wantDrn) throw new Error('复位后 DRN 为 ' + dev2.drn + '，期望 ' + wantDrn)
+				log('info', '模组已定形: 角色 ' + wantName + (dev2 ? '，DRN ' + dev2.drn : ''))
+				return { role: again, drn: dev2 ? dev2.drn : null }
 			},
 		}
 	}
@@ -373,7 +428,7 @@
 				case R.TI: return { enc: 0x00, val: Uint8Array.from([0]) }
 				case R.EA: return { enc: 0x00, val: Uint8Array.from([7]) }
 				case R.KEN: return { enc: 0x00, val: Uint8Array.from([255]) }
-				case R.METER_NO: return { enc: 0xb0, val: S.meterBcd(cfg.meterNo) }
+				case R.METER_NO: return { enc: 0xb0, val: S.meterBcd(drnToMeterNo(a.drn)) } // 表号取自 DRN
 				case R.FW_VER: return { enc: 0xf0, val: Buffer_from('SIM-1.0') }
 				case R.PROTO_VER: return { enc: 0x00, val: Uint8Array.from([cfg.protoVersion]) }
 				case R.DRN: return { enc: 0xb0, val: bcdDigits(a.drn, 7) } // 13 位十进制，最高半字节补 0
@@ -524,7 +579,9 @@
 		const onStateCb = opts.onState || function () {}
 		const waiter = makeWaiter(clock)
 		const app = createMeterApp(cfg, clock)
-		const policy = createMeterPolicy(cfg.meterNo)
+		// 表号取自 DRN: 配置了 DRN 就先按配置建策略，留空则等启动时读到模组 DRN 再建
+		let meterNo = cfg.drn ? drnToMeterNo(cfg.drn) : null
+		let policy = meterNo ? createMeterPolicy(meterNo) : null
 		let running = false
 		let stopped = false
 		let unsubEvt = null
@@ -539,9 +596,9 @@
 
 		function snapshot() {
 			const a = app.state
-			const p = policy.state.pending
+			const p = policy ? policy.state.pending : null
 			return {
-				running: running, meterNo: cfg.meterNo, drn: info.drn, role: info.role,
+				running: running, meterNo: meterNo, drn: info.drn, role: info.role,
 				remaining: a.remaining, totalUsed: a.totalUsed, totalPurchased: a.totalPurchased,
 				tariff: { currency: a.tariffCurrency, dec: a.tariffDec },
 				valve: a.valve, valveTestActive: a.valveTestActive, valveRestoreAt: a.valveRestoreAt,
@@ -549,7 +606,7 @@
 				records: a.records.map(function (r) { return { empty: r.empty, minutes: r.minutes, amount: r.amount } }),
 				recordCount: a.recordCount,
 				pending: p ? { tgt: p.tgt, type: S.TYPE_NAME[p.type], etaS: p.etaS() } : null,
-				archive: policy.state.arch.map(function (x) { return { tgt: x.tgt, type: S.TYPE_NAME[x.type], len: x.payload.length } }),
+				archive: (policy ? policy.state.arch : []).map(function (x) { return { tgt: x.tgt, type: S.TYPE_NAME[x.type], len: x.payload.length } }),
 				dedupCount: a.dedup.length, unbound: a.unbound,
 				lastSession: info.lastSession, sessions: info.sessions,
 			}
@@ -591,6 +648,7 @@
 
 		// 表体收到一帧应用层请求 -> 应答帧（或静默丢弃返回 null）
 		function handleApp(data) {
+			if (!policy) { log('warn', 'DRN 尚未确定，丢弃应用帧'); return null }
 			const g = policy.onFrame(data)
 			switch (g.act) {
 				case 'discard':
@@ -684,15 +742,22 @@
 			info.startedAt = clock.now()
 			await mod.echo()
 			info.fw = await mod.fwInfo()
-			info.role = await mod.ensureRole(1, cfg.pak)
-			const dr = mod.need(await link.request(C.PROV_DEV_ID_GET, []), 'DEV_ID_GET')
-			const dev = H.decodeDevId(dr.payload)
-			if (!dev) throw new Error('DEV_ID_GET 结果长度异常')
+			// DRN 留空时以模组回读值为准；填了就以面板为准，不一致时（有 PAK）写入模组
+			const dev0 = await mod.devIdGet()
+			const want = cfg.drn ? BigInt(cfg.drn) : dev0.drn
+			if (want === 0n) throw new Error('DRN 未设置：在面板填写 DRN 并填写 PAK 由模拟器写入，或用 keytool 写入')
+			drnToMeterNo(want)
+			if (!drnCheckOk(want)) log('warn', 'DRN ' + want + ' 的校验位不符合 Luhn 规则，仍按此地址继续')
+			const pv = await mod.provision(1, want, cfg.pak, 1)
+			const dev = { drn: pv.drn }
+			info.role = pv.role
 			info.drn = dev.drn.toString()
-			if (dev.drn === 0n) throw new Error('DRN 未置备，请用 keytool 写入')
-			if (cfg.drn && cfg.drn !== info.drn) log('warn', '配置的 DRN(' + cfg.drn + ') 与模组回读值(' + info.drn + ')不一致，以模组为准')
+			if (!policy || meterNo !== drnToMeterNo(dev.drn)) {
+				meterNo = drnToMeterNo(dev.drn)
+				policy = createMeterPolicy(meterNo)
+			}
 			app.setDrn(info.drn)
-			log('info', 'DRN = ' + info.drn + '（devType ' + dev.devType + '）')
+			log('info', 'DRN = ' + info.drn + '，应用层表号 = ' + meterNo)
 
 			// 稳态应为 [1 SENTRY][1 GRID]；未 WOR_INIT 时补 INIT + SENTRY_START
 			let ws = await link.request(C.WOR_GET_STATUS, [])
@@ -714,7 +779,7 @@
 			if (gen !== runGen || stopped) throw abortErr()
 			unsubEvt = link.onEvt(onEvt)
 			running = true
-			log('info', '表端模拟运行中：表号 ' + cfg.meterNo)
+			log('info', '表端模拟运行中：DRN ' + info.drn + '，表号 ' + meterNo)
 			pushState()
 			return snapshot()
 		}
@@ -740,13 +805,14 @@
 			// 模拟表体重启: 清空待办与存档（去重记录视作已随余额落盘），阀控测试立即恢复
 			simulateReboot() {
 				if (workTimer != null) { clock.clearTimeout(workTimer); workTimer = null }
-				policy.reboot()
+				if (policy) policy.reboot()
 				app.reboot()
 				if (holdTimer != null) { clock.clearTimeout(holdTimer); holdTimer = null }
 				log('warn', '模拟表体重启: 待办与存档已清空')
 				pushState()
 			},
-			app: app, policy: policy,
+			app: app,
+			get policy() { return policy },
 		}
 	}
 
@@ -1382,7 +1448,8 @@
 			else mod.need(i, 'WOR_INIT')
 			if (gen !== runGen || stopped) throw abortErr()
 			running = true
-			log('info', 'CIU 模拟就绪：本机地址 ' + cfg.localAddr + '，目标 DRN ' + cfg.targetDrn + '，表号 ' + cfg.meterNo)
+			log('info', 'CIU 模拟就绪：本机地址 ' + cfg.localAddr + '，目标 DRN ' + cfg.targetDrn + '，应用层表号 ' + cfg.meterNo)
+			if (!drnCheckOk(cfg.targetDrn)) log('warn', '目标 DRN ' + cfg.targetDrn + ' 的校验位不符合 Luhn 规则，仍按此地址唤醒')
 			setPhase('idle')
 			// 连接后读一次 0x18 计价模式与 0x27 协议版本（每次读都是一次唤醒会话，需要几秒到几十秒）
 			try {
@@ -1521,6 +1588,8 @@
 		createCiuPolicy: createCiuPolicy,
 		normalizeMeterConfig: normalizeMeterConfig,
 		normalizeCiuConfig: normalizeCiuConfig,
+		drnToMeterNo: drnToMeterNo,
+		drnCheckOk: drnCheckOk,
 		METER_DEFAULTS: METER_DEFAULTS,
 		CIU_DEFAULTS: CIU_DEFAULTS,
 		BUDGET_MS: BUDGET_MS,

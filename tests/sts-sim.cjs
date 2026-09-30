@@ -60,7 +60,8 @@ async function drive(clock, p, maxMs = 900000, step = 100) {
 }
 
 // ---------- 假模组 ----------
-const METER_DRN = 1234567890123n
+// 13 位 DRN = 厂商码 0101 + 表号 12345678 + Luhn 校验位 8（合成值）
+const METER_DRN = 101123456788n
 const CIU_ADDR = 2n
 const PAK = '000102030405060708090a0b0c0d0e0f'
 function makeWorld(clock, opts) {
@@ -122,6 +123,21 @@ function makeWorld(clock, opts) {
 				} }
 			}
 			case 0x0301: return { status: 0, data: [mod.role === 2 ? 2 : 1, ...H.u64Bytes(mod.drn)] }
+			case 0x0302:
+				if (p.length !== 9) return { status: 1 }
+				if (!mod.authed) return { status: 3 }
+				mod.drn = H.u64(p, 1)
+				mod.devIdSets = (mod.devIdSets || 0) + 1
+				return OK
+			case 0x0004: return { status: 0, after: () => {
+				// 应答先于复位；METER 上电按 DRN 自动值守
+				mod.silentUntil = clock.now() + 3000
+				mod.worInit = mod.role === 1 && mod.drn !== 0n
+				mod.sentry = mod.worInit
+				mod.addr = mod.worInit ? mod.drn : 0n
+				mod.reboots = (mod.reboots || 0) + 1
+				mod.session = null; mod.mailbox = null; mod.cache = null; mod.authed = false
+			} }
 			case 0x0200:
 				if (p.length !== 9) return { status: 1 }
 				if (mod.worInit) return { status: 2 }
@@ -229,11 +245,11 @@ function setup(o) {
 	const ciuLink = makeLink(clock, world.port(world.ciu))
 	const meter = SIM.createMeterSim({
 		link: meterLink, clock, onLog: e => logs.meter.push(e),
-		config: Object.assign({ meterNo: METER_NO, tokenDelayS: 6, creditAmount: 500 }, o.meter),
+		config: Object.assign({ tokenDelayS: 6, creditAmount: 500 }, o.meter),
 	})
 	const ciu = SIM.createCiuSim({
 		link: ciuLink, clock, onLog: e => logs.ciu.push(e),
-		config: Object.assign({ meterNo: METER_NO, targetDrn: METER_DRN.toString(), localAddr: '2' }, o.ciu),
+		config: Object.assign({ targetDrn: METER_DRN.toString(), localAddr: '2' }, o.ciu),
 	})
 	return { clock, world, logs, meter, ciu, meterLink, ciuLink }
 }
@@ -289,7 +305,7 @@ async function tests() {
 	{
 		const t = setup({ world: { meterDrn: 0n } })
 		const e = await drive(t.clock, t.meter.start().then(() => null, x => x))
-		assert.match(e.message, /DRN 未置备/)
+		assert.match(e.message, /DRN 未设置/)
 	}
 	{
 		// 角色不对且填了 PAK: PROV_AUTH + ROLE_SET（只发一次），轮询 ECHO 等模组回来，再核对
@@ -298,7 +314,7 @@ async function tests() {
 		assert.equal(t.world.meter.roleSets, 1)
 		assert.equal(t.world.meter.role, 1)
 		assert.equal(t.meter.getState().role, 1)
-		assert.match(logText(t.logs.meter), /角色已定形为 METER/)
+		assert.match(logText(t.logs.meter), /模组已定形: 角色 METER/)
 	}
 	{
 		const t = setup({ world: { meterRole: 0 }, meter: { pak: 'ff'.repeat(16) } })
@@ -654,7 +670,7 @@ async function tests() {
 
 	// ---- F01: 取决于当前余额的失败不回放，重新判定并更新该项；永久结果回放 ----
 	{
-		const t = setup({ meter: { tokenDelayS: 1, remaining: 2147483600, creditAmount: 500 } })
+		const t = setup({ meter: { drn: METER_DRN.toString(), tokenDelayS: 1, remaining: 2147483600, creditAmount: 500 } }) // 不启动直接喂帧: DRN 要配上
 		const m = t.meter
 		const mk = (txn, d) => S.buildFrame({ dir: 0, type: S.TYPE.TOKEN, txn, meter: METER_NO, payload: S.tokenReqEncode(d) })
 		const final = async txn => {
@@ -744,7 +760,7 @@ async function tests() {
 	}
 	// ---- 表体协议策略: 待办槽 / 存档 FIFO / TGT 冲突 / 接收判定 ----
 	{
-		const t = setup({ meter: { tokenDelayS: 5 } })
+		const t = setup({ meter: { drn: METER_DRN.toString(), tokenDelayS: 5 } }) // 不启动直接喂帧: DRN 要配上
 		const m = t.meter
 		const mk = (type, txn, payload) => S.buildFrame({ dir: 0, type, txn, meter: METER_NO, payload })
 		const rsp = f => S.parseRaw(f)
@@ -815,6 +831,62 @@ async function tests() {
 		assert.deepEqual(bytes(r.payload), [5, 0xff])
 	}
 
+	// ---- DRN 与应用层表号: 表号取 DRN 中间 8 位 ----
+	{
+		assert.equal(SIM.drnToMeterNo('0101123456788'), '12345678') // 13 位: 4 位厂商码 + 8 位表号 + 校验
+		assert.equal(SIM.drnToMeterNo('01123456780'), '12345678') // 11 位: 2 位厂商码 + 8 位表号 + 校验
+		assert.equal(SIM.drnToMeterNo('1'), '00000001') // 台架短地址
+		// 模组里存的是整数，厂商码前导 0 丢掉后照样取对
+		assert.equal(SIM.drnToMeterNo(101123456788n), '12345678')
+		assert.equal(SIM.drnToMeterNo(1123456780n), '12345678')
+		assert.equal(SIM.drnToMeterNo('9999123456785'), '12345678')
+		for (const bad of ['123456789', '0', '12345678901234']) assert.throws(() => SIM.drnToMeterNo(bad))
+		assert.equal(SIM.drnCheckOk('0101123456788'), true)
+		assert.equal(SIM.drnCheckOk(101123456788n), true)
+		assert.equal(SIM.drnCheckOk('0101123456789'), false)
+		assert.equal(SIM.drnCheckOk('1'), true)
+		assert.throws(() => SIM.normalizeCiuConfig({ targetDrn: '123456789' }), /9 位/)
+		assert.equal(SIM.normalizeCiuConfig({ targetDrn: '0101123456788' }).meterNo, '12345678')
+	}
+
+	// ---- 表端 DRN 留空: 以模组回读值为准 ----
+	{
+		const t = setup()
+		await ready(t)
+		const st = t.meter.getState()
+		assert.equal(st.drn, METER_DRN.toString())
+		assert.equal(st.meterNo, METER_NO)
+		t.meter.stop(); t.ciu.stop()
+	}
+
+	// ---- 表端配置的 DRN 与模组不同: 有 PAK 写入并 REBOOT，值守地址随之更新，CIU 按新 DRN 通信 ----
+	{
+		const NEW_DRN = 101876543212n
+		const t = setup({ meter: { drn: NEW_DRN.toString(), pak: PAK }, ciu: { targetDrn: NEW_DRN.toString() } })
+		await ready(t)
+		assert.equal(t.world.meter.drn, NEW_DRN)
+		assert.equal(t.world.meter.devIdSets, 1)
+		assert.equal(t.world.meter.reboots, 1)
+		assert.equal(t.meter.getState().meterNo, '87654321')
+		const r = await drive(t.clock, t.ciu.status())
+		assert.equal(r.ok, true, r.message)
+		t.meter.stop(); t.ciu.stop()
+	}
+
+	// ---- DRN 不同但没有 PAK: 拒绝启动，不写模组 ----
+	{
+		const t = setup({ meter: { drn: '0101876543212' } })
+		await assert.rejects(drive(t.clock, t.meter.start()), /不一致/)
+		assert.equal(t.world.meter.drn, METER_DRN)
+		assert.equal(t.world.meter.devIdSets, undefined)
+	}
+
+	// ---- 模组未置备 DRN、面板也留空: 拒绝启动 ----
+	{
+		const t = setup({ world: { meterDrn: 0n } })
+		await assert.rejects(drive(t.clock, t.meter.start()), /DRN 未设置/)
+	}
+
 	// ---- 预算末尾模组 RSP 丢失: 事务层重发也不能把放弃拖过 60s ----
 	{
 		const t = setup({ meter: { tokenDelayS: 55 } })
@@ -853,7 +925,7 @@ async function tests() {
 				return Promise.resolve({ status: 0 })
 			},
 		}
-		const ciu = SIM.createCiuSim({ link, clock, config: { meterNo: METER_NO, targetDrn: METER_DRN.toString(), localAddr: '2' } })
+		const ciu = SIM.createCiuSim({ link, clock, config: { targetDrn: METER_DRN.toString(), localAddr: '2' } })
 		const res = await drive(clock, ciu.runSession(S.buildFrame({ dir: 0, type: S.TYPE.STATUS, txn: 2, meter: METER_NO, payload: [] }), b => S.parseRaw(b).txn === 2))
 		assert.equal(res.ok, true)
 		assert.equal(S.parseRaw(res.uplink).txn, 2, '用的是本轮上行，不是 WAKE 在飞期间到达的旧上行')
