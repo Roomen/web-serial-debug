@@ -77,8 +77,12 @@
 		}
 	}
 	const sessionSingle = makeSerialSession('COM')
-	const sessionA = makeSerialSession('TX')
-	const sessionB = makeSerialSession('RX')
+	const sessionA = makeSerialSession('A路')
+	const sessionB = makeSerialSession('B路')
+	// 提示文案里的会话名：固定叫「单路 / A路 / B路」，不跟可编辑的标签走
+	function sidName(sid) {
+		return sid === 'S' ? '单路' : sid + '路'
+	}
 	function sessionByPhys(sid) {
 		if (sid === 'S') return sessionSingle
 		if (sid === 'B') return sessionB
@@ -160,11 +164,11 @@
 		},
 		getLabelA() {
 			const el = document.getElementById('serial-session-a-label')
-			return el ? el.value || 'TX' : 'TX'
+			return el ? el.value || 'A路' : 'A路'
 		},
 		getLabelB() {
 			const el = document.getElementById('serial-session-b-label')
-			return el ? el.value || 'RX' : 'RX'
+			return el ? el.value || 'B路' : 'B路'
 		},
 
 		// API 仍返回 'A'/'B'；真正写口用 activeSendPhys()
@@ -2855,7 +2859,7 @@
 				}
 				refreshPortDisplayNames()
 				updateOpenButton(sid)
-				showToast(`串口已选择 (会话 ${sid}${key ? '' : '，无持久标识'})`)
+				showToast(`串口已选择 (${sidName(sid)}${key ? '' : '，无持久标识'})`)
 				// 锁由本函数持有到结束，这里不要再套一层 setOpening
 				if (wasOpen || openAfterSelect) {
 					await openSerial(sid, { reason: 'user' })
@@ -3300,7 +3304,7 @@
 	function portConflictMsg(taken) {
 		if (taken === 'BLU') return '该口已被功耗分析占用'
 		if (taken === 'S') return '该口已被单路串口占用'
-		if (taken === 'A' || taken === 'B') return '该口已被双路 ' + taken + ' 占用'
+		if (taken === 'A' || taken === 'B') return '该口已被' + sidName(taken) + '占用'
 		return '该口已被其它会话占用'
 	}
 
@@ -3741,7 +3745,7 @@
 		addLogErr('设备断开连接 (' + getPortDisplayName(port) + ')', sid)
 		await closeSerial(sid)
 		if (!SerialHub.isManualClose(sid)) {
-			addLogErr('会话 ' + sid + ' 设备已断开，重新插入后将自动重连', sid)
+			addLogErr(sidName(sid) + ' 设备已断开，重新插入后将自动重连', sid)
 		}
 	})
 	function serialStatuChange(statu, sid) {
@@ -5493,7 +5497,7 @@
 	const labelBInput = document.getElementById('serial-session-b-label')
 	if (labelBInput) {
 		labelBInput.addEventListener('input', function () {
-			sessionB.label = this.value || 'RX'
+			sessionB.label = this.value || 'B路'
 			updateDualLogLabels()
 		})
 		labelBInput.addEventListener('change', function () {
@@ -5546,10 +5550,11 @@
 	// 双路：恢复标签和主发口设置
 	;(function restoreDualSettings() {
 		try {
+			// 旧版默认标签是 TX/RX，按默认值存下来的不再恢复，改用新默认 A路/B路
 			const savedLabelA = sessionStorage.getItem('serialSessionLabelA')
-			if (savedLabelA && labelAInput) labelAInput.value = savedLabelA
+			if (savedLabelA && savedLabelA !== 'TX' && labelAInput) labelAInput.value = savedLabelA
 			const savedLabelB = sessionStorage.getItem('serialSessionLabelB')
-			if (savedLabelB) {
+			if (savedLabelB && savedLabelB !== 'RX') {
 				sessionB.label = savedLabelB
 				if (labelBInput) labelBInput.value = savedLabelB
 			}
@@ -5762,8 +5767,8 @@
 			if (wantA && wantB && planA && planB) {
 				const aIdKey = getSerialWantPortKey('A')
 				const bIdKey = getSerialWantPortKey('B')
-				if (aIdKey && bIdKey) addLogErr('双路已按设备身份恢复 A/B 连接', 'A')
-				else addLogErr('双路已按授权顺序恢复 A/B；若设备串台请重新选择串口', 'A')
+				if (aIdKey && bIdKey) addLogErr('双路已按设备身份恢复 A路/B路 连接', 'A')
+				else addLogErr('双路已按授权顺序恢复 A路/B路；若设备串台请重新选择串口', 'A')
 			}
 		} finally {
 			reconnectGrace = false
