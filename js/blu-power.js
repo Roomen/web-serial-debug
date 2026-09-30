@@ -69,7 +69,8 @@
 	let bluPort = null
 	let bluKnownPorts = [] // getPorts() 检测到的 BLU 端口
 	window.bluApi = {
-		ownsPort: function (port) { return !!(port && bluPort === port) },
+		// 只有真正打开（或正在打开）才算占用；页面加载时自动填进下拉框的口只是「选中」，不能挡住串口调试
+		ownsPort: function (port) { return !!(port && bluPort === port && (bluOpen || bluOpening)) },
 		isOpen: function () { return !!bluOpen },
 		getPort: function () { return bluPort },
 		// 排查样点流用：先 captureRaw() 再采样，停采后 dumpRaw() 导出 .bin + .json
@@ -1890,12 +1891,9 @@
 
 	async function bluOpenPort() {
 		if (!bluPort || bluOpen || bluOpening) return
-		if (window.SerialHub && typeof window.SerialHub.findSessionByPort === 'function') {
-			const owner = window.SerialHub.findSessionByPort(bluPort)
-			if (owner) {
-				bluLog('该口已被串口调试占用，请换一个设备或先在串口页关闭', 'error')
-				return
-			}
+		if (serialOwnsPort(bluPort)) {
+			bluLog('该口已被串口调试占用，请换一个设备或先在串口页关闭', 'error')
+			return
 		}
 		bluOpening = true
 		bluManualClose = false

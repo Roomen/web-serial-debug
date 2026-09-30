@@ -70,8 +70,8 @@
 		const ui = {
 			wanted: lsGet(KEY_RUNNING) === true,
 			sid: null,
-			name: channel === 'S' ? '单路' : channel, // 短名，用于提示文案
-			title: channel === 'S' ? '单路' : channel, // 头部显示名，A/B 有串口标签时附上
+			name: channel === 'S' ? '单路' : channel + '路', // 短名，用于提示文案
+			title: channel === 'S' ? '单路' : channel + '路', // 头部显示名，串口标签改成自定义名时附上
 			collapsed: channel !== 'S' && lsGet(KEY_COLLAPSED) === true,
 			retryAt: 0,
 			retryCount: 0,
@@ -939,7 +939,8 @@
 			channel: channel,
 			setCollapsed: setCollapsed,
 			setLabel: function (label) {
-				const title = channel === 'S' ? '单路' : (label && label !== channel ? channel + ' · ' + label : channel)
+				const base = channel === 'S' ? '单路' : channel + '路'
+				const title = channel === 'S' || !label || label === base || label === channel ? base : base + ' · ' + label
 				if (title === ui.title) return
 				ui.title = title
 				ui.refs.nameEl.textContent = title
@@ -977,7 +978,7 @@
 
 	const help = mk('details', 'sts-sim-card')
 	help.appendChild(mk('summary', null, '接线与刷新说明'))
-	help.appendChild(mk('div', 'sts-sim-hint small', '单路与双路是不同的串口，各自独立保存配置。双路模式下 A / B 并排（窄栏时上下堆叠）显示，独立设置角色、启停与日志，支持 CIU + 表端或两路表端，需分别连接两个 hostProto 模组。运行时保持本页在前台，不要让其他工具占用同一串口。'))
+	help.appendChild(mk('div', 'sts-sim-hint small', '单路与双路是不同的串口，各自独立保存配置。双路模式下 A路 / B路 并排（窄栏时上下堆叠）显示，独立设置角色、启停与日志，支持 CIU + 表端或两路表端，需分别连接两个 hostProto 模组。运行时保持本页在前台，不要让其他工具占用同一串口。'))
 	help.appendChild(mk('div', 'sts-sim-hint small', '刷新后等待对应串口重连，再自动重新启动。使用配置初值，不恢复运行值、充值记录、阀门保持期或在飞事务。PAK 不保存；需要认证时重新输入并手动启动。'))
 
 	const panels = {}
