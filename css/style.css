@@ -8124,234 +8124,513 @@ summary {
    STS 表端 / CIU 模拟面板
    ============================================= */
 .sts-sim {
-  gap: 8px;
-  padding: 2px 2px 8px;
+	min-width: 0;
+	gap: 8px;
+	padding: 2px 2px 8px;
+}
+
+.sts-sim.wb-pane-scroll {
+	container: sts-sim / inline-size;
+}
+
+.sts-sim > .sts-sim {
+	flex: 0 0 auto;
+	padding: 0;
+}
+
+.sts-sim > .sts-sim-channelbar,
+.sts-sim > .sts-sim-hint {
+	flex-shrink: 0;
 }
 
 .sts-sim [hidden] {
-  display: none !important;
+	display: none !important;
 }
 
-.sts-sim-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+.sts-sim-top,
+.sts-sim-channelbar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.sts-sim-channelbar {
+	padding: 6px 8px;
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	background: var(--bg-surface-hover);
+}
+
+.sts-sim-channelbar > .ctl-seg {
+	flex: 1 1 100%;
+	width: 100%;
+}
+
+.sts-sim-channelbar > .ctl-seg > button {
+	flex: 1 1 0;
+	min-width: 0;
+	padding: 5px 8px;
+	line-height: 1.5;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+.sts-sim-top > *,
+.sts-sim-channelbar > * {
+	min-width: 0;
+	max-width: 100%;
 }
 
 .sts-sim-status {
-  color: var(--text-secondary);
+	color: var(--text-secondary);
+	font-size: 0.72rem;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
 }
 
 .sts-sim-status.is-ok {
-  color: var(--success);
+	color: var(--success);
 }
 
 .sts-sim-status.is-bad {
-  color: var(--danger);
+	color: var(--danger);
 }
 
 .sts-sim-hint {
-  color: var(--text-secondary);
-  line-height: 1.5;
+	color: var(--text-secondary);
+	line-height: 1.5;
+	font-size: 0.72rem;
+	overflow-wrap: anywhere;
 }
 
 .sts-sim-card {
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background: var(--bg-surface);
-  padding: 8px 10px;
+	flex: 0 0 auto;
+	min-width: 0;
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md);
+	background: var(--bg-surface);
+	padding: 8px 10px;
 }
 
 .sts-sim-card > summary {
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--text-secondary);
+	font-size: 0.78rem;
+	font-weight: 600;
+	color: var(--text-primary);
+	line-height: 1.6;
+}
+
+.sts-sim-card[open] > summary {
+	padding-bottom: 6px;
+	border-bottom: 1px solid var(--border-color);
+}
+
+.sts-sim-card > .sts-sim-hint {
+	margin-top: 6px;
 }
 
 .sts-sim-card-title {
-  margin: 6px 0 4px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-secondary);
+	margin: 10px 0 6px;
+	font-size: 0.75rem;
+	font-weight: 600;
+	color: var(--text-secondary);
+}
+
+.sts-sim-card > .sts-sim-card-title:first-child {
+	margin-top: 0;
+	color: var(--text-primary);
 }
 
 .sts-sim-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-  margin-top: 6px;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 8px 10px;
+	margin: 8px 0;
 }
 
 .sts-sim-field {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
+	display: inline-flex;
+	flex-direction: column;
+	gap: 2px;
+	margin: 0;
+	min-width: 0;
+	max-width: 100%;
+}
+
+.sts-sim-field > .form-control,
+.sts-sim-field > .form-select {
+	min-width: 0;
+	max-width: 100%;
+}
+
+.sts-sim-field:has(> .sts-sim-alarm-block) {
+	flex: 1 0 100%;
+}
+
+.sts-sim-field input[type='text'],
+.sts-sim-field input[type='password'] {
+	font-family: var(--font-mono);
 }
 
 .sts-sim-field-name {
-  font-size: 0.68rem;
-  color: var(--text-secondary);
-  white-space: nowrap;
+	font-size: 0.68rem;
+	color: var(--text-secondary);
+	line-height: 1.45;
+	overflow-wrap: anywhere;
 }
 
 .sts-sim-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 6px;
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-bottom: 6px;
+}
+
+.sts-sim-row > .form-control,
+.sts-sim-row > .form-select {
+	min-width: 0;
+	max-width: 100%;
 }
 
 .sts-sim-token {
-  width: 200px;
-  font-family: var(--font-mono);
+	flex: 0 1 220px;
+	width: 220px;
+	font-family: var(--font-mono);
 }
 
 .sts-sim-kv {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 2px 12px;
-  font-size: 0.75rem;
+	display: grid;
+	grid-template-columns: fit-content(40%) minmax(0, 1fr);
+	gap: 4px 12px;
+	font-size: 0.75rem;
+	line-height: 1.5;
 }
 
 .sts-sim-k {
-  color: var(--text-secondary);
-  white-space: nowrap;
+	min-width: 0;
+	color: var(--text-secondary);
+	overflow-wrap: anywhere;
 }
 
 .sts-sim-v {
-  font-family: var(--font-mono);
-  overflow-wrap: anywhere;
+	min-width: 0;
+	font-family: var(--font-mono);
+	overflow-wrap: anywhere;
 }
 
 .sts-sim-rec {
-  display: grid;
-  grid-template-columns: 2.5em 11em minmax(0, 1fr);
-  gap: 8px;
-  font-size: 0.72rem;
-  font-family: var(--font-mono);
+	display: grid;
+	grid-template-columns: 2.5em 11em minmax(0, 1fr);
+	gap: 8px;
+	font-size: 0.72rem;
+	font-family: var(--font-mono);
+	padding: 5px 0;
+	line-height: 1.5;
+	border-bottom: 1px solid var(--border-color);
+}
+
+.sts-sim-rec > * {
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 
 .sts-sim-empty {
-  color: var(--text-secondary);
+	color: var(--text-secondary);
 }
 
 .sts-sim-phase {
-  color: var(--text-secondary);
-  min-height: 1.2em;
+	color: var(--text-secondary);
+	min-height: 1.2em;
 }
 
 .sts-sim-result:empty {
-  display: none;
+	display: none;
 }
 
 .sts-sim-result {
-  border-top: 1px dashed var(--border-color);
-  margin-top: 4px;
-  padding-top: 6px;
+	border-top: 1px dashed var(--border-color);
+	margin-top: 4px;
+	padding-top: 6px;
 }
 
 .sts-sim-result-head {
-  font-size: 0.8rem;
-  margin-bottom: 4px;
+	font-size: 0.8rem;
+	margin-bottom: 4px;
 }
 
 .sts-sim-badge {
-  display: inline-block;
-  padding: 0 8px;
-  border-radius: var(--radius-sm);
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: #fff;
-  background: var(--text-secondary);
+	display: inline-block;
+	padding: 0 8px;
+	border-radius: var(--radius-sm);
+	font-size: 0.72rem;
+	font-weight: 600;
+	color: #fff;
+	background: var(--text-secondary);
 }
 
 .sts-sim-result-head.is-ok .sts-sim-badge {
-  background: var(--success);
+	background: var(--success);
 }
 
 .sts-sim-result-head.is-bad .sts-sim-badge {
-  background: var(--danger);
+	background: var(--danger);
 }
 
 .sts-sim-tl {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) repeat(4, max-content);
-  gap: 2px 10px;
-  font-size: 0.7rem;
-  font-family: var(--font-mono);
+	display: grid;
+	grid-template-columns: max-content minmax(8ch, 1fr) repeat(4, max-content);
+	gap: 2px 10px;
+	font-size: 0.7rem;
+	font-family: var(--font-mono);
+	max-width: 100%;
+	overflow-x: auto;
+	padding-bottom: 4px;
+	line-height: 1.6;
+}
+
+.sts-sim-tl > * {
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 
 .sts-sim-tl-h {
-  color: var(--text-secondary);
+	color: var(--text-secondary);
 }
 
 .sts-sim-tl .is-ok {
-  color: var(--success);
+	color: var(--success);
 }
 
 .sts-sim-tl .is-bad {
-  color: var(--danger);
+	color: var(--danger);
 }
 
 .sts-sim-logcard {
-  display: flex;
-  flex-direction: column;
-  min-height: 160px;
+	display: flex;
+	flex-direction: column;
+	min-height: 160px;
+}
+
+.sts-sim-logcard > .sts-sim-row {
+	justify-content: space-between;
+}
+
+.sts-sim-logcard .sts-sim-card-title {
+	margin: 0;
 }
 
 .sts-sim-log {
-  flex: 1 1 auto;
-  min-height: 120px;
-  max-height: 320px;
-  overflow: auto;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  line-height: 1.5;
+	flex: 1 1 auto;
+	min-height: 120px;
+	max-height: 320px;
+	overflow: auto;
+	font-family: var(--font-mono);
+	font-size: 0.72rem;
+	line-height: 1.65;
+	border-top: 1px solid var(--border-color);
+	padding-top: 4px;
+	scrollbar-gutter: stable;
 }
 
 .sts-sim-log-line {
-  display: flex;
-  gap: 8px;
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	align-items: baseline;
+	gap: 2px 10px;
+	padding: 4px 6px;
+	border-bottom: 1px solid var(--border-color);
+}
+
+.sts-sim-log-line:nth-child(even) {
+	background: var(--bg-surface-hover);
 }
 
 .sts-sim-log-time {
-  flex: 0 0 auto;
-  color: var(--text-secondary);
+	color: var(--text-secondary);
+	font-size: 0.66rem;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
 }
 
 .sts-sim-log-text {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
 }
 
 .sts-sim-lv-warn .sts-sim-log-text {
-  color: var(--warning);
+	color: var(--warning);
 }
 
 .sts-sim-lv-error .sts-sim-log-text {
-  color: var(--danger);
+	color: var(--danger);
 }
 
 .sts-sim .form-control:disabled,
 .sts-sim .form-select:disabled {
-  background-color: var(--bg-surface-hover);
-  color: var(--text-secondary);
-  opacity: 0.75;
+	background-color: var(--bg-surface-hover);
+	color: var(--text-secondary);
+	opacity: 0.75;
 }
 
 .sts-sim-alarm-block {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 6px;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	width: 100%;
+	gap: 6px;
+	margin: 4px 0 8px;
+}
+
+.sts-sim-alarm-summary {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+	font-size: 0.7rem;
+	color: var(--text-secondary);
+}
+
+.sts-sim-alarm-tag {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 4px;
+	max-width: 100%;
+	padding: 2px 6px;
+	border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border-color));
+	border-radius: var(--radius-sm);
+	background: color-mix(in srgb, var(--warning) 8%, var(--bg-surface));
+	color: var(--text-primary);
+	font-family: var(--font-sans);
+	font-size: 0.7rem;
+	line-height: 1.5;
+}
+
+.sts-sim-alarm-code {
+	flex: 0 0 auto;
+	font-family: var(--font-mono);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.sts-sim-alarm-name {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.sts-sim-alarm-tag > :not(.sts-sim-alarm-code) {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+details.sts-sim-alarm-picker {
+	min-width: 0;
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-sm);
+	background: var(--bg-surface-hover);
+}
+
+.sts-sim-alarm-picker > summary {
+	padding: 5px 8px;
+	color: var(--text-secondary);
+	font-size: 0.7rem;
+	line-height: 1.5;
+}
+
+.sts-sim-alarm-picker[open] > summary {
+	border-bottom: 1px solid var(--border-color);
+}
+
+.sts-sim-card > summary:focus-visible,
+.sts-sim-alarm-picker > summary:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.sts-sim-alarm-picker > .sts-sim-alarms {
+	padding: 6px 8px;
+}
+
+.sts-sim-alarm-picker > .form-control {
+	width: calc(100% - 16px);
+	min-width: 0;
+	margin: 0 8px 6px;
+}
+
+.sts-sim-alarm-picker > .sts-sim-hint {
+	padding: 0 8px 6px;
 }
 
 .sts-sim-alarms {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 2px 10px;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+	gap: 4px 12px;
+}
+
+.sts-sim-alarms .ctl-switch {
+	min-width: 0;
+	margin: 0;
+	padding-block: 3px;
+	align-items: flex-start;
+}
+
+.sts-sim-alarms .form-check-input {
+	flex-shrink: 0;
+}
+
+.sts-sim-alarms .form-check-label {
+	display: flex;
+	align-items: baseline;
+	gap: 5px;
+	min-width: 0;
+	font-size: 0.7rem;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+
+@container sts-sim (max-width: 360px) {
+	.sts-sim-card {
+		padding: 8px;
+	}
+
+	.sts-sim-form > .sts-sim-field {
+		flex: 1 1 calc(50% - 10px);
+	}
+
+	.sts-sim-form > .sts-sim-field:has(input[type='password']),
+	.sts-sim-form > .sts-sim-field:has(> .sts-sim-alarm-block) {
+		flex-basis: 100%;
+	}
+
+	.sts-sim-kv {
+		grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+		gap: 4px 8px;
+	}
+
+	.sts-sim-rec {
+		grid-template-columns: 2.5em minmax(0, 1fr);
+		gap: 2px 6px;
+	}
+
+	.sts-sim-rec > :nth-child(3) {
+		grid-column: 2;
+	}
+
+	.sts-sim-log-line {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 0;
+	}
+}
+
+@container sts-sim (min-width: 700px) {
+	.sts-sim-log {
+		max-height: 240px;
+	}
+
+	.sts-sim-form {
+		gap: 8px 14px;
+	}
 }

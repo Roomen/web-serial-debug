@@ -533,7 +533,196 @@ async function transactionTests() {
 	}
 }
 
-transactionTests().then(() => console.log('hostProto protocol and transaction checks passed'), e => {
+async function serialSessionTests() {
+	const clock = makeClock()
+	ctx.setTimeout = clock.setTimeout
+	ctx.clearTimeout = clock.clearTimeout
+	const sessions = { S: true, A: true, B: true }
+	const subscriptions = []
+	const writes = []
+	let mode = 'dual'
+	let active = 'A'
+	let pinned = null
+	let pins = 0
+	let unpins = 0
+	const api = {
+		getMode: () => mode,
+		isSessionOpen: sid => sessions[sid],
+		getActiveSendSid: () => pinned || active,
+		pinSession(sid) { pinned = sid; pins++ },
+		unpinSession() { pinned = null; unpins++ },
+		isOpen: () => sessions[pinned || active],
+		writeRawTo(sid, data, opts) { writes.push({ sid, data, logData: opts.logData }) },
+		writeRaw(data, opts) { this.writeRawTo(pinned || active, data, opts) },
+		onReceiveFrom(sid, cb) {
+			const sub = { sid, cb }
+			subscriptions.push(sub)
+			return () => subscriptions.splice(subscriptions.indexOf(sub), 1)
+		},
+		onReceive(cb) { return this.onReceiveFrom(null, cb) },
+	}
+	function receive(sid, data) {
+		for (const sub of subscriptions.slice()) {
+			if (mode === 'single' || sid === (sub.sid || pinned || active)) sub.cb(data)
+		}
+	}
+	window.serialApi = api
+	const linkA = window.hostProtoSerialLink({ sid: 'A' })
+	const linkB = window.hostProtoSerialLink({ sid: 'B' })
+	const linkS = window.hostProtoSerialLink({ sid: 'S' })
+	assert.equal(pins, 0)
+	const pendingA = linkA.request(1, [1])
+	const pendingB = linkB.request(1, [2])
+	await flush()
+	assert.deepEqual(writes.map(call => call.sid), ['A', 'B'])
+	receive('A', rspOf(1, 1, 0, [11]))
+	assert.deepEqual(bytes((await pendingA).payload), [11])
+	assert.equal(linkB.stats.rxRsp, 0)
+	receive('B', rspOf(1, 1, 0, [22]))
+	assert.deepEqual(bytes((await pendingB).payload), [22])
+	const eventsA = []
+	const eventsB = []
+	const eventsS = []
+	linkA.onEvt(evt => eventsA.push(evt))
+	linkB.onEvt(evt => eventsB.push(evt))
+	linkS.onEvt(evt => eventsS.push(evt))
+	sessions.A = false
+	receive('A', evtOf(1, [1]))
+	receive('B', evtOf(1, [2]))
+	assert.equal(eventsA.length, 0)
+	assert.equal(eventsB.length, 1)
+	const closedError = await linkA.request(1, []).catch(error => error)
+	assert.equal(closedError.code, 'write')
+	sessions.A = true
+	mode = 'single'
+	receive('S', evtOf(1, [3]))
+	assert.equal(eventsA.length, 0)
+	assert.equal(eventsB.length, 1)
+	assert.equal(eventsS.length, 1)
+	assert.equal((await linkB.request(1, []).catch(error => error)).code, 'write')
+	const singleRequest = linkS.request(1, [])
+	await flush()
+	assert.equal(writes.at(-1).sid, 'S')
+	receive('S', rspOf(1, 1, 0, [33]))
+	assert.deepEqual(bytes((await singleRequest).payload), [33])
+	mode = 'dual'
+	receive('S', evtOf(1, [4]))
+	assert.equal(eventsS.length, 1)
+	assert.equal((await linkS.request(1, []).catch(error => error)).code, 'write')
+	linkA.close()
+	assert.equal(subscriptions.length, 2)
+	assert.equal(unpins, 0)
+	const sensitive = new Uint8Array(16).fill(0x5a)
+	const sensitiveRequest = linkB.request(0x0300, sensitive)
+	await flush()
+	const sensitiveCall = writes.at(-1)
+	assert.equal(sensitiveCall.sid, 'B')
+	assert.ok(Buffer.from(sensitiveCall.data).includes(Buffer.from(sensitive)))
+	assert.ok(!Buffer.from(sensitiveCall.logData).includes(Buffer.from(sensitive)))
+	const sensitiveFrame = H.scan(sensitiveCall.data, 4, true)
+	receive('B', rspOf(0x0300, sensitiveFrame.seq, 0, []))
+	await sensitiveRequest
+	linkB.close()
+	linkS.close()
+	assert.equal(subscriptions.length, 0)
+	const legacy = window.hostProtoSerialLink()
+	assert.equal(pins, 1)
+	active = 'B'
+	const legacyRequest = legacy.request(1, [])
+	await flush()
+	assert.equal(writes.at(-1).sid, 'A')
+	receive('B', rspOf(1, 1, 0, [44]))
+	assert.equal(legacy.stats.rxRsp, 0)
+	receive('A', rspOf(1, 1, 0, [55]))
+	assert.deepEqual(bytes((await legacyRequest).payload), [55])
+	legacy.close()
+	assert.equal(unpins, 1)
+	assert.equal(clock.pending(), 0)
+	assert.throws(() => window.hostProtoSerialLink({ sid: 'invalid' }), /无效的串口会话/)
+	assert.equal(pins, 1)
+	delete window.serialApi
+}
+
+async function serialApiTests() {
+	const source = fs.readFileSync(path.join(__dirname, '../js/common.js'), 'utf8')
+	const writeStart = source.indexOf('\tasync function writeData(data, sid, sendName, opts) {')
+	const writeEnd = source.indexOf('\n\t// 终端键盘直写', writeStart)
+	const apiStart = source.indexOf('\twindow.serialApi = {')
+	const apiEnd = source.indexOf('\n\t\t//下行加密密钥', apiStart)
+	assert.ok(writeStart >= 0 && writeEnd > writeStart && apiStart >= 0 && apiEnd > apiStart)
+	let mode = 'dual'
+	let failure = false
+	let releases = 0
+	const writes = []
+	const logs = []
+	const sessions = {}
+	for (const sid of ['S', 'A', 'B']) {
+		sessions[sid] = {
+			open: true, txBytes: 0,
+			port: { writable: { getWriter() {
+				return {
+					async write(data) {
+						if (failure) throw new Error('synthetic sensitive error')
+						writes.push({ sid, data: bytes(data) })
+					},
+					releaseLock() { releases++ },
+				}
+			} } },
+		}
+	}
+	const sandbox = {
+		window: {}, Uint8Array,
+		SerialHub: {
+			activeSendPhys: () => 'B',
+			isVisible: sid => mode === 'single' ? sid === 'S' : sid === 'A' || sid === 'B',
+			getPort: sid => sessions[sid].port,
+			isOpen: sid => sessions[sid].open,
+			_sess: sid => sessions[sid],
+		},
+		toolOptions: { addCRLF: true },
+		addLog: (data, sent, time, sid) => logs.push({ sid, data: bytes(data) }),
+		addParseLog: (data, sent, time, sid) => logs.push({ sid, data: bytes(data) }),
+		addLogErr() { assert.fail('明确会话失败不应记录底层敏感错误') },
+		showToast() { assert.fail('明确会话失败应抛出') },
+	}
+	vm.runInNewContext(source.slice(writeStart, writeEnd) + '\n' + source.slice(apiStart, apiEnd) + '\n\t}', sandbox)
+	const api = sandbox.window.serialApi
+	assert.equal(api.isSessionOpen('A'), true)
+	assert.equal(api.isSessionOpen('B'), true)
+	assert.equal(api.isSessionOpen('S'), false)
+	assert.equal(api.isSessionOpen('invalid'), false)
+	await assert.rejects(api.writeRawTo('invalid', new Uint8Array()), /无效的串口会话/)
+	const raw = Uint8Array.from([0x5a, 0x5a])
+	const shown = Uint8Array.from([0, 0])
+	await api.writeRawTo('A', raw, { logData: shown })
+	await api.writeRawTo('B', raw, { logData: shown })
+	assert.deepEqual(writes, [{ sid: 'A', data: [0x5a, 0x5a] }, { sid: 'B', data: [0x5a, 0x5a] }])
+	assert.deepEqual(logs.map(entry => entry.data), [[0, 0], [0, 0], [0, 0], [0, 0]])
+	assert.equal(sandbox.toolOptions.addCRLF, true)
+	sessions.A.open = false
+	assert.equal(api.isSessionOpen('A'), false)
+	assert.equal(api.isSessionOpen('B'), true)
+	await assert.rejects(api.writeRawTo('A', raw), /未打开/)
+	sessions.A.open = true
+	failure = true
+	await assert.rejects(api.writeRawTo('A', raw, { logData: shown }), error => error.message === '串口写入失败')
+	assert.equal(releases, 3)
+	assert.equal(logs.length, 4)
+	failure = false
+	mode = 'single'
+	assert.equal(api.isSessionOpen('A'), false)
+	assert.equal(api.isSessionOpen('B'), false)
+	assert.equal(api.isSessionOpen('S'), true)
+	await assert.rejects(api.writeRawTo('A', raw), /不可路由/)
+	await assert.rejects(api.writeRawTo('B', raw), /不可路由/)
+	await api.writeRawTo('S', raw, { logData: shown })
+	assert.equal(writes.at(-1).sid, 'S')
+	sessions.S.port.writable = null
+	assert.equal(api.isSessionOpen('S'), false)
+	await assert.rejects(api.writeRawTo('S', raw), /未打开/)
+}
+
+transactionTests().then(serialSessionTests).then(serialApiTests).then(() => console.log('hostProto protocol and transaction checks passed'), e => {
 	console.error(e)
 	process.exit(1)
 })

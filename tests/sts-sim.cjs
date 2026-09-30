@@ -290,11 +290,21 @@ async function tests() {
 		assert.equal(t.world.meter.cb, null) // 链路关闭后串口订阅也已退订
 	}
 	// 启动失败路径: 模组无应答 / 角色不符无 PAK / DRN 未置备 / 补 INIT
-	{
+	for (const role of ['meter', 'ciu']) {
 		const t = setup()
-		t.world.meter.silentUntil = Infinity
-		const e = await drive(t.clock, t.meter.start().then(() => null, x => x))
-		assert.match(e.message, /模组无应答/)
+		t.world[role].silentUntil = Infinity
+		const engine = t[role]
+		const link = t[role + 'Link']
+		const error = await drive(t.clock, engine.start().then(() => null, failure => failure))
+		assert.equal(error.code, 'timeout', role + ' 启动 ECHO 超时保留错误码')
+		assert.equal(error.message, '模组无应答：请检查串口、波特率 115200 8N1，以及是否被其他工具占用同一个串口')
+		assert.equal(engine.getState().running, false)
+		assert.equal(link.stats.txFrames, 3)
+		assert.equal(link.stats.timeouts, 1)
+		engine.stop()
+		t.meterLink.close()
+		t.ciuLink.close()
+		assert.equal(t.clock.pending(), 0)
 	}
 	{
 		const t = setup({ world: { meterRole: 2 } })

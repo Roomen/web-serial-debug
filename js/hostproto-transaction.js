@@ -247,17 +247,39 @@
 		const api = W.serialApi
 		if (!api) throw new Error('serialApi 未就绪')
 		const opts = extra || {}
+		const explicit = Object.prototype.hasOwnProperty.call(opts, 'sid')
+		const sid = opts.sid
+		if (explicit) {
+			if (sid !== 'S' && sid !== 'A' && sid !== 'B') throw new Error('无效的串口会话')
+			if (typeof api.getMode !== 'function' || typeof api.isSessionOpen !== 'function' ||
+				typeof api.writeRawTo !== 'function' || typeof api.onReceiveFrom !== 'function') {
+				throw new Error('serialApi 不支持明确会话')
+			}
+		}
+		function sessionReady() {
+			const mode = api.getMode()
+			return (sid === 'S' ? mode === 'single' : mode === 'dual') && api.isSessionOpen(sid)
+		}
 		let pinned = false
-		if (typeof api.pinSession === 'function') {
+		if (!explicit && typeof api.pinSession === 'function') {
 			api.pinSession(api.getActiveSendSid())
 			pinned = true
 		}
 		return createHostProtoLink({
 			write: function (bytes, logBytes) {
+				if (explicit) {
+					if (!sessionReady()) throw new Error('串口会话未打开或当前模式不可路由')
+					return api.writeRawTo(sid, bytes, { logData: logBytes || null })
+				}
 				if (!api.isOpen()) throw new Error('串口未打开')
 				return api.writeRaw(bytes, { logData: logBytes || null })
 			},
-			onReceive: function (cb) { return api.onReceive(cb) },
+			onReceive: function (cb) {
+				if (!explicit) return api.onReceive(cb)
+				return api.onReceiveFrom(sid, function (bytes) {
+					if (sessionReady()) cb(bytes)
+				})
+			},
 			now: function () { return Date.now() },
 			setTimeout: function (f, ms) { return setTimeout(f, ms) },
 			clearTimeout: function (h) { clearTimeout(h) },

@@ -3816,11 +3816,13 @@
 		sid = sid || SerialHub.activeSendPhys()
 		const port = SerialHub.getPort(sid)
 		if (!port || !port.writable) {
+			if (opts.throwOnError) throw new Error('串口未打开')
 			addLogErr('请先打开串口再发送数据', sid)
 			if (sid === 'S') showToast('单路串口未打开，请切回单路模式连接后再切回双路', 2500)
 			return
 		}
 		if (!SerialHub.isOpen(sid)) {
+			if (opts.throwOnError) throw new Error('串口未打开')
 			addLogErr('请先打开串口再发送数据', sid)
 			if (sid === 'S') showToast('单路串口未打开，请切回单路模式连接后再切回双路', 2500)
 			return
@@ -3838,6 +3840,7 @@
 			addLog(shown, false, sendTime, sid)
 			addParseLog([...shown], false, sendTime, sid, sendName)
 		} catch (error) {
+			if (opts.throwOnError) throw new Error('串口写入失败')
 			const errorType = error.name || 'UnknownError'
 			const errorMsg = error.message || '未知错误'
 			addLogErr(`串口写入失败(${sid}): ${errorType} - ${errorMsg}`, sid)
@@ -4317,6 +4320,17 @@
 		// 协议事务专用: 不追加 CRLF；logData 存在时日志只显示这份（已脱敏）字节
 		async writeRaw(data, opts) {
 			await writeData(data, SerialHub.activeSendPhys(), undefined, { raw: true, logData: opts && opts.logData })
+		},
+		isSessionOpen(id) {
+			if (id !== 'S' && id !== 'A' && id !== 'B') return false
+			if (!SerialHub.isVisible(id)) return false
+			const port = SerialHub.getPort(id)
+			return !!(port && port.writable && SerialHub.isOpen(id))
+		},
+		async writeRawTo(id, data, opts) {
+			if (id !== 'S' && id !== 'A' && id !== 'B') throw new Error('无效的串口会话')
+			if (!this.isSessionOpen(id)) throw new Error('串口会话未打开或当前模式不可路由')
+			await writeData(data, id, undefined, { raw: true, logData: opts && opts.logData, throwOnError: true })
 		},
 		isOpen() {
 			const sid = SerialHub.activeSendPhys()
