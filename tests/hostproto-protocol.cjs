@@ -24,6 +24,15 @@ for (const k of ['parseFrame', 'formatFrame', 'findFrame', 'byteMap', 'buildDown
 assert.equal(registered.impl.name, 'hostProto 模组')
 assert.equal(registered.impl.presets[0].items.length, 7)
 
+// ---- FW_INFO 定长 ASCII: 空格垫齐（规范）与 \0 垫齐（实板固件）都要解出干净的字符串 ----
+{
+	const field = (s, n, pad) => { const b = new Uint8Array(n).fill(pad); b.set(Buffer.from(s)); return Array.from(b) }
+	for (const pad of [0x20, 0x00]) {
+		const p = Uint8Array.from([1, ...field('TEST-BOARD', 16, pad), ...field('abc1234', 8, pad), 1, ...field('def5678', 8, pad), 0, ...field('2026-01-02 03:04:05', 20, pad)])
+		assert.deepEqual(J(H.decodeFwInfo(p)), { protoVer: 1, board: 'TEST-BOARD', appGit: 'abc1234', appDirty: 1, sdkGit: 'def5678', sdkDirty: 0, buildTime: '2026-01-02 03:04:05' })
+	}
+}
+
 // ---- CRC16/CCITT-FALSE ----
 assert.equal(H.crc16(Buffer.from('123456789')), 0x29b1)
 assert.equal(H.crc16(hex('EB 90 10 01 00 5A 04 00 50 49 4E 47')), 0xdf32)

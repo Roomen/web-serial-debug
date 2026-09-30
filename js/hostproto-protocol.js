@@ -244,16 +244,21 @@
 		if (p.length < 2) return null
 		return { role: p[0], state: p[1] }
 	}
+	// 规范写的是空格垫齐，实板固件用 \0 垫齐：遇到 \0 截断，不把垫字节显示成 '.'
+	function fixedAscii(b) {
+		const z = b.indexOf(0)
+		return asciiSafe(z === -1 ? b : b.subarray(0, z)).trim()
+	}
 	function decodeFwInfo(p) {
 		if (p.length < 55) return null
 		return {
 			protoVer: p[0],
-			board: asciiSafe(p.subarray(1, 17)).trim(),
-			appGit: asciiSafe(p.subarray(17, 25)).trim(),
+			board: fixedAscii(p.subarray(1, 17)),
+			appGit: fixedAscii(p.subarray(17, 25)),
 			appDirty: p[25],
-			sdkGit: asciiSafe(p.subarray(26, 34)).trim(),
+			sdkGit: fixedAscii(p.subarray(26, 34)),
 			sdkDirty: p[34],
-			buildTime: asciiSafe(p.subarray(35, 55)).trim(),
+			buildTime: fixedAscii(p.subarray(35, 55)),
 		}
 	}
 	// EVT 0x0280: [src u64][kind u8][seq u16][len u8][data][rssi i16][snr i8]
