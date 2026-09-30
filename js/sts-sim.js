@@ -202,7 +202,11 @@
 				try {
 					r = await link.request(C.ECHO, Buffer_from('PING'), { timeoutMs: 1000, retries: 2 })
 				} catch (e) {
-					if (e && e.code === 'timeout') throw new Error('模组无应答：请检查串口、波特率 115200 8N1，以及是否被其他工具占用同一个串口')
+					if (e && e.code === 'timeout') {
+						const error = new Error('模组无应答：请检查串口、波特率 115200 8N1，以及是否被其他工具占用同一个串口')
+						error.code = 'timeout'
+						throw error
+					}
 					throw e
 				}
 				need(r, 'ECHO')
