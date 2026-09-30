@@ -655,6 +655,7 @@ async function serialApiTests() {
 	let releases = 0
 	const writes = []
 	const logs = []
+	const flushes = []
 	const sessions = {}
 	for (const sid of ['S', 'A', 'B']) {
 		sessions[sid] = {
@@ -663,6 +664,7 @@ async function serialApiTests() {
 				return {
 					async write(data) {
 						if (failure) throw new Error('synthetic sensitive error')
+						assert.equal(flushes.at(-1), sid, '写串口前先输出同口待输出的 RX')
 						writes.push({ sid, data: bytes(data) })
 					},
 					releaseLock() { releases++ },
@@ -680,6 +682,7 @@ async function serialApiTests() {
 			_sess: sid => sessions[sid],
 		},
 		toolOptions: { addCRLF: true },
+		flushPendingRx: sid => flushes.push(sid),
 		addLog: (data, sent, time, sid) => logs.push({ sid, data: bytes(data) }),
 		addParseLog: (data, sent, time, sid) => logs.push({ sid, data: bytes(data) }),
 		addLogErr() { assert.fail('明确会话失败不应记录底层敏感错误') },
