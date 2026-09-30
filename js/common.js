@@ -3833,6 +3833,7 @@
 			if (toolOptions.addCRLF && !opts.raw) {
 				data = new Uint8Array([...data, 0x0d, 0x0a])
 			}
+			flushPendingRx(sid)
 			const sendTime = new Date()
 			await writer.write(data)
 			SerialHub._sess(sid).txBytes += data.length
@@ -4222,6 +4223,22 @@
 		if (!buf || !buf.length) return
 		if (isRowLogType(getLogTypeForSid(sid))) addLog(buf, true, startTime, sid)
 		addParseLog(buf.slice ? buf.slice() : [...buf], true, startTime, sid)
+	}
+
+	// 发送前先把本口已到达、还在等分包超时的 RX 输出：订阅者（协议事务、STS 模拟）拿到字节就立即应答，
+	// 不先输出的话 TX 行会排在触发它的 RX 之前，随后到的应答还会并进同一条 RX，日志顺序与真实时序相反。
+	// 代价是 TX 前后紧贴的 RX 碎片会被切成两行。未收满的 SEK 帧仍在等待窗口内时不切，否则解析会被拆坏。
+	function flushPendingRx(sid) {
+		const buf = SerialHub.getPackBuf(sid)
+		if (!buf.length) return
+		const wantProto = toolOptions.skParseEnable || toolOptions.skHoverEnable || (window._activeProtocol === 'sek')
+		const need = wantProto ? peekSekIncompleteNeed(buf) : 0
+		const waitStart = SerialHub.getSekWaitStart(sid)
+		if (need > 0 && buf.length < need && (waitStart == null || Date.now() - waitStart < SEK_INCOMPLETE_WAIT_MAX_MS)) return
+		clearTimeout(SerialHub.getPackTimer(sid))
+		const pack = buf.slice()
+		SerialHub.setPackBuf(sid, [])
+		flushSerialPack(pack, SerialHub.getPackStartTime(sid), sid)
 	}
 
 	//串口分包合并
