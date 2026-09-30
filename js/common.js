@@ -3809,7 +3809,10 @@
 	}
 
 	//写串口数据（走主发口 activeSendPhys）
-	async function writeData(data, sid, sendName) {
+	// opts.raw: 不追加 CRLF（协议事务的整帧不能被改）；opts.logData: 日志/解析用这份字节代替真实发送字节
+	// （含密钥的帧只把脱敏副本交给日志，真实串口仍写原帧，txBytes 按真实长度计）
+	async function writeData(data, sid, sendName, opts) {
+		opts = opts || {}
 		sid = sid || SerialHub.activeSendPhys()
 		const port = SerialHub.getPort(sid)
 		if (!port || !port.writable) {
@@ -3825,14 +3828,15 @@
 		let writer
 		try {
 			writer = port.writable.getWriter()
-			if (toolOptions.addCRLF) {
+			if (toolOptions.addCRLF && !opts.raw) {
 				data = new Uint8Array([...data, 0x0d, 0x0a])
 			}
 			const sendTime = new Date()
 			await writer.write(data)
 			SerialHub._sess(sid).txBytes += data.length
-			addLog(data, false, sendTime, sid)
-			addParseLog([...data], false, sendTime, sid, sendName)
+			const shown = opts.logData ? Uint8Array.from(opts.logData) : data
+			addLog(shown, false, sendTime, sid)
+			addParseLog([...shown], false, sendTime, sid, sendName)
 		} catch (error) {
 			const errorType = error.name || 'UnknownError'
 			const errorMsg = error.message || '未知错误'
@@ -4309,6 +4313,10 @@
 	window.serialApi = {
 		async writeData(data) {
 			await writeData(data, SerialHub.activeSendPhys())
+		},
+		// 协议事务专用: 不追加 CRLF；logData 存在时日志只显示这份（已脱敏）字节
+		async writeRaw(data, opts) {
+			await writeData(data, SerialHub.activeSendPhys(), undefined, { raw: true, logData: opts && opts.logData })
 		},
 		isOpen() {
 			const sid = SerialHub.activeSendPhys()
