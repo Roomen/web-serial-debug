@@ -252,6 +252,8 @@ assert.equal(S.tokenRspDecode(hex('02 00 00 00 01 00 00 00 02 55')).stsBlock.len
 {
 	const bad = S.parseFrame(hex('01 12 34 56 78 00')) // CRC 错
 	assert.equal(bad.ok, false)
-	assert.doesNotMatch(S.formatFrame({ ok: false, errors: ['<img src=x onerror=1>'], fields: { '<b>': '<script>' } }), /<img|<script|<b>/)
+	const html = S.formatFrame({ ok: false, errors: ['<img src=x onerror=1>'], fields: { '<b>': '<script>' } })
+	for (const raw of ['<img src=x onerror=1>', '<b>', '<script>']) assert.ok(!html.includes(raw), '原样出现: ' + raw)
+	for (const escaped of ['&lt;img src=x onerror=1&gt;', '&lt;b&gt;', '&lt;script&gt;']) assert.ok(html.includes(escaped), '缺少转义: ' + escaped)
 }
 console.log('STS-CIU protocol checks passed')
