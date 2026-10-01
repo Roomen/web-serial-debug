@@ -601,6 +601,9 @@
 			left.textContent = 'TX'
 			right.textContent = 'RX'
 		}
+		// 图例窄时会截断，全名放 title
+		left.title = left.textContent
+		right.title = right.textContent
 	}
 	// logType 拆成「视图」(行日志/终端) + 「格式」(HEX/TEXT 复选 + ANSI 修饰) 两组控件的 UI 同步。
 	// logType 仍是唯一状态源,这里只是把它拆开点亮;视图=终端时格式、分包、行数整体禁用(term 不走 addLog,

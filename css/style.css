@@ -3237,9 +3237,12 @@ hr {
   user-select: none;
 }
 
+/* 双路标签可编辑（最长 8 字），窄档截断（max-width 由标题行的容器查询给），全名在 title 里 */
 .serial-log-legend-item {
-  display: inline-flex;
-  align-items: center;
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding: 1px 6px;
   border-radius: 4px;
   font-size: 0.62rem;
@@ -3624,8 +3627,7 @@ hr {
   column-gap: 12px;
 }
 
-/* 标题 + 视图切换 + TX/RX 图例：视图 seg 紧跟固定宽度的标题，右侧工具栏文案变长变短都不会推着它跑；
-   双路图例标签可编辑（最长 8 字），放不下时图例自己换到下一行 */
+/* 标题 + 视图切换 + TX/RX 图例：视图 seg 紧跟固定宽度的标题，右侧工具栏文案变长变短都不会推着它跑 */
 .serial-log-headline {
   display: flex;
   flex-wrap: wrap;
@@ -3672,24 +3674,21 @@ hr {
   font-weight: 500;
 }
 
-/* 两行档：工具栏独占第二行，设置摘要靠左、操作组靠右 */
-@container log-header (max-width: 760px) {
-  .serial-log-header > .btn-toolbar {
-    flex: 1 0 100%;
-    justify-content: space-between;
-  }
-}
-
-/* 紧凑档：去掉重复的「串口日志」标题，设置摘要只留图标，操作按钮只留图标，高频操作仍一键可达 */
-@container log-header (max-width: 480px) {
-  .serial-log-title {
-    display: none;
-  }
-
+/* 逐级压缩、尽量保持一行（阈值是容器内容宽度，按实测部件宽度定）：先把设置摘要缩成图标，再去掉与导航重复的「串口日志」标题，
+   最后操作按钮只留图标；高频操作始终一键可达，不收进折叠菜单。再窄才靠 flex-wrap 换行兜底 */
+@container log-header (max-width: 720px) {
   #serial-log-settings-text {
     display: none;
   }
+}
 
+@container log-header (max-width: 580px) {
+  .serial-log-title {
+    display: none;
+  }
+}
+
+@container log-header (max-width: 490px) {
   .serial-log-actions .btn {
     padding: 4px 10px;
   }
@@ -3700,6 +3699,45 @@ hr {
 
   .serial-log-action-text {
     display: none;
+  }
+
+  .serial-log-legend.is-dual .serial-log-legend-item {
+    max-width: 4.5em;
+  }
+}
+
+/* 双路图例比 TX/RX 宽约 90px，同样三级但提前触发，并从第一级起截断标签 */
+@container log-header (max-width: 830px) {
+  .serial-log-header:has(.serial-log-legend.is-dual) #serial-log-settings-text {
+    display: none;
+  }
+
+  .serial-log-legend.is-dual .serial-log-legend-item {
+    max-width: 6em;
+  }
+}
+
+@container log-header (max-width: 670px) {
+  .serial-log-header:has(.serial-log-legend.is-dual) .serial-log-title {
+    display: none;
+  }
+}
+
+@container log-header (max-width: 575px) {
+  .serial-log-header:has(.serial-log-legend.is-dual) .serial-log-actions .btn {
+    padding: 4px 10px;
+  }
+
+  .serial-log-header:has(.serial-log-legend.is-dual) .serial-log-actions .btn > i {
+    display: inline;
+  }
+
+  .serial-log-header:has(.serial-log-legend.is-dual) .serial-log-action-text {
+    display: none;
+  }
+
+  .serial-log-legend.is-dual .serial-log-legend-item {
+    max-width: 4.5em;
   }
 }
 
