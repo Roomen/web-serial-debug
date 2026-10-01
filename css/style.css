@@ -3237,9 +3237,12 @@ hr {
   user-select: none;
 }
 
+/* 双路标签可编辑（最长 8 字），最后一档压缩时截断（见 data-compact），全名在 title 里 */
 .serial-log-legend-item {
-  display: inline-flex;
-  align-items: center;
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding: 1px 6px;
   border-radius: 4px;
   font-size: 0.62rem;
@@ -3612,13 +3615,35 @@ hr {
   line-height: 1;
 }
 
-/* Serial Log Title */
+/* Serial Log Header */
+/* 不能用 flex-md-nowrap 这类视口断点：右栏打开时视口很宽、日志列却只剩几百 px，nowrap 会让右侧工具栏叠到左侧的视图切换和图例上。
+   压缩档由 common.js fitLogHeader 实测决定（data-compact），左右两块都不收缩，收到底还放不下就整块换行兜底 */
+.serial-log-header {
+  row-gap: 6px;
+  column-gap: 12px;
+}
+
 /* 标题 + 视图切换 + TX/RX 图例：视图 seg 紧跟固定宽度的标题，右侧工具栏文案变长变短都不会推着它跑 */
 .serial-log-headline {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
   min-width: 0;
+}
+
+.serial-log-header > .btn-toolbar {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+
+.serial-log-header #serial-log-settings {
+  margin-right: 0 !important;
+}
+
+/* 宽档只显示文字，紧凑档只显示图标；按钮自身带 aria-label/title */
+.serial-log-actions .btn > i {
+  display: none;
 }
 
 .serial-log-title {
@@ -3643,6 +3668,32 @@ hr {
   font-size: 0.72rem;
   padding: 4px 12px;
   font-weight: 500;
+}
+
+/* 压缩档按顺序累加（data-compact="1 2 3 4"）：设置摘要缩成图标 → 去掉与导航重复的「串口日志」标题 → 操作按钮只留图标 → 截断双路标签。
+   高频操作始终一键可达，不收进折叠菜单 */
+.serial-log-header[data-compact~='1'] #serial-log-settings-text {
+  display: none;
+}
+
+.serial-log-header[data-compact~='2'] .serial-log-title {
+  display: none;
+}
+
+.serial-log-header[data-compact~='3'] .serial-log-actions .btn {
+  padding: 4px 10px;
+}
+
+.serial-log-header[data-compact~='3'] .serial-log-actions .btn > i {
+  display: inline;
+}
+
+.serial-log-header[data-compact~='3'] .serial-log-action-text {
+  display: none;
+}
+
+.serial-log-header[data-compact~='4'] .serial-log-legend-item {
+  max-width: 4.5em;
 }
 
 /* Send Area */

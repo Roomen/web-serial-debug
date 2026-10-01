@@ -581,11 +581,39 @@
 		// 终端不走行数裁剪,拼上去是在说假话;分包仍决定协议解析的帧边界,要留着
 		if (logType === 'term') {
 			text.textContent = LOG_TYPE_LABELS.term + ' · ' + timeoutTxt
-			return
+		} else {
+			let rows = rowsEl ? parseInt(rowsEl.value, 10) : 10000
+			if (isNaN(rows)) rows = 10000
+			text.textContent = typeLabel + ' · ' + timeoutTxt + ' · ' + rows + '行'
 		}
-		let rows = rowsEl ? parseInt(rowsEl.value, 10) : 10000
-		if (isNaN(rows)) rows = 10000
-		text.textContent = typeLabel + ' · ' + timeoutTxt + ' · ' + rows + '行'
+		fitLogHeader()
+	}
+	// 标题行逐级压缩：先全展开排一次，换行了才多收一级，直到一行放得下或收到底（再放不下靠 flex-wrap 换行兜底）。
+	// 不用容器查询定死阈值：摘要文案、双路标签长度都会变，固定阈值只能按最坏情况留余量，空位还很多就提前收了
+	function logHeaderWrapped(header) {
+		let top = Infinity
+		let bottom = -Infinity
+		let tallest = 0
+		header.querySelectorAll('.serial-log-title, #serial-log-view-seg, #serial-log-legend, #serial-log-settings-btn, .serial-log-actions').forEach(function (el) {
+			const r = el.getBoundingClientRect()
+			if (!r.width) return
+			top = Math.min(top, r.top)
+			bottom = Math.max(bottom, r.bottom)
+			tallest = Math.max(tallest, r.height)
+		})
+		return bottom - top > tallest + 2
+	}
+	function fitLogHeader() {
+		const header = document.querySelector('.serial-log-header')
+		// 视图隐藏时量不出宽度，回到视图时 ResizeObserver 会再触发
+		if (!header || !header.clientWidth) return
+		const levels = []
+		header.removeAttribute('data-compact')
+		// 共 4 档，对应 css 里 data-compact~='1'..'4'
+		while (levels.length < 4 && logHeaderWrapped(header)) {
+			levels.push(levels.length + 1)
+			header.dataset.compact = levels.join(' ')
+		}
 	}
 	function updateLogLegend() {
 		const legend = document.getElementById('serial-log-legend')
@@ -601,6 +629,10 @@
 			left.textContent = 'TX'
 			right.textContent = 'RX'
 		}
+		// 图例窄时会截断，全名放 title
+		left.title = left.textContent
+		right.title = right.textContent
+		fitLogHeader()
 	}
 	// logType 拆成「视图」(行日志/终端) + 「格式」(HEX/TEXT 复选 + ANSI 修饰) 两组控件的 UI 同步。
 	// logType 仍是唯一状态源,这里只是把它拆开点亮;视图=终端时格式、分包、行数整体禁用(term 不走 addLog,
@@ -2337,6 +2369,21 @@
 		setLogType(composeLogType(s.hasHex, s.hasText, hasAnsi))
 	})
 	updateLogSettingsSummary()
+	;(function () {
+		const header = document.querySelector('.serial-log-header')
+		if (!header) return
+		// 只在宽度变化时重排；压缩档改变的是高度，不会自激
+		let lastWidth = -1
+		if (typeof ResizeObserver !== 'undefined') {
+			new ResizeObserver(function () {
+				if (header.clientWidth === lastWidth) return
+				lastWidth = header.clientWidth
+				fitLogHeader()
+			}).observe(header)
+		}
+		// 网页字体晚到会改变文字宽度
+		if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitLogHeader)
+	})()
 	;(function () {
 		const popover = document.getElementById('serial-log-settings-popover')
 		if (popover) {

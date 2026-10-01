@@ -304,8 +304,8 @@
                 <div id="main">
                     <!--中间串口日志-->
                     <div id="log-main">
-                        <div
-                            class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
+                        <!-- 按日志列自身宽度（容器查询）分档换行/紧凑，不按视口断点：右栏打开时视口宽但日志列窄 -->
+                        <div class="serial-log-header d-flex justify-content-between flex-wrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
                             <div class="serial-log-headline">
                                 <h1 class="h4 serial-log-title">
                                     <i class="bi bi-journal-text"></i> 串口日志
@@ -357,10 +357,10 @@
                                 </div>
 
                                 <div class="btn-group serial-log-actions">
-                                    <button type="button" class="btn btn-sm btn-outline-secondary ctl-toggle" id="serial-auto-scroll" aria-pressed="true" title="日志自动滚动到底部">自动滚动</button>
-                                    <button class="btn btn-sm btn-outline-secondary" id="serial-clear">清空</button>
-                                    <button class="btn btn-sm btn-outline-secondary" id="serial-copy">复制</button>
-                                    <button class="btn btn-sm btn-outline-secondary" id="serial-save">导出</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary ctl-toggle" id="serial-auto-scroll" aria-pressed="true" title="日志自动滚动到底部" aria-label="自动滚动"><i class="bi bi-chevron-bar-down"></i><span class="serial-log-action-text">自动滚动</span></button>
+                                    <button class="btn btn-sm btn-outline-secondary" id="serial-clear" title="清空日志" aria-label="清空"><i class="bi bi-trash3"></i><span class="serial-log-action-text">清空</span></button>
+                                    <button class="btn btn-sm btn-outline-secondary" id="serial-copy" title="复制日志" aria-label="复制"><i class="bi bi-copy"></i><span class="serial-log-action-text">复制</span></button>
+                                    <button class="btn btn-sm btn-outline-secondary" id="serial-save" title="导出日志" aria-label="导出"><i class="bi bi-download"></i><span class="serial-log-action-text">导出</span></button>
                                 </div>
                             </div>
                         </div>
