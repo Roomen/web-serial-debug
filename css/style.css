@@ -3612,13 +3612,40 @@ hr {
   line-height: 1;
 }
 
-/* Serial Log Title */
-/* 标题 + 视图切换 + TX/RX 图例：视图 seg 紧跟固定宽度的标题，右侧工具栏文案变长变短都不会推着它跑 */
+/* Serial Log Header */
+/* 分档按日志列自身宽度（容器查询），不能用 flex-md-nowrap 这类视口断点：右栏打开时视口很宽、日志列却只剩几百 px，
+   nowrap 会让右侧工具栏叠到左侧的视图切换和图例上。左右两块都不收缩，放不下就整块换行，这是任何宽度下的兜底 */
+.serial-log-header {
+  container: log-header / inline-size;
+  /* 尺寸容器带 layout containment 会自成层叠上下文，抬高一层，否则日志设置下拉会被下方日志区盖住 */
+  position: relative;
+  z-index: 3;
+  row-gap: 6px;
+  column-gap: 12px;
+}
+
+/* 标题 + 视图切换 + TX/RX 图例：视图 seg 紧跟固定宽度的标题，右侧工具栏文案变长变短都不会推着它跑；
+   双路图例标签可编辑（最长 8 字），放不下时图例自己换到下一行 */
 .serial-log-headline {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
   min-width: 0;
+}
+
+.serial-log-header > .btn-toolbar {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+
+.serial-log-header #serial-log-settings {
+  margin-right: 0 !important;
+}
+
+/* 宽档只显示文字，紧凑档只显示图标；按钮自身带 aria-label/title */
+.serial-log-actions .btn > i {
+  display: none;
 }
 
 .serial-log-title {
@@ -3643,6 +3670,37 @@ hr {
   font-size: 0.72rem;
   padding: 4px 12px;
   font-weight: 500;
+}
+
+/* 两行档：工具栏独占第二行，设置摘要靠左、操作组靠右 */
+@container log-header (max-width: 760px) {
+  .serial-log-header > .btn-toolbar {
+    flex: 1 0 100%;
+    justify-content: space-between;
+  }
+}
+
+/* 紧凑档：去掉重复的「串口日志」标题，设置摘要只留图标，操作按钮只留图标，高频操作仍一键可达 */
+@container log-header (max-width: 480px) {
+  .serial-log-title {
+    display: none;
+  }
+
+  #serial-log-settings-text {
+    display: none;
+  }
+
+  .serial-log-actions .btn {
+    padding: 4px 10px;
+  }
+
+  .serial-log-actions .btn > i {
+    display: inline;
+  }
+
+  .serial-log-action-text {
+    display: none;
+  }
 }
 
 /* Send Area */
