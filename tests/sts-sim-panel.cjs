@@ -170,7 +170,7 @@ function makeWorld(options = {}) {
 		let resolveStart
 		const startPromise = new Promise(resolve => { resolveStart = resolve })
 		const state = {
-			running: false, phase: 'idle', localAddr: options.ciuAddr || args.config.localAddr || '2', drn: args.config.drn || DRN, meterNo: '12345678',
+			running: false, phase: 'idle', localAddr: options.ciuAddr || '2', drn: args.config.drn || DRN, meterNo: '12345678',
 			remaining: 100, totalUsed: 20, totalPurchased: 120, batteryCv: 350,
 			meterStatus: 0, valve: 1, valveFault: false, alarms: [], tariff: { currency: false, dec: 1 },
 			archive: [], records: [], sessions: 0, pending: null,
@@ -247,7 +247,7 @@ function makeWorld(options = {}) {
 		},
 		stsSim: {
 			METER_DEFAULTS: { drn: DRN, tokenDelayS: 1, tokenMode: 'exec', creditAmount: 10, testBits: '00000001', valveDelayS: 1, remaining: 100, totalUsed: 20, batteryCv: 350, tariffCurrency: false, tariffDec: 0, alarmCodes: '' },
-			CIU_DEFAULTS: { targetDrn: DRN, localAddr: '', ackTimeoutS: 5, upTimeoutS: 10, busyWaitS: 1, sessionRetries: 2 },
+			CIU_DEFAULTS: { targetDrn: DRN, ackTimeoutS: 5, upTimeoutS: 10, busyWaitS: 1, sessionRetries: 2 },
 			ALARM_PRESETS: presets,
 			composeAlarmCodes: (checked, other) => [...new Set(checked.concat(split(other)))].join(' '),
 			splitAlarmCodes(value) {
@@ -318,19 +318,24 @@ test('meter DRN input is removed and stale saved DRNs never reach engines', asyn
 	assert.equal(Object.hasOwn(world.saved('stsSim.meter2'), 'drn'), false)
 })
 
-test('CIU starts with blank address and displays, saves and restores the module runtime address', async () => {
-	const world = makeWorld({ open: ['B'], ciuAddr: '42' })
+test('CIU address is read-only, ignores old saved values and is never persisted', async () => {
+	const storage = new Map([['stsSim.ciu.B', JSON.stringify({ localAddr: '99' })]])
+	const world = makeWorld({ storage, open: ['B'], ciuAddr: '42' })
 	const panel = world.panel('B')
 	panel.role('ciu')
-	assert.equal(panel.input('ciu', 'localAddr').value, '')
+	const address = panel.root.querySelector('#sts-sim-ciu-localAddr-B')
+	assert.equal(address.tagName, 'OUTPUT')
+	assert.equal(address.textContent, '待读取')
 	panel.start.click()
 	await flush()
-	assert.equal(world.engines[0].args.config.localAddr, '')
-	assert.equal(panel.input('ciu', 'localAddr').value, '42')
+	assert.equal(Object.hasOwn(world.engines[0].args.config, 'localAddr'), false)
+	assert.equal(address.textContent, '42')
 	assert.match(panel.root.querySelector('.sts-sim-phase').textContent, /本机地址 42/)
-	assert.equal(world.saved('stsSim.ciu.B').localAddr, '42')
+	assert.equal(Object.hasOwn(world.saved('stsSim.ciu.B'), 'localAddr'), false)
 	const refreshed = makeWorld({ storage: new Map(world.storage) })
-	assert.equal(refreshed.panel('B').input('ciu', 'localAddr').value, '42')
+	assert.equal(refreshed.panel('B').root.querySelector('#sts-sim-ciu-localAddr-B').textContent, '待读取')
+	panel.start.click()
+	assert.equal(address.textContent, '待读取')
 })
 
 test('A/B roles, configuration, logs and manual start/stop are independent', async () => {
@@ -339,20 +344,20 @@ test('A/B roles, configuration, logs and manual start/stop are independent', asy
 	const channelB = world.panel('B')
 	channelB.role('ciu')
 	change(channelA.input('meter', 'remaining'), 321)
-	change(channelB.input('ciu', 'localAddr'), 42)
+	change(channelB.input('ciu', 'ackTimeoutS'), 42)
 	assert.equal(world.saved('stsSim.role.B'), 'ciu')
 	assert.equal(channelA.root.querySelector('.ctl-seg').querySelector('button').getAttribute('aria-pressed'), 'true')
 	assert.equal(world.saved('stsSim.meter2.A').remaining, '321')
 	assert.equal(world.saved('stsSim.meter2'), null, 'dual A no longer shares the single-mode key')
-	assert.equal(world.saved('stsSim.ciu.B').localAddr, '42')
+	assert.equal(world.saved('stsSim.ciu.B').ackTimeoutS, '42')
 	assert.equal(channelB.input('meter', 'remaining').value, '100')
-	assert.equal(channelA.input('ciu', 'localAddr').value, '')
+	assert.equal(channelA.input('ciu', 'ackTimeoutS').value, '5')
 	channelA.start.click()
 	channelB.start.click()
 	await flush()
 	assert.deepEqual(world.engines.map(engine => engine.role), ['meter', 'ciu'])
 	assert.equal(world.engines[0].args.config.remaining, 321)
-	assert.equal(world.engines[1].args.config.localAddr, '42')
+	assert.equal(world.engines[1].args.config.ackTimeoutS, 42)
 	world.engines[0].log('A-only')
 	world.engines[1].log('B-only')
 	assert.match(channelA.log.textContent, /A-only/)

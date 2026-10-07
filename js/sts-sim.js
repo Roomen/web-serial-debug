@@ -129,7 +129,7 @@
 		tariffCurrency: false, tariffDec: 2, protoVersion: 2,
 	}
 	const CIU_DEFAULTS = {
-		targetDrn: '', localAddr: '', pak: '',
+		targetDrn: '', pak: '',
 		ackTimeoutS: 15, upTimeoutS: 12, busyWaitS: 30, sessionRetries: 3, sendTiming: 'accept', keepAliveMs: 500,
 	}
 	// 按产品错误码对照表预置，码表不在协议内枚举；CIU 原样送显，不认识的码走「其他码」输入。
@@ -201,8 +201,7 @@
 		if (!digitsOnly(o.targetDrn, 13)) throw new Error('目标表 DRN 需为 13 位以内十进制')
 		o.meterNo = drnToMeterNo(o.targetDrn)
 		o.targetDrn = BigInt(o.targetDrn).toString()
-		o.localAddr = String(o.localAddr || '').trim()
-		if (o.localAddr && (!digitsOnly(o.localAddr, 20) || BigInt(o.localAddr) > 0xffffffffffffffffn)) throw new Error('本机地址需为 u64 十进制数字')
+		delete o.localAddr // 仅回读运行地址，不采用旧配置
 		o.pak = String(o.pak || '').replace(/\s+/g, '')
 		o.ackTimeoutS = clampInt(o.ackTimeoutS, 1, 600, 15)
 		o.upTimeoutS = clampInt(o.upTimeoutS, 1, 600, 12)
@@ -1916,23 +1915,13 @@
 			await mod.echo()
 			st.fw = await mod.fwInfo()
 			st.role = await mod.ensureRole(2, cfg.pak)
-			let ws = await link.request(C.WOR_GET_STATUS, [])
-			let initializedAddr = null
-			if (mod.notInit(ws)) {
-				if (!cfg.localAddr) throw new Error('CIU WOR 尚未初始化，无法读取本机地址；请填写本机地址用于初始化')
-				const initAddr = BigInt(cfg.localAddr)
-				const i = await link.request(C.WOR_INIT, H.woInitPayload(2, initAddr))
-				if (i.status === H.STATUS.OK) initializedAddr = initAddr
-				else if (i.status !== H.STATUS.ERR_BUSY) mod.need(i, 'WOR_INIT')
-				ws = await link.request(C.WOR_GET_STATUS, [])
-			}
+			const ws = await link.request(C.WOR_GET_STATUS, [])
+			if (mod.notInit(ws)) throw new Error('CIU WOR 尚未初始化，无法读取本机地址；请先在模组侧完成初始化')
 			mod.need(ws, 'WOR_GET_STATUS')
 			const wst = H.decodeWorStatus(ws.payload)
 			if (!wst || (ws.payload.length !== 2 && ws.payload.length < 10)) throw new Error('WOR_GET_STATUS 结果长度异常')
-			// 旧 2B 应答只有本次 INIT 成功时才能确定地址；已初始化或 BUSY 时不能猜。
-			const addr = wst.localAddr != null ? wst.localAddr : initializedAddr
-			if (addr == null) throw new Error('模组固件未返回 WOR 本机地址，请升级模组固件后重试')
-			st.localAddr = addr.toString()
+			if (wst.localAddr == null) throw new Error('模组固件未返回 WOR 本机地址，请升级模组固件后重试')
+			st.localAddr = wst.localAddr.toString()
 			ciuStatsBase = await mod.worStats() // 失败诊断的对账基线；之后只在会话失败时再查
 			if (gen !== runGen || stopped) throw abortErr()
 			running = true

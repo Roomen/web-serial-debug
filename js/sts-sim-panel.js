@@ -63,7 +63,6 @@
 		]
 		const CIU_FIELDS = [
 			{ k: 'targetDrn', label: '目标表 DRN', kind: 'text', maxlength: 13, w: 150, title: '唤醒地址用完整 DRN；应用层表号取中间 8 位（13 位去掉 4 位厂商码和末位校验，11 位去掉 2 位厂商码和末位校验）' },
-			{ k: 'localAddr', label: '本机地址(留空=自动读取)', kind: 'text', maxlength: 20, w: 150, title: '优先读取模组 WOR 运行地址；仅未初始化时使用填写的地址进行 WOR_INIT。CIU 置备身份不等于运行地址' },
 			{ k: 'ackTimeoutS', label: 'ACK 超时(s)', kind: 'num', min: 1, max: 600, w: 72 },
 			{ k: 'upTimeoutS', label: '上行超时(s)', kind: 'num', min: 1, max: 600, w: 72 },
 			{ k: 'busyWaitS', label: 'BUSY 等待(s)', kind: 'num', min: 0, max: 600, w: 72 },
@@ -270,6 +269,11 @@
 			const meterForm = el('div', 'sts-sim-form')
 			METER_FIELDS.forEach(function (d) { meterForm.appendChild(buildField(d, 'meter')) })
 			const ciuForm = el('div', 'sts-sim-form')
+			const addrField = el('div', 'sts-sim-field')
+			ui.refs.ciuLocalAddr = el('output', 'form-control form-control-sm', '待读取')
+			ui.refs.ciuLocalAddr.id = 'sts-sim-ciu-localAddr'
+			addrField.append(el('span', 'sts-sim-field-name', '本机地址(只读)'), ui.refs.ciuLocalAddr)
+			ciuForm.appendChild(addrField)
 			CIU_FIELDS.forEach(function (d) { ciuForm.appendChild(buildField(d, 'ciu')) })
 			ui.alarmCfg = buildAlarmGrid('sts-sim-cfg-alarm')
 			const alarmCfgBox = el('div', 'sts-sim-field')
@@ -277,7 +281,7 @@
 			alarmCfgBox.style.width = '100%'
 			meterForm.appendChild(alarmCfgBox)
 			meterForm.appendChild(el('div', 'sts-sim-hint small', 'DRN 启动时从模组自动读取。'))
-			ciuForm.appendChild(el('div', 'sts-sim-hint small', '本机地址优先自动读取；模组未初始化时需填写地址。'))
+			ciuForm.appendChild(el('div', 'sts-sim-hint small', '本机地址仅从模组读取。'))
 			cfg.append(meterForm, ciuForm)
 			body.appendChild(cfg)
 
@@ -712,8 +716,9 @@
 		}
 		function renderPhase() {
 			const r = ui.refs
-			if (!ui.engine || ui.role !== 'ciu' || !ui.running) { r.phase.textContent = ''; renderSimUnit(); return }
+			if (!ui.engine || ui.role !== 'ciu' || !ui.running) { r.ciuLocalAddr.textContent = '待读取'; r.phase.textContent = ''; renderSimUnit(); return }
 			const st = ui.engine.getState()
+			r.ciuLocalAddr.textContent = st.localAddr == null ? '待读取' : st.localAddr
 			const names = { idle: '空闲', session: '唤醒会话中（WAKE → SEND → 等 ACK → 等上行 → FINISH）', 'wait-poll': '等待下一次轮询' }
 			let t = '阶段：' + (names[st.phase] || st.phase)
 			if (st.localAddr != null) t += '；本机地址 ' + st.localAddr
@@ -814,10 +819,6 @@
 				ui.retryAt = 0
 				ui.retryCount = 0
 				ui.refs.cfg.open = false
-				if (ui.role === 'ciu') {
-					ui.inputs.ciu.localAddr.value = engine.getState().localAddr || ''
-					saveGroup('ciu', CIU_FIELDS, KEY_CIU)
-				}
 				ui.timer = setInterval(tick, 500)
 				setStatus(ui.role === 'meter' ? '表端运行中' : 'CIU 运行中', 'is-ok')
 				applyRunning()
