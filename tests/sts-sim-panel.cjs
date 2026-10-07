@@ -170,7 +170,7 @@ function makeWorld(options = {}) {
 		let resolveStart
 		const startPromise = new Promise(resolve => { resolveStart = resolve })
 		const state = {
-			running: false, phase: 'idle', drn: args.config.drn || DRN, meterNo: '12345678',
+			running: false, phase: 'idle', localAddr: options.ciuAddr || args.config.localAddr || '2', drn: args.config.drn || DRN, meterNo: '12345678',
 			remaining: 100, totalUsed: 20, totalPurchased: 120, batteryCv: 350,
 			meterStatus: 0, valve: 1, valveFault: false, alarms: [], tariff: { currency: false, dec: 1 },
 			archive: [], records: [], sessions: 0, pending: null,
@@ -247,7 +247,7 @@ function makeWorld(options = {}) {
 		},
 		stsSim: {
 			METER_DEFAULTS: { drn: DRN, tokenDelayS: 1, tokenMode: 'exec', creditAmount: 10, testBits: '00000001', valveDelayS: 1, remaining: 100, totalUsed: 20, batteryCv: 350, tariffCurrency: false, tariffDec: 0, alarmCodes: '' },
-			CIU_DEFAULTS: { targetDrn: DRN, localAddr: '2', ackTimeoutS: 5, upTimeoutS: 10, busyWaitS: 1, sessionRetries: 2 },
+			CIU_DEFAULTS: { targetDrn: DRN, localAddr: '', ackTimeoutS: 5, upTimeoutS: 10, busyWaitS: 1, sessionRetries: 2 },
 			ALARM_PRESETS: presets,
 			composeAlarmCodes: (checked, other) => [...new Set(checked.concat(split(other)))].join(' '),
 			splitAlarmCodes(value) {
@@ -301,6 +301,38 @@ function change(input, value) {
 const tests = []
 function test(name, run) { tests.push({ name, run }) }
 
+test('meter DRN input is removed and stale saved DRNs never reach engines', async () => {
+	const storage = new Map(['S', 'A', 'B'].map(sid => ['stsSim.meter2' + (sid === 'S' ? '' : '.' + sid), JSON.stringify({ drn: '9998765432101' })]))
+	const world = makeWorld({ storage, open: ['A', 'B'] })
+	for (const sid of ['S', 'A', 'B']) assert.equal(world.panel(sid).root.querySelector('#sts-sim-meter-drn-' + sid), null)
+	world.panel('A').start.click()
+	world.panel('B').start.click()
+	await flush()
+	for (const engine of world.engines) assert.equal(engine.args.config.drn, '')
+	for (const sid of ['A', 'B']) assert.equal(Object.hasOwn(world.saved('stsSim.meter2.' + sid), 'drn'), false)
+	world.setMode('single')
+	world.sessions.add('S')
+	world.panel('S').start.click()
+	await flush()
+	assert.equal(world.engines.at(-1).args.config.drn, '')
+	assert.equal(Object.hasOwn(world.saved('stsSim.meter2'), 'drn'), false)
+})
+
+test('CIU starts with blank address and displays, saves and restores the module runtime address', async () => {
+	const world = makeWorld({ open: ['B'], ciuAddr: '42' })
+	const panel = world.panel('B')
+	panel.role('ciu')
+	assert.equal(panel.input('ciu', 'localAddr').value, '')
+	panel.start.click()
+	await flush()
+	assert.equal(world.engines[0].args.config.localAddr, '')
+	assert.equal(panel.input('ciu', 'localAddr').value, '42')
+	assert.match(panel.root.querySelector('.sts-sim-phase').textContent, /本机地址 42/)
+	assert.equal(world.saved('stsSim.ciu.B').localAddr, '42')
+	const refreshed = makeWorld({ storage: new Map(world.storage) })
+	assert.equal(refreshed.panel('B').input('ciu', 'localAddr').value, '42')
+})
+
 test('A/B roles, configuration, logs and manual start/stop are independent', async () => {
 	const world = makeWorld({ open: ['A', 'B'] })
 	const channelA = world.panel('A')
@@ -314,7 +346,7 @@ test('A/B roles, configuration, logs and manual start/stop are independent', asy
 	assert.equal(world.saved('stsSim.meter2'), null, 'dual A no longer shares the single-mode key')
 	assert.equal(world.saved('stsSim.ciu.B').localAddr, '42')
 	assert.equal(channelB.input('meter', 'remaining').value, '100')
-	assert.equal(channelA.input('ciu', 'localAddr').value, '2')
+	assert.equal(channelA.input('ciu', 'localAddr').value, '')
 	channelA.start.click()
 	channelB.start.click()
 	await flush()

@@ -129,7 +129,7 @@
 		tariffCurrency: false, tariffDec: 2, protoVersion: 2,
 	}
 	const CIU_DEFAULTS = {
-		targetDrn: '', localAddr: '2', pak: '',
+		targetDrn: '', localAddr: '', pak: '',
 		ackTimeoutS: 15, upTimeoutS: 12, busyWaitS: 30, sessionRetries: 3, sendTiming: 'accept', keepAliveMs: 500,
 	}
 	// 按产品错误码对照表预置，码表不在协议内枚举；CIU 原样送显，不认识的码走「其他码」输入。
@@ -201,8 +201,8 @@
 		if (!digitsOnly(o.targetDrn, 13)) throw new Error('目标表 DRN 需为 13 位以内十进制')
 		o.meterNo = drnToMeterNo(o.targetDrn)
 		o.targetDrn = BigInt(o.targetDrn).toString()
-		if (!digitsOnly(o.localAddr, 20)) throw new Error('本机地址需为十进制数字')
-		o.localAddr = String(o.localAddr).trim()
+		o.localAddr = String(o.localAddr || '').trim()
+		if (o.localAddr && (!digitsOnly(o.localAddr, 20) || BigInt(o.localAddr) > 0xffffffffffffffffn)) throw new Error('本机地址需为 u64 十进制数字')
 		o.pak = String(o.pak || '').replace(/\s+/g, '')
 		o.ackTimeoutS = clampInt(o.ackTimeoutS, 1, 600, 15)
 		o.upTimeoutS = clampInt(o.upTimeoutS, 1, 600, 12)
@@ -1068,11 +1068,11 @@
 			info.startedAt = clock.now()
 			await mod.echo()
 			info.fw = await mod.fwInfo()
-			// DRN 留空时以模组回读值为准；填了就以面板为准，不一致时（有 PAK）写入模组
+			// 面板不指定 DRN，始终回读模组；显式引擎配置仍供台架置备使用
 			const dev0 = await mod.devIdGet()
 			const want = cfg.drn ? BigInt(cfg.drn) : dev0.drn
-			if (!cfg.drn) log('info', '面板 DRN 留空，从模组读取: ' + dev0.drn)
-			if (want === 0n) throw new Error('DRN 未设置：已从模组读取 DRN，结果为 0（模组还没置备 DRN）。在面板填写 DRN 并填写 PAK 由模拟器写入，或用 keytool 写入')
+			if (!cfg.drn) log('info', '从模组读取 DRN: ' + dev0.drn)
+			if (want === 0n) throw new Error('DRN 未设置：已从模组读取 DRN，结果为 0（模组还没置备 DRN）。请先用 keytool 置备 DRN')
 			drnToMeterNo(want)
 			if (!drnCheckOk(want)) log('warn', 'DRN ' + want + ' 的校验位不符合 Luhn 规则，仍按此地址继续')
 			const pv = await mod.provision(1, want, cfg.pak, 1)
@@ -1388,7 +1388,7 @@
 		const sessionWaiters = new Set() // 正在等 ACK / 上行的等待者，中止时要能立刻叫醒
 		const st = {
 			phase: 'idle', op: null, tariff: null, protoVersion: null, pollAllowed: true,
-			lastResult: null, sessionCount: 0, lastTimeline: null, budgetLeftMs: null, role: null, fw: null,
+			lastResult: null, sessionCount: 0, lastTimeline: null, budgetLeftMs: null, role: null, fw: null, localAddr: null,
 		}
 
 		function log(level, text) { onLogCb({ at: clock.now(), level: level, text: text }) }
@@ -1398,7 +1398,7 @@
 				running: running, phase: st.phase, op: st.op, tariff: st.tariff, protoVersion: st.protoVersion,
 				pollAllowed: st.pollAllowed, lastResult: st.lastResult, sessionCount: st.sessionCount,
 				lastTimeline: st.lastTimeline, budgetLeftMs: policy.budgetLeft(clock.now()), role: st.role,
-				pending: policy.hasPending(), targetDrn: cfg.targetDrn,
+				pending: policy.hasPending(), targetDrn: cfg.targetDrn, localAddr: st.localAddr,
 			}
 		}
 		function setPhase(p) { st.phase = p; try { onStateCb(snapshot()) } catch (e) { /* 界面回调异常不影响引擎 */ } }
@@ -1916,16 +1916,27 @@
 			await mod.echo()
 			st.fw = await mod.fwInfo()
 			st.role = await mod.ensureRole(2, cfg.pak)
-			const i = await link.request(C.WOR_INIT, H.woInitPayload(2, BigInt(cfg.localAddr)))
-			if (i.status === H.STATUS.ERR_BUSY) log('info', 'WOR_INIT 回 BUSY: 已初始化，跳过（运行地址仍是上次 INIT 的值，以 WOR_GET_STATUS 为准）')
-			else mod.need(i, 'WOR_INIT')
-			const ws = await link.request(C.WOR_GET_STATUS, [])
-			const wst = ws.status === H.STATUS.OK ? H.decodeWorStatus(ws.payload) : null
-			if (wst && wst.localAddr != null && wst.localAddr !== BigInt(cfg.localAddr)) log('warn', 'WOR 运行地址为 ' + wst.localAddr + '（模组早已初始化），与面板本机地址 ' + cfg.localAddr + ' 不同；复位模组后才会按面板地址初始化')
+			let ws = await link.request(C.WOR_GET_STATUS, [])
+			let initializedAddr = null
+			if (mod.notInit(ws)) {
+				if (!cfg.localAddr) throw new Error('CIU WOR 尚未初始化，无法读取本机地址；请填写本机地址用于初始化')
+				const initAddr = BigInt(cfg.localAddr)
+				const i = await link.request(C.WOR_INIT, H.woInitPayload(2, initAddr))
+				if (i.status === H.STATUS.OK) initializedAddr = initAddr
+				else if (i.status !== H.STATUS.ERR_BUSY) mod.need(i, 'WOR_INIT')
+				ws = await link.request(C.WOR_GET_STATUS, [])
+			}
+			mod.need(ws, 'WOR_GET_STATUS')
+			const wst = H.decodeWorStatus(ws.payload)
+			if (!wst || (ws.payload.length !== 2 && ws.payload.length < 10)) throw new Error('WOR_GET_STATUS 结果长度异常')
+			// 旧 2B 应答只有本次 INIT 成功时才能确定地址；已初始化或 BUSY 时不能猜。
+			const addr = wst.localAddr != null ? wst.localAddr : initializedAddr
+			if (addr == null) throw new Error('模组固件未返回 WOR 本机地址，请升级模组固件后重试')
+			st.localAddr = addr.toString()
 			ciuStatsBase = await mod.worStats() // 失败诊断的对账基线；之后只在会话失败时再查
 			if (gen !== runGen || stopped) throw abortErr()
 			running = true
-			log('info', 'CIU 模拟就绪：本机地址 ' + cfg.localAddr + '，目标 DRN ' + cfg.targetDrn + '，应用层表号 ' + cfg.meterNo)
+			log('info', 'CIU 模拟就绪：本机地址 ' + st.localAddr + '，目标 DRN ' + cfg.targetDrn + '，应用层表号 ' + cfg.meterNo)
 			if (!drnCheckOk(cfg.targetDrn)) log('warn', '目标 DRN ' + cfg.targetDrn + ' 的校验位不符合 Luhn 规则，仍按此地址唤醒')
 			setPhase('idle')
 			// 连接后读一次 0x18 计价模式与 0x27 协议版本（每次读都是一次唤醒会话，需要几秒到几十秒）

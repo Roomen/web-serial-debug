@@ -452,6 +452,93 @@ async function tests() {
 		t.world.faults.wakeStatus = null
 	}
 
+	// ---- CIU 本机地址: 优先回读运行地址，只在未初始化时使用填写值 ----
+	{
+		const t = setup({ ciu: { localAddr: '7' } })
+		t.world.ciu.worInit = true
+		t.world.ciu.addr = 11n
+		await ready(t)
+		assert.equal(t.ciu.getState().localAddr, '11')
+		assert.equal(t.world.log.requests.filter(r => r.role === 'ciu' && r.cmd === H.CMD.WOR_INIT).length, 0)
+		assert.equal(t.world.log.requests.filter(r => r.role === 'ciu' && r.cmd === H.CMD.PROV_DEV_ID_GET).length, 0, '不把 CIU 置备身份当作运行地址')
+		t.meter.stop(); t.ciu.stop()
+	}
+	{
+		const t = setup({ ciu: { localAddr: '' } })
+		await assert.rejects(drive(t.clock, t.ciu.start()), /尚未初始化.*填写本机地址/)
+		assert.equal(t.ciu.getState().running, false)
+		assert.equal(t.ciu.getState().localAddr, null)
+		assert.equal(t.world.log.requests.filter(r => r.role === 'ciu' && r.cmd === H.CMD.WOR_INIT).length, 0)
+		t.ciu.stop()
+	}
+	for (const notInitStatus of [H.STATUS.ERR_NOT_INIT, H.STATUS.ERR_STATE]) {
+		const t = setup({ world: { notInitStatus }, ciu: { localAddr: '17' } })
+		await ready(t)
+		assert.equal(t.world.ciu.addr, 17n)
+		assert.equal(t.ciu.getState().localAddr, '17')
+		assert.equal(t.world.log.requests.filter(r => r.role === 'ciu' && r.cmd === H.CMD.WOR_INIT).length, 1)
+		t.meter.stop(); t.ciu.stop()
+	}
+	for (const alreadyInit of [false, true]) {
+		const t = setup({ ciu: { localAddr: '23' } })
+		t.world.ciu.worInit = alreadyInit
+		const original = t.ciuLink.request
+		t.ciuLink.request = async function (cmd, payload, opts) {
+			const r = await original(cmd, payload, opts)
+			if (cmd === H.CMD.WOR_GET_STATUS && r.status === H.STATUS.OK) return Object.assign({}, r, { payload: r.payload.subarray(0, 2) })
+			return r
+		}
+		if (alreadyInit) {
+			await assert.rejects(drive(t.clock, t.ciu.start()), /未返回 WOR 本机地址/)
+			assert.equal(t.ciu.getState().running, false)
+			assert.equal(t.world.log.requests.filter(r => r.role === 'ciu' && r.cmd === H.CMD.WOR_INIT).length, 0)
+		} else {
+			await ready(t)
+			assert.equal(t.ciu.getState().localAddr, '23', '旧固件可采用本次成功初始化的已知地址')
+			assert.equal(t.world.ciu.addr, 23n)
+		}
+		t.meter.stop(); t.ciu.stop()
+	}
+	for (const reply of [
+		{ status: H.STATUS.ERR_AUTH, payload: new Uint8Array(0) },
+		{ status: H.STATUS.OK, payload: Uint8Array.of(2) },
+		{ status: H.STATUS.OK, payload: Uint8Array.of(2, 0, 1) },
+	]) {
+		const t = setup()
+		const original = t.ciuLink.request
+		t.ciuLink.request = function (cmd, payload, opts) {
+			return cmd === H.CMD.WOR_GET_STATUS ? Promise.resolve(reply) : original(cmd, payload, opts)
+		}
+		await assert.rejects(drive(t.clock, t.ciu.start()), /WOR_GET_STATUS/)
+		assert.equal(t.ciu.getState().running, false)
+		assert.equal(t.ciu.getState().localAddr, null)
+		assert.equal(t.world.log.requests.filter(r => r.role === 'ciu' && r.cmd === H.CMD.WOR_INIT).length, 0)
+		t.ciu.stop()
+	}
+	for (const legacyStatus of [false, true]) {
+		const t = setup({ ciu: { localAddr: '29' } })
+		const original = t.ciuLink.request
+		t.ciuLink.request = async function (cmd, payload, opts) {
+			// 首次查状态后另一主机抢先 INIT，当前 INIT 因而回 BUSY。
+			if (cmd === H.CMD.WOR_INIT) {
+				t.world.ciu.worInit = true
+				t.world.ciu.addr = 31n
+			}
+			const r = await original(cmd, payload, opts)
+			if (legacyStatus && cmd === H.CMD.WOR_GET_STATUS && r.status === H.STATUS.OK) return Object.assign({}, r, { payload: r.payload.subarray(0, 2) })
+			return r
+		}
+		if (legacyStatus) {
+			await assert.rejects(drive(t.clock, t.ciu.start()), /未返回 WOR 本机地址/)
+			assert.equal(t.ciu.getState().running, false)
+		} else {
+			await ready(t)
+			assert.equal(t.ciu.getState().localAddr, '31', 'INIT BUSY 后采纳模组回读地址，不采用未生效的填写值')
+		}
+		assert.equal(t.world.log.requests.filter(r => r.role === 'ciu' && r.cmd === H.CMD.WOR_INIT).length, 1)
+		t.meter.stop(); t.ciu.stop()
+	}
+
 	// ---- 充值全流程: 受理 -> 轮询处理中 -> 完成，余额与充值记录更新 ----
 	{
 		const t = setup({ meter: { tokenDelayS: 20 } })
