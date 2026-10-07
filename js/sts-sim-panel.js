@@ -44,7 +44,6 @@
 		// ===== 字段定义 =====
 		// kind: text / num / sel / bool；persist=false 的不落盘
 		const METER_FIELDS = [
-			{ k: 'drn', label: 'DRN(留空=以模组为准)', kind: 'text', maxlength: 13, w: 150, title: '13 位 = 4 位厂商码 + 8 位表号 + 1 位校验（11 位为 2 位厂商码）；应用层表号取中间 8 位。与模组不一致且填了 PAK 时写入模组并复位' },
 			{ k: 'tokenDelayS', label: '令牌处理耗时(s)', kind: 'num', min: 0, max: 3600, w: 72 },
 			{ k: 'tokenMode', label: '普通令牌结果', kind: 'sel', title: '非模拟令牌（任意 20 位）的处理结果: 已执行 = 处理状态 2 + MODE1 充值量；结果码 = 处理状态 1 + MODE3；表计测试 = 处理状态 1 + MODE256 位图。这里只回报结果码，不执行业务动作；模拟令牌按自身类型处理，不受此项影响', options: [
 				['exec', '已执行(充值)'], ['1', 'OVER 余额过多'], ['2', 'OLD 令牌过期'], ['3', 'USED 已使用'], ['4', '1ST 换钥第一步'], ['5', '2ND 换钥第二步'],
@@ -60,18 +59,17 @@
 			{ k: 'batteryV', label: '电池(V)', kind: 'num', min: 0, max: 655.35, step: 0.01, w: 80, title: '两位小数，引擎内部换算为 0.01V 整数' },
 			{ k: 'tariffCurrency', label: '计价模式', kind: 'sel', options: [['0', '体积(dL)'], ['1', '金额']] },
 			{ k: 'tariffDec', label: '金额小数位', kind: 'sel', options: [['0', '0'], ['2', '2']] },
-			{ k: 'pak', label: 'PAK(32 位 HEX，不保存)', kind: 'text', maxlength: 32, w: 260, persist: false, sensitive: true, title: '仅当模组角色或 DRN 需要写入时用于 PROV_AUTH，不写入浏览器存储' },
+			{ k: 'pak', label: 'PAK(32 位 HEX，不保存)', kind: 'text', maxlength: 32, w: 260, persist: false, sensitive: true, title: '仅当模组角色需要切换时用于 PROV_AUTH，不写入浏览器存储' },
 		]
 		const CIU_FIELDS = [
 			{ k: 'targetDrn', label: '目标表 DRN', kind: 'text', maxlength: 13, w: 150, title: '唤醒地址用完整 DRN；应用层表号取中间 8 位（13 位去掉 4 位厂商码和末位校验，11 位去掉 2 位厂商码和末位校验）' },
-			{ k: 'localAddr', label: '本机地址(十进制)', kind: 'text', maxlength: 20, w: 120 },
 			{ k: 'ackTimeoutS', label: 'ACK 超时(s)', kind: 'num', min: 1, max: 600, w: 72 },
 			{ k: 'upTimeoutS', label: '上行超时(s)', kind: 'num', min: 1, max: 600, w: 72 },
 			{ k: 'busyWaitS', label: 'BUSY 等待(s)', kind: 'num', min: 0, max: 600, w: 72 },
 			{ k: 'sessionRetries', label: '会话重试次数', kind: 'num', min: 0, max: 20, w: 72 },
 			{ k: 'keepAliveMs', label: '会话保活(ms)', kind: 'num', min: 0, max: 5000, w: 72, title: '收到 ACK 后每隔这么久向 CIU 模组查一次 WOR_GET_STATUS，0 = 关闭。唤醒阶段保持安静；实测数据阶段完全静默仍会卡住，保活可规避' },
 			{ k: 'sendTiming', label: 'WOR_SEND 时机', kind: 'sel', title: '规范允许 WAKE 受理后立即入队（默认）。实板上 ACK 后表端收不到会话帧时，切到「ACK 后」对比，可判断是否为 ACK 前入队的数据没被模组消费', options: [['accept', '受理后立即'], ['ack', 'ACK 后']] },
-			{ k: 'pak', label: 'PAK(32 位 HEX，不保存)', kind: 'text', maxlength: 32, w: 260, persist: false, sensitive: true, title: '仅当模组角色或 DRN 需要写入时用于 PROV_AUTH，不写入浏览器存储' },
+			{ k: 'pak', label: 'PAK(32 位 HEX，不保存)', kind: 'text', maxlength: 32, w: 260, persist: false, sensitive: true, title: '仅当模组角色需要切换时用于 PROV_AUTH，不写入浏览器存储' },
 		]
 
 		const ui = {
@@ -271,12 +269,19 @@
 			const meterForm = el('div', 'sts-sim-form')
 			METER_FIELDS.forEach(function (d) { meterForm.appendChild(buildField(d, 'meter')) })
 			const ciuForm = el('div', 'sts-sim-form')
+			const addrField = el('div', 'sts-sim-field')
+			ui.refs.ciuLocalAddr = el('output', 'form-control form-control-sm', '待读取')
+			ui.refs.ciuLocalAddr.id = 'sts-sim-ciu-localAddr'
+			addrField.append(el('span', 'sts-sim-field-name', '本机地址(只读)'), ui.refs.ciuLocalAddr)
+			ciuForm.appendChild(addrField)
 			CIU_FIELDS.forEach(function (d) { ciuForm.appendChild(buildField(d, 'ciu')) })
 			ui.alarmCfg = buildAlarmGrid('sts-sim-cfg-alarm')
 			const alarmCfgBox = el('div', 'sts-sim-field')
 			alarmCfgBox.append(el('span', 'sts-sim-field-name', '初始告警'), ui.alarmCfg.root)
 			alarmCfgBox.style.width = '100%'
 			meterForm.appendChild(alarmCfgBox)
+			meterForm.appendChild(el('div', 'sts-sim-hint small', 'DRN 启动时从模组自动读取。'))
+			ciuForm.appendChild(el('div', 'sts-sim-hint small', '本机地址仅从模组读取。'))
 			cfg.append(meterForm, ciuForm)
 			body.appendChild(cfg)
 
@@ -468,7 +473,7 @@
 		}
 		function collectMeterConfig() {
 			const raw = readGroup('meter', METER_FIELDS)
-			const c = {}
+			const c = { drn: '' } // 地址始终以本次连接的模组为准
 			METER_FIELDS.forEach(function (d) {
 				const v = raw[d.k]
 				c[d.k] = d.kind === 'num' ? (v === '' ? undefined : Number(v)) : v
@@ -711,10 +716,12 @@
 		}
 		function renderPhase() {
 			const r = ui.refs
-			if (!ui.engine || ui.role !== 'ciu' || !ui.running) { r.phase.textContent = ''; renderSimUnit(); return }
+			if (!ui.engine || ui.role !== 'ciu' || !ui.running) { r.ciuLocalAddr.textContent = '待读取'; r.phase.textContent = ''; renderSimUnit(); return }
 			const st = ui.engine.getState()
+			r.ciuLocalAddr.textContent = st.localAddr == null ? '待读取' : st.localAddr
 			const names = { idle: '空闲', session: '唤醒会话中（WAKE → SEND → 等 ACK → 等上行 → FINISH）', 'wait-poll': '等待下一次轮询' }
 			let t = '阶段：' + (names[st.phase] || st.phase)
+			if (st.localAddr != null) t += '；本机地址 ' + st.localAddr
 			if (st.budgetLeftMs != null) t += '；总预算剩余 ' + Math.ceil(st.budgetLeftMs / 1000) + ' s'
 			if (st.tariff) t += '；计价 ' + (st.tariff.currency ? '金额 d=' + st.tariff.dec : '体积 dL')
 			if (st.protoVersion != null) t += '；表体协议版本 ' + st.protoVersion
@@ -812,11 +819,6 @@
 				ui.retryAt = 0
 				ui.retryCount = 0
 				ui.refs.cfg.open = false
-				if (ui.role === 'meter') {
-					const s = engine.getState()
-					if (s.drn) ui.inputs.meter.drn.value = s.drn // 以模组回读的 DRN 为准并回填
-					saveGroup('meter', METER_FIELDS, KEY_METER)
-				}
 				ui.timer = setInterval(tick, 500)
 				setStatus(ui.role === 'meter' ? '表端运行中' : 'CIU 运行中', 'is-ok')
 				applyRunning()
