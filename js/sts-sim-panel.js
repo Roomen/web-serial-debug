@@ -52,6 +52,7 @@
 				['12', '关闭水阀'], ['13', '清除窃水'], ['255', 'REJECT 错误令牌'], ['test', '表计测试(MODE256)'],
 			] },
 			{ k: 'creditAmount', label: '充值量(原始整数)', kind: 'num', min: 0, w: 96, title: '按当前计价模式的最小单位：体积 dL，金额按小数位' },
+			{ k: 'creditLimit', label: '余额上限(0=不限)', kind: 'num', min: 0, w: 96, title: '原始整数，单位同剩余量。充值后剩余量超过上限时令牌不执行，终局为处理状态 1 + MODE3 OVER 余额过多；对模拟令牌和「已执行(充值)」的普通令牌都生效。0 = 只受 i32 上限 2147483647 限制' },
 			{ k: 'testBits', label: '测试位图(HEX)', kind: 'text', maxlength: 8, w: 96, title: '结果模式为「表计测试」时 MODE256 的 Value，u32 位图：BIT0 水阀开关测试、BIT1 全屏、BIT2 总用水量、BIT3 KRN、BIT4 TI、BIT7 清除窃水、BIT9 软件版本、BIT13 EA、BIT16 KEN、BIT17 DRN' },
 			{ k: 'valveDelayS', label: '阀门动作耗时(s)', kind: 'num', min: 0, max: 600, w: 72 },
 			{ k: 'remaining', label: '初始剩余量', kind: 'num', w: 96 },
@@ -376,7 +377,10 @@
 			simData.spellcheck = false
 			const simBtn = buildToggleRow('生成模拟令牌', 'sts-sim-ciu-simgen')
 			simRow.title = '模拟令牌 = 77 + 类型 2 位 + 序号 4 位 + 数据 10 位 + 校验 2 位，只对本工具的表端模拟器有意义。充值填充值量（原始整数）；表计测试填位图 HEX；指定结果码填 1/2/3/6/255；其余类型不需要数据。序号每次生成自动递增'
-			simRow.append(el('span', 'sts-sim-field-name', '模拟令牌'), simType, simData, simBtn)
+			// 充值量的单位与换算值: 计价模式要等 CIU 启动后读到寄存器 0x18 才知道
+			const simUnit = el('span', 'sts-sim-hint small')
+			simUnit.id = 'sts-sim-ciu-simunit'
+			simRow.append(el('span', 'sts-sim-field-name', '模拟令牌'), simType, simData, simUnit, simBtn)
 			const opRow = el('div', 'sts-sim-row')
 			const statusBtn = buildToggleRow('查询状态', 'sts-sim-ciu-status')
 			const recBtn = buildToggleRow('充值记录', 'sts-sim-ciu-records')
@@ -423,7 +427,7 @@
 
 			Object.assign(ui.refs, {
 				root, head, body, toggle, nameEl, hint, logCard, logTitle, bMeter, bCiu, startBtn, startText, startIcon, status, cfg, meterForm, ciuForm, meterView, ciuView, kv, recTable,
-				tokenInput, tokenBtn, simType, simData, simBtn, statusBtn, recBtn, valveOpenBtn, valveCloseBtn, unbindBtn, readStart, readCount, readBtn, abortBtn,
+				tokenInput, tokenBtn, simType, simData, simUnit, simBtn, statusBtn, recBtn, valveOpenBtn, valveCloseBtn, unbindBtn, readStart, readCount, readBtn, abortBtn,
 				phase, resultCard, logBox, clearBtn,
 			})
 			root.querySelectorAll('[id]').forEach(function (node) { node.id += '-' + channel })
@@ -579,6 +583,21 @@
 			r.abortBtn.disabled = !(ui.running && ui.opBusy)
 			r.tokenBtn.disabled = !idle || r.tokenInput.value.length !== 20
 		}
+		// 模拟充值令牌的单位: 原始整数按表端计价模式的最小单位计数，有数值时附换算值
+		function renderSimUnit() {
+			const r = ui.refs
+			const t = S.SIM_TOKEN_TYPES && S.SIM_TOKEN_TYPES[r.simType.value]
+			r.simUnit.hidden = !t || t.data !== 'amount'
+			if (r.simUnit.hidden) return
+			const st = ui.engine && ui.role === 'ciu' && ui.running ? ui.engine.getState() : null
+			const tariff = st && st.tariff
+			const raw = r.simData.value.trim()
+			let text
+			if (!tariff) text = '单位：体积 dL / 金额 10^-d 货币单位（启动后按表端 0x18 确定）'
+			else if (/^\d{1,10}$/.test(raw)) text = '= ' + S.qtyRawText(Number(raw), tariff)
+			else text = '单位 ' + S.qtyUnit(tariff)
+			r.simUnit.textContent = text
+		}
 		// 阀门行: 动作中（正在开/关或恢复，剩余秒数）、关阀保持期剩余时间；剩余时间按快照时刻的剩余毫秒减去已过去的时间
 		function renderValveText(s) {
 			const posName = function (v) { return v === S.VALVE_POS_OPEN ? '开' : v === S.VALVE_POS_CLOSED ? '关' : '不明' }
@@ -692,7 +711,7 @@
 		}
 		function renderPhase() {
 			const r = ui.refs
-			if (!ui.engine || ui.role !== 'ciu' || !ui.running) { r.phase.textContent = ''; return }
+			if (!ui.engine || ui.role !== 'ciu' || !ui.running) { r.phase.textContent = ''; renderSimUnit(); return }
 			const st = ui.engine.getState()
 			const names = { idle: '空闲', session: '唤醒会话中（WAKE → SEND → 等 ACK → 等上行 → FINISH）', 'wait-poll': '等待下一次轮询' }
 			let t = '阶段：' + (names[st.phase] || st.phase)
@@ -700,6 +719,7 @@
 			if (st.tariff) t += '；计价 ' + (st.tariff.currency ? '金额 d=' + st.tariff.dec : '体积 dL')
 			if (st.protoVersion != null) t += '；表体协议版本 ' + st.protoVersion
 			r.phase.textContent = t
+			renderSimUnit()
 			updateCiuButtons()
 		}
 		// 在飞待办的预计剩余秒数随阀门动作倒计时变化，tick 里和阀门行一起刷新，否则停在受理时的值
@@ -940,10 +960,12 @@
 				const t = S.SIM_TOKEN_TYPES && S.SIM_TOKEN_TYPES[r.simType.value]
 				const k = t ? t.data : null
 				r.simData.disabled = !k
-				r.simData.placeholder = k === 'amount' ? '充值量' : k === 'bits' ? '位图 HEX，如 20001' : k === 'code' ? '1/2/3/6/255' : '无需数据'
+				r.simData.placeholder = k === 'amount' ? '充值量(原始整数)' : k === 'bits' ? '位图 HEX，如 20001' : k === 'code' ? '1/2/3/6/255' : '无需数据'
 			}
-			r.simType.addEventListener('change', simHint)
+			r.simType.addEventListener('change', function () { simHint(); renderSimUnit() })
+			r.simData.addEventListener('input', renderSimUnit)
 			simHint()
+			renderSimUnit()
 			r.simBtn.addEventListener('click', function () {
 				const t = S.SIM_TOKEN_TYPES[r.simType.value]
 				const raw = r.simData.value.trim()
@@ -960,7 +982,8 @@
 				simSerial = simSerial >= 9999 ? 1 : simSerial + 1
 				r.tokenInput.value = tok
 				updateCiuButtons()
-				plog('info', '已生成 ' + S.simTokenText(S.simTokenDecode(tok)) + ': ' + tok)
+				const st = ui.engine && ui.role === 'ciu' ? ui.engine.getState() : null
+				plog('info', '已生成 ' + S.simTokenText(S.simTokenDecode(tok), st && st.tariff) + ': ' + tok)
 			})
 			r.tokenBtn.addEventListener('click', function () {
 				const t = r.tokenInput.value

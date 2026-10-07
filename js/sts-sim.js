@@ -121,7 +121,7 @@
 	// ===== 配置规范化 =====
 	const METER_DEFAULTS = {
 		drn: '', pak: '', // drn 留空 = 以模组 DEV_ID_GET 回读值为准
-		tokenDelayS: 6, tokenMode: 'exec', creditAmount: 500, testBits: '00000001', valveDelayS: 30,
+		tokenDelayS: 6, tokenMode: 'exec', creditAmount: 500, creditLimit: 0, testBits: '00000001', valveDelayS: 30,
 		remaining: 5000, totalUsed: 12345, totalPurchased: 20000, batteryCv: 368, alarmCodes: '',
 		tariffCurrency: false, tariffDec: 2, protoVersion: 2,
 	}
@@ -186,6 +186,7 @@
 		if (!/^[0-9a-fA-F]{1,8}$/.test(bits)) throw new Error('测试位图需为 1..8 位十六进制')
 		o.testBits = bits.toUpperCase().padStart(8, '0')
 		o.creditAmount = clampInt(o.creditAmount, 0, INT32_MAX, 500)
+		o.creditLimit = clampInt(o.creditLimit, 0, INT32_MAX, 0) // 余额上限，0 = 只受 i32 限制
 		normalizeLiveFields(o)
 		o.protoVersion = clampInt(o.protoVersion, 0, 255, 2) // 仅测试用: <2 时表体对 RESULT 回 NAK 0x01
 		o.tariffCurrency = !!o.tariffCurrency
@@ -546,6 +547,10 @@
 		// 模拟令牌（明文测试格式）: 按类型给出 STS 结果块并执行对应的表端动作。
 		// 同一令牌在去重深度内再输由去重回放上次结果（协议 2.1，保证句柄恢复重发不重复执行）；
 		// 超出深度后再输，按 STS 的 TID 防重放给 USED
+		// 充值后余额超出上限（配置的余额上限，未配置时为 i32 上限）: 终局 OVER
+		function overLimit(amount) { return a.remaining + amount > (cfg.creditLimit || INT32_MAX) }
+		function overNote() { return '充值后余额超出' + (cfg.creditLimit ? '余额上限 ' + S.qtyRawText(cfg.creditLimit, tariffOf()) : ' i32 上限') + '，OVER' }
+		function tariffOf() { return { currency: a.tariffCurrency, dec: a.tariffDec } }
 		function finishSimToken(w) {
 			const I = S.STS_IDX
 			const m = S.simTokenDecode(w.digits)
@@ -561,7 +566,7 @@
 			else {
 				switch (m.type) {
 					case '01':
-						if (a.remaining + m.data > INT32_MAX) { rsp = code(1); replayable = false; consumed = false; note = '充值后余额越界，OVER'; break }
+						if (overLimit(m.data)) { rsp = code(1); replayable = false; consumed = false; note = overNote(); break }
 						a.remaining += m.data
 						a.totalPurchased = Math.min(4294967295, a.totalPurchased + m.data)
 						recordPush(m.data, w.acceptedMin)
@@ -659,14 +664,14 @@
 					const I = S.STS_IDX
 					let rsp
 					let replayable = true
-					if (cfg.tokenMode === 'exec' && a.remaining + cfg.creditAmount <= INT32_MAX) {
+					if (cfg.tokenMode === 'exec' && !overLimit(cfg.creditAmount)) {
 						a.remaining += cfg.creditAmount
 						a.totalPurchased = Math.min(4294967295, a.totalPurchased + cfg.creditAmount)
 						recordPush(cfg.creditAmount, w.acceptedMin)
 						// MODE1 的 Value 与本次充值量同数同单位
 						rsp = { procStatus: S.TOKEN_DONE_EXEC, credited: cfg.creditAmount, remaining: a.remaining, stsBlock: S.stsResultEncode({ index: I.CREDIT, value: cfg.creditAmount }) }
 					} else if (cfg.tokenMode === 'exec') {
-						// 余额是 i32，充进来会越界: 终局 OVER，绝不回绕成负数；取决于当前余额，用掉一些水后应当成功，不回放
+						// 超出余额上限（或 i32 越界）: 终局 OVER，绝不回绕成负数；取决于当前余额，用掉一些水后应当成功，不回放
 						rsp = { procStatus: S.TOKEN_DONE_NOEXEC, stsBlock: S.stsResultEncode({ index: I.CODE, value: 1 }) }
 						replayable = false
 					} else if (cfg.tokenMode === 'test') {
@@ -679,7 +684,7 @@
 					}
 					const payload = S.tokenRspEncode(rsp)
 					dedupStore(w.digits, payload, replayable)
-					return { kind: 'token', payload: payload, executed: rsp.procStatus === S.TOKEN_DONE_EXEC }
+					return { kind: 'token', payload: payload, executed: rsp.procStatus === S.TOKEN_DONE_EXEC, note: replayable || cfg.tokenMode !== 'exec' ? '' : overNote() }
 				}
 				return null
 			},
@@ -880,8 +885,10 @@
 			}
 			// 模拟令牌的开关阀: 与手动改阀门同一条路径（取消进行中的阀控测试）
 			if (out.action) { app.setValve(out.action); armValve() }
-			if (out.sim) log('info', S.simTokenText(out.sim) + (out.note ? '；' + out.note : '') + (out.action ? '；阀门' + (out.action === 'open' ? '已开' : '已关') : ''))
-			log('info', '令牌处理完成: ' + (out.executed ? '已执行，余额 ' + app.state.remaining : '未执行') + '，终局结果已存档')
+			const tariff = { currency: app.state.tariffCurrency, dec: app.state.tariffDec }
+			if (out.sim) log('info', S.simTokenText(out.sim, tariff) + (out.note ? '；' + out.note : '') + (out.action ? '；阀门' + (out.action === 'open' ? '已开' : '已关') : ''))
+			else if (out.note) log('info', out.note)
+			log('info', '令牌处理完成: ' + (out.executed ? '已执行，余额 ' + S.qtyRawText(app.state.remaining, tariff) : '未执行') + '，终局结果已存档')
 			pushState()
 		}
 		function startWork(delayMs) {

@@ -326,11 +326,12 @@
 		if (!t) return { valid: false, reason: '未知类型 ' + type }
 		return { valid: true, type: type, name: t.name, code: t.code, dataKind: t.data || null, serial: Number(s.slice(4, 8)), data: Number(s.slice(8, 18)) }
 	}
-	function simTokenText(m) {
+	// tariff 可选，给出时充值量带单位与换算值；不给时（日志解析没有计价模式）注明单位随寄存器 0x18
+	function simTokenText(m, tariff) {
 		if (!m) return ''
 		if (!m.valid) return '模拟令牌（无效: ' + m.reason + '）'
 		let x = '模拟令牌: ' + m.name + '，序号 ' + m.serial
-		if (m.dataKind === 'amount') x += '，充值量 ' + m.data
+		if (m.dataKind === 'amount') x += '，充值量 ' + qtyRawText(m.data, tariff)
 		else if (m.dataKind === 'bits') x += '，测试位图 0x' + m.data.toString(16).toUpperCase().padStart(8, '0')
 		else if (m.dataKind === 'code') x += '，结果码 ' + m.data
 		return x
@@ -460,6 +461,19 @@
 			s = s.slice(0, -d) + '.' + s.slice(-d)
 		}
 		return (neg ? '-' : '') + s
+	}
+
+	// 量值的最小单位: 原始整数即按此计数。线上不传币种（5.1），金额只能写「货币单位」
+	function qtyUnit(tariff) {
+		if (!tariff) return ''
+		if (!tariff.currency) return 'dL'
+		return tariff.dec > 0 ? '0.' + '0'.repeat(tariff.dec - 1) + '1 货币单位' : '货币单位'
+	}
+	// 原始整数 + 单位 + 换算后的显示值，如「500 dL（= 50.0 L）」
+	function qtyRawText(v, tariff) {
+		if (!tariff) return v + '（最小单位，随计价模式 0x18：体积 dL / 金额 10^-d 货币单位）'
+		if (!tariff.currency) return v + ' dL（= ' + fmtScaled(v, 1) + ' L）'
+		return tariff.dec > 0 ? v + ' × ' + qtyUnit(tariff) + '（= ' + fmtScaled(v, tariff.dec) + ' 货币单位）' : v + ' 货币单位'
 	}
 
 	// 告警码列表(2B BCD 逐码): 返回码字符串数组; 长度奇数/非法 BCD/超过 27 个返回 null
@@ -962,7 +976,7 @@
 		tokenReqEncode, tokenReqDecode, tokenRspEncode, tokenRspDecode,
 		STS_RESULT_LEN, STS_IDX, STS_IDX_NAME, STS_CODE, STS_TEST_BIT, stsResultEncode, stsResultDecode,
 		SIM_TOKEN_MAGIC, SIM_TOKEN_TYPES, simTokenEncode, simTokenDecode, simTokenText,
-		readReqEncode, readReqDecode, createTlvWriter, tlvParse, tlvInt, fmtScaled,
+		readReqEncode, readReqDecode, createTlvWriter, tlvParse, tlvInt, fmtScaled, qtyUnit, qtyRawText,
 		alarmListDecode, alarmListEncode, recordEncode, recordDecode, recordTimeStr,
 		writeReqEncode, writeReqDecode, writeRspEncode, writeRspDecode,
 		statusRspEncode, statusRspDecode, nakEncode, nakDecode,

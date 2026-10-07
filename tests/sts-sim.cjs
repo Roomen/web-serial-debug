@@ -794,10 +794,33 @@ async function tests() {
 		r = await run(tok)
 		assert.match(r.message, /令牌未执行：USED 令牌已使用/)
 		assert.equal(t.meter.getState().remaining, 10)
-		// 校验对但类型未知: REJECT
+		// 余额上限另见下一段；校验对但类型未知: REJECT
 		const d18 = '77' + '55' + '0001' + '0000000000'
 		let sum = 0; for (let i = 0; i < 18; i++) sum += (d18.charCodeAt(i) - 48) * (i % 2 ? 3 : 1)
 		assert.match((await run(d18 + String(sum % 97).padStart(2, '0'))).message, /REJECT/)
+	}
+	// ---- 余额上限: 充值后超出即 OVER（模拟令牌与「已执行」普通令牌一致），不占用、不回放 ----
+	{
+		const t = setup({ meter: { tokenDelayS: 0, remaining: 900, creditLimit: 1000, creditAmount: 200 } })
+		await ready(t)
+		const run = async tok => drive(t.clock, t.ciu.token(tok))
+		const over = S.simTokenEncode({ type: '01', serial: 1, data: 101 })
+		let r = await run(over)
+		assert.equal(r.token.executed, false)
+		assert.match(r.message, /令牌未执行：OVER 余额过多/)
+		assert.equal(r.token.stsBlockHex, '00 03 00 00 00 01')
+		assert.equal(t.meter.getState().remaining, 900)
+		assert.match(logText(t.logs.meter), /充值量 101 dL（= 10\.1 L）；充值后余额超出余额上限 1000 dL/)
+		r = await run(S.simTokenEncode({ type: '01', serial: 2, data: 100 })) // 恰好到上限: 成功
+		assert.equal(r.token.executed, true)
+		assert.equal(t.meter.getState().remaining, 1000)
+		assert.match(logText(t.logs.meter), /已执行，余额 1000 dL（= 100\.0 L）/)
+		r = await run('12345678901234567890') // 普通令牌按 creditAmount 200: 超上限
+		assert.match(r.message, /OVER 余额过多/)
+		t.meter.setLive({ remaining: 500 })
+		r = await run(over) // 余额降下来后同一令牌重新判定，不回放旧的 OVER
+		assert.equal(r.token.executed, true)
+		assert.equal(t.meter.getState().remaining, 601)
 	}
 	// 模拟令牌编解码与日志解析
 	{
@@ -808,7 +831,11 @@ async function tests() {
 		assert.equal(S.simTokenDecode('77777777777777771000'), null)
 		assert.throws(() => S.simTokenEncode({ type: '99' }), /未知/)
 		const f = S.buildFrame({ dir: 0, type: S.TYPE.TOKEN, txn: 1, meter: METER_NO, payload: S.tokenReqEncode(tok) })
-		assert.match(S.parseFrame(f).decoded, /模拟令牌: 充值，序号 1，充值量 500/)
+		assert.match(S.parseFrame(f).decoded, /模拟令牌: 充值，序号 1，充值量 500（最小单位，随计价模式 0x18/)
+		assert.equal(S.qtyRawText(500, { currency: false, dec: 1 }), '500 dL（= 50.0 L）')
+		assert.equal(S.qtyRawText(500, { currency: true, dec: 2 }), '500 × 0.01 货币单位（= 5.00 货币单位）')
+		assert.equal(S.qtyRawText(500, { currency: true, dec: 0 }), '500 货币单位')
+		assert.equal(S.qtyUnit({ currency: true, dec: 3 }), '0.001 货币单位')
 	}
 	// 复现实板故障: 会话期间 CIU 串口安静时发起端首帧后卡住。关掉保活: 失败，诊断打出卡在 SESSION_TX、
 	// 发起端 dataTx +1 不重传、表端 dataRx 不增；默认保活（500ms 查状态）: 同一操作一次成功
