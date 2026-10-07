@@ -24,6 +24,22 @@
 		return false
 	}
 
+	// 浏览器会按 CDN 改写的 max-age 缓存 js/css，普通 reload 只校验 HTML，子资源仍用旧缓存。
+	// 先用 cache: 'reload' 重拉本站脚本和样式把缓存覆盖掉，再刷新页面。
+	var reloading = false
+	function hardReload() {
+		if (reloading) return
+		reloading = true
+		var urls = []
+		document.querySelectorAll('script[src], link[rel="stylesheet"][href]').forEach(function (n) {
+			var u = new URL(n.src || n.href, location.href)
+			if (u.origin === location.origin) urls.push(u.href)
+		})
+		Promise.all(urls.map(function (u) {
+			return fetch(u, { cache: 'reload' }).catch(function () { })
+		})).then(function () { location.reload() })
+	}
+
 	function markUpdate(version) {
 		if (found) return
 		found = true
@@ -38,11 +54,11 @@
 		dot.className = 'rail-version-dot'
 		dot.setAttribute('aria-hidden', 'true')
 		el.appendChild(dot)
-		el.addEventListener('click', function () { location.reload() })
+		el.addEventListener('click', hardReload)
 		el.addEventListener('keydown', function (e) {
 			if (e.key === 'Enter' || e.key === ' ') {
 				e.preventDefault()
-				location.reload()
+				hardReload()
 			}
 		})
 	}
