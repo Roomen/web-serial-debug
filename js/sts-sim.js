@@ -26,6 +26,7 @@
 	// 令牌结果模式: exec = 执行充值（状态 2 + MODE1）；1..13 / 255 = 状态 1 + MODE3 对应结果码；test = 状态 1 + MODE256 位图
 	const TOKEN_MODES = ['exec', 'test'].concat(Object.keys(S.STS_CODE))
 	const BEAT_MS = 1200 // 停等栅格一拍；WOR_SEND 槽满、上行队列满都等一拍再补
+	const SESSION_COOLDOWN_MS = 1200 // CIU 终结后表端仍在 linger；实板表端约晚 1s 回 GRID，留一拍再唤醒
 	const UPQ_RETRY = 4 // 上行队列满（BUSY）时的补发次数，超过就放弃，CIU 会按会话重发同一帧
 	const END_WAIT_MS = 8000 // FINISH / ABORT 之后等 0x0281 的上限: 收尾最多一拍 END + 重传，下一轮 WAKE 另有 BUSY 等待兜底
 
@@ -1362,6 +1363,7 @@
 		let policy = createCiuPolicy(cfg.meterNo)
 		let target = BigInt(cfg.targetDrn)
 		let activeSessions = 0 // 正在进行的唤醒会话数；setTarget 只在为 0 时生效
+		let lastSessionEndAt = null
 		const C = H.CMD
 		let running = false
 		let stopped = false
@@ -1408,6 +1410,7 @@
 					if (!e) return
 					if (!sess.accepted || sess.end) { log('info', '会话终结 0x0281 不属于本轮（' + endText(e) + '）'); return }
 					sess.end = { at: clock.now(), reason: e.reason, dl: e.dlDelivered, up: e.upDelivered }
+					lastSessionEndAt = sess.end.at
 					log(e.reason === 2 || e.reason === 1 ? 'info' : 'warn', '会话终结 0x0281（' + endText(e) + '），相对 WAKE 请求 ' + (sess.end.at - t0) + 'ms')
 					notify()
 					return
@@ -1477,16 +1480,18 @@
 				return fail(why + (stage === 'uplink' ? '，没有收到本轮上行' : ''), stage)
 			}
 			// 收尾: 正常路径发 FINISH 结束轮询相，失败路径发 ABORT 立即断开；都等 0x0281，等不到也不算本轮失败
-			// 会话保活: 受理后到会话终结前定时查 WOR_GET_STATUS。实板上会话期间 CIU 串口完全安静时，
+			// 会话保活: ACK 后到会话终结前定时查 WOR_GET_STATUS。唤醒/ACK 阶段保持串口安静，
+			// 实板在这一阶段频繁查询会反复错过 ACK；数据阶段串口完全安静时，
 			// 发起端发出首帧后卡在 SESSION_TX（不重传、不收尾，表端 2 窗失联），有串口流量则会话正常推进，
 			// 属模组固件问题；保活是主机侧规避，同时记下最近状态供失败诊断。上一条没回来不叠发
 			let kaTimer = null
 			let kaBusy = false
+			let kaStopped = false
 			const keepAlive = function () {
-				if (!cfg.keepAliveMs || sess.end || stopped || aborted) return
+				if (!cfg.keepAliveMs || kaStopped || sess.end || stopped || aborted) return
 				kaTimer = clock.setTimeout(function () {
 					kaTimer = null
-					if (sess.end || stopped || aborted) return
+					if (kaStopped || sess.end || stopped || aborted) return
 					if (kaBusy) { keepAlive(); return }
 					kaBusy = true
 					link.request(C.WOR_GET_STATUS, [], { timeoutMs: 500, retries: 0 }).then(function (r) {
@@ -1495,7 +1500,10 @@
 					}, function () { /* 中止或超时: 只是保活，不影响会话 */ }).then(function () { kaBusy = false; keepAlive() })
 				}, cfg.keepAliveMs)
 			}
-			const stopKeepAlive = function () { if (kaTimer != null) { clock.clearTimeout(kaTimer); kaTimer = null } }
+			const stopKeepAlive = function () {
+				kaStopped = true // 在飞查询晚到时也不能重挂上一会话的保活，影响下一轮 ACK
+				if (kaTimer != null) { clock.clearTimeout(kaTimer); kaTimer = null }
+			}
 			const closeSession = async function (how) {
 				if (!sess.accepted || sess.end || stopped || aborted) return
 				const cmd = how === 'finish' ? C.WOR_FINISH : C.WOR_ABORT
@@ -1519,6 +1527,10 @@
 				// 预算紧张时不做（一次查询最长 1s，不能把放弃拖过 60s）
 				const bl = budgetLeft()
 				if (bl == null || bl > 5000) st0 = await mod.worStats()
+				// 发起端见终结时，表端还在 END linger；重新 WAKE 的部分前导可能落在收尾阶段，
+				// 实板连续问答因此常要第二个 burst；等满一拍后再开始下一轮，等待同样受应用层预算约束
+				const coolMs = lastSessionEndAt == null ? 0 : lastSessionEndAt + SESSION_COOLDOWN_MS - clock.now()
+				if (coolMs > 0 && !budgetOut()) await waiter.sleep(cap(coolMs))
 				// 1. WAKE_CIU
 				const busyDeadline = clock.now() + cfg.busyWaitS * 1000
 				let tWake
@@ -1542,7 +1554,6 @@
 					return (result = fail('WOR_WAKE_CIU 失败: ' + statusText(r), 'wake'))
 				}
 				sess.accepted = true
-				keepAlive()
 				const tAcc = clock.now()
 				tl.wakeMs = tAcc - tWake
 				log('info', 'WOR_WAKE_CIU 已受理（受理不是成功），耗时 ' + tl.wakeMs + 'ms')
@@ -1575,6 +1586,7 @@
 				if (!sess.ack && ended()) return (result = endFail('ack'))
 				if (!ackOk) return (result = fail(budgetOut() ? '总等待预算 60s 已用完' : '等 ACK 超时（' + cfg.ackTimeoutS + 's）', budgetOut() ? 'budget' : 'ack'))
 				tl.ackMs = sess.ack.at - t0
+				keepAlive()
 				if (cfg.sendTiming === 'ack') { const f = await sendStep(); if (f) return (result = f) }
 				// 4. 等上行，从 ACK 起算；会话先终结（重传耗尽 / 失联 / 空轮询退出）就不必再等
 				const upOk = await waitCond(function () { return !!sess.up || ended() }, cap(Math.max(0, sess.ack.at + cfg.upTimeoutS * 1000 - clock.now())))
