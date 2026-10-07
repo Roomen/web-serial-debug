@@ -46,9 +46,14 @@
 		const METER_FIELDS = [
 			{ k: 'drn', label: 'DRN(留空=以模组为准)', kind: 'text', maxlength: 13, w: 150, title: '13 位 = 4 位厂商码 + 8 位表号 + 1 位校验（11 位为 2 位厂商码）；应用层表号取中间 8 位。与模组不一致且填了 PAK 时写入模组并复位' },
 			{ k: 'tokenDelayS', label: '令牌处理耗时(s)', kind: 'num', min: 0, max: 3600, w: 72 },
-			{ k: 'tokenMode', label: '结果模式', kind: 'sel', options: [['exec', '已执行(充值)'], ['reject', '未执行(拒收)']] },
+			{ k: 'tokenMode', label: '普通令牌结果', kind: 'sel', title: '非模拟令牌（任意 20 位）的处理结果: 已执行 = 处理状态 2 + MODE1 充值量；结果码 = 处理状态 1 + MODE3；表计测试 = 处理状态 1 + MODE256 位图。这里只回报结果码，不执行业务动作；模拟令牌按自身类型处理，不受此项影响', options: [
+				['exec', '已执行(充值)'], ['1', 'OVER 余额过多'], ['2', 'OLD 令牌过期'], ['3', 'USED 已使用'], ['4', '1ST 换钥第一步'], ['5', '2ND 换钥第二步'],
+				['6', 'EXPIRED 密钥到期'], ['7', 'SUCCESS 设置成功'], ['8', '清余额成功'], ['9', '设置预付费'], ['10', '设置后付费'], ['11', '打开水阀'],
+				['12', '关闭水阀'], ['13', '清除窃水'], ['255', 'REJECT 错误令牌'], ['test', '表计测试(MODE256)'],
+			] },
 			{ k: 'creditAmount', label: '充值量(原始整数)', kind: 'num', min: 0, w: 96, title: '按当前计价模式的最小单位：体积 dL，金额按小数位' },
-			{ k: 'stsBlockHex', label: 'STS 结果块(HEX)', kind: 'text', w: 200, title: '1..47 字节，原样透传，工具不解释' },
+			{ k: 'creditLimit', label: '余额上限(0=不限)', kind: 'num', min: 0, w: 96, title: '原始整数，单位同剩余量。充值后剩余量超过上限时令牌不执行，终局为处理状态 1 + MODE3 OVER 余额过多；对模拟令牌和「已执行(充值)」的普通令牌都生效。0 = 只受 i32 上限 2147483647 限制' },
+			{ k: 'testBits', label: '测试位图(HEX)', kind: 'text', maxlength: 8, w: 96, title: '结果模式为「表计测试」时 MODE256 的 Value，u32 位图：BIT0 水阀开关测试、BIT1 全屏、BIT2 总用水量、BIT3 KRN、BIT4 TI、BIT7 清除窃水、BIT9 软件版本、BIT13 EA、BIT16 KEN、BIT17 DRN' },
 			{ k: 'valveDelayS', label: '阀门动作耗时(s)', kind: 'num', min: 0, max: 600, w: 72 },
 			{ k: 'remaining', label: '初始剩余量', kind: 'num', w: 96 },
 			{ k: 'totalUsed', label: '初始累计量', kind: 'num', min: 0, w: 96 },
@@ -64,6 +69,8 @@
 			{ k: 'upTimeoutS', label: '上行超时(s)', kind: 'num', min: 1, max: 600, w: 72 },
 			{ k: 'busyWaitS', label: 'BUSY 等待(s)', kind: 'num', min: 0, max: 600, w: 72 },
 			{ k: 'sessionRetries', label: '会话重试次数', kind: 'num', min: 0, max: 20, w: 72 },
+			{ k: 'keepAliveMs', label: '会话保活(ms)', kind: 'num', min: 0, max: 5000, w: 72, title: '收到 ACK 后每隔这么久向 CIU 模组查一次 WOR_GET_STATUS，0 = 关闭。唤醒阶段保持安静；实测数据阶段完全静默仍会卡住，保活可规避' },
+			{ k: 'sendTiming', label: 'WOR_SEND 时机', kind: 'sel', title: '规范允许 WAKE 受理后立即入队（默认）。实板上 ACK 后表端收不到会话帧时，切到「ACK 后」对比，可判断是否为 ACK 前入队的数据没被模组消费', options: [['accept', '受理后立即'], ['ack', 'ACK 后']] },
 			{ k: 'pak', label: 'PAK(32 位 HEX，不保存)', kind: 'text', maxlength: 32, w: 260, persist: false, sensitive: true, title: '仅当模组角色或 DRN 需要写入时用于 PROV_AUTH，不写入浏览器存储' },
 		]
 
@@ -347,8 +354,33 @@
 			tokenInput.inputMode = 'numeric'
 			tokenInput.autocomplete = 'off'
 			tokenInput.spellcheck = false
-			const tokenBtn = buildToggleRow('令牌充值', 'sts-sim-ciu-token-go')
+			const tokenBtn = buildToggleRow('下发令牌', 'sts-sim-ciu-token-go')
 			tokRow.append(tokenInput, tokenBtn)
+			// 模拟令牌生成: 明文测试格式（不是 STS 令牌），表端模拟器按类型给出对应结果；生成后填进上面的令牌框
+			const simRow = el('div', 'sts-sim-row')
+			const simType = document.createElement('select')
+			simType.className = 'form-select form-select-sm'
+			simType.id = 'sts-sim-ciu-simtype'
+			simType.style.width = '140px'
+			Object.keys(S.SIM_TOKEN_TYPES || {}).forEach(function (k) {
+				const o = document.createElement('option')
+				o.value = k
+				o.textContent = k + ' ' + S.SIM_TOKEN_TYPES[k].name
+				simType.appendChild(o)
+			})
+			const simData = document.createElement('input')
+			simData.type = 'text'
+			simData.id = 'sts-sim-ciu-simdata'
+			simData.className = 'form-control form-control-sm'
+			simData.style.width = '120px'
+			simData.autocomplete = 'off'
+			simData.spellcheck = false
+			const simBtn = buildToggleRow('生成模拟令牌', 'sts-sim-ciu-simgen')
+			simRow.title = '模拟令牌 = 77 + 类型 2 位 + 序号 4 位 + 数据 10 位 + 校验 2 位，只对本工具的表端模拟器有意义。充值填充值量：体积按 STS 令牌单位 0.1 m³（100 L），表端换算为协议的 dL（×1000），金额按 10^-d 货币单位；表计测试填位图 HEX；指定结果码填 1/2/3/6/255；其余类型不需要数据。序号每次生成自动递增'
+			// 充值量的单位与换算值: 计价模式要等 CIU 启动后读到寄存器 0x18 才知道
+			const simUnit = el('span', 'sts-sim-hint small')
+			simUnit.id = 'sts-sim-ciu-simunit'
+			simRow.append(el('span', 'sts-sim-field-name', '模拟令牌'), simType, simData, simUnit, simBtn)
 			const opRow = el('div', 'sts-sim-row')
 			const statusBtn = buildToggleRow('查询状态', 'sts-sim-ciu-status')
 			const recBtn = buildToggleRow('充值记录', 'sts-sim-ciu-records')
@@ -376,7 +408,7 @@
 			readRow.append(el('span', 'sts-sim-field-name', '起始/数量'), readStart, readCount, readBtn, abortBtn)
 			const phase = el('div', 'sts-sim-phase small', '')
 			const resultCard = el('div', 'sts-sim-result')
-			ciuView.append(tokRow, opRow, readRow, phase, resultCard)
+			ciuView.append(tokRow, simRow, opRow, readRow, phase, resultCard)
 
 			body.append(meterView, ciuView)
 
@@ -395,7 +427,7 @@
 
 			Object.assign(ui.refs, {
 				root, head, body, toggle, nameEl, hint, logCard, logTitle, bMeter, bCiu, startBtn, startText, startIcon, status, cfg, meterForm, ciuForm, meterView, ciuView, kv, recTable,
-				tokenInput, tokenBtn, statusBtn, recBtn, valveOpenBtn, valveCloseBtn, unbindBtn, readStart, readCount, readBtn, abortBtn,
+				tokenInput, tokenBtn, simType, simData, simUnit, simBtn, statusBtn, recBtn, valveOpenBtn, valveCloseBtn, unbindBtn, readStart, readCount, readBtn, abortBtn,
 				phase, resultCard, logBox, clearBtn,
 			})
 			root.querySelectorAll('[id]').forEach(function (node) { node.id += '-' + channel })
@@ -428,6 +460,7 @@
 				let v = saved[d.k]
 				if (v == null) v = defaults[d.k]
 				if (d.k === 'tariffCurrency') v = (v === true || v === '1') ? '1' : '0'
+				if (d.k === 'tokenMode' && v === 'reject') v = '255' // 旧配置的「未执行(拒收)」
 				if (d.k === 'batteryV' && v == null) v = defaults.batteryCv / 100
 				input.value = v == null ? '' : String(v)
 			})
@@ -546,8 +579,24 @@
 			const idle = !!(st && st.running && st.phase === 'idle' && !ui.opBusy)
 			;[r.tokenBtn, r.statusBtn, r.recBtn, r.valveOpenBtn, r.valveCloseBtn, r.unbindBtn, r.readBtn].forEach(function (b) { b.disabled = !idle })
 			r.tokenInput.disabled = !(ui.running && ui.role === 'ciu')
+			r.simBtn.disabled = r.tokenInput.disabled
 			r.abortBtn.disabled = !(ui.running && ui.opBusy)
 			r.tokenBtn.disabled = !idle || r.tokenInput.value.length !== 20
+		}
+		// 模拟充值令牌的单位: 原始整数按表端计价模式的最小单位计数，有数值时附换算值
+		function renderSimUnit() {
+			const r = ui.refs
+			const t = S.SIM_TOKEN_TYPES && S.SIM_TOKEN_TYPES[r.simType.value]
+			r.simUnit.hidden = !t || t.data !== 'amount'
+			if (r.simUnit.hidden) return
+			const st = ui.engine && ui.role === 'ciu' && ui.running ? ui.engine.getState() : null
+			const tariff = st && st.tariff
+			const raw = r.simData.value.trim()
+			let text
+			if (!tariff) text = '单位：体积 0.1 m³（100 L，STS 令牌最小粒度）/ 金额 10^-d 货币单位（启动后按表端 0x18 确定）'
+			else if (/^\d{1,10}$/.test(raw)) text = '= ' + S.simAmountText(Number(raw), tariff)
+			else text = '单位 ' + (tariff.currency ? S.qtyUnit(tariff) : '0.1 m³（100 L）')
+			r.simUnit.textContent = text
 		}
 		// 阀门行: 动作中（正在开/关或恢复，剩余秒数）、关阀保持期剩余时间；剩余时间按快照时刻的剩余毫秒减去已过去的时间
 		function renderValveText(s) {
@@ -600,7 +649,7 @@
 			renderPendingText(s)
 			kv['存档'].textContent = s.archive.length ? s.archive.map(function (a) { return a.type + ' 0x' + a.tgt.toString(16).toUpperCase() }).join('，') : '空'
 			const ls = s.lastSession
-			kv['最近会话'].textContent = ls ? '共 ' + s.sessions + ' 次；最近一次 SET_UPLINK ' + ls.setUplinkMs + 'ms，自 kind=3 起 ' + ls.sinceKind3Ms + 'ms' : (s.sessions ? '共 ' + s.sessions + ' 次' : '暂无')
+			kv['最近会话'].textContent = ls ? '共 ' + s.sessions + ' 次；最近一次入队 ' + ls.setUplinkMs + 'ms，自 kind=3 起 ' + ls.sinceKind3Ms + 'ms' + (ls.endReason != null ? '，终结 r' + ls.endReason + '，本会话表端确认上行 ' + ls.upDelivered + ' 片' : '') : (s.sessions ? '共 ' + s.sessions + ' 次' : '暂无')
 			const box = ui.refs.recTable
 			box.textContent = ''
 			const list = s.records.filter(function (r) { return !r.empty })
@@ -626,6 +675,7 @@
 			if (res.token) {
 				add('处理状态', '0x' + res.token.procStatus.toString(16).toUpperCase().padStart(2, '0') + (res.token.known === false ? '（未知）' : res.token.executed ? ' 已执行' : ' 未执行'))
 				if (res.token.executed) { add('充值量', res.token.creditedText); add('剩余量', res.token.remainingText) }
+				if (res.token.stsResultText) add('STS 结果', res.token.stsResultText)
 				if (res.token.stsBlockHex) add('STS 结果块', res.token.stsBlockHex)
 			}
 			if (res.write) add('WRITE', '寄存器 0x' + res.write.reg.toString(16).toUpperCase() + ' 结果 0x' + res.write.result.toString(16).toUpperCase().padStart(2, '0'))
@@ -645,13 +695,15 @@
 			if (res.sessions && res.sessions.length) {
 				box.appendChild(el('div', 'sts-sim-card-title', '会话时间线（相对 WAKE 请求，ms）'))
 				const tb = el('div', 'sts-sim-tl')
-				const hdr = ['会话', '结果', 'wake', 'send', 'ACK', '上行']
+				const hdr = ['会话', '结果', 'wake', 'send', 'ACK', '上行', '终结']
 				hdr.forEach(function (h) { tb.appendChild(el('span', 'sts-sim-tl-h', h)) })
 				res.sessions.forEach(function (s) {
 					const tl = s.timeline || {}
 					tb.appendChild(el('span', null, s.label + ' #' + s.attempt))
 					tb.appendChild(el('span', s.ok ? 'is-ok' : 'is-bad', s.ok ? 'OK' : (s.reason || '失败')))
 					;[tl.wakeMs, tl.sendMs, tl.ackMs, tl.upMs].forEach(function (v) { tb.appendChild(el('span', null, v == null ? '-' : String(v))) })
+					// 终结 = 收到 EVT 0x0281 的时刻与原因（2=FINISH 正常收尾）
+					tb.appendChild(el('span', null, tl.endMs == null ? '-' : tl.endMs + ' r' + tl.endReason))
 				})
 				box.appendChild(tb)
 			}
@@ -659,14 +711,15 @@
 		}
 		function renderPhase() {
 			const r = ui.refs
-			if (!ui.engine || ui.role !== 'ciu' || !ui.running) { r.phase.textContent = ''; return }
+			if (!ui.engine || ui.role !== 'ciu' || !ui.running) { r.phase.textContent = ''; renderSimUnit(); return }
 			const st = ui.engine.getState()
-			const names = { idle: '空闲', session: '唤醒会话中（WAKE → SEND → 等 ACK → 等上行）', 'wait-poll': '等待下一次轮询' }
+			const names = { idle: '空闲', session: '唤醒会话中（WAKE → SEND → 等 ACK → 等上行 → FINISH）', 'wait-poll': '等待下一次轮询' }
 			let t = '阶段：' + (names[st.phase] || st.phase)
 			if (st.budgetLeftMs != null) t += '；总预算剩余 ' + Math.ceil(st.budgetLeftMs / 1000) + ' s'
 			if (st.tariff) t += '；计价 ' + (st.tariff.currency ? '金额 d=' + st.tariff.dec : '体积 dL')
 			if (st.protoVersion != null) t += '；表体协议版本 ' + st.protoVersion
 			r.phase.textContent = t
+			renderSimUnit()
 			updateCiuButtons()
 		}
 		// 在飞待办的预计剩余秒数随阀门动作倒计时变化，tick 里和阀门行一起刷新，否则停在受理时的值
@@ -900,6 +953,37 @@
 			r.tokenInput.addEventListener('input', function () {
 				r.tokenInput.value = r.tokenInput.value.replace(/\D/g, '').slice(0, 20) // 只接受数字
 				updateCiuButtons()
+			})
+			// 序号从随机值起步并逐次递增: 同一页面里反复生成不会撞上表端的去重 / 已用记录
+			let simSerial = Math.floor(Math.random() * 9000) + 1
+			const simHint = function () {
+				const t = S.SIM_TOKEN_TYPES && S.SIM_TOKEN_TYPES[r.simType.value]
+				const k = t ? t.data : null
+				r.simData.disabled = !k
+				r.simData.placeholder = k === 'amount' ? '充值量' : k === 'bits' ? '位图 HEX，如 20001' : k === 'code' ? '1/2/3/6/255' : '无需数据'
+			}
+			r.simType.addEventListener('change', function () { simHint(); renderSimUnit() })
+			r.simData.addEventListener('input', renderSimUnit)
+			simHint()
+			renderSimUnit()
+			r.simBtn.addEventListener('click', function () {
+				const t = S.SIM_TOKEN_TYPES[r.simType.value]
+				const raw = r.simData.value.trim()
+				let data = 0
+				if (t.data === 'bits') {
+					if (!/^(0x)?[0-9a-fA-F]{1,8}$/i.test(raw)) { plog('warn', '测试位图需 1..8 位 HEX'); return }
+					data = parseInt(raw.replace(/^0x/i, ''), 16)
+				} else if (t.data) {
+					if (!/^\d{1,10}$/.test(raw)) { plog('warn', '模拟令牌数据需为十进制整数'); return }
+					data = Number(raw)
+				}
+				let tok
+				try { tok = S.simTokenEncode({ type: r.simType.value, serial: simSerial, data: data }) } catch (e) { plog('warn', e.message); return }
+				simSerial = simSerial >= 9999 ? 1 : simSerial + 1
+				r.tokenInput.value = tok
+				updateCiuButtons()
+				const st = ui.engine && ui.role === 'ciu' ? ui.engine.getState() : null
+				plog('info', '已生成 ' + S.simTokenText(S.simTokenDecode(tok), st && st.tariff) + ': ' + tok)
 			})
 			r.tokenBtn.addEventListener('click', function () {
 				const t = r.tokenInput.value

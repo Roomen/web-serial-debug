@@ -246,7 +246,7 @@ function makeWorld(options = {}) {
 			meterStatusText: () => ' 合成状态', recordTimeStr: () => '合成时刻', RECORD_EPOCH_UNSET: 0,
 		},
 		stsSim: {
-			METER_DEFAULTS: { drn: DRN, tokenDelayS: 1, tokenMode: 'exec', creditAmount: 10, stsBlockHex: '00', valveDelayS: 1, remaining: 100, totalUsed: 20, batteryCv: 350, tariffCurrency: false, tariffDec: 0, alarmCodes: '' },
+			METER_DEFAULTS: { drn: DRN, tokenDelayS: 1, tokenMode: 'exec', creditAmount: 10, testBits: '00000001', valveDelayS: 1, remaining: 100, totalUsed: 20, batteryCv: 350, tariffCurrency: false, tariffDec: 0, alarmCodes: '' },
 			CIU_DEFAULTS: { targetDrn: DRN, localAddr: '2', ackTimeoutS: 5, upTimeoutS: 10, busyWaitS: 1, sessionRetries: 2 },
 			ALARM_PRESETS: presets,
 			composeAlarmCodes: (checked, other) => [...new Set(checked.concat(split(other)))].join(' '),

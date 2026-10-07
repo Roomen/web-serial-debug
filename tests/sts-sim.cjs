@@ -1,7 +1,8 @@
 // Run: node tests/sts-sim.cjs — synthetic data only.
 // 双引擎端到端: 假模组对（按 hostProto 真帧收发）+ 可控假时钟，表端引擎与 CIU 引擎经完整两层协议对话
-// 假模组模型: WAKE_CIU 受理后定锚点；锚点 +250ms 给 CIU 发 ACK(kind=2)；数据帧锚点 +1s 起每秒一帧以 kind=3 送到表端；
-// 锚点 +6s 把表端信箱内容以 kind=4 送给 CIU，发出即清；锚点 +6.5s 会话结束
+// 假模组模型（停等 ARQ）: WAKE_CIU 受理后 anchorDelayMs 到锚点，表端清空上行队列并收到 kind=2 唤醒通知，锚点 +250ms 给 CIU 发 ACK；
+// 锚点 +1s 起每 1.2s 一拍: 有下行就发一帧（拍 +450ms 以 kind=3 到表端），否则征求拍；拍 +600ms DACK 捎带表端上行队列队头，以 kind=4 给 CIU；
+// 下行排空后 FINISH -> END、ABORT -> END、空轮询 5s -> END，END 的 DACK 到达时双侧各报 EVT 0x0281；唤醒失败 12.4s 后报 reason=3
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const vm = require('node:vm')
@@ -64,14 +65,21 @@ async function drive(clock, p, maxMs = 900000, step = 100) {
 const METER_DRN = 101123456788n
 const CIU_ADDR = 2n
 const PAK = '000102030405060708090a0b0c0d0e0f'
+const WAKE_FAIL_MS = 12400
 function makeWorld(clock, opts) {
-	const o = Object.assign({ anchorDelayMs: 2000, meterRole: 1, ciuRole: 2, meterDrn: METER_DRN, meterInit: true }, opts || {})
-	const faults = { dropAck: 0, dropUplink: 0, skipUplink: 0, dropSession: 0, delayKind3: 0, beforeKind3: null, wakeStatus: null }
-	const log = { kind3: [], uplinks: [], wakes: 0, sends: 0, setUplinks: [], events: [] }
+	const o = Object.assign({ anchorDelayMs: 3350, meterRole: 1, ciuRole: 2, meterDrn: METER_DRN, meterInit: true, notInitStatus: 9 }, opts || {})
+	// dropAck: 丢 ACK 事件；dropUplink: 丢 CIU 侧 kind=4 事件（空口已交付）；dropSession: 唤醒失败；
+	// killAfterData: 数据拍之后 DACK 全丢，发起端重传耗尽、表端失联；delayKind3: 表端 kind=3 晚 kind3DelayMs 到；upqBusy: SET_UPLINK 回 BUSY 的次数
+	// stallQuiet: 复现实板现象——会话首拍前 1s 内 CIU 串口没收到任何请求时，发起端发出首帧后卡住不再发拍，
+	// 表端 2 窗静默失联(5)，发起端直到 ABORT 才以重传耗尽(7)收尾；有串口流量（会话保活）则正常
+	const faults = { dropAck: 0, dropUplink: 0, dropSession: 0, killAfterData: 0, delayKind3: 0, kind3DelayMs: 3000, upqBusy: 0, stallQuiet: false, beforeKind3: null, wakeStatus: null }
+	const log = { kind3: [], uplinks: [], wakes: 0, sends: 0, setUplinks: [], events: [], requests: [], finishes: 0, aborts: 0, ends: [] }
 	function newModule(name, role, drn, autoInit) {
+		const on = !!autoInit && role === 1 && drn !== 0n
 		return {
-			name, role, drn, authed: false, worInit: !!autoInit && role === 1 && drn !== 0n, sentry: !!autoInit && role === 1 && drn !== 0n,
-			mailbox: null, session: null, cache: null, silentUntil: 0, cb: null, roleSets: 0, echoes: 0, addr: 0n,
+			name, role, drn, authed: false, worInit: on, sentry: on,
+			upq: [], inSession: null, session: null, cache: null, silentUntil: 0, cb: null, roleSets: 0, echoes: 0, addr: on ? drn : 0n,
+			stats: {},
 		}
 	}
 	const meter = newModule('meter', o.meterRole, o.meterDrn, o.meterInit)
@@ -80,7 +88,16 @@ function makeWorld(clock, opts) {
 	const meter2 = o.meter2Drn ? newModule('meter2', 1, o.meter2Drn, true) : null
 
 	function emit(mod, frame) {
-		clock.setTimeout(() => { if (mod.cb) mod.cb(frame) }, 1)
+		clock.setTimeout(() => {
+			if (!mod.cb) return
+			const f = H.scan(frame, 0, true)
+			if (f.status === 'frame' && f.type === H.TYPE_EVT) {
+				const d = f.cmd === H.EVT.WOR_FRAME ? H.decodeWorFrame(f.payload) : null
+				const e = f.cmd === H.EVT.WOR_SESSION_END ? H.decodeSessionEnd(f.payload) : null
+				log.events.push({ at: clock.now(), role: mod.name, cmd: f.cmd, kind: d && d.kind, reason: e && e.reason })
+			}
+			mod.cb(frame)
+		}, 1)
 	}
 	function evtFrame(src, kind, seq, data, rssi, snr) {
 		const d = Uint8Array.from(data || [])
@@ -94,9 +111,17 @@ function makeWorld(clock, opts) {
 		p[14 + d.length] = snr & 0xff
 		return H.buildFrame({ type: 2, cmd: 0x0280, seq: 0, payload: p })
 	}
+	function endFrame(reason, dl, up) { return H.buildFrame({ type: 2, cmd: 0x0281, seq: 0, payload: [reason, dl & 0xff, dl >> 8, up] }) }
 	const ROLE_OK = {
-		1: c => c < 0x0100 || (c >= 0x0300) || (c >= 0x0200 && c <= 0x0201) || c === 0x020f || c === 0x0202 || c === 0x0203 || (c >= 0x0204 && c <= 0x0206) || c === 0x020c || (c >= 0x0100 && c < 0x0200),
-		2: c => c < 0x0100 || c >= 0x0300 || c === 0x0200 || c === 0x0201 || c === 0x020f || c === 0x0208 || c === 0x020a || c === 0x020b,
+		1: c => c < 0x0100 || (c >= 0x0300) || (c >= 0x0200 && c <= 0x0201) || c === 0x020f || c === 0x0202 || c === 0x0203 || (c >= 0x0204 && c <= 0x0206) || c === 0x020c || c === 0x0211 || (c >= 0x0100 && c < 0x0200),
+		2: c => c < 0x0100 || c >= 0x0300 || c === 0x0200 || c === 0x0201 || c === 0x020f || c === 0x0208 || c === 0x020a || c === 0x020b || c === 0x0211,
+	}
+	function resetRuntime(mod) {
+		mod.worInit = mod.role === 1 && mod.drn !== 0n
+		mod.sentry = mod.worInit
+		mod.addr = mod.worInit ? mod.drn : 0n
+		if (mod.session) mod.session.ended = true
+		mod.session = null; mod.inSession = null; mod.upq = []; mod.cache = null; mod.authed = false
 	}
 	function exec(mod, cmd, p) {
 		if (ROLE_OK[mod.role] && !ROLE_OK[mod.role](cmd)) return { status: H.STATUS.ERR_ROLE }
@@ -118,9 +143,7 @@ function makeWorld(clock, opts) {
 					// 应答先于复位发出；复位期间模组静默，回来后按新角色自动行为
 					mod.role = p[0]
 					mod.silentUntil = clock.now() + 3000
-					mod.worInit = mod.role === 1 && mod.drn !== 0n
-					mod.sentry = mod.worInit
-					mod.session = null; mod.mailbox = null; mod.cache = null; mod.authed = false
+					resetRuntime(mod)
 				} }
 			}
 			case 0x0301: return { status: 0, data: [mod.role === 2 ? 2 : 1, ...H.u64Bytes(mod.drn)] }
@@ -133,11 +156,8 @@ function makeWorld(clock, opts) {
 			case 0x0004: return { status: 0, after: () => {
 				// 应答先于复位；METER 上电按 DRN 自动值守
 				mod.silentUntil = clock.now() + 3000
-				mod.worInit = mod.role === 1 && mod.drn !== 0n
-				mod.sentry = mod.worInit
-				mod.addr = mod.worInit ? mod.drn : 0n
 				mod.reboots = (mod.reboots || 0) + 1
-				mod.session = null; mod.mailbox = null; mod.cache = null; mod.authed = false
+				resetRuntime(mod)
 			} }
 			case 0x0200:
 				if (p.length !== 9) return { status: 1 }
@@ -145,17 +165,26 @@ function makeWorld(clock, opts) {
 				mod.worInit = true
 				mod.addr = H.u64(p, 1)
 				return OK
-			case 0x0201: return mod.worInit ? { status: 0, data: [mod.role === 1 ? 1 : 2, mod.sentry ? 1 : 0] } : { status: 6 }
-			case 0x0202: if (!mod.worInit) return { status: 6 }
+			case 0x0201: return mod.worInit ? { status: 0, data: [mod.role === 1 ? 1 : (mod.session ? 2 : 0), mod.role === 1 ? (mod.sentry ? 1 : 0) : (mod.session ? 9 : 0), ...H.u64Bytes(mod.addr)] } : { status: o.notInitStatus }
+			case 0x020f: { // 53×u32，只填假模组维护的几个计数
+				const out = [212, 0]
+				H.WOR_STATS_FIELDS.forEach(f => { const v = mod.stats[f] || 0; out.push(v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >>> 24) & 0xff) })
+				return { status: 0, data: out }
+			}
+			case 0x0202: if (!mod.worInit) return { status: o.notInitStatus }
 				mod.sentry = true
 				return OK
 			case 0x020c:
-				if (p.length < 1 || p[0] > 64 || p.length !== 1 + p[0]) return { status: 1 }
-				mod.mailbox = Uint8Array.from(p.subarray(1))
-				log.setUplinks.push({ at: clock.now(), data: Uint8Array.from(mod.mailbox) })
+				if (!mod.worInit) return { status: o.notInitStatus }
+				if (p.length === 0) { mod.upq = []; return OK } // 空载荷 = 清空未发送队列
+				if (p[0] > 64 || p.length !== 1 + p[0]) return { status: 5 }
+				if (faults.upqBusy > 0) { faults.upqBusy--; return { status: 2 } }
+				if (mod.upq.length >= 4) return { status: 2 }
+				mod.upq.push(Uint8Array.from(p.subarray(1)))
+				log.setUplinks.push({ at: clock.now(), data: Uint8Array.from(p.subarray(1)) })
 				return OK
 			case 0x0208: {
-				if (!mod.worInit) return { status: 6 }
+				if (!mod.worInit) return { status: o.notInitStatus }
 				if (p.length !== 9) return { status: 1 }
 				if (faults.wakeStatus != null) return { status: faults.wakeStatus }
 				if (mod.session) return { status: 2 }
@@ -167,39 +196,106 @@ function makeWorld(clock, opts) {
 				if (!mod.session) return { status: 6 }
 				if (mod.session.queue.length >= 4) return { status: 2 }
 				const len = p[0] | (p[1] << 8)
-				if (p.length !== 2 + len) return { status: 1 }
+				if (p.length !== 2 + len) return { status: 5 }
 				mod.session.queue.push(Uint8Array.from(p.subarray(2)))
 				log.sends++
+				return OK
+			}
+			case 0x020b:
+				if (!mod.session) return { status: 6 }
+				mod.session.finish = true
+				log.finishes++
+				return OK
+			case 0x0211: {
+				if (!mod.session) return { status: 6 }
+				const s = mod.session
+				s.abort = true
+				log.aborts++
+				if (!s.anchored) clock.setTimeout(() => endSession(mod, s, 4, null), 10) // burst 期闩锁，立即终结
+				else if (s.stalled) clock.setTimeout(() => endSession(mod, s, 7, null), 2600)
 				return OK
 			}
 			default: return { status: 4 }
 		}
 	}
 	function startSession(mod, dst) {
-		const s = { queue: [], dead: false, dropAck: false, dropUplink: false, skipUplink: false, late: false }
 		const take = k => { if (faults[k] > 0) { faults[k]--; return true } return false }
-		s.dead = take('dropSession'); s.dropAck = take('dropAck'); s.dropUplink = take('dropUplink'); s.skipUplink = take('skipUplink'); s.late = take('delayKind3')
-		mod.session = s
-		const anchor = o.anchorDelayMs
-		const target = [meter, meter2].find(m => m && m.drn === dst) || null
-		if (!s.dead && target) {
-			clock.setTimeout(() => { if (!s.dropAck) emit(mod, evtFrame(dst, 2, 1, [], -80, 7)) }, anchor + 250)
-			for (let k = 0; k < 5; k++) {
-				clock.setTimeout(() => {
-					if (!s.queue.length) return
-					deliverKind3(target, mod, s.queue.shift(), s.late)
-				}, anchor + 1000 + k * 1000)
-			}
-			clock.setTimeout(() => {
-				if (s.skipUplink) return
-				const data = target.mailbox
-				target.mailbox = null // 发出即清
-				if (!data) return
-				log.uplinks.push({ at: clock.now(), data, dropped: s.dropUplink })
-				if (!s.dropUplink) emit(mod, evtFrame(dst, 4, 2, data, -80, 7))
-			}, anchor + 6000)
+		const target = [meter, meter2].find(m => m && m.drn === dst && m.sentry) || null
+		const s = {
+			dst, target, queue: [], finish: false, abort: false, ended: false, anchored: false, dl: 0, up: 0, lastPayloadAt: 0,
+			dead: take('dropSession'), dropAck: take('dropAck'), dropUplink: take('dropUplink'), kill: take('killAfterData'), late: take('delayKind3'),
 		}
-		clock.setTimeout(() => { mod.session = null }, anchor + 6500)
+		mod.session = s
+		if (s.dead || !target) {
+			clock.setTimeout(() => endSession(mod, s, 3, null), WAKE_FAIL_MS)
+			return
+		}
+		clock.setTimeout(() => {
+			if (s.ended) return
+			s.anchored = true
+			s.lastPayloadAt = clock.now()
+			if (target.inSession) target.inSession.ended = true
+			target.upq = [] // 被唤醒即清空上行队列并通知表务主机
+			target.inSession = s
+			emit(target, evtFrame(mod.addr, 2, 1, [], -80, 7))
+			const bump = (m, f) => { m.stats[f] = (m.stats[f] || 0) + 1 }
+			bump(target, 'wakes'); bump(target, 'ciuWakes')
+			clock.setTimeout(() => { s.acked = true; bump(mod, 'wakeOk'); if (!s.dropAck && !s.ended) emit(mod, evtFrame(dst, 2, 1, [], -80, 7)) }, 250)
+			clock.setTimeout(() => {
+				if (faults.stallQuiet && clock.now() - (mod.lastReqAt || 0) > 1000) {
+					// 发起端首帧后卡住: 表端两窗静默失联；发起端挂着，ABORT 后 END 也收不到确认
+					bump(mod, 'dataTx')
+					s.stalled = true
+					clock.setTimeout(() => {
+						if (target.inSession !== s) return
+						bump(target, 'serveIdleExit')
+						target.inSession = null; target.upq = []
+						emit(target, endFrame(5, 0, 0))
+					}, 2 * 1200 + 300)
+					return
+				}
+				beat(mod, s)
+			}, 1000)
+		}, o.anchorDelayMs)
+	}
+	function beat(mod, s) {
+		if (s.ended) return
+		const target = s.target
+		if (s.abort) { clock.setTimeout(() => endSession(mod, s, 4, 4), 600); return }
+		if (s.queue.length) {
+			const d = s.queue.shift()
+			s.dl++
+			s.lastPayloadAt = clock.now()
+			mod.stats.dataTx = (mod.stats.dataTx || 0) + 1
+			target.stats.dataRx = (target.stats.dataRx || 0) + 1
+			clock.setTimeout(() => deliverKind3(target, mod, d, s.late), 450)
+			if (s.kill) { clock.setTimeout(() => endSession(mod, s, 7, 5), 600); return } // DACK 全丢: 发起端重传耗尽，表端失联早退
+		} else if (s.finish || clock.now() - s.lastPayloadAt >= 5000) {
+			clock.setTimeout(() => endSession(mod, s, s.finish ? 2 : 8, s.finish ? 1 : 8), 600) // END 经 DACK 确认后终结
+			return
+		}
+		clock.setTimeout(() => {
+			if (s.ended || target.inSession !== s || !target.upq.length) return
+			const data = target.upq.shift() // DACK 捎带队头一片
+			s.up++
+			s.lastPayloadAt = clock.now()
+			log.uplinks.push({ at: clock.now(), data, dropped: s.dropUplink })
+			if (!s.dropUplink) emit(mod, evtFrame(0n, 4, 2, data, -80, 7)) // 实板固件: 捎带上行的 src 为 0
+		}, 600)
+		clock.setTimeout(() => beat(mod, s), 1200)
+	}
+	function endSession(mod, s, initReason, meterReason) {
+		if (s.ended) return
+		s.ended = true
+		if (mod.session === s) mod.session = null
+		log.ends.push({ at: clock.now(), reason: initReason, dl: s.dl, up: s.up })
+		emit(mod, endFrame(initReason, s.dl, s.up))
+		const target = s.target
+		if (meterReason != null && target && target.inSession === s) {
+			target.inSession = null
+			target.upq = [] // 任何断开都清空上行队列
+			emit(target, endFrame(meterReason, s.dl, s.up))
+		}
 	}
 	function deliverKind3(target, from, data, late) {
 		const go = () => {
@@ -207,15 +303,17 @@ function makeWorld(clock, opts) {
 			log.kind3.push({ at: clock.now(), data })
 			emit(target, evtFrame(from.addr, 3, 1, data, -80, 7))
 		}
-		if (late) clock.setTimeout(go, 7000)
+		if (late) clock.setTimeout(go, faults.kind3DelayMs)
 		else go()
 	}
 	function onWrite(mod, bytesIn) {
 		if (clock.now() < mod.silentUntil) return
 		const s = H.scan(Uint8Array.from(bytesIn), 0, true)
 		if (s.status !== 'frame' || s.type !== 0) return
+		log.requests.push({ at: clock.now(), role: mod.name, cmd: s.cmd })
 		const key = s.seq + ':' + s.cmd + ':' + Buffer.from(s.payload).toString('hex')
 		if (mod.cache && mod.cache.key === key) { emit(mod, mod.cache.rsp); return } // 幂等缓存深度 1
+		mod.lastReqAt = clock.now()
 		const r = exec(mod, s.cmd, s.payload)
 		const rsp = H.buildFrame({ type: 1, cmd: s.cmd, seq: s.seq, payload: [r.status, ...(r.data || [])] })
 		mod.cache = { key, rsp }
@@ -267,7 +365,7 @@ async function tests() {
 	{
 		const t = await setup()
 		await drive(t.clock, t.meter.start())
-		assert.deepEqual(bytes(t.world.meter.mailbox), [0]) // 占位信箱 1 字节，CIU 按长度门静默丢弃
+		assert.equal(t.world.log.setUplinks.length, 0) // 不预置上行: 队列每次被唤醒都会清空
 		await drive(t.clock, t.ciu.start())
 		const ms = t.meter.getState()
 		assert.equal(ms.running, true)
@@ -366,7 +464,10 @@ async function tests() {
 		assert.equal(res.token.credited, 500)
 		assert.equal(res.token.remaining, 5500)
 		assert.equal(res.token.remainingText, '550.0 L') // 按 0x18 标度格式化
-		assert.equal(res.token.stsBlockHex, '03 80 80 80 00') // STS 结果块原样透传
+		assert.equal(res.token.stsBlockHex, '00 01 00 00 01 F4') // STS 结果块: MODE1，Value 与本次充值量同为 500
+		assert.equal(res.token.stsResult.kind, 'credit')
+		assert.equal(res.token.stsResult.mismatch, false)
+		assert.match(res.token.stsResultText, /MODE1 充值成功，充值量 500/)
 		const ms = t.meter.getState()
 		assert.equal(ms.remaining, 5500)
 		assert.equal(ms.totalPurchased, 20500)
@@ -381,12 +482,18 @@ async function tests() {
 		assert.equal(res.sessions[0].label, 'TOKEN')
 		assert.ok(res.sessions.slice(1).every(s => s.label === 'RESULT 轮询'))
 		assert.ok(t.clock.now() - t0 < 60000)
-		// 每轮会话的时间线: wake 受理 <= send <= ack <= 上行，上行在锚点 +6s 附近
+		// 每轮会话的时间线: wake 受理 <= send <= ack <= 上行 < 终结；首拍数据的 DACK（锚点 +1.6s）就捎带了应答
 		const tl = res.sessions[0].timeline
-		assert.ok(tl.wakeMs != null && tl.sendMs >= tl.wakeMs && tl.ackMs >= tl.sendMs && tl.upMs > tl.ackMs)
-		assert.ok(Math.abs((tl.upMs - tl.ackMs) - 5750) < 20) // 上行拍在锚点 +6s，ACK 在 +250ms
-		// 表端 SET_UPLINK 在 kind=3 之后立即写入（远早于 +6s）
-		assert.match(logText(t.logs.meter), /SET_UPLINK OK，耗时 \d+ms/)
+		assert.ok(tl.wakeMs != null && tl.sendMs >= tl.wakeMs && tl.ackMs >= tl.sendMs && tl.upMs > tl.ackMs && tl.endMs > tl.upMs)
+		assert.ok(Math.abs((tl.upMs - tl.ackMs) - 1350) < 20, 'up-ack ' + (tl.upMs - tl.ackMs)) // ACK 在锚点 +250ms
+		assert.equal(tl.endReason, 2) // 拿到上行后 FINISH，下一拍 END 收尾
+		assert.ok(tl.endMs - tl.upMs < 2000)
+		assert.equal(t.world.log.finishes, t.world.log.wakes) // 每轮会话（含启动时读基本信息）都以 FINISH 收尾
+		assert.equal(t.world.log.aborts, 0)
+		assert.ok(t.world.log.ends.every(e => e.reason === 2))
+		assert.match(logText(t.logs.meter), /SET_UPLINK 入队 OK，耗时 \d+ms/)
+		assert.match(logText(t.logs.meter), /被唤醒（kind=2 通知）src=2/)
+		assert.match(logText(t.logs.meter), /会话终结 0x0281（reason=1 表端 END 收尾/)
 		const lastSess = t.meter.getState().lastSession
 		assert.ok(lastSess.sinceKind3Ms < 100)
 		// 之后查询剩余量与充值记录
@@ -396,16 +503,26 @@ async function tests() {
 		assert.equal(rec.records[0].amount, 500)
 		assert.match(rec.records[0].timeText, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
 	}
-	// 拒绝模式: 令牌未执行，STS 结果块原样返回，余额不动
-	{
-		const t = setup({ meter: { tokenMode: 'reject', stsBlockHex: '06 80 20 00 00' } })
+	// 结果码模式: 处理状态 1 + MODE3，余额不动；旧配置 'reject' 按 REJECT
+	for (const [mode, block, msg] of [['reject', '00 03 00 00 00 FF', /令牌未执行：REJECT 错误的令牌/], ['3', '00 03 00 00 00 03', /令牌未执行：USED/], ['8', '00 03 00 00 00 08', /令牌成功（非充值）：CLEAR_CREDIT 清余额成功/]]) {
+		const t = setup({ meter: { tokenMode: mode } })
 		await ready(t)
 		const res = await drive(t.clock, t.ciu.token(TOKEN_A))
 		assert.equal(res.ok, true)
 		assert.equal(res.token.executed, false)
-		assert.equal(res.token.stsBlockHex, '06 80 20 00 00')
+		assert.equal(res.token.stsBlockHex, block)
+		assert.match(res.message, msg)
 		assert.equal(t.meter.getState().remaining, 5000)
 		assert.equal(t.meter.getState().recordCount, 0)
+	}
+	// 表计测试模式: MODE256 位图逐位解释
+	{
+		const t = setup({ meter: { tokenMode: 'test', testBits: '20001' } })
+		await ready(t)
+		const res = await drive(t.clock, t.ciu.token(TOKEN_A))
+		assert.equal(res.token.stsBlockHex, '00 FF 00 02 00 01')
+		assert.match(res.message, /表计测试令牌：BIT0 水阀开关测试、BIT17 显示 DRN/)
+		assert.throws(() => SIM.normalizeMeterConfig({ tokenMode: 'test', testBits: 'xyz' }), /十六进制/)
 	}
 	// 20 位以外的令牌不上线
 	{
@@ -531,39 +648,334 @@ async function tests() {
 		}
 		t.meter.stop(); t.ciu.stop()
 	}
-	// 表端信箱来不及刷新: 上行是旧内容，CIU 接收判定丢弃后重新唤醒，最终成功
-	{
-		const t = setup({ ciu: { sessionRetries: 3 } })
-		await ready(t)
-		// 先做一次 STATUS，但上行全部丢在半路（信箱里留着这次的应答，未被发出）
-		t.world.faults.skipUplink = 4
-		const a = await drive(t.clock, t.ciu.status())
-		assert.equal(a.ok, false)
-		assert.match(a.message, /会话多次失败/)
-		assert.equal(t.world.meter.mailbox.length, 14) // 旧 STATUS 应答还躺在信箱里
-		// 再发 READ，并让这次 kind=3 晚到（在 +6s 上行拍之后）: 上行拍发出的是旧 STATUS 应答
-		t.world.faults.delayKind3 = 1
-		const b = await drive(t.clock, t.ciu.read(0x03, 1))
-		assert.equal(b.ok, true, b.message)
-		assert.equal(b.sessions[0].ok, false)
-		// 旧 STATUS 应答过不了本轮接收判定，会话层不让它占上行槽，本轮等不到自己的上行而超时
-		assert.match(b.sessions[0].reason, /等上行超时/)
-		assert.ok(t.logs.ciu.some(e => e.text.includes('未通过接收判定')))
-		assert.equal(b.sessions[1].ok, true)
-		assert.equal(b.read[0].text, '500.0（原始 5000，d=1）')
-	}
-	// 占位信箱(1 字节)被当作应答时按长度门静默丢弃
+	// 会话在应答捎带前中断（重传耗尽）: CIU 收到 0x0281 立即判失败，表端队列随会话清空；重发同一帧后成功
 	{
 		const t = setup()
-		await drive(t.clock, t.meter.start())
-		await drive(t.clock, t.ciu.start())
-		t.world.meter.mailbox = Uint8Array.from([0]) // 信箱里还是启动时预置的占位
-		t.world.faults.delayKind3 = 1 // kind=3 晚到，+6s 上行拍发的是占位信箱
+		await ready(t)
+		t.world.faults.killAfterData = 1
 		const res = await drive(t.clock, t.ciu.status())
 		assert.equal(res.ok, true, res.message)
 		assert.equal(res.sessions[0].ok, false)
+		assert.match(res.sessions[0].reason, /会话已终结（重传耗尽），没有收到本轮上行/)
+		assert.equal(res.sessions[0].timeline.endReason, 7)
+		assert.ok(res.sessions[0].timeline.endMs - res.sessions[0].timeline.ackMs < 3000, '不白等上行超时')
+		assert.equal(res.sessions[1].ok, true)
+		assert.match(logText(t.logs.meter), /1 片未获确认（可能未送达），队列已随会话清空/)
+		assert.equal(t.world.log.aborts, 0) // 会话已终结，不必再 ABORT
+	}
+	// C3: 上行队列满等一拍期间会话结束，旧应答不得再入队（否则会被捎带进下一会话）
+	{
+		const t = setup()
+		await ready(t)
+		t.world.faults.killAfterData = 1
+		t.world.faults.upqBusy = 1
+		const before = t.world.log.setUplinks.length
+		const res = await drive(t.clock, t.ciu.status())
+		assert.equal(res.ok, true, res.message)
+		assert.match(logText(t.logs.meter), /等待入队期间会话已结束，旧应答不再入队/)
+		assert.equal(t.world.log.setUplinks.length - before, 1) // 只有第二轮会话的应答入队
+		assert.equal(res.sessions[1].ok, true)
+	}
+	// C4: 已收到上行、还在 FINISH / 等 END 时中止: 结果按已中止，不报成功
+	{
+		const t = setup()
+		await ready(t)
+		const ups = () => t.logs.ciu.filter(e => /上行 \(kind=4\)/.test(e.text)).length
+		const n0 = ups()
+		const p = t.ciu.status()
+		for (let i = 0; i < 4000 && ups() === n0; i++) await t.clock.advance(5)
+		assert.equal(ups(), n0 + 1) // 本轮上行刚到，正处于 FINISH / 等 END
+		t.ciu.abort()
+		const res = await drive(t.clock, p)
+		assert.equal(res.outcome, 'aborted')
+		assert.equal(res.ok, false)
+	}
+	// kind=3 晚到 3s: 应答在轮询相的征求拍里捎带，同一会话内完成
+	{
+		const t = setup()
+		await ready(t)
+		t.world.faults.delayKind3 = 1
+		const res = await drive(t.clock, t.ciu.status())
+		assert.equal(res.ok, true, res.message)
+		assert.equal(res.sessions.length, 1)
+		assert.ok(res.sessions[0].timeline.upMs - res.sessions[0].timeline.ackMs > 3000)
+	}
+	// kind=3 晚到超过空轮询 5s: 会话已按空闲收尾，应答没赶上；重新唤醒后成功
+	{
+		const t = setup()
+		await ready(t)
+		t.world.faults.delayKind3 = 1
+		t.world.faults.kind3DelayMs = 7000
+		const res = await drive(t.clock, t.ciu.status())
+		assert.equal(res.ok, true, res.message)
+		assert.equal(res.sessions[0].ok, false)
+		assert.match(res.sessions[0].reason, /空闲看门狗/)
+		assert.equal(res.sessions[1].ok, true)
+	}
+	// CIU 等上行超时（会话还活着）: 发 WOR_ABORT 断开并等到 0x0281 reason=4，再整轮重来
+	{
+		const t = setup({ ciu: { upTimeoutS: 2 } })
+		await ready(t)
+		t.world.faults.delayKind3 = 1
+		const res = await drive(t.clock, t.ciu.status())
+		assert.equal(res.ok, true, res.message)
 		assert.match(res.sessions[0].reason, /等上行超时/)
-		assert.ok(t.logs.ciu.some(e => e.text.includes('未通过接收判定')))
+		assert.equal(res.sessions[0].timeline.endReason, 4)
+		assert.equal(t.world.log.aborts, 1)
+		assert.equal(res.sessions[1].ok, true)
+		assert.doesNotMatch(logText(t.logs.ciu), /回 BUSY/) // ABORT 等到终结后再唤醒，不撞 BUSY
+	}
+	// 表端上行队列满（BUSY）: 等一拍再入队，轮询相捎带，同一会话内完成
+	{
+		const t = setup()
+		await ready(t)
+		t.world.faults.upqBusy = 2
+		const res = await drive(t.clock, t.ciu.status())
+		assert.equal(res.ok, true, res.message)
+		assert.equal(res.sessions.length, 1)
+		assert.match(logText(t.logs.meter), /上行队列满（BUSY），等一拍再入队/)
+	}
+	// 唤醒失败: 0x0281 reason=3 立即判失败，不等 ACK 超时
+	{
+		const t = setup({ ciu: { ackTimeoutS: 60, sessionRetries: 0 } })
+		await ready(t)
+		t.world.faults.dropSession = 1
+		const r = await drive(t.clock, t.ciu.runSession(hex('38 12 34 56 78 03')))
+		assert.equal(r.ok, false)
+		assert.match(r.reason, /唤醒失败（burst 耗尽/)
+		assert.equal(r.stage, 'ack')
+		const wake = t.world.log.requests.filter(e => e.role === 'ciu' && e.cmd === H.CMD.WOR_WAKE_CIU).at(-1)
+		const end = t.world.log.events.filter(e => e.role === 'ciu' && e.cmd === H.EVT.WOR_SESSION_END).at(-1)
+		assert.ok(end.at - wake.at < 13000, 'burst 耗尽从实际 WAKE 起算，冷却不计入唤醒预算')
+	}
+	// ---- 模拟令牌: 各类型的表端解析与结果块 ----
+	{
+		const t = setup({ meter: { tokenDelayS: 0 } })
+		await ready(t)
+		let serial = 100
+		const sim = (type, data) => S.simTokenEncode({ type, serial: serial++, data: data || 0 })
+		const run = async tok => drive(t.clock, t.ciu.token(tok))
+		// 充值: 数据按 STS 单位 0.1 m³，体积模式落账 ×1000 dL；状态 2 + MODE1，Value 与充值量同数
+		let r = await run(sim('01', 2))
+		assert.equal(r.token.executed, true)
+		assert.equal(r.token.credited, 2000)
+		assert.equal(r.token.stsBlockHex, '00 01 00 00 07 D0')
+		assert.equal(t.meter.getState().remaining, 7000)
+		assert.match(logText(t.logs.meter), /模拟令牌: 充值，序号 100，充值量 2 × 0\.1 m³（= 0\.2 m³ = 200 L，线上 2000 dL）/)
+		// 后付费: 表计状态 bit5；预付费清掉
+		r = await run(sim('04'))
+		assert.match(r.message, /令牌成功（非充值）：SET_POSTPAY 设置后付费/)
+		assert.equal(t.meter.getState().meterStatus & S.MST_POSTPAID, S.MST_POSTPAID)
+		await run(sim('03'))
+		assert.equal(t.meter.getState().meterStatus & S.MST_POSTPAID, 0)
+		// 关阀 / 开阀: 阀门真实变化
+		r = await run(sim('06'))
+		assert.match(r.message, /VALVE_CLOSE/)
+		assert.equal(t.meter.getState().valve, S.VALVE_POS_CLOSED)
+		await run(sim('05'))
+		assert.equal(t.meter.getState().valve, S.VALVE_POS_OPEN)
+		// 换钥: 第一枚 1ST，接着第二枚 SUCCESS；单独第二枚 2ND
+		assert.match((await run(sim('10'))).message, /1ST 换钥第一步/)
+		assert.match((await run(sim('11'))).message, /SUCCESS/)
+		assert.match((await run(sim('11'))).message, /2ND 换钥第二步/)
+		// 表计测试位图 / 指定结果码 / 清余额
+		assert.match((await run(sim('20', 0x20001))).message, /表计测试令牌：BIT0 水阀开关测试、BIT17 显示 DRN/)
+		assert.match((await run(sim('90', 2))).message, /令牌未执行：OLD 令牌过期/)
+		assert.match((await run(sim('90', 255))).message, /REJECT/)
+		r = await run(sim('02'))
+		assert.match(r.message, /CLEAR_CREDIT 清余额成功/)
+		assert.equal(t.meter.getState().remaining, 0)
+		// 去重深度内再输: 回放上次结果；超出深度（5 笔）后再输: USED
+		const tok = sim('01', 1)
+		assert.equal((await run(tok)).token.executed, true)
+		assert.equal((await run(tok)).token.executed, true) // 回放，不重复充值
+		assert.equal(t.meter.getState().remaining, 1000)
+		for (let i = 0; i < 5; i++) await run(sim('08'))
+		r = await run(tok)
+		assert.match(r.message, /令牌未执行：USED 令牌已使用/)
+		assert.equal(t.meter.getState().remaining, 1000)
+		// 余额上限另见下一段；校验对但类型未知: REJECT
+		const d18 = '77' + '55' + '0001' + '0000000000'
+		let sum = 0; for (let i = 0; i < 18; i++) sum += (d18.charCodeAt(i) - 48) * (i % 2 ? 3 : 1)
+		assert.match((await run(d18 + String(sum % 97).padStart(2, '0'))).message, /REJECT/)
+	}
+	// ---- 余额上限: 充值后超出即 OVER（模拟令牌与「已执行」普通令牌一致），不占用、不回放 ----
+	{
+		const t = setup({ meter: { tokenDelayS: 0, remaining: 8000, creditLimit: 10000, creditAmount: 200 } })
+		await ready(t)
+		const run = async tok => drive(t.clock, t.ciu.token(tok))
+		const over = S.simTokenEncode({ type: '01', serial: 1, data: 3 })
+		let r = await run(over)
+		assert.equal(r.token.executed, false)
+		assert.match(r.message, /令牌未执行：OVER 余额过多/)
+		assert.equal(r.token.stsBlockHex, '00 03 00 00 00 01')
+		assert.equal(t.meter.getState().remaining, 8000)
+		assert.match(logText(t.logs.meter), /充值量 3 × 0\.1 m³（= 0\.3 m³ = 300 L，线上 3000 dL）；充值后余额超出余额上限 10000 dL/)
+		r = await run(S.simTokenEncode({ type: '01', serial: 2, data: 2 })) // 恰好到上限: 成功
+		assert.equal(r.token.executed, true)
+		assert.equal(t.meter.getState().remaining, 10000)
+		assert.match(logText(t.logs.meter), /已执行，余额 10000 dL（= 1000\.0 L）/)
+		r = await run('12345678901234567890') // 普通令牌按 creditAmount 200: 超上限
+		assert.match(r.message, /OVER 余额过多/)
+		t.meter.setLive({ remaining: 5000 })
+		r = await run(over) // 余额降下来后同一令牌重新判定，不回放旧的 OVER
+		assert.equal(r.token.executed, true)
+		assert.equal(t.meter.getState().remaining, 8000)
+	}
+	// 模拟令牌编解码与日志解析
+	{
+		const tok = S.simTokenEncode({ type: '01', serial: 1, data: 500 })
+		assert.equal(tok, '77010001000000050049')
+		assert.equal(S.simTokenDecode(tok).data, 500)
+		assert.equal(S.simTokenDecode(tok.slice(0, 19) + '0'), null) // 校验不符按普通令牌
+		assert.equal(S.simTokenDecode('77777777777777771000'), null)
+		assert.throws(() => S.simTokenEncode({ type: '99' }), /未知/)
+		const f = S.buildFrame({ dir: 0, type: S.TYPE.TOKEN, txn: 1, meter: METER_NO, payload: S.tokenReqEncode(tok) })
+		assert.match(S.parseFrame(f).decoded, /模拟令牌: 充值，序号 1，充值量 500（体积: × 0\.1 m³ = 100 L；金额: × 10\^-d 货币单位）/)
+		assert.equal(S.simTokenCredit(S.simTokenDecode(tok), { currency: false, dec: 1 }), 500000)
+		assert.equal(S.simTokenCredit(S.simTokenDecode(tok), { currency: true, dec: 2 }), 500) // 金额模式不换算
+		assert.equal(S.qtyRawText(500, { currency: false, dec: 1 }), '500 dL（= 50.0 L）')
+		assert.equal(S.qtyRawText(500, { currency: true, dec: 2 }), '500 × 0.01 货币单位（= 5.00 货币单位）')
+		assert.equal(S.qtyRawText(500, { currency: true, dec: 0 }), '500 货币单位')
+		assert.equal(S.qtyUnit({ currency: true, dec: 3 }), '0.001 货币单位')
+	}
+	// 复现实板故障: 会话期间 CIU 串口安静时发起端首帧后卡住。关掉保活: 失败，诊断打出卡在 SESSION_TX、
+	// 发起端 dataTx +1 不重传、表端 dataRx 不增；默认保活（500ms 查状态）: 同一操作一次成功
+	{
+		const t = setup({ ciu: { sessionRetries: 0, keepAliveMs: 0 } })
+		await ready(t)
+		t.world.faults.stallQuiet = true
+		const res = await drive(t.clock, t.ciu.status())
+		assert.equal(res.ok, false)
+		assert.match(res.sessions[0].reason, /等上行超时/)
+		assert.equal(res.sessions[0].timeline.endReason, 7)
+		const ct = logText(t.logs.ciu)
+		assert.match(ct, /诊断: 失败时发起端 WOR 状态 \[2 INITIATOR\]\[9 SESSION_TX\]/)
+		// 0x020F 只在启动和失败时查: 增量里夹着启动读基本信息的正常会话，失败类计数仍只来自这次失败
+		assert.match(ct, /诊断: 发起端统计增量 .*dataTx \+\d+.*（自上次快照起，期间另有 \d+ 次会话也计入）/)
+		assert.doesNotMatch(ct, /dataRetx \+|retxExhaust \+/)
+		assert.match(logText(t.logs.meter), /会话终结 0x0281（reason=5 链路失联/)
+		assert.match(logText(t.logs.meter), /诊断: 表端统计增量 .*serveIdleExit \+1（自上次快照起，期间另有 \d+ 次会话也计入）（dataRx 不增/)
+		const t2 = setup()
+		await ready(t2)
+		t2.world.faults.stallQuiet = true
+		const ok = await drive(t2.clock, t2.ciu.status())
+		assert.equal(ok.ok, true, ok.message)
+		assert.equal(ok.sessions.length, 1)
+	}
+	// 保活不得占用唤醒/ACK 窗；拿到 ACK 后仍须推进会话。相邻问答给表端 END linger 留一拍。
+	{
+		const t = setup()
+		await ready(t)
+		t.world.log.requests.length = 0
+		t.world.log.events.length = 0
+		t.world.faults.stallQuiet = true
+		for (let i = 0; i < 2; i++) {
+			const requestAt = t.world.log.requests.length
+			const eventAt = t.world.log.events.length
+			const res = await drive(t.clock, t.ciu.status())
+			assert.equal(res.ok, true, res.message)
+			assert.equal(res.sessions.length, 1, 'ACK 后保活避免首拍卡住，不依靠整轮重试')
+			const requests = t.world.log.requests.slice(requestAt).filter(r => r.role === 'ciu')
+			const events = t.world.log.events.slice(eventAt).filter(e => e.role === 'ciu')
+			const wake = requests.find(r => r.cmd === H.CMD.WOR_WAKE_CIU)
+			const send = requests.find(r => r.cmd === H.CMD.WOR_SEND)
+			const ack = events.find(e => e.kind === 2)
+			const end = events.find(e => e.cmd === H.EVT.WOR_SESSION_END)
+			assert.ok(wake && send && ack && end, '完整经过受理、排队、ACK、终结')
+			assert.ok(send.at >= wake.at && send.at < ack.at, '受理后立即排队，首拍发送不等待 ACK')
+			const queries = requests.filter(r => r.cmd === H.CMD.WOR_GET_STATUS && r.at >= wake.at)
+			assert.ok(queries.length > 0, 'ACK 后仍有串口保活')
+			assert.ok(queries.every(r => r.at >= ack.at && r.at < end.at), 'GET_STATUS 只在 ACK 后至终结前发送')
+		}
+		const wakes = t.world.log.requests.filter(r => r.role === 'ciu' && r.cmd === H.CMD.WOR_WAKE_CIU)
+		const ends = t.world.log.events.filter(e => e.role === 'ciu' && e.cmd === H.EVT.WOR_SESSION_END)
+		assert.equal(wakes.length, 2)
+		assert.equal(ends.length, 2)
+		assert.ok(wakes[1].at - ends[0].at >= 1200, '下一 WAKE 至少在上一 CIU END 后一拍，避免表端 linger 冲突')
+		const lastEnd = ends[1].at
+		await t.clock.advance(2000)
+		assert.equal(t.world.log.requests.filter(r => r.role === 'ciu' && r.cmd === H.CMD.WOR_GET_STATUS && r.at >= lastEnd).length, 0, 'END 后没有残留保活请求')
+		assert.equal(t.world.log.requests.filter(r => r.cmd === H.CMD.WOR_STATS_GET).length, 0, '成功会话两端都不查 0x020F')
+		t.ciu.stop(); t.meter.stop(); t.ciuLink.close(); t.meterLink.close()
+	}
+	// ACK EVT 丢失与串口安静故障同时出现：首轮没有启动保活机会，整轮重试仍能恢复。
+	{
+		const t = setup({ ciu: { sessionRetries: 1 } })
+		await ready(t)
+		t.world.faults.stallQuiet = true
+		t.world.faults.dropAck = 1
+		const res = await drive(t.clock, t.ciu.status())
+		assert.equal(res.ok, true, res.message)
+		assert.equal(res.sessions.length, 2, 'ACK EVT 丢失的首轮失败后只需一次整轮重试')
+		assert.equal(res.sessions[0].ok, false)
+		assert.equal(res.sessions[1].ok, true)
+		assert.ok(res.sessions[0].timeline.endReason != null, '先收尾失败会话再重试')
+		assert.ok(res.sessions[1].timeline.ackMs != null)
+		t.ciu.stop(); t.meter.stop(); t.ciuLink.close(); t.meterLink.close()
+	}
+	// 中止后在飞保活才完成，新操作会清掉 aborted；旧会话不能因此复活保活并打扰下一轮 ACK。
+	{
+		const t = setup()
+		await ready(t)
+		const original = t.ciuLink.request
+		let held = false
+		let completeOldQuery = null
+		t.ciuLink.request = function (cmd, payload, opts) {
+			const reply = original(cmd, payload, opts)
+			if (cmd !== H.CMD.WOR_GET_STATUS || held) return reply
+			held = true
+			return reply.then(r => new Promise(resolve => { completeOldQuery = () => resolve(r) }))
+		}
+		const first = t.ciu.status()
+		for (let i = 0; i < 100 && !completeOldQuery; i++) await t.clock.advance(100)
+		assert.ok(completeOldQuery, '第一轮 ACK 后保活已发出，故意扣住它的完成通知')
+		t.ciu.abort()
+		assert.equal((await drive(t.clock, first)).outcome, 'aborted')
+		const requestAt = t.world.log.requests.length
+		const second = t.ciu.status()
+		await t.clock.advance(10)
+		completeOldQuery()
+		await t.clock.advance(1000)
+		assert.equal(t.world.log.requests.slice(requestAt).filter(r => r.role === 'ciu' && r.cmd === H.CMD.WOR_GET_STATUS).length, 0, '旧保活完成后不能在下一轮 ACK 前重新挂计时器')
+		assert.equal((await drive(t.clock, second)).ok, true, '上次会话自然收尾后，新操作能正常完成')
+		t.ciu.stop(); t.meter.stop(); t.ciuLink.close(); t.meterLink.close()
+	}
+	// 冷却等待同其他等待一样可立即中止；取消后不能迟到发出 WAKE。
+	{
+		const t = setup()
+		await ready(t)
+		const requestAt = t.world.log.requests.length
+		const p = t.ciu.status()
+		await t.clock.advance(10)
+		t.ciu.abort()
+		assert.equal((await drive(t.clock, p)).outcome, 'aborted')
+		await t.clock.advance(1500)
+		assert.equal(t.world.log.requests.slice(requestAt).filter(r => r.role === 'ciu' && r.cmd === H.CMD.WOR_WAKE_CIU).length, 0, '冷却期间取消后不发出唤醒')
+		t.ciu.stop(); t.meter.stop(); t.ciuLink.close(); t.meterLink.close()
+	}
+	// WOR_SEND 时机 = ACK 后: 等到 ACK 才入队
+	{
+		const t = setup({ ciu: { sendTiming: 'ack' } })
+		await ready(t)
+		const ok = await drive(t.clock, t.ciu.status())
+		assert.equal(ok.ok, true, ok.message)
+		assert.match(logText(t.logs.ciu), /WOR_SEND 已入待发槽 6B（ACK 后入队）/)
+		assert.ok(ok.sessions[0].timeline.sendMs > ok.sessions[0].timeline.ackMs)
+	}
+	// 旧固件未 WOR_INIT 回 ERR_STATE(0x06): 表端照样识别并补 INIT
+	{
+		const t = setup({ world: { meterInit: false, notInitStatus: 6 } })
+		await drive(t.clock, t.meter.start())
+		assert.equal(t.world.meter.worInit, true)
+		assert.equal(t.world.meter.sentry, true)
+	}
+	// 运行地址与 DRN 不一致（DRN 改了没复位）: 启动时提示
+	{
+		const t = setup()
+		t.world.meter.addr = 5n
+		await drive(t.clock, t.meter.start())
+		assert.match(logText(t.logs.meter), /WOR 运行地址 5 与 DRN 101123456788 不一致/)
 	}
 
 	// ---- 表端重启（清空存档）: 轮询状态 0 -> 重发令牌 -> 表端令牌去重回放终局 ----
@@ -647,7 +1059,7 @@ async function tests() {
 		assert.equal(t.meter.getState().remaining, 5000)
 	}
 
-	// ---- 会话层: BUSY 重试 / 同一会话内多个 kind=3 ----
+	// ---- 会话层: BUSY 重试 / 同一会话内多个 kind=3 依次入队 ----
 	{
 		const t = setup()
 		await ready(t)
@@ -667,10 +1079,9 @@ async function tests() {
 		await t.clock.advance(300)
 		t.world.injectKind3(S.buildFrame({ dir: 0, type: S.TYPE.READ, txn: 3, meter: METER_NO, payload: S.readReqEncode(3, 1) }))
 		await t.clock.advance(300)
-		assert.match(logText(t.logs.meter), /连续收到多个 kind=3/)
-		// 信箱以最后一个为准
-		const last = t.world.log.setUplinks[t.world.log.setUplinks.length - 1].data
-		assert.equal(S.parseRaw(last).type, S.TYPE.READ)
+		// 上行是追加队列: 两个应答按到达顺序各占一片，后一个不覆盖前一个
+		assert.deepEqual(t.world.log.setUplinks.slice(-2).map(u => S.parseRaw(u.data).type), [S.TYPE.STATUS, S.TYPE.READ])
+		assert.equal(t.world.meter.upq.length, 2)
 	}
 
 	// ---- F01: 取决于当前余额的失败不回放，重新判定并更新该项；永久结果回放 ----
@@ -687,7 +1098,7 @@ async function tests() {
 		let r = await final(1)
 		assert.equal(r.payload[0], 2) // RESULT 状态 2
 		assert.equal(r.payload[2], S.TOKEN_DONE_NOEXEC) // 越界: 未执行
-		assert.equal(r.payload[3], 0x05)
+		assert.deepEqual(bytes(r.payload.subarray(3)), [0, 3, 0, 0, 0, 1]) // MODE3 OVER 余额过多
 		// 余额降回可充值范围后再输同一令牌: 必须重新判定（进待办），不能回放旧失败
 		m.app.state.remaining = 5000
 		const again = S.parseRaw(m.handleApp(mk(5, TOKEN_A)))
@@ -709,7 +1120,9 @@ async function tests() {
 		assert.equal(res.outcome, 'timeout')
 		assert.match(res.message, /表体并不因此停止执行/)
 		// 放弃发生在受理后 60s 附近，而不是等某轮会话自然结束（会话最长 ACK15s + 上行12s）
-		const accepted = res.sessions[0].at
+		// 预算从受理上行到达时刻起算（不是收尾完成时刻）: rec.at 是收尾完成时刻，减去收尾耗时得到上行到达时刻
+		const tl0 = res.sessions[0].timeline
+		const accepted = res.sessions[0].at - (tl0.endMs - tl0.upMs)
 		const gaveUp = res.startedAt + res.durationMs
 		assert.ok(gaveUp - accepted <= 60000 + 200, 'gave up at +' + (gaveUp - accepted))
 		assert.equal(t.ciu.getState().pending, false)

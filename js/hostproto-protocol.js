@@ -19,47 +19,67 @@
 	const TYPE_EVT = 2
 	const TYPE_NAME = ['REQ', 'RSP', 'EVT']
 
-	const STATUS = { OK: 0, ERR_FMT: 1, ERR_BUSY: 2, ERR_AUTH: 3, ERR_CMD: 4, ERR_SIZE: 5, ERR_STATE: 6, PENDING: 7, ERR_ROLE: 8 }
-	const STATUS_NAME = ['OK', 'ERR_FMT', 'ERR_BUSY', 'ERR_AUTH', 'ERR_CMD', 'ERR_SIZE', 'ERR_STATE', 'PENDING', 'ERR_ROLE']
+	// ERR_NOT_INIT(0x09) 从 ERR_STATE 分立: 未跑 WOR_INIT / LW 未启动回 0x09，0x06 只表示无会话或状态不允许。
+	// 旧固件两态都回 0x06，判「未初始化」时两个码都要认
+	const STATUS = { OK: 0, ERR_FMT: 1, ERR_BUSY: 2, ERR_AUTH: 3, ERR_CMD: 4, ERR_SIZE: 5, ERR_STATE: 6, PENDING: 7, ERR_ROLE: 8, ERR_NOT_INIT: 9 }
+	const STATUS_NAME = ['OK', 'ERR_FMT', 'ERR_BUSY', 'ERR_AUTH', 'ERR_CMD', 'ERR_SIZE', 'ERR_STATE', 'PENDING', 'ERR_ROLE', 'ERR_NOT_INIT']
 	const STATUS_DESC = [
 		'成功', '载荷格式非法', '忙(在途/槽满/角色被占)', '密钥材料缺失/鉴权失败', '未知命令', '载荷超限',
-		'状态不允许', '已受理，结果经同 CMD 的 EVT 补发', '角色白名单拒绝',
+		'状态不允许(无会话等)', '已受理，结果经同 CMD 的 EVT 补发', '角色白名单拒绝', '未初始化(未 WOR_INIT / LW 未启动)',
 	]
 	const ROLE_NAME = ['TEST', 'METER', 'CIU', 'WALKBY']
 	const WOR_ROLE_NAME = ['NONE', 'SENTRY', 'INITIATOR', 'COLLECTOR']
-	// 规范只给出 0=IDLE、1=GRID 两个数值（稳态 [1 SENTRY][1 GRID]、未活动 [0 0]），其余瞬态的数值编号不在文档里，不猜
-	const WOR_STATE_NAME = { 0: 'IDLE', 1: 'GRID' }
-	const KIND_NAME = { 2: 'ACK', 3: 'DATA', 4: 'UPLINK', 5: 'BEACON' }
+	// 0x0201 state 原值；11 是退役的 UP_RX，不给名字
+	const WOR_STATE_NAME = {
+		0: 'IDLE', 1: 'GRID', 2: 'FP_BURST', 3: 'TX_ACK', 4: 'SERVE_DATA', 5: 'TX_DACK', 6: 'TX_BEACON',
+		7: 'TX_WAKE', 8: 'WAIT_ACK', 9: 'SESSION_TX', 10: 'WAIT_DACK', 12: 'BC_RX',
+	}
+	// kind=2 双侧含义: 发起端收到是表端 ACK，表端收到是「已被唤醒」通知（上行队列已清空，表务主机据此入队）
+	const KIND_NAME = { 2: 'ACK/唤醒通知', 3: 'DATA', 4: 'UPLINK', 5: 'BEACON' }
+	// EVT 0x0281 会话终结原因，双侧各报一次
+	const END_REASON_NAME = {
+		1: '表端 END 收尾', 2: '发起端自然收尾(含 FINISH)', 3: '唤醒失败', 4: 'ABORT', 5: '链路失联',
+		6: '1h 保险', 7: '重传耗尽', 8: '空闲看门狗', 9: '唤醒抢占',
+	}
+	const BOOT_MODE_NAME = { 0: 'NORMAL', 1: 'BOOTLOADER', 2: 'BLE_CONFIG' }
 
 	const CMD = {
-		ECHO: 0x0001, LINK_STAT: 0x0002, FW_INFO: 0x0003, REBOOT: 0x0004, REBOOT_TO_BOOT: 0x0005, RTC_TIME_GET: 0x0006,
+		ECHO: 0x0001, LINK_STAT: 0x0002, FW_INFO: 0x0003, REBOOT: 0x0004, REBOOT_MODE: 0x0005, RTC_TIME_GET: 0x0006,
+		BOOT_MODE_GET: 0x0007,
 		LW_GET_STATUS: 0x0100, LW_CFG_SET: 0x0101, LW_DEV_EUI_GET: 0x0102, LW_JOIN: 0x0103, LW_LEAVE: 0x0104,
 		LW_SEND: 0x0105, LW_CLASS_SET: 0x0106, LW_ADR_SET: 0x0107, LW_NBTRANS_SET: 0x0108, LW_TIME_REQ: 0x0109,
 		LW_TIME_GET: 0x010a, LW_BEACON_GET: 0x010b, LW_LINK_CHECK: 0x010c, LW_PERSIST: 0x010d, LW_BATTERY_SET: 0x010e,
 		WOR_INIT: 0x0200, WOR_GET_STATUS: 0x0201, WOR_SENTRY_START: 0x0202, WOR_SENTRY_STOP: 0x0203,
 		WOR_BEACON_SET: 0x0204, WOR_BEACON_EN: 0x0205, WOR_BEACON_RATE: 0x0206, WOR_WAKE: 0x0207, WOR_WAKE_CIU: 0x0208,
 		WOR_PROBE: 0x0209, WOR_SEND: 0x020a, WOR_FINISH: 0x020b, WOR_SET_UPLINK: 0x020c, WOR_COLLECTOR_START: 0x020d,
-		WOR_COLLECTOR_STOP: 0x020e, WOR_STATS_GET: 0x020f, WOR_SESSION_KEY_SET: 0x0210,
+		WOR_COLLECTOR_STOP: 0x020e, WOR_STATS_GET: 0x020f, WOR_SESSION_KEY_SET: 0x0210, WOR_ABORT: 0x0211,
+		BLE_GET_STATUS: 0x0400, BLE_ADV_START: 0x0401, BLE_ADV_STOP: 0x0402, BLE_ADV_SET: 0x0403, BLE_TX: 0x0404,
+		BLE_DISCONNECT: 0x0405, BLE_OFF: 0x0406, BLE_MTU_GET: 0x0407, BLE_ADV_START_CONT: 0x0408, BLE_ADV_IDENTITY: 0x0409,
+		UPG_ERASE_APP: 0x0600, UPG_WRITE: 0x0601, UPG_VERIFY: 0x0602,
 		PROV_AUTH: 0x0300, PROV_DEV_ID_GET: 0x0301, PROV_DEV_ID_SET: 0x0302, PROV_PAK_SET: 0x0303,
 		PROV_FACTORY_RESET: 0x0304, PROV_ROLE_SET: 0x0305, PROV_ROLE_GET: 0x0306,
 		PROV_KEYS_BEGIN: 0x0310, PROV_KEYS_SLOT_SET: 0x0311, PROV_KEYS_COMMIT: 0x0312, PROV_KEYS_QUERY: 0x0313,
 	}
 	const EVT = {
 		LW_JOINED: 0x0180, LW_JOIN_FAIL: 0x0181, LW_TX_DONE: 0x0182, LW_DOWNDATA: 0x0183, LW_CLASSB: 0x0184,
-		LW_TIME_SYNCED: 0x0185, LW_LINK_CHECK: 0x0186, LW_PERSIST: 0x0187, WOR_FRAME: 0x0280,
+		LW_TIME_SYNCED: 0x0185, LW_LINK_CHECK: 0x0186, LW_PERSIST: 0x0187, WOR_FRAME: 0x0280, WOR_SESSION_END: 0x0281,
+		BLE_CONNECTED: 0x0480, BLE_DISCONNECTED: 0x0481, BLE_RX: 0x0482, BLE_TX_EMPTY: 0x0483, BLE_MTU: 0x0484,
+		UPG_ERASED: 0x0680,
 	}
 	const CMD_NAME = {}
 	Object.keys(CMD).forEach(k => { CMD_NAME[CMD[k]] = k })
 	const EVT_NAME = {}
 	Object.keys(EVT).forEach(k => { EVT_NAME[EVT[k]] = k })
 	// 这四条 RSP OK 之后模组即复位，重试会在新固件上再执行一次
-	const NO_RETRY = [CMD.REBOOT, CMD.REBOOT_TO_BOOT, CMD.PROV_FACTORY_RESET, CMD.PROV_ROLE_SET]
+	const NO_RETRY = [CMD.REBOOT, CMD.REBOOT_MODE, CMD.PROV_FACTORY_RESET, CMD.PROV_ROLE_SET]
 
 	const LINK_STAT_FIELDS = ['rxFrames', 'rxReq', 'rxCrcErr', 'rxVerErr', 'rxLenErr', 'rxOvf', 'rxIgnored', 'reqReplays', 'txFrames', 'txEvt', 'txBusy']
+	// 53×u32 = 212B（ARQ 布局）: 发起端 14 + 表端 17 + 跳频 9 + 网格 3 + 信标 4 + 安全 4 + 事件队列 2
 	const WOR_STATS_FIELDS = [
 		'worTx', 'wakeOk', 'ackErr', 'bcastTx', 'probeTx', 'dataTx', 'dataFail', 'endTx', 'upRx', 'upErr',
-		'wakes', 'uniWakes', 'bcastWakes', 'ciuWakes', 'dupWakes', 'foreignIg', 'ackTx', 'ackFail', 'dataRx', 'dataErr',
-		'serveIdleExit', 'capExit', 'endRx', 'upTx', 'upFail',
+		'dackRx', 'dataRetx', 'retxExhaust', 'idleExit',
+		'wakes', 'uniWakes', 'bcastWakes', 'ciuWakes', 'wakePreempt', 'foreignIg', 'ackTx', 'ackFail', 'dataRx', 'dataErr',
+		'serveIdleExit', 'capExit', 'endRx', 'dackTx', 'dackFail', 'upQueued', 'upSent',
 		'hopHist0', 'hopHist1', 'hopHist2', 'hopHist3', 'hopHist4', 'hopHist5', 'hopHist6', 'hopHist7', 'hopHist8',
 		'gridBeats', 'gridCb', 'fpBursts', 'beaconTx', 'beaconRx', 'beaconErr', 'bcWin',
 		'micFail', 'keyMiss', 'replay', 'sessReplay', 'evtDrop', 'evtLatched',
@@ -222,6 +242,7 @@
 		p.set(d, 2)
 		return p
 	}
+	// 追加一个上行分片（队列深度 4）。清空未发送队列是空载荷（LEN=0），直接发 []，不经这里
 	function setUplinkPayload(data) {
 		const d = toU8(data)
 		if (d.length > 64) throw new Error('WOR_SET_UPLINK 数据最长 64 字节')
@@ -240,9 +261,15 @@
 		if (p.length !== 9) return null
 		return { devType: p[0], drn: u64(p, 1) }
 	}
+	// 2B [role][state]，标准出货固件 10B 再附 localAddr u64（WOR_INIT 生效的运行地址），按长度兼容
 	function decodeWorStatus(p) {
 		if (p.length < 2) return null
-		return { role: p[0], state: p[1] }
+		return { role: p[0], state: p[1], localAddr: p.length >= 10 ? u64(p, 2) : null }
+	}
+	// EVT 0x0281: [reason u8][dlDelivered u16 LE][upDelivered u8]
+	function decodeSessionEnd(p) {
+		if (p.length < 4) return null
+		return { reason: p[0], dlDelivered: u16(p, 1), upDelivered: p[3] }
 	}
 	// 规范写的是空格垫齐，实板固件用 \0 垫齐：遇到 \0 截断，不把垫字节显示成 '.'
 	function fixedAscii(b) {
@@ -332,11 +359,11 @@
 				break
 			}
 			case CMD.WOR_SET_UPLINK: {
-				if (p.length < 1) { lines.push('WOR_SET_UPLINK 载荷不足'); break }
+				if (p.length < 1) { lines.push('（空载荷: 清空未发送的上行分片队列）'); break }
 				lines.push('数据长度 = ' + p[0] + (p.length - 1 === p[0] ? '' : '（与实际 ' + (p.length - 1) + ' 不符）'))
 				const data = p.subarray(1)
-				lines.push('信箱数据 = ' + hexSpaced(data))
-				seg(0, 1, '数据长度', '长度'); seg(1, data.length, '上行信箱数据', '数据')
+				lines.push('追加上行分片 = ' + hexSpaced(data))
+				seg(0, 1, '数据长度', '长度'); seg(1, data.length, '上行分片数据', '数据')
 				const n = nestedSts(data, '  ')
 				if (n) {
 					n.lines.forEach(l => lines.push(l))
@@ -344,6 +371,14 @@
 				}
 				break
 			}
+			case CMD.REBOOT_MODE:
+				if (need(1, 'REBOOT_MODE')) { lines.push('mode = ' + p[0] + ' ' + (BOOT_MODE_NAME[p[0]] || '未注册')); seg(0, 1, '启动模式', 'mode') }
+				break
+			case CMD.UPG_WRITE:
+				if (p.length < 5) { lines.push('UPG_WRITE 载荷不足 5 字节'); break }
+				lines.push('off = ' + u32(p, 0) + '  数据 ' + (p.length - 4) + ' B')
+				seg(0, 4, '分区内偏移 u32 LE', 'off'); seg(4, p.length - 4, '镜像数据', '数据')
+				break
 			case CMD.WOR_SESSION_KEY_SET:
 				if (need(17, 'WOR_SESSION_KEY_SET')) {
 					lines.push('id = ' + p[0]); lines.push('key = ' + (allZero(p.subarray(1)) ? '已脱敏' : '****'))
@@ -440,9 +475,25 @@
 				const d = decodeWorStatus(r)
 				if (!d) { lines.push('WOR_GET_STATUS 结果不足 2 字节'); break }
 				lines.push('WOR 角色 = ' + d.role + ' ' + (WOR_ROLE_NAME[d.role] || '未知') + '  状态 = ' + d.state + (WOR_STATE_NAME[d.state] ? ' ' + WOR_STATE_NAME[d.state] : ''))
-				seg(0, 1, 'WOR 运行时角色', '角色'); seg(1, 1, 'WOR 状态', '状态')
+				if (d.localAddr != null) lines.push('运行地址 localAddr = ' + d.localAddr)
+				seg(0, 1, 'WOR 运行时角色', '角色'); seg(1, 1, 'WOR 状态', '状态'); seg(2, 8, '运行地址 u64 LE', '地址')
 				break
 			}
+			case CMD.BLE_GET_STATUS:
+				if (r.length >= 7) lines.push('state = ' + r[0] + '  peerAddr = ' + hexSpaced(r.subarray(1, 7)))
+				break
+			case CMD.BLE_MTU_GET:
+				if (r.length >= 2) lines.push('MTU = ' + u16(r, 0))
+				break
+			case CMD.BLE_ADV_IDENTITY:
+				if (r.length >= 8) lines.push('注入身份 DRN = ' + u64(r, 0))
+				break
+			case CMD.BOOT_MODE_GET:
+				if (r.length >= 1) lines.push('启动模式 = ' + r[0] + ' ' + (BOOT_MODE_NAME[r[0]] || '未注册'))
+				break
+			case CMD.UPG_VERIFY:
+				if (r.length >= 21) lines.push('valid = ' + r[0] + '  binSize = ' + u32(r, 1) + '  buildTime = ' + u32(r, 5) + '  appVer = 0x' + u32(r, 9).toString(16).toUpperCase().padStart(8, '0') + '  appGit = ' + fixedAscii(r.subarray(13, 21)))
+				break
 			case CMD.WOR_STATS_GET: {
 				if (r.length < 2) { lines.push('WOR_STATS_GET 结果不足'); break }
 				const len = u16(r, 0)
@@ -486,9 +537,23 @@
 			}
 			return { lines: lines, segs: segs }
 		}
+		if (cmd === EVT.WOR_SESSION_END) {
+			const d = decodeSessionEnd(p)
+			if (!d) { lines.push('会话终结事件载荷不足 4 字节'); return { lines: lines, segs: segs } }
+			lines.push('终结原因 = ' + d.reason + ' ' + (END_REASON_NAME[d.reason] || '未知'))
+			lines.push('确认交付: 下行 ' + d.dlDelivered + ' 帧  上行 ' + d.upDelivered + ' 片')
+			seg(0, 1, '终结原因', 'reason'); seg(1, 2, '下行交付数 u16 LE', 'dl'); seg(3, 1, '上行交付数', 'up')
+			return { lines: lines, segs: segs }
+		}
 		switch (cmd) {
 			case EVT.LW_JOINED: lines.push('reason = ' + p[0] + '（0=OTAA 新入网 2=暖启动恢复）'); break
-			case EVT.LW_JOIN_FAIL: lines.push('reason = ' + p[0]); break
+			case EVT.LW_JOIN_FAIL: lines.push('reason = ' + p[0] + '（0=最终失败 1=退避重试中 2=暖启动过程 3=超限放弃）'); break
+			case EVT.UPG_ERASED: lines.push('status = ' + p[0] + '（0=擦除完成 1=flash 错误）'); break
+			case EVT.BLE_CONNECTED: if (p.length >= 8) lines.push('手机连接  peerAddr = ' + hexSpaced(p.subarray(0, 6)) + '  MTU 初值 = ' + u16(p, 6)); break
+			case EVT.BLE_DISCONNECTED: lines.push('连接断开  HCI reason = 0x' + h2(p[0])); break
+			case EVT.BLE_RX: if (p.length >= 1) lines.push('手机→模组 ' + p[0] + ' B  data = ' + hexSpaced(p.subarray(1))); break
+			case EVT.BLE_TX_EMPTY: lines.push('TX FIFO 已排空'); break
+			case EVT.BLE_MTU: if (p.length >= 2) lines.push('MTU 变为 ' + u16(p, 0)); break
 			case EVT.LW_TX_DONE: lines.push('status = ' + p[0] + '（0=WAITING 1=SENT 2=CONFIRMED 3=NO_ACK 4=FAILED）'); break
 			case EVT.LW_DOWNDATA:
 				if (p.length >= 5) lines.push('fport = ' + p[0] + '  rssi = ' + ((u16(p, 1) << 16) >> 16) + '  snr = ' + ((p[3] << 24) >> 24) + '  len = ' + p[4] + '  data = ' + hexSpaced(p.subarray(5)))
@@ -651,8 +716,9 @@
 		['链路统计 LINK_STAT', CMD.LINK_STAT, '', '11×u32 计数'],
 		['读角色 ROLE_GET', CMD.PROV_ROLE_GET, '', '0=TEST 1=METER 2=CIU 3=WALKBY'],
 		['读身份 DEV_ID_GET', CMD.PROV_DEV_ID_GET, '', '[devType][DRN u64 LE]'],
-		['WOR 状态 WOR_GET_STATUS', CMD.WOR_GET_STATUS, '', '[role][state]'],
-		['WOR 统计 WOR_STATS_GET', CMD.WOR_STATS_GET, '', '47×u32'],
+		['WOR 状态 WOR_GET_STATUS', CMD.WOR_GET_STATUS, '', '[role][state][localAddr]'],
+		['WOR 统计 WOR_STATS_GET', CMD.WOR_STATS_GET, '', '53×u32'],
+		['启动模式 BOOT_MODE_GET', CMD.BOOT_MODE_GET, '', '0=NORMAL 1=BOOTLOADER 2=BLE_CONFIG'],
 	]
 	const PRESETS = [{
 		group: 'hostProto 常用无参命令',
@@ -661,12 +727,12 @@
 
 	W.hostProto = {
 		SOF0, SOF1, VER, OVERHEAD, MAX_PAY, MAX_FRAME, WAKE_LEN, TYPE_REQ, TYPE_RSP, TYPE_EVT, TYPE_NAME,
-		STATUS, STATUS_NAME, STATUS_DESC, ROLE_NAME, WOR_ROLE_NAME, WOR_STATE_NAME, KIND_NAME,
+		STATUS, STATUS_NAME, STATUS_DESC, ROLE_NAME, WOR_ROLE_NAME, WOR_STATE_NAME, KIND_NAME, END_REASON_NAME, BOOT_MODE_NAME,
 		CMD, EVT, CMD_NAME, EVT_NAME, NO_RETRY, LINK_STAT_FIELDS, WOR_STATS_FIELDS, cmdName,
 		crc16, buildFrame, scan, findFrame, parseFrame, formatFrame, byteMap, buildDownFrame,
 		u64, u64Bytes, hexToBytes, hexSpaced, asciiSafe,
 		woInitPayload, wakePayload, sendPayload, setUplinkPayload, devIdSetPayload,
-		decodeDevId, decodeWorStatus, decodeFwInfo, decodeWorFrame,
+		decodeDevId, decodeWorStatus, decodeFwInfo, decodeWorFrame, decodeSessionEnd,
 	}
 
 	function tryRegister(retry) {

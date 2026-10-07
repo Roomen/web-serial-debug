@@ -9,6 +9,8 @@
 
 	const RX_CLEAR_MS = 50 // 帧内字节间隔超过 50ms 视为半帧残留（对应 rxBusy/rxClear）
 	const MIN_TIMEOUT_MS = 100
+	// 规范 §11.5 里同步应答不是 100ms 级的命令: 阻塞式最长 10s，复位类 2s。调用方没给超时就用这里的值
+	const SLOW_TIMEOUT_MS = { 0x010d: 10000, 0x0602: 10000, 0x0304: 2000, 0x0305: 2000 }
 
 	function mkErr(msg, code, cmd) {
 		const e = new Error(msg)
@@ -123,7 +125,7 @@
 				const retries = noRetry ? 0 : (o.retries == null ? 2 : Math.max(0, o.retries))
 				queue.push({
 					cmd: cmd, payload: pl,
-					timeoutMs: Math.max(MIN_TIMEOUT_MS, o.timeoutMs == null ? 1000 : o.timeoutMs),
+					timeoutMs: Math.max(MIN_TIMEOUT_MS, o.timeoutMs == null ? (SLOW_TIMEOUT_MS[cmd] || 1000) : o.timeoutMs),
 					maxAttempts: 1 + retries,
 					resolve: resolve, reject: reject, timer: null, seq: 0, frame: null, attempt: 0,
 				})
