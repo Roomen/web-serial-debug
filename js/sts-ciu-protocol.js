@@ -326,12 +326,23 @@
 		if (!t) return { valid: false, reason: '未知类型 ' + type }
 		return { valid: true, type: type, name: t.name, code: t.code, dataKind: t.data || null, serial: Number(s.slice(4, 8)), data: Number(s.slice(8, 18)) }
 	}
-	// tariff 可选，给出时充值量带单位与换算值；不给时（日志解析没有计价模式）注明单位随寄存器 0x18
+	// 模拟充值令牌的数据按 STS 令牌的 TransferAmount 计: 体积是 0.1 m³ = 100 L（IEC 62055-41 Table 18），
+	// 真实令牌给不出更细的量；表端换算成本协议的 dL（×1000）再落账。金额模式不模拟 STS 的货币粒度，数据直接按 10^-d 货币单位
+	const SIM_VOLUME_STEP_DL = 1000
+	function simTokenCredit(m, tariff) {
+		return tariff && tariff.currency ? m.data : m.data * SIM_VOLUME_STEP_DL
+	}
+	function simAmountText(data, tariff) {
+		if (!tariff) return data + '（体积: × 0.1 m³ = 100 L；金额: × 10^-d 货币单位）'
+		if (tariff.currency) return qtyRawText(data, tariff)
+		return data + ' × 0.1 m³（= ' + fmtScaled(data, 1) + ' m³ = ' + data * 100 + ' L，线上 ' + data * SIM_VOLUME_STEP_DL + ' dL）'
+	}
+	// tariff 可选，给出时充值量按计价模式换算；不给时（日志解析没有计价模式）两种模式都列出
 	function simTokenText(m, tariff) {
 		if (!m) return ''
 		if (!m.valid) return '模拟令牌（无效: ' + m.reason + '）'
 		let x = '模拟令牌: ' + m.name + '，序号 ' + m.serial
-		if (m.dataKind === 'amount') x += '，充值量 ' + qtyRawText(m.data, tariff)
+		if (m.dataKind === 'amount') x += '，充值量 ' + simAmountText(m.data, tariff)
 		else if (m.dataKind === 'bits') x += '，测试位图 0x' + m.data.toString(16).toUpperCase().padStart(8, '0')
 		else if (m.dataKind === 'code') x += '，结果码 ' + m.data
 		return x
@@ -975,7 +986,7 @@
 		buildFrame, parseRaw, tgtOf, tgtType, tgtTxn,
 		tokenReqEncode, tokenReqDecode, tokenRspEncode, tokenRspDecode,
 		STS_RESULT_LEN, STS_IDX, STS_IDX_NAME, STS_CODE, STS_TEST_BIT, stsResultEncode, stsResultDecode,
-		SIM_TOKEN_MAGIC, SIM_TOKEN_TYPES, simTokenEncode, simTokenDecode, simTokenText,
+		SIM_TOKEN_MAGIC, SIM_TOKEN_TYPES, SIM_VOLUME_STEP_DL, simTokenEncode, simTokenDecode, simTokenText, simTokenCredit, simAmountText,
 		readReqEncode, readReqDecode, createTlvWriter, tlvParse, tlvInt, fmtScaled, qtyUnit, qtyRawText,
 		alarmListDecode, alarmListEncode, recordEncode, recordDecode, recordTimeStr,
 		writeReqEncode, writeReqDecode, writeRspEncode, writeRspDecode,

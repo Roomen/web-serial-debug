@@ -376,7 +376,7 @@
 			simData.autocomplete = 'off'
 			simData.spellcheck = false
 			const simBtn = buildToggleRow('生成模拟令牌', 'sts-sim-ciu-simgen')
-			simRow.title = '模拟令牌 = 77 + 类型 2 位 + 序号 4 位 + 数据 10 位 + 校验 2 位，只对本工具的表端模拟器有意义。充值填充值量（原始整数）；表计测试填位图 HEX；指定结果码填 1/2/3/6/255；其余类型不需要数据。序号每次生成自动递增'
+			simRow.title = '模拟令牌 = 77 + 类型 2 位 + 序号 4 位 + 数据 10 位 + 校验 2 位，只对本工具的表端模拟器有意义。充值填充值量：体积按 STS 令牌单位 0.1 m³（100 L），表端换算为协议的 dL（×1000），金额按 10^-d 货币单位；表计测试填位图 HEX；指定结果码填 1/2/3/6/255；其余类型不需要数据。序号每次生成自动递增'
 			// 充值量的单位与换算值: 计价模式要等 CIU 启动后读到寄存器 0x18 才知道
 			const simUnit = el('span', 'sts-sim-hint small')
 			simUnit.id = 'sts-sim-ciu-simunit'
@@ -593,9 +593,9 @@
 			const tariff = st && st.tariff
 			const raw = r.simData.value.trim()
 			let text
-			if (!tariff) text = '单位：体积 dL / 金额 10^-d 货币单位（启动后按表端 0x18 确定）'
-			else if (/^\d{1,10}$/.test(raw)) text = '= ' + S.qtyRawText(Number(raw), tariff)
-			else text = '单位 ' + S.qtyUnit(tariff)
+			if (!tariff) text = '单位：体积 0.1 m³（100 L，STS 令牌最小粒度）/ 金额 10^-d 货币单位（启动后按表端 0x18 确定）'
+			else if (/^\d{1,10}$/.test(raw)) text = '= ' + S.simAmountText(Number(raw), tariff)
+			else text = '单位 ' + (tariff.currency ? S.qtyUnit(tariff) : '0.1 m³（100 L）')
 			r.simUnit.textContent = text
 		}
 		// 阀门行: 动作中（正在开/关或恢复，剩余秒数）、关阀保持期剩余时间；剩余时间按快照时刻的剩余毫秒减去已过去的时间
@@ -960,7 +960,7 @@
 				const t = S.SIM_TOKEN_TYPES && S.SIM_TOKEN_TYPES[r.simType.value]
 				const k = t ? t.data : null
 				r.simData.disabled = !k
-				r.simData.placeholder = k === 'amount' ? '充值量(原始整数)' : k === 'bits' ? '位图 HEX，如 20001' : k === 'code' ? '1/2/3/6/255' : '无需数据'
+				r.simData.placeholder = k === 'amount' ? '充值量' : k === 'bits' ? '位图 HEX，如 20001' : k === 'code' ? '1/2/3/6/255' : '无需数据'
 			}
 			r.simType.addEventListener('change', function () { simHint(); renderSimUnit() })
 			r.simData.addEventListener('input', renderSimUnit)

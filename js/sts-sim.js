@@ -565,14 +565,16 @@
 			else if (a.simUsed.has(w.digits)) { rsp = code(3); consumed = false; note = '模拟令牌已用过，按 USED' }
 			else {
 				switch (m.type) {
-					case '01':
-						if (overLimit(m.data)) { rsp = code(1); replayable = false; consumed = false; note = overNote(); break }
-						a.remaining += m.data
-						a.totalPurchased = Math.min(4294967295, a.totalPurchased + m.data)
-						recordPush(m.data, w.acceptedMin)
-						rsp = { procStatus: S.TOKEN_DONE_EXEC, credited: m.data, remaining: a.remaining, stsBlock: S.stsResultEncode({ index: I.CREDIT, value: m.data }) }
+					case '01': {
+						const credit = S.simTokenCredit(m, tariffOf()) // 体积: 0.1 m³ → dL
+						if (overLimit(credit)) { rsp = code(1); replayable = false; consumed = false; note = overNote(); break }
+						a.remaining += credit
+						a.totalPurchased = Math.min(4294967295, a.totalPurchased + credit)
+						recordPush(credit, w.acceptedMin)
+						rsp = { procStatus: S.TOKEN_DONE_EXEC, credited: credit, remaining: a.remaining, stsBlock: S.stsResultEncode({ index: I.CREDIT, value: credit }) }
 						executed = true
 						break
+					}
 					case '02': a.remaining = 0; rsp = code(8); note = '余额已清零'; break
 					case '03': a.postpaid = false; rsp = code(9); note = '切换为预付费'; break
 					case '04': a.postpaid = true; rsp = code(10); note = '切换为后付费（表计状态 bit5）'; break

@@ -755,13 +755,13 @@ async function tests() {
 		let serial = 100
 		const sim = (type, data) => S.simTokenEncode({ type, serial: serial++, data: data || 0 })
 		const run = async tok => drive(t.clock, t.ciu.token(tok))
-		// 充值: 状态 2 + MODE1，Value 与充值量同数
-		let r = await run(sim('01', 250))
+		// 充值: 数据按 STS 单位 0.1 m³，体积模式落账 ×1000 dL；状态 2 + MODE1，Value 与充值量同数
+		let r = await run(sim('01', 2))
 		assert.equal(r.token.executed, true)
-		assert.equal(r.token.credited, 250)
-		assert.equal(r.token.stsBlockHex, '00 01 00 00 00 FA')
-		assert.equal(t.meter.getState().remaining, 5250)
-		assert.match(logText(t.logs.meter), /模拟令牌: 充值，序号 100，充值量 250/)
+		assert.equal(r.token.credited, 2000)
+		assert.equal(r.token.stsBlockHex, '00 01 00 00 07 D0')
+		assert.equal(t.meter.getState().remaining, 7000)
+		assert.match(logText(t.logs.meter), /模拟令牌: 充值，序号 100，充值量 2 × 0\.1 m³（= 0\.2 m³ = 200 L，线上 2000 dL）/)
 		// 后付费: 表计状态 bit5；预付费清掉
 		r = await run(sim('04'))
 		assert.match(r.message, /令牌成功（非充值）：SET_POSTPAY 设置后付费/)
@@ -786,14 +786,14 @@ async function tests() {
 		assert.match(r.message, /CLEAR_CREDIT 清余额成功/)
 		assert.equal(t.meter.getState().remaining, 0)
 		// 去重深度内再输: 回放上次结果；超出深度（5 笔）后再输: USED
-		const tok = sim('01', 10)
+		const tok = sim('01', 1)
 		assert.equal((await run(tok)).token.executed, true)
 		assert.equal((await run(tok)).token.executed, true) // 回放，不重复充值
-		assert.equal(t.meter.getState().remaining, 10)
+		assert.equal(t.meter.getState().remaining, 1000)
 		for (let i = 0; i < 5; i++) await run(sim('08'))
 		r = await run(tok)
 		assert.match(r.message, /令牌未执行：USED 令牌已使用/)
-		assert.equal(t.meter.getState().remaining, 10)
+		assert.equal(t.meter.getState().remaining, 1000)
 		// 余额上限另见下一段；校验对但类型未知: REJECT
 		const d18 = '77' + '55' + '0001' + '0000000000'
 		let sum = 0; for (let i = 0; i < 18; i++) sum += (d18.charCodeAt(i) - 48) * (i % 2 ? 3 : 1)
@@ -801,26 +801,26 @@ async function tests() {
 	}
 	// ---- 余额上限: 充值后超出即 OVER（模拟令牌与「已执行」普通令牌一致），不占用、不回放 ----
 	{
-		const t = setup({ meter: { tokenDelayS: 0, remaining: 900, creditLimit: 1000, creditAmount: 200 } })
+		const t = setup({ meter: { tokenDelayS: 0, remaining: 8000, creditLimit: 10000, creditAmount: 200 } })
 		await ready(t)
 		const run = async tok => drive(t.clock, t.ciu.token(tok))
-		const over = S.simTokenEncode({ type: '01', serial: 1, data: 101 })
+		const over = S.simTokenEncode({ type: '01', serial: 1, data: 3 })
 		let r = await run(over)
 		assert.equal(r.token.executed, false)
 		assert.match(r.message, /令牌未执行：OVER 余额过多/)
 		assert.equal(r.token.stsBlockHex, '00 03 00 00 00 01')
-		assert.equal(t.meter.getState().remaining, 900)
-		assert.match(logText(t.logs.meter), /充值量 101 dL（= 10\.1 L）；充值后余额超出余额上限 1000 dL/)
-		r = await run(S.simTokenEncode({ type: '01', serial: 2, data: 100 })) // 恰好到上限: 成功
+		assert.equal(t.meter.getState().remaining, 8000)
+		assert.match(logText(t.logs.meter), /充值量 3 × 0\.1 m³（= 0\.3 m³ = 300 L，线上 3000 dL）；充值后余额超出余额上限 10000 dL/)
+		r = await run(S.simTokenEncode({ type: '01', serial: 2, data: 2 })) // 恰好到上限: 成功
 		assert.equal(r.token.executed, true)
-		assert.equal(t.meter.getState().remaining, 1000)
-		assert.match(logText(t.logs.meter), /已执行，余额 1000 dL（= 100\.0 L）/)
+		assert.equal(t.meter.getState().remaining, 10000)
+		assert.match(logText(t.logs.meter), /已执行，余额 10000 dL（= 1000\.0 L）/)
 		r = await run('12345678901234567890') // 普通令牌按 creditAmount 200: 超上限
 		assert.match(r.message, /OVER 余额过多/)
-		t.meter.setLive({ remaining: 500 })
+		t.meter.setLive({ remaining: 5000 })
 		r = await run(over) // 余额降下来后同一令牌重新判定，不回放旧的 OVER
 		assert.equal(r.token.executed, true)
-		assert.equal(t.meter.getState().remaining, 601)
+		assert.equal(t.meter.getState().remaining, 8000)
 	}
 	// 模拟令牌编解码与日志解析
 	{
@@ -831,7 +831,9 @@ async function tests() {
 		assert.equal(S.simTokenDecode('77777777777777771000'), null)
 		assert.throws(() => S.simTokenEncode({ type: '99' }), /未知/)
 		const f = S.buildFrame({ dir: 0, type: S.TYPE.TOKEN, txn: 1, meter: METER_NO, payload: S.tokenReqEncode(tok) })
-		assert.match(S.parseFrame(f).decoded, /模拟令牌: 充值，序号 1，充值量 500（最小单位，随计价模式 0x18/)
+		assert.match(S.parseFrame(f).decoded, /模拟令牌: 充值，序号 1，充值量 500（体积: × 0\.1 m³ = 100 L；金额: × 10\^-d 货币单位）/)
+		assert.equal(S.simTokenCredit(S.simTokenDecode(tok), { currency: false, dec: 1 }), 500000)
+		assert.equal(S.simTokenCredit(S.simTokenDecode(tok), { currency: true, dec: 2 }), 500) // 金额模式不换算
 		assert.equal(S.qtyRawText(500, { currency: false, dec: 1 }), '500 dL（= 50.0 L）')
 		assert.equal(S.qtyRawText(500, { currency: true, dec: 2 }), '500 × 0.01 货币单位（= 5.00 货币单位）')
 		assert.equal(S.qtyRawText(500, { currency: true, dec: 0 }), '500 货币单位')
