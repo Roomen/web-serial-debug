@@ -68,6 +68,7 @@
 			{ k: 'upTimeoutS', label: '上行超时(s)', kind: 'num', min: 1, max: 600, w: 72 },
 			{ k: 'busyWaitS', label: 'BUSY 等待(s)', kind: 'num', min: 0, max: 600, w: 72 },
 			{ k: 'sessionRetries', label: '会话重试次数', kind: 'num', min: 0, max: 20, w: 72 },
+			{ k: 'keepAliveMs', label: '会话保活(ms)', kind: 'num', min: 0, max: 5000, w: 72, title: '会话期间每隔这么久向 CIU 模组查一次 WOR_GET_STATUS，0 = 关闭。实测会话期间串口完全安静时，模组发出首帧后会卡住（固件问题），保活可规避' },
 			{ k: 'sendTiming', label: 'WOR_SEND 时机', kind: 'sel', title: '规范允许 WAKE 受理后立即入队（默认）。实板上 ACK 后表端收不到会话帧时，切到「ACK 后」对比，可判断是否为 ACK 前入队的数据没被模组消费', options: [['accept', '受理后立即'], ['ack', 'ACK 后']] },
 			{ k: 'pak', label: 'PAK(32 位 HEX，不保存)', kind: 'text', maxlength: 32, w: 260, persist: false, sensitive: true, title: '仅当模组角色或 DRN 需要写入时用于 PROV_AUTH，不写入浏览器存储' },
 		]

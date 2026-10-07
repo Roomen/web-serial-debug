@@ -126,7 +126,7 @@
 	}
 	const CIU_DEFAULTS = {
 		targetDrn: '', localAddr: '2', pak: '',
-		ackTimeoutS: 15, upTimeoutS: 12, busyWaitS: 30, sessionRetries: 3, sendTiming: 'accept',
+		ackTimeoutS: 15, upTimeoutS: 12, busyWaitS: 30, sessionRetries: 3, sendTiming: 'accept', keepAliveMs: 500,
 	}
 	// 按产品错误码对照表预置，码表不在协议内枚举；CIU 原样送显，不认识的码走「其他码」输入。
 	// 顺序即显示优先级（从高到低），组包进寄存器 0x17 的告警码列表时保持这个顺序
@@ -204,6 +204,7 @@
 		o.busyWaitS = clampInt(o.busyWaitS, 0, 600, 30)
 		o.sessionRetries = clampInt(o.sessionRetries, 0, 20, 3)
 		o.sendTiming = o.sendTiming === 'ack' ? 'ack' : 'accept'
+		o.keepAliveMs = o.keepAliveMs === 0 || o.keepAliveMs === '0' ? 0 : clampInt(o.keepAliveMs, 200, 5000, 500)
 		return o
 	}
 
@@ -1414,7 +1415,9 @@
 				if (evt.cmd !== H.EVT.WOR_FRAME) return
 				const d = H.decodeWorFrame(evt.payload)
 				if (!d) return
-				if (d.src !== tgt) { log('info', '忽略其他来源的 EVT src=' + d.src + ' kind=' + d.kind); return }
+				// 会话帧不带地址（隐式取自当前事务），实板固件上报捎带上行(kind=4)时 src 填 0；
+				// 所以 kind=4 不按 src 过滤，靠下面的应用层接收判定（表号 + TXN）认领，只有 ACK 等其余事件要求来源是目标表
+				if (d.kind !== 4 && d.src !== tgt) { log('info', '忽略其他来源的 EVT src=' + d.src + ' kind=' + d.kind); return }
 				if (!sess.open) { log('info', '本轮 WAKE 尚未受理时收到 kind=' + d.kind + '，属于上一会话，不占本轮接收槽'); return }
 				if (d.kind === 2 && !sess.ack) {
 					sess.ack = { at: clock.now() }
@@ -1474,6 +1477,25 @@
 				return fail(why + (stage === 'uplink' ? '，没有收到本轮上行' : ''), stage)
 			}
 			// 收尾: 正常路径发 FINISH 结束轮询相，失败路径发 ABORT 立即断开；都等 0x0281，等不到也不算本轮失败
+			// 会话保活: 受理后到会话终结前定时查 WOR_GET_STATUS。实板上会话期间 CIU 串口完全安静时，
+			// 发起端发出首帧后卡在 SESSION_TX（不重传、不收尾，表端 2 窗失联），有串口流量则会话正常推进，
+			// 属模组固件问题；保活是主机侧规避，同时记下最近状态供失败诊断。上一条没回来不叠发
+			let kaTimer = null
+			let kaBusy = false
+			const keepAlive = function () {
+				if (!cfg.keepAliveMs || sess.end || stopped || aborted) return
+				kaTimer = clock.setTimeout(function () {
+					kaTimer = null
+					if (sess.end || stopped || aborted) return
+					if (kaBusy) { keepAlive(); return }
+					kaBusy = true
+					link.request(C.WOR_GET_STATUS, [], { timeoutMs: 500, retries: 0 }).then(function (r) {
+						const d = r && r.status === H.STATUS.OK && r.payload ? H.decodeWorStatus(r.payload) : null
+						if (d) sess.lastState = d
+					}, function () { /* 中止或超时: 只是保活，不影响会话 */ }).then(function () { kaBusy = false; keepAlive() })
+				}, cfg.keepAliveMs)
+			}
+			const stopKeepAlive = function () { if (kaTimer != null) { clock.clearTimeout(kaTimer); kaTimer = null } }
 			const closeSession = async function (how) {
 				if (!sess.accepted || sess.end || stopped || aborted) return
 				const cmd = how === 'finish' ? C.WOR_FINISH : C.WOR_ABORT
@@ -1520,6 +1542,7 @@
 					return (result = fail('WOR_WAKE_CIU 失败: ' + statusText(r), 'wake'))
 				}
 				sess.accepted = true
+				keepAlive()
 				const tAcc = clock.now()
 				tl.wakeMs = tAcc - tWake
 				log('info', 'WOR_WAKE_CIU 已受理（受理不是成功），耗时 ' + tl.wakeMs + 'ms')
@@ -1570,7 +1593,8 @@
 					if (diag && !sess.end) {
 						const ws = await link.request(C.WOR_GET_STATUS, [], { timeoutMs: 1000, retries: 0 })
 						const d = ws.status === H.STATUS.OK ? H.decodeWorStatus(ws.payload) : null
-						if (d) log('warn', '诊断: 失败时发起端 WOR 状态 [' + d.role + ' ' + (H.WOR_ROLE_NAME[d.role] || '') + '][' + d.state + ' ' + (H.WOR_STATE_NAME[d.state] || '') + ']')
+						if (d) log('warn', '诊断: 失败时发起端 WOR 状态 [' + d.role + ' ' + (H.WOR_ROLE_NAME[d.role] || '') + '][' + d.state + ' ' + (H.WOR_STATE_NAME[d.state] || '') + ']' +
+							(d.state === 9 && !cfg.keepAliveMs ? '：停在 SESSION_TX 且会话保活已关闭，这是会话期间串口安静时模组首帧后卡住的已知现象，请把「会话保活」设为 500ms' : ''))
 					}
 					// 中止 / 停止时不再给模组发命令；会话由模组自己按空轮询或看门狗收尾
 					if (result) await closeSession(result.ok ? 'finish' : 'abort')
@@ -1579,6 +1603,7 @@
 						if (txt) log('warn', '诊断: 本轮会话发起端统计增量 ' + txt + '（dataTx 不增 = 发起端没发出会话帧；dataRetx/retxExhaust 增 = 发了但收不到 DACK）')
 					}
 				} catch (e) { /* 收尾期间被中止: 不影响本轮结果 */ }
+				stopKeepAlive()
 				if (sess.end) { tl.endMs = sess.end.at - t0; tl.endReason = sess.end.reason }
 				activeSessions--
 				unsub()

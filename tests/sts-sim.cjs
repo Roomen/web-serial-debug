@@ -70,8 +70,9 @@ function makeWorld(clock, opts) {
 	const o = Object.assign({ anchorDelayMs: 3350, meterRole: 1, ciuRole: 2, meterDrn: METER_DRN, meterInit: true, notInitStatus: 9 }, opts || {})
 	// dropAck: 丢 ACK 事件；dropUplink: 丢 CIU 侧 kind=4 事件（空口已交付）；dropSession: 唤醒失败；
 	// killAfterData: 数据拍之后 DACK 全丢，发起端重传耗尽、表端失联；delayKind3: 表端 kind=3 晚 kind3DelayMs 到；upqBusy: SET_UPLINK 回 BUSY 的次数
-	// stallPreAck: 复现实板现象——ACK 前就入队的会话里，发起端 ACK 后不发任何拍，表端 2 窗静默失联(5)，发起端直到 ABORT 才以重传耗尽(7)收尾
-	const faults = { dropAck: 0, dropUplink: 0, dropSession: 0, killAfterData: 0, delayKind3: 0, kind3DelayMs: 3000, upqBusy: 0, stallPreAck: false, beforeKind3: null, wakeStatus: null }
+	// stallQuiet: 复现实板现象——会话首拍前 1s 内 CIU 串口没收到任何请求时，发起端发出首帧后卡住不再发拍，
+	// 表端 2 窗静默失联(5)，发起端直到 ABORT 才以重传耗尽(7)收尾；有串口流量（会话保活）则正常
+	const faults = { dropAck: 0, dropUplink: 0, dropSession: 0, killAfterData: 0, delayKind3: 0, kind3DelayMs: 3000, upqBusy: 0, stallQuiet: false, beforeKind3: null, wakeStatus: null }
 	const log = { kind3: [], uplinks: [], wakes: 0, sends: 0, setUplinks: [], events: [], finishes: 0, aborts: 0, ends: [] }
 	function newModule(name, role, drn, autoInit) {
 		const on = !!autoInit && role === 1 && drn !== 0n
@@ -188,7 +189,6 @@ function makeWorld(clock, opts) {
 				const len = p[0] | (p[1] << 8)
 				if (p.length !== 2 + len) return { status: 5 }
 				mod.session.queue.push(Uint8Array.from(p.subarray(2)))
-				if (!mod.session.acked) mod.session.preAck = true
 				log.sends++
 				return OK
 			}
@@ -232,18 +232,21 @@ function makeWorld(clock, opts) {
 			const bump = (m, f) => { m.stats[f] = (m.stats[f] || 0) + 1 }
 			bump(target, 'wakes'); bump(target, 'ciuWakes')
 			clock.setTimeout(() => { s.acked = true; bump(mod, 'wakeOk'); if (!s.dropAck && !s.ended) emit(mod, evtFrame(dst, 2, 1, [], -80, 7)) }, 250)
-			if (faults.stallPreAck && s.preAck) {
-				// 发起端不发拍: 表端两窗静默失联；发起端挂着，ABORT 后 END 也收不到确认
-				clock.setTimeout(() => {
-					if (target.inSession !== s) return
-					bump(target, 'serveIdleExit')
-					target.inSession = null; target.upq = []
-					emit(target, endFrame(5, 0, 0))
-				}, 1000 + 2 * 1200 + 300)
-				s.stalled = true
-				return
-			}
-			clock.setTimeout(() => beat(mod, s), 1000)
+			clock.setTimeout(() => {
+				if (faults.stallQuiet && clock.now() - (mod.lastReqAt || 0) > 1000) {
+					// 发起端首帧后卡住: 表端两窗静默失联；发起端挂着，ABORT 后 END 也收不到确认
+					bump(mod, 'dataTx')
+					s.stalled = true
+					clock.setTimeout(() => {
+						if (target.inSession !== s) return
+						bump(target, 'serveIdleExit')
+						target.inSession = null; target.upq = []
+						emit(target, endFrame(5, 0, 0))
+					}, 2 * 1200 + 300)
+					return
+				}
+				beat(mod, s)
+			}, 1000)
 		}, o.anchorDelayMs)
 	}
 	function beat(mod, s) {
@@ -268,7 +271,7 @@ function makeWorld(clock, opts) {
 			s.up++
 			s.lastPayloadAt = clock.now()
 			log.uplinks.push({ at: clock.now(), data, dropped: s.dropUplink })
-			if (!s.dropUplink) emit(mod, evtFrame(s.dst, 4, 2, data, -80, 7))
+			if (!s.dropUplink) emit(mod, evtFrame(0n, 4, 2, data, -80, 7)) // 实板固件: 捎带上行的 src 为 0
 		}, 600)
 		clock.setTimeout(() => beat(mod, s), 1200)
 	}
@@ -300,6 +303,7 @@ function makeWorld(clock, opts) {
 		if (s.status !== 'frame' || s.type !== 0) return
 		const key = s.seq + ':' + s.cmd + ':' + Buffer.from(s.payload).toString('hex')
 		if (mod.cache && mod.cache.key === key) { emit(mod, mod.cache.rsp); return } // 幂等缓存深度 1
+		mod.lastReqAt = clock.now()
 		const r = exec(mod, s.cmd, s.payload)
 		const rsp = H.buildFrame({ type: 1, cmd: s.cmd, seq: s.seq, payload: [r.status, ...(r.data || [])] })
 		mod.cache = { key, rsp }
@@ -794,28 +798,35 @@ async function tests() {
 		const f = S.buildFrame({ dir: 0, type: S.TYPE.TOKEN, txn: 1, meter: METER_NO, payload: S.tokenReqEncode(tok) })
 		assert.match(S.parseFrame(f).decoded, /模拟令牌: 充值，序号 1，充值量 500/)
 	}
-	// 复现实板故障形态: ACK 后发起端不发拍。CIU 失败诊断打出发起端状态与统计增量（dataTx 不增），表端打出 dataRx 不增；
-	// 切到「ACK 后入队」后该假故障不触发，同一操作一次成功
+	// 复现实板故障: 会话期间 CIU 串口安静时发起端首帧后卡住。关掉保活: 失败，诊断打出卡在 SESSION_TX、
+	// 发起端 dataTx +1 不重传、表端 dataRx 不增；默认保活（500ms 查状态）: 同一操作一次成功
 	{
-		const t = setup({ ciu: { sessionRetries: 0 } })
+		const t = setup({ ciu: { sessionRetries: 0, keepAliveMs: 0 } })
 		await ready(t)
-		t.world.faults.stallPreAck = true
+		t.world.faults.stallQuiet = true
 		const res = await drive(t.clock, t.ciu.status())
 		assert.equal(res.ok, false)
 		assert.match(res.sessions[0].reason, /等上行超时/)
 		assert.equal(res.sessions[0].timeline.endReason, 7)
 		const ct = logText(t.logs.ciu)
 		assert.match(ct, /诊断: 失败时发起端 WOR 状态 \[2 INITIATOR\]\[9 SESSION_TX\]/)
-		assert.match(ct, /诊断: 本轮会话发起端统计增量 wakeOk \+1（dataTx 不增/)
+		assert.match(ct, /诊断: 本轮会话发起端统计增量 wakeOk \+1  dataTx \+1（/)
 		assert.match(logText(t.logs.meter), /会话终结 0x0281（reason=5 链路失联/)
 		assert.match(logText(t.logs.meter), /诊断: 本会话表端统计增量 wakes \+1  ciuWakes \+1  serveIdleExit \+1（dataRx 不增/)
-		const t2 = setup({ ciu: { sendTiming: 'ack' } })
+		const t2 = setup()
 		await ready(t2)
-		t2.world.faults.stallPreAck = true
+		t2.world.faults.stallQuiet = true
 		const ok = await drive(t2.clock, t2.ciu.status())
 		assert.equal(ok.ok, true, ok.message)
 		assert.equal(ok.sessions.length, 1)
-		assert.match(logText(t2.logs.ciu), /WOR_SEND 已入待发槽 6B（ACK 后入队）/)
+	}
+	// WOR_SEND 时机 = ACK 后: 等到 ACK 才入队
+	{
+		const t = setup({ ciu: { sendTiming: 'ack' } })
+		await ready(t)
+		const ok = await drive(t.clock, t.ciu.status())
+		assert.equal(ok.ok, true, ok.message)
+		assert.match(logText(t.logs.ciu), /WOR_SEND 已入待发槽 6B（ACK 后入队）/)
 		assert.ok(ok.sessions[0].timeline.sendMs > ok.sessions[0].timeline.ackMs)
 	}
 	// 旧固件未 WOR_INIT 回 ERR_STATE(0x06): 表端照样识别并补 INIT
