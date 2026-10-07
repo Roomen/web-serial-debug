@@ -225,6 +225,73 @@
 		return { procStatus: st, known: false }
 	}
 
+	// STS 结果块（4.1）: 表端 STS 库的返回值 [index u16 BE][Value u32 BE]，偏移 6 起保留（忽略但照样保留上送）。
+	// M < 6 是旧格式块（status_code/Auth/Validation/TokenResult 5 字节），解不出来按原始字节展示，不当错误帧。
+	// 处理状态 2（已执行）配 MODE1；处理状态 1（未执行充值）配 MODE3 / MODE256。对应不上只标出，不拒帧
+	const STS_RESULT_LEN = 6
+	const STS_IDX = { CREDIT: 0x0001, MODE2: 0x0002, CODE: 0x0003, TEST: 0x00ff }
+	const STS_IDX_NAME = { 0x0001: 'MODE1 充值', 0x0002: 'MODE2（库未定义语义）', 0x0003: 'MODE3 结果码', 0x00ff: 'MODE256 表计测试' }
+	// MODE3 结果码: ok=true 表示令牌本身成功但不是充值（4、5、7..13）；1、2、3、6、0xFF 是失败
+	const STS_CODE = {
+		1: { name: 'OVER', text: '余额过多', ok: false }, 2: { name: 'OLD', text: '令牌过期', ok: false },
+		3: { name: 'USED', text: '令牌已使用', ok: false }, 4: { name: '1ST', text: '换钥第一步', ok: true },
+		5: { name: '2ND', text: '换钥第二步', ok: true }, 6: { name: 'EXPIRED', text: '密钥到期', ok: false },
+		7: { name: 'SUCCESS', text: '设置参数成功', ok: true }, 8: { name: 'CLEAR_CREDIT', text: '清余额成功', ok: true },
+		9: { name: 'SET_PREPAY', text: '设置预付费', ok: true }, 10: { name: 'SET_POSTPAY', text: '设置后付费', ok: true },
+		11: { name: 'VALVE_OPEN', text: '打开水阀', ok: true }, 12: { name: 'VALVE_CLOSE', text: '关闭水阀', ok: true },
+		13: { name: 'CLEAR_TAMPER', text: '清除窃水状态', ok: true }, 255: { name: 'REJECT', text: '错误的令牌', ok: false },
+	}
+	// MODE256 位图: 库只返回解析出的测试位，执行与否由表端业务层决定；未列出的位表端显示拒绝
+	const STS_TEST_BIT = {
+		0: '水阀开关测试', 1: '全屏显示', 2: '总用水量', 3: '显示 KRN', 4: '显示 TI', 7: '清除窃水状态',
+		9: '软件版本号', 13: '显示 EA', 14: '2 串密钥替换（预留）', 16: '显示 KEN', 17: '显示 DRN',
+	}
+	function stsResultEncode(r) {
+		const a = [(r.index >> 8) & 0xff, r.index & 0xff]
+		putU32(a, r.value >>> 0)
+		return Uint8Array.from(a)
+	}
+	function stsTestBits(v) {
+		const bits = []
+		for (let b = 0; b < 32; b++) if ((v >>> b) & 1) bits.push({ bit: b, text: STS_TEST_BIT[b] || '预留（表端显示拒绝）' })
+		return bits
+	}
+	// 返回 { parsed:false, len } 或 { parsed:true, index, value, extra, kind, code?, bits?, text, mismatch }
+	function stsResultDecode(block, procStatus) {
+		const b = toU8(block || [])
+		if (b.length < STS_RESULT_LEN) return { parsed: false, len: b.length }
+		const index = (b[0] << 8) | b[1]
+		const value = u32(b, 2)
+		const r = { parsed: true, index: index, value: value, extra: b.length - STS_RESULT_LEN, mismatch: false }
+		if (index === STS_IDX.CREDIT) {
+			r.kind = 'credit'
+			// 单位 0.01 kL（= 10 L）: STS 库的体积量，与寄存器 0x18 的计价单位无关，不要求与应用层充值量同数
+			r.text = 'MODE1 充值成功，STS 充值量 ' + value + '（单位 0.01 kL，即 ' + fmtScaled(value, 2) + ' kL）'
+		} else if (index === STS_IDX.CODE) {
+			r.kind = 'code'
+			r.code = STS_CODE[value] || null
+			r.text = 'MODE3 结果码 ' + value + (r.code ? ' ' + r.code.name + ' ' + r.code.text : ' 未知')
+		} else if (index === STS_IDX.TEST) {
+			r.kind = 'test'
+			r.bits = stsTestBits(value)
+			r.text = 'MODE256 表计测试 位图 0x' + value.toString(16).toUpperCase().padStart(8, '0') + (r.bits.length ? '：' + r.bits.map(x => 'BIT' + x.bit + ' ' + x.text).join('、') : '（无测试位）')
+		} else {
+			r.kind = 'unknown'
+			r.text = (index === STS_IDX.MODE2 ? 'MODE2（库未定义语义）' : '未知 index 0x' + index.toString(16).toUpperCase().padStart(4, '0')) + '，Value = ' + value
+		}
+		if (procStatus === TOKEN_DONE_EXEC) r.mismatch = r.kind !== 'credit'
+		else if (procStatus === TOKEN_DONE_NOEXEC) r.mismatch = r.kind !== 'code' && r.kind !== 'test'
+		return r
+	}
+	function stsResultLines(block, procStatus, lines) {
+		const r = stsResultDecode(block, procStatus)
+		if (!r.parsed) { lines.push('STS 结果块(' + r.len + 'B，旧格式，不足 6 字节无法解析) = ' + hexSpaced(toU8(block))); return }
+		lines.push('STS 结果块(' + (STS_RESULT_LEN + r.extra) + 'B) = ' + hexSpaced(toU8(block)))
+		lines.push('  ' + r.text)
+		if (r.extra) lines.push('  偏移 6 起 ' + r.extra + ' 字节为保留，忽略')
+		if (r.mismatch) lines.push('  ⚠ 处理状态 ' + procStatus + ' 与结果块 ' + (STS_IDX_NAME[r.index] || 'index') + ' 对应不上（状态 2 应配 MODE1，状态 1 应配 MODE3/MODE256）')
+	}
+
 	// READ 请求
 	function readReqEncode(start, count) {
 		if (count < 1 || count > READ_MAX_REGS || start + count - 1 > 0xff) throw new Error('READ 数量/范围非法')
@@ -582,7 +649,7 @@
 			lines.push('本次充值量 = ' + t.credited + '（原始整数，标度见寄存器 0x18）')
 			lines.push('剩余量 = ' + t.remaining + '（原始整数）')
 		}
-		lines.push('STS 结果块(' + t.stsBlock.length + 'B，原样透传) = ' + hexSpaced(t.stsBlock))
+		stsResultLines(t.stsBlock, t.procStatus, lines)
 	}
 	function tlvValueText(t) {
 		if (t.invalid) return '无效标记(未定义或当前不可读)'
@@ -727,8 +794,8 @@
 		switch (f.type) {
 			case TYPE.TOKEN:
 				add(0, 1, '处理状态', '状态')
-				if (p[0] === TOKEN_DONE_EXEC && p.length >= 10) { add(1, 4, '本次充值量', '充值量'); add(5, 4, '剩余量', '剩余量'); add(9, p.length - 9, 'STS 结果块(原样透传)', 'STS') }
-				else if (p[0] === TOKEN_DONE_NOEXEC) add(1, p.length - 1, 'STS 结果块(原样透传)', 'STS')
+				if (p[0] === TOKEN_DONE_EXEC && p.length >= 10) { add(1, 4, '本次充值量', '充值量'); add(5, 4, '剩余量', '剩余量'); stsBlockSegs(add, 9, p.length - 9) }
+				else if (p[0] === TOKEN_DONE_NOEXEC) stsBlockSegs(add, 1, p.length - 1)
 				break
 			case TYPE.READ: {
 				const r = tlvParse(p)
@@ -748,6 +815,12 @@
 			default: add(0, p.length, '载荷', '载荷')
 		}
 		return segs
+	}
+
+	function stsBlockSegs(add, off, len) {
+		if (len < STS_RESULT_LEN) { add(off, len, 'STS 结果块(旧格式，无法解析)', 'STS'); return }
+		add(off, 2, 'STS 结果 index u16 BE', 'STS index'); add(off + 2, 4, 'STS 结果 Value u32 BE', 'STS Value')
+		if (len > STS_RESULT_LEN) add(off + STS_RESULT_LEN, len - STS_RESULT_LEN, 'STS 结果块保留字节', 'STS 保留')
 	}
 
 	// 解析一段字节: 成功返回 { ok, dir, fields, decoded, errors, raw, segs, frame }
@@ -842,6 +915,7 @@
 		crc8, bcdPack, bcdUnpack, bcdValid, meterBcd, hexToBytes, hexSpaced, equalBytes,
 		buildFrame, parseRaw, tgtOf, tgtType, tgtTxn,
 		tokenReqEncode, tokenReqDecode, tokenRspEncode, tokenRspDecode,
+		STS_RESULT_LEN, STS_IDX, STS_IDX_NAME, STS_CODE, STS_TEST_BIT, stsResultEncode, stsResultDecode,
 		readReqEncode, readReqDecode, createTlvWriter, tlvParse, tlvInt, fmtScaled,
 		alarmListDecode, alarmListEncode, recordEncode, recordDecode, recordTimeStr,
 		writeReqEncode, writeReqDecode, writeRspEncode, writeRspDecode,

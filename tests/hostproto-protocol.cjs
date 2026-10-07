@@ -22,7 +22,7 @@ const bytes = u8 => Array.from(u8)
 assert.equal(registered.id, 'hostproto')
 for (const k of ['parseFrame', 'formatFrame', 'findFrame', 'byteMap', 'buildDownFrame', 'presets']) assert.ok(registered.impl[k], k)
 assert.equal(registered.impl.name, 'hostProto 模组')
-assert.equal(registered.impl.presets[0].items.length, 7)
+assert.equal(registered.impl.presets[0].items.length, 8)
 
 // ---- FW_INFO 定长 ASCII: 空格垫齐（规范）与 \0 垫齐（实板固件）都要解出干净的字符串 ----
 {
@@ -179,6 +179,24 @@ assert.deepEqual(bytes(H.buildFrame({ cmd: 0x0001, seq: 0x5a, payload: Buffer.fr
 	assert.equal(H.buildFrame({ cmd: 1, seq: 0, payload: new Uint8Array(255), preamble: false }).length, 265)
 }
 
+// ---- 规范附录 B.9 固件升级段金帧 ----
+{
+	const golden = [
+		[0x0600, 0, 0x40, [], 'FF FF FF FF EB 90 10 00 06 40 00 00 9A 2B'],
+		[0x0600, 1, 0x40, [7], 'FF FF FF FF EB 90 11 00 06 40 01 00 07 BF F0'],
+		[0x0680, 2, 0, [0], 'FF FF FF FF EB 90 12 80 06 00 01 00 00 66 E2'],
+		[0x0601, 0, 0x41, [0, 0, 0, 0, 0xde, 0xad, 0xbe, 0xef], 'FF FF FF FF EB 90 10 01 06 41 08 00 00 00 00 00 DE AD BE EF 3D D1'],
+		[0x0601, 1, 0x41, [0], 'FF FF FF FF EB 90 11 01 06 41 01 00 00 4C B3'],
+		[0x0602, 0, 0x43, [], 'FF FF FF FF EB 90 10 02 06 43 00 00 49 36'],
+	]
+	for (const [cmd, type, seq, payload, want] of golden) assert.deepEqual(bytes(H.buildFrame({ type, cmd, seq, payload })), bytes(hex(want)), want)
+	const ver = H.parseFrame(hex('FF FF FF FF EB 90 11 02 06 43 16 00 00 01 54 03 01 00 00 AB F0 69 00 00 02 01 31 30 39 65 65 32 65 33 79 B4'))
+	assert.equal(ver.ok, true)
+	assert.match(ver.decoded, /valid = 1  binSize = 66388  buildTime = 1777380096  appVer = 0x01020000  appGit = 109ee2e3/)
+	assert.match(H.parseFrame(hex(golden[2][4])).decoded, /status = 0（0=擦除完成/)
+	assert.match(H.parseFrame(hex(golden[3][4])).decoded, /off = 0  数据 4 B/)
+}
+
 // ---- 解析展示 ----
 {
 	// FW_INFO / DEV_ID_GET / WOR_GET_STATUS / LW_GET_STATUS 应答
@@ -204,6 +222,50 @@ assert.deepEqual(bytes(H.buildFrame({ cmd: 0x0001, seq: 0x5a, payload: Buffer.fr
 	p = H.parseFrame(rsp(0x020c, 1, [8]))
 	assert.equal(p.fields.状态.value, '0x08')
 	assert.match(p.fields.状态.name, /ERR_ROLE/)
+	// ERR_NOT_INIT(0x09) 从 ERR_STATE 分立
+	p = H.parseFrame(rsp(0x0201, 1, [9]))
+	assert.match(p.fields.状态.name, /^ERR_NOT_INIT/)
+	// WOR_GET_STATUS 10B 版本带运行地址；瞬态 state 有名字
+	p = H.parseFrame(rsp(0x0201, 1, [0, 2, 10, 0x39, 0x30, 0, 0, 0, 0, 0, 0]))
+	assert.match(p.decoded, /2 INITIATOR/)
+	assert.match(p.decoded, /状态 = 10 WAIT_DACK/)
+	assert.match(p.decoded, /localAddr = 12345/)
+	assert.deepEqual(J(H.decodeWorStatus(Uint8Array.from([1, 1]))), { role: 1, state: 1, localAddr: null })
+	assert.equal(H.decodeWorStatus(Uint8Array.from([1, 1, 0x39, 0x30, 0, 0, 0, 0, 0, 0])).localAddr, 12345n)
+	// WOR_STATS_GET: 53×u32，ARQ 新字段按线序
+	assert.equal(H.WOR_STATS_FIELDS.length, 53)
+	{
+		const st = new Uint8Array(2 + 212)
+		st[0] = 212
+		// 偏移按规范 Table 9 线序独立写死，不从被测数组反查
+		const put = (i, v) => { st[2 + i * 4] = v }
+		put(12, 3); put(30, 2); put(52, 1) // retxExhaust / upSent / evtLatched
+		assert.deepEqual([10, 13, 14, 18, 27, 29, 31, 40, 43, 47, 51].map(i => H.WOR_STATS_FIELDS[i]), ['dackRx', 'idleExit', 'wakes', 'wakePreempt', 'dackTx', 'upQueued', 'hopHist0', 'gridBeats', 'beaconTx', 'micFail', 'evtDrop'])
+		p = H.parseFrame(rsp(0x020f, 1, [0, ...st]))
+		assert.match(p.decoded, /统计长度 = 212 B  非零项: retxExhaust=3  upSent=2  evtLatched=1$/)
+	}
+	// EVT 0x0281 会话终结
+	{
+		const evt = H.buildFrame({ type: 2, cmd: 0x0281, seq: 0, payload: [7, 3, 0, 1] })
+		p = H.parseFrame(evt)
+		assert.equal(p.fields.命令.name, 'WOR_SESSION_END')
+		assert.match(p.decoded, /终结原因 = 7 重传耗尽/)
+		assert.match(p.decoded, /下行 3 帧  上行 1 片/)
+		assert.deepEqual(J(H.decodeSessionEnd(Uint8Array.from([3, 0, 0, 0]))), { reason: 3, dlDelivered: 0, upDelivered: 0 })
+		assert.equal(H.decodeSessionEnd(Uint8Array.from([3, 0, 0])), null)
+	}
+	// WOR_SET_UPLINK 空载荷 = 清空队列；WOR_ABORT / REBOOT_MODE 有名字
+	p = H.parseFrame(H.buildFrame({ cmd: 0x020c, seq: 1, payload: [] }))
+	assert.match(p.decoded, /清空未发送的上行分片队列/)
+	assert.equal(H.cmdName(0x0211), 'WOR_ABORT')
+	// BLE 段字段解析
+	assert.match(H.parseFrame(H.buildFrame({ type: 2, cmd: 0x0480, seq: 0, payload: [1, 2, 3, 4, 5, 6, 23, 0] })).decoded, /peerAddr = 01 02 03 04 05 06  MTU 初值 = 23/)
+	assert.match(H.parseFrame(H.buildFrame({ type: 2, cmd: 0x0484, seq: 0, payload: [247, 0] })).decoded, /MTU 变为 247/)
+	assert.match(H.parseFrame(rsp(0x0407, 1, [0, 23, 0])).decoded, /MTU = 23/)
+	assert.equal(H.CMD.REBOOT_MODE, 0x0005)
+	assert.ok(H.NO_RETRY.includes(0x0005))
+	p = H.parseFrame(H.buildFrame({ cmd: 0x0005, seq: 1, payload: [1] }))
+	assert.match(p.decoded, /mode = 1 BOOTLOADER/)
 	// 密钥类载荷脱敏: 展示文本与字节提示里都不出现密钥字节
 	const keyReq = H.parseFrame(hex(REQ_ROWS.find(r => r[0] === 'SESSION_KEY_SET §8.7')[1]))
 	assert.match(keyReq.decoded, /key = \*\*\*\*/)

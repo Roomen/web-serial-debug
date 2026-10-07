@@ -29,11 +29,12 @@ const vectors = [
 	['52 12 34 56 78 01 01', () => frame(0, T.RESULT, 2, S.resultReqEncode(S.tgtOf(T.TOKEN, 1)))],
 	['D2 12 34 56 78 01 01 05 57', () => frame(1, T.RESULT, 2, S.resultRspEncode({ pollState: 1, tgt: 1, etaS: 5 }))],
 	['53 12 34 56 78 01 55', () => frame(0, T.RESULT, 3, S.resultReqEncode(1))],
-	['D3 12 34 56 78 02 01 02 00 00 01 F4 00 00 01 F4 03 80 80 80 00 A6', () => frame(1, T.RESULT, 3, S.resultRspEncode({
-		pollState: 2, tgt: 1, tail: S.tokenRspEncode({ procStatus: 2, credited: 500, remaining: 500, stsBlock: block5 }) }))],
+	// 协议 10.1 / 10.2: STS 结果块为 6 字节 [index u16 BE][Value u32 BE]
+	['D3 12 34 56 78 02 01 02 00 00 01 F4 00 00 01 F4 00 01 00 00 00 05 2B', () => frame(1, T.RESULT, 3, S.resultRspEncode({
+		pollState: 2, tgt: 1, tail: S.tokenRspEncode({ procStatus: 2, credited: 500, remaining: 500, stsBlock: S.stsResultEncode({ index: 1, value: 5 }) }) }))],
 	['54 12 34 56 78 01 D6', () => frame(0, T.RESULT, 4, S.resultReqEncode(1))],
 	['D4 12 34 56 78 00 01 00', () => frame(1, T.RESULT, 4, S.resultRspEncode({ pollState: 0, tgt: 1 }))],
-	['81 12 34 56 78 01 06 80 20 00 00 22', () => frame(1, T.TOKEN, 1, S.tokenRspEncode({ procStatus: 1, stsBlock: hex('06 80 20 00 00') }))],
+	['81 12 34 56 78 01 00 03 00 00 00 01 76', () => frame(1, T.TOKEN, 1, S.tokenRspEncode({ procStatus: 1, stsBlock: S.stsResultEncode({ index: 3, value: 1 }) }))],
 	['0D 12 34 56 78 40 66 82 21 84 58 90 32 36 66 F4', () => frame(0, T.TOKEN, 13, S.tokenReqEncode('40668221845890323666'))],
 	['CD 12 34 56 78 06 00 44', () => frame(1, T.NAK, 13, S.nakEncode(6, 0))],
 	['25 12 34 56 78 80 01 99', () => frame(0, T.WRITE, 5, S.writeReqEncode(0x80, [1]))],
@@ -255,5 +256,35 @@ assert.equal(S.tokenRspDecode(hex('02 00 00 00 01 00 00 00 02 55')).stsBlock.len
 	const html = S.formatFrame({ ok: false, errors: ['<img src=x onerror=1>'], fields: { '<b>': '<script>' } })
 	for (const raw of ['<img src=x onerror=1>', '<b>', '<script>']) assert.ok(!html.includes(raw), '原样出现: ' + raw)
 	for (const escaped of ['&lt;img src=x onerror=1&gt;', '&lt;b&gt;', '&lt;script&gt;']) assert.ok(html.includes(escaped), '缺少转义: ' + escaped)
+}
+// ---- STS 结果块: [index u16 BE][Value u32 BE]，偏移 6 起保留，M<6 旧格式 ----
+{
+	assert.deepEqual(Array.from(S.stsResultEncode({ index: 1, value: 1000 })), [0, 1, 0, 0, 3, 0xe8])
+	let r = S.stsResultDecode(hex('00 01 00 00 03 E8'), 2)
+	assert.equal(r.kind, 'credit'); assert.equal(r.value, 1000); assert.equal(r.mismatch, false)
+	assert.match(r.text, /即 10\.00 kL/)
+	r = S.stsResultDecode(hex('00 03 00 00 00 07 AA BB'), 1)
+	assert.equal(r.kind, 'code'); assert.equal(r.code.name, 'SUCCESS'); assert.equal(r.code.ok, true); assert.equal(r.extra, 2)
+	r = S.stsResultDecode(hex('00 03 00 00 00 FF'), 2)
+	assert.equal(r.mismatch, true) // 状态 2 应配 MODE1
+	r = S.stsResultDecode(hex('00 01 00 00 00 05'), 1)
+	assert.equal(r.mismatch, true) // 状态 1 不应配 MODE1
+	r = S.stsResultDecode(hex('00 FF 00 02 00 21'), 1)
+	assert.deepEqual(J(r.bits.map(b => b.bit)), [0, 5, 17])
+	assert.match(r.bits[1].text, /预留/)
+	assert.equal(S.stsResultDecode(hex('00 02 00 00 00 01'), 1).kind, 'unknown')
+	assert.equal(S.stsResultDecode(hex('00 02 00 00 00 01'), 1).mismatch, true) // 状态 1 只配 MODE3 / MODE256
+	assert.equal(S.stsResultDecode(hex('00 FF 00 00 00 01'), 1).mismatch, false)
+	assert.equal(S.stsResultDecode(hex('12 34 00 00 00 01'), 1).kind, 'unknown')
+	assert.deepEqual(J(S.stsResultDecode(hex('03 80 80 80 00'), 2)), { parsed: false, len: 5 })
+	// 解析展示与字节提示
+	const f = S.buildFrame({ dir: 1, type: S.TYPE.TOKEN, txn: 1, meter: '12345678', payload: S.tokenRspEncode({ procStatus: 1, stsBlock: hex('00 03 00 00 00 03') }) })
+	const p = S.parseFrame(f)
+	assert.equal(p.ok, true)
+	assert.match(p.decoded, /MODE3 结果码 3 USED 令牌已使用/)
+	const bm = S.byteMap(p)
+	assert.match(bm[6 + 1].tip, /index/)
+	assert.match(bm[6 + 3].tip, /Value/)
+	assert.match(S.parseFrame(S.buildFrame({ dir: 1, type: S.TYPE.TOKEN, txn: 1, meter: '12345678', payload: S.tokenRspEncode({ procStatus: 1, stsBlock: hex('06 80 20 00 00') }) })).decoded, /旧格式，不足 6 字节无法解析/)
 }
 console.log('STS-CIU protocol checks passed')

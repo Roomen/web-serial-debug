@@ -46,9 +46,13 @@
 		const METER_FIELDS = [
 			{ k: 'drn', label: 'DRN(留空=以模组为准)', kind: 'text', maxlength: 13, w: 150, title: '13 位 = 4 位厂商码 + 8 位表号 + 1 位校验（11 位为 2 位厂商码）；应用层表号取中间 8 位。与模组不一致且填了 PAK 时写入模组并复位' },
 			{ k: 'tokenDelayS', label: '令牌处理耗时(s)', kind: 'num', min: 0, max: 3600, w: 72 },
-			{ k: 'tokenMode', label: '结果模式', kind: 'sel', options: [['exec', '已执行(充值)'], ['reject', '未执行(拒收)']] },
+			{ k: 'tokenMode', label: '结果模式', kind: 'sel', title: '决定 STS 结果块: 已执行 = 处理状态 2 + MODE1 充值量；结果码 = 处理状态 1 + MODE3；表计测试 = 处理状态 1 + MODE256 位图。模拟器只回报结果码，不执行清余额、开关阀等业务动作', options: [
+				['exec', '已执行(充值)'], ['1', 'OVER 余额过多'], ['2', 'OLD 令牌过期'], ['3', 'USED 已使用'], ['4', '1ST 换钥第一步'], ['5', '2ND 换钥第二步'],
+				['6', 'EXPIRED 密钥到期'], ['7', 'SUCCESS 设置成功'], ['8', '清余额成功'], ['9', '设置预付费'], ['10', '设置后付费'], ['11', '打开水阀'],
+				['12', '关闭水阀'], ['13', '清除窃水'], ['255', 'REJECT 错误令牌'], ['test', '表计测试(MODE256)'],
+			] },
 			{ k: 'creditAmount', label: '充值量(原始整数)', kind: 'num', min: 0, w: 96, title: '按当前计价模式的最小单位：体积 dL，金额按小数位' },
-			{ k: 'stsBlockHex', label: 'STS 结果块(HEX)', kind: 'text', w: 200, title: '1..47 字节，原样透传，工具不解释' },
+			{ k: 'testBits', label: '测试位图(HEX)', kind: 'text', maxlength: 8, w: 96, title: '结果模式为「表计测试」时 MODE256 的 Value，u32 位图：BIT0 水阀开关测试、BIT1 全屏、BIT2 总用水量、BIT3 KRN、BIT4 TI、BIT7 清除窃水、BIT9 软件版本、BIT13 EA、BIT16 KEN、BIT17 DRN' },
 			{ k: 'valveDelayS', label: '阀门动作耗时(s)', kind: 'num', min: 0, max: 600, w: 72 },
 			{ k: 'remaining', label: '初始剩余量', kind: 'num', w: 96 },
 			{ k: 'totalUsed', label: '初始累计量', kind: 'num', min: 0, w: 96 },
@@ -428,6 +432,7 @@
 				let v = saved[d.k]
 				if (v == null) v = defaults[d.k]
 				if (d.k === 'tariffCurrency') v = (v === true || v === '1') ? '1' : '0'
+				if (d.k === 'tokenMode' && v === 'reject') v = '255' // 旧配置的「未执行(拒收)」
 				if (d.k === 'batteryV' && v == null) v = defaults.batteryCv / 100
 				input.value = v == null ? '' : String(v)
 			})
@@ -600,7 +605,7 @@
 			renderPendingText(s)
 			kv['存档'].textContent = s.archive.length ? s.archive.map(function (a) { return a.type + ' 0x' + a.tgt.toString(16).toUpperCase() }).join('，') : '空'
 			const ls = s.lastSession
-			kv['最近会话'].textContent = ls ? '共 ' + s.sessions + ' 次；最近一次 SET_UPLINK ' + ls.setUplinkMs + 'ms，自 kind=3 起 ' + ls.sinceKind3Ms + 'ms' : (s.sessions ? '共 ' + s.sessions + ' 次' : '暂无')
+			kv['最近会话'].textContent = ls ? '共 ' + s.sessions + ' 次；最近一次入队 ' + ls.setUplinkMs + 'ms，自 kind=3 起 ' + ls.sinceKind3Ms + 'ms' + (ls.endReason != null ? '，终结 r' + ls.endReason + '，本会话表端确认上行 ' + ls.upDelivered + ' 片' : '') : (s.sessions ? '共 ' + s.sessions + ' 次' : '暂无')
 			const box = ui.refs.recTable
 			box.textContent = ''
 			const list = s.records.filter(function (r) { return !r.empty })
@@ -626,6 +631,7 @@
 			if (res.token) {
 				add('处理状态', '0x' + res.token.procStatus.toString(16).toUpperCase().padStart(2, '0') + (res.token.known === false ? '（未知）' : res.token.executed ? ' 已执行' : ' 未执行'))
 				if (res.token.executed) { add('充值量', res.token.creditedText); add('剩余量', res.token.remainingText) }
+				if (res.token.stsResultText) add('STS 结果', res.token.stsResultText)
 				if (res.token.stsBlockHex) add('STS 结果块', res.token.stsBlockHex)
 			}
 			if (res.write) add('WRITE', '寄存器 0x' + res.write.reg.toString(16).toUpperCase() + ' 结果 0x' + res.write.result.toString(16).toUpperCase().padStart(2, '0'))
@@ -645,13 +651,15 @@
 			if (res.sessions && res.sessions.length) {
 				box.appendChild(el('div', 'sts-sim-card-title', '会话时间线（相对 WAKE 请求，ms）'))
 				const tb = el('div', 'sts-sim-tl')
-				const hdr = ['会话', '结果', 'wake', 'send', 'ACK', '上行']
+				const hdr = ['会话', '结果', 'wake', 'send', 'ACK', '上行', '终结']
 				hdr.forEach(function (h) { tb.appendChild(el('span', 'sts-sim-tl-h', h)) })
 				res.sessions.forEach(function (s) {
 					const tl = s.timeline || {}
 					tb.appendChild(el('span', null, s.label + ' #' + s.attempt))
 					tb.appendChild(el('span', s.ok ? 'is-ok' : 'is-bad', s.ok ? 'OK' : (s.reason || '失败')))
 					;[tl.wakeMs, tl.sendMs, tl.ackMs, tl.upMs].forEach(function (v) { tb.appendChild(el('span', null, v == null ? '-' : String(v))) })
+					// 终结 = 收到 EVT 0x0281 的时刻与原因（2=FINISH 正常收尾）
+					tb.appendChild(el('span', null, tl.endMs == null ? '-' : tl.endMs + ' r' + tl.endReason))
 				})
 				box.appendChild(tb)
 			}
@@ -661,7 +669,7 @@
 			const r = ui.refs
 			if (!ui.engine || ui.role !== 'ciu' || !ui.running) { r.phase.textContent = ''; return }
 			const st = ui.engine.getState()
-			const names = { idle: '空闲', session: '唤醒会话中（WAKE → SEND → 等 ACK → 等上行）', 'wait-poll': '等待下一次轮询' }
+			const names = { idle: '空闲', session: '唤醒会话中（WAKE → SEND → 等 ACK → 等上行 → FINISH）', 'wait-poll': '等待下一次轮询' }
 			let t = '阶段：' + (names[st.phase] || st.phase)
 			if (st.budgetLeftMs != null) t += '；总预算剩余 ' + Math.ceil(st.budgetLeftMs / 1000) + ' s'
 			if (st.tariff) t += '；计价 ' + (st.tariff.currency ? '金额 d=' + st.tariff.dec : '体积 dL')
