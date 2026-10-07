@@ -354,7 +354,7 @@
 			tokenInput.inputMode = 'numeric'
 			tokenInput.autocomplete = 'off'
 			tokenInput.spellcheck = false
-			const tokenBtn = buildToggleRow('令牌充值', 'sts-sim-ciu-token-go')
+			const tokenBtn = buildToggleRow('下发令牌', 'sts-sim-ciu-token-go')
 			tokRow.append(tokenInput, tokenBtn)
 			// 模拟令牌生成: 明文测试格式（不是 STS 令牌），表端模拟器按类型给出对应结果；生成后填进上面的令牌框
 			const simRow = el('div', 'sts-sim-row')
