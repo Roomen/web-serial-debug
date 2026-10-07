@@ -265,8 +265,8 @@
 		const r = { parsed: true, index: index, value: value, extra: b.length - STS_RESULT_LEN, mismatch: false }
 		if (index === STS_IDX.CREDIT) {
 			r.kind = 'credit'
-			// 单位 0.01 kL（= 10 L）: STS 库的体积量，与寄存器 0x18 的计价单位无关，不要求与应用层充值量同数
-			r.text = 'MODE1 充值成功，STS 充值量 ' + value + '（单位 0.01 kL，即 ' + fmtScaled(value, 2) + ' kL）'
+			// Value 与 TOKEN 响应的「本次充值量」同数同单位（随寄存器 0x18），不另换算
+			r.text = 'MODE1 充值成功，充值量 ' + value + '（原始整数，与本次充值量同单位）'
 		} else if (index === STS_IDX.CODE) {
 			r.kind = 'code'
 			r.code = STS_CODE[value] || null
@@ -290,6 +290,50 @@
 		lines.push('  ' + r.text)
 		if (r.extra) lines.push('  偏移 6 起 ' + r.extra + ' 字节为保留，忽略')
 		if (r.mismatch) lines.push('  ⚠ 处理状态 ' + procStatus + ' 与结果块 ' + (STS_IDX_NAME[r.index] || 'index') + ' 对应不上（状态 2 应配 MODE1，状态 1 应配 MODE3/MODE256）')
+	}
+
+	// ===== 模拟令牌（测试用明文格式，不是 STS 令牌，不加密）=====
+	// 20 位 = [77 标识][TT 类型][SSSS 序号][DDDDDDDDDD 数据][CC 校验]，
+	// 校验 = 前 18 位按 1、3 交替加权求和 mod 97。表端模拟器据此给出对应的 STS 结果块；不带标识的令牌按普通令牌处理
+	const SIM_TOKEN_MAGIC = '77'
+	const SIM_TOKEN_TYPES = {
+		'01': { name: '充值', data: 'amount' }, '02': { name: '清余额', code: 8 }, '03': { name: '设预付费', code: 9 },
+		'04': { name: '设后付费', code: 10 }, '05': { name: '开阀', code: 11 }, '06': { name: '关阀', code: 12 },
+		'07': { name: '清除窃水', code: 13 }, '08': { name: '设置参数', code: 7 }, '10': { name: '换钥第一步', code: 4 },
+		'11': { name: '换钥第二步', code: 5 }, '20': { name: '表计测试', data: 'bits' }, '90': { name: '指定结果码', data: 'code' },
+	}
+	function simTokenCheck(d18) {
+		let sum = 0
+		for (let i = 0; i < 18; i++) sum += (d18.charCodeAt(i) - 48) * (i % 2 === 0 ? 1 : 3)
+		return String(sum % 97).padStart(2, '0')
+	}
+	function simTokenEncode(o) {
+		const type = String(o.type).padStart(2, '0')
+		if (!SIM_TOKEN_TYPES[type]) throw new Error('未知的模拟令牌类型 ' + type)
+		const serial = Math.trunc(Number(o.serial || 0))
+		const data = Math.trunc(Number(o.data || 0))
+		if (!(serial >= 0 && serial <= 9999)) throw new Error('模拟令牌序号需 0..9999')
+		if (!(data >= 0 && data <= 4294967295)) throw new Error('模拟令牌数据需 0..4294967295')
+		const d18 = SIM_TOKEN_MAGIC + type + String(serial).padStart(4, '0') + String(data).padStart(10, '0')
+		return d18 + simTokenCheck(d18)
+	}
+	// 标识或校验不符返回 null，按普通令牌处理（手敲的 7777… 这类测试令牌不会被误认）；校验对但类型未知返回 { valid:false }
+	function simTokenDecode(digits) {
+		const s = String(digits || '')
+		if (!/^\d{20}$/.test(s) || s.slice(0, 2) !== SIM_TOKEN_MAGIC || simTokenCheck(s.slice(0, 18)) !== s.slice(18)) return null
+		const type = s.slice(2, 4)
+		const t = SIM_TOKEN_TYPES[type]
+		if (!t) return { valid: false, reason: '未知类型 ' + type }
+		return { valid: true, type: type, name: t.name, code: t.code, dataKind: t.data || null, serial: Number(s.slice(4, 8)), data: Number(s.slice(8, 18)) }
+	}
+	function simTokenText(m) {
+		if (!m) return ''
+		if (!m.valid) return '模拟令牌（无效: ' + m.reason + '）'
+		let x = '模拟令牌: ' + m.name + '，序号 ' + m.serial
+		if (m.dataKind === 'amount') x += '，充值量 ' + m.data
+		else if (m.dataKind === 'bits') x += '，测试位图 0x' + m.data.toString(16).toUpperCase().padStart(8, '0')
+		else if (m.dataKind === 'code') x += '，结果码 ' + m.data
+		return x
 	}
 
 	// READ 请求
@@ -701,6 +745,7 @@
 				case TYPE.TOKEN: {
 					const d = tokenReqDecode(p)
 					lines.push('令牌 = ' + (d == null ? '(非法 BCD)' : d))
+					if (d != null && simTokenDecode(d)) lines.push(simTokenText(simTokenDecode(d)))
 					break
 				}
 				case TYPE.READ: {
@@ -916,6 +961,7 @@
 		buildFrame, parseRaw, tgtOf, tgtType, tgtTxn,
 		tokenReqEncode, tokenReqDecode, tokenRspEncode, tokenRspDecode,
 		STS_RESULT_LEN, STS_IDX, STS_IDX_NAME, STS_CODE, STS_TEST_BIT, stsResultEncode, stsResultDecode,
+		SIM_TOKEN_MAGIC, SIM_TOKEN_TYPES, simTokenEncode, simTokenDecode, simTokenText,
 		readReqEncode, readReqDecode, createTlvWriter, tlvParse, tlvInt, fmtScaled,
 		alarmListDecode, alarmListEncode, recordEncode, recordDecode, recordTimeStr,
 		writeReqEncode, writeReqDecode, writeRspEncode, writeRspDecode,

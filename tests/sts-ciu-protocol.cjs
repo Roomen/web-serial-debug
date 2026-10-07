@@ -30,8 +30,8 @@ const vectors = [
 	['D2 12 34 56 78 01 01 05 57', () => frame(1, T.RESULT, 2, S.resultRspEncode({ pollState: 1, tgt: 1, etaS: 5 }))],
 	['53 12 34 56 78 01 55', () => frame(0, T.RESULT, 3, S.resultReqEncode(1))],
 	// 协议 10.1 / 10.2: STS 结果块为 6 字节 [index u16 BE][Value u32 BE]
-	['D3 12 34 56 78 02 01 02 00 00 01 F4 00 00 01 F4 00 01 00 00 00 05 2B', () => frame(1, T.RESULT, 3, S.resultRspEncode({
-		pollState: 2, tgt: 1, tail: S.tokenRspEncode({ procStatus: 2, credited: 500, remaining: 500, stsBlock: S.stsResultEncode({ index: 1, value: 5 }) }) }))],
+	['D3 12 34 56 78 02 01 02 00 00 01 F4 00 00 01 F4 00 01 00 00 01 F4 35', () => frame(1, T.RESULT, 3, S.resultRspEncode({
+		pollState: 2, tgt: 1, tail: S.tokenRspEncode({ procStatus: 2, credited: 500, remaining: 500, stsBlock: S.stsResultEncode({ index: 1, value: 500 }) }) }))],
 	['54 12 34 56 78 01 D6', () => frame(0, T.RESULT, 4, S.resultReqEncode(1))],
 	['D4 12 34 56 78 00 01 00', () => frame(1, T.RESULT, 4, S.resultRspEncode({ pollState: 0, tgt: 1 }))],
 	['81 12 34 56 78 01 00 03 00 00 00 01 76', () => frame(1, T.TOKEN, 1, S.tokenRspEncode({ procStatus: 1, stsBlock: S.stsResultEncode({ index: 3, value: 1 }) }))],
@@ -262,7 +262,7 @@ assert.equal(S.tokenRspDecode(hex('02 00 00 00 01 00 00 00 02 55')).stsBlock.len
 	assert.deepEqual(Array.from(S.stsResultEncode({ index: 1, value: 1000 })), [0, 1, 0, 0, 3, 0xe8])
 	let r = S.stsResultDecode(hex('00 01 00 00 03 E8'), 2)
 	assert.equal(r.kind, 'credit'); assert.equal(r.value, 1000); assert.equal(r.mismatch, false)
-	assert.match(r.text, /即 10\.00 kL/)
+	assert.match(r.text, /充值量 1000（原始整数/)
 	r = S.stsResultDecode(hex('00 03 00 00 00 07 AA BB'), 1)
 	assert.equal(r.kind, 'code'); assert.equal(r.code.name, 'SUCCESS'); assert.equal(r.code.ok, true); assert.equal(r.extra, 2)
 	r = S.stsResultDecode(hex('00 03 00 00 00 FF'), 2)

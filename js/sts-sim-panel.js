@@ -46,7 +46,7 @@
 		const METER_FIELDS = [
 			{ k: 'drn', label: 'DRN(留空=以模组为准)', kind: 'text', maxlength: 13, w: 150, title: '13 位 = 4 位厂商码 + 8 位表号 + 1 位校验（11 位为 2 位厂商码）；应用层表号取中间 8 位。与模组不一致且填了 PAK 时写入模组并复位' },
 			{ k: 'tokenDelayS', label: '令牌处理耗时(s)', kind: 'num', min: 0, max: 3600, w: 72 },
-			{ k: 'tokenMode', label: '结果模式', kind: 'sel', title: '决定 STS 结果块: 已执行 = 处理状态 2 + MODE1 充值量；结果码 = 处理状态 1 + MODE3；表计测试 = 处理状态 1 + MODE256 位图。模拟器只回报结果码，不执行清余额、开关阀等业务动作', options: [
+			{ k: 'tokenMode', label: '普通令牌结果', kind: 'sel', title: '非模拟令牌（任意 20 位）的处理结果: 已执行 = 处理状态 2 + MODE1 充值量；结果码 = 处理状态 1 + MODE3；表计测试 = 处理状态 1 + MODE256 位图。这里只回报结果码，不执行业务动作；模拟令牌按自身类型处理，不受此项影响', options: [
 				['exec', '已执行(充值)'], ['1', 'OVER 余额过多'], ['2', 'OLD 令牌过期'], ['3', 'USED 已使用'], ['4', '1ST 换钥第一步'], ['5', '2ND 换钥第二步'],
 				['6', 'EXPIRED 密钥到期'], ['7', 'SUCCESS 设置成功'], ['8', '清余额成功'], ['9', '设置预付费'], ['10', '设置后付费'], ['11', '打开水阀'],
 				['12', '关闭水阀'], ['13', '清除窃水'], ['255', 'REJECT 错误令牌'], ['test', '表计测试(MODE256)'],
@@ -68,6 +68,7 @@
 			{ k: 'upTimeoutS', label: '上行超时(s)', kind: 'num', min: 1, max: 600, w: 72 },
 			{ k: 'busyWaitS', label: 'BUSY 等待(s)', kind: 'num', min: 0, max: 600, w: 72 },
 			{ k: 'sessionRetries', label: '会话重试次数', kind: 'num', min: 0, max: 20, w: 72 },
+			{ k: 'sendTiming', label: 'WOR_SEND 时机', kind: 'sel', title: '规范允许 WAKE 受理后立即入队（默认）。实板上 ACK 后表端收不到会话帧时，切到「ACK 后」对比，可判断是否为 ACK 前入队的数据没被模组消费', options: [['accept', '受理后立即'], ['ack', 'ACK 后']] },
 			{ k: 'pak', label: 'PAK(32 位 HEX，不保存)', kind: 'text', maxlength: 32, w: 260, persist: false, sensitive: true, title: '仅当模组角色或 DRN 需要写入时用于 PROV_AUTH，不写入浏览器存储' },
 		]
 
@@ -353,6 +354,28 @@
 			tokenInput.spellcheck = false
 			const tokenBtn = buildToggleRow('令牌充值', 'sts-sim-ciu-token-go')
 			tokRow.append(tokenInput, tokenBtn)
+			// 模拟令牌生成: 明文测试格式（不是 STS 令牌），表端模拟器按类型给出对应结果；生成后填进上面的令牌框
+			const simRow = el('div', 'sts-sim-row')
+			const simType = document.createElement('select')
+			simType.className = 'form-select form-select-sm'
+			simType.id = 'sts-sim-ciu-simtype'
+			simType.style.width = '140px'
+			Object.keys(S.SIM_TOKEN_TYPES || {}).forEach(function (k) {
+				const o = document.createElement('option')
+				o.value = k
+				o.textContent = k + ' ' + S.SIM_TOKEN_TYPES[k].name
+				simType.appendChild(o)
+			})
+			const simData = document.createElement('input')
+			simData.type = 'text'
+			simData.id = 'sts-sim-ciu-simdata'
+			simData.className = 'form-control form-control-sm'
+			simData.style.width = '120px'
+			simData.autocomplete = 'off'
+			simData.spellcheck = false
+			const simBtn = buildToggleRow('生成模拟令牌', 'sts-sim-ciu-simgen')
+			simRow.title = '模拟令牌 = 77 + 类型 2 位 + 序号 4 位 + 数据 10 位 + 校验 2 位，只对本工具的表端模拟器有意义。充值填充值量（原始整数）；表计测试填位图 HEX；指定结果码填 1/2/3/6/255；其余类型不需要数据。序号每次生成自动递增'
+			simRow.append(el('span', 'sts-sim-field-name', '模拟令牌'), simType, simData, simBtn)
 			const opRow = el('div', 'sts-sim-row')
 			const statusBtn = buildToggleRow('查询状态', 'sts-sim-ciu-status')
 			const recBtn = buildToggleRow('充值记录', 'sts-sim-ciu-records')
@@ -380,7 +403,7 @@
 			readRow.append(el('span', 'sts-sim-field-name', '起始/数量'), readStart, readCount, readBtn, abortBtn)
 			const phase = el('div', 'sts-sim-phase small', '')
 			const resultCard = el('div', 'sts-sim-result')
-			ciuView.append(tokRow, opRow, readRow, phase, resultCard)
+			ciuView.append(tokRow, simRow, opRow, readRow, phase, resultCard)
 
 			body.append(meterView, ciuView)
 
@@ -399,7 +422,7 @@
 
 			Object.assign(ui.refs, {
 				root, head, body, toggle, nameEl, hint, logCard, logTitle, bMeter, bCiu, startBtn, startText, startIcon, status, cfg, meterForm, ciuForm, meterView, ciuView, kv, recTable,
-				tokenInput, tokenBtn, statusBtn, recBtn, valveOpenBtn, valveCloseBtn, unbindBtn, readStart, readCount, readBtn, abortBtn,
+				tokenInput, tokenBtn, simType, simData, simBtn, statusBtn, recBtn, valveOpenBtn, valveCloseBtn, unbindBtn, readStart, readCount, readBtn, abortBtn,
 				phase, resultCard, logBox, clearBtn,
 			})
 			root.querySelectorAll('[id]').forEach(function (node) { node.id += '-' + channel })
@@ -551,6 +574,7 @@
 			const idle = !!(st && st.running && st.phase === 'idle' && !ui.opBusy)
 			;[r.tokenBtn, r.statusBtn, r.recBtn, r.valveOpenBtn, r.valveCloseBtn, r.unbindBtn, r.readBtn].forEach(function (b) { b.disabled = !idle })
 			r.tokenInput.disabled = !(ui.running && ui.role === 'ciu')
+			r.simBtn.disabled = r.tokenInput.disabled
 			r.abortBtn.disabled = !(ui.running && ui.opBusy)
 			r.tokenBtn.disabled = !idle || r.tokenInput.value.length !== 20
 		}
@@ -908,6 +932,34 @@
 			r.tokenInput.addEventListener('input', function () {
 				r.tokenInput.value = r.tokenInput.value.replace(/\D/g, '').slice(0, 20) // 只接受数字
 				updateCiuButtons()
+			})
+			// 序号从随机值起步并逐次递增: 同一页面里反复生成不会撞上表端的去重 / 已用记录
+			let simSerial = Math.floor(Math.random() * 9000) + 1
+			const simHint = function () {
+				const t = S.SIM_TOKEN_TYPES && S.SIM_TOKEN_TYPES[r.simType.value]
+				const k = t ? t.data : null
+				r.simData.disabled = !k
+				r.simData.placeholder = k === 'amount' ? '充值量' : k === 'bits' ? '位图 HEX，如 20001' : k === 'code' ? '1/2/3/6/255' : '无需数据'
+			}
+			r.simType.addEventListener('change', simHint)
+			simHint()
+			r.simBtn.addEventListener('click', function () {
+				const t = S.SIM_TOKEN_TYPES[r.simType.value]
+				const raw = r.simData.value.trim()
+				let data = 0
+				if (t.data === 'bits') {
+					if (!/^(0x)?[0-9a-fA-F]{1,8}$/i.test(raw)) { plog('warn', '测试位图需 1..8 位 HEX'); return }
+					data = parseInt(raw.replace(/^0x/i, ''), 16)
+				} else if (t.data) {
+					if (!/^\d{1,10}$/.test(raw)) { plog('warn', '模拟令牌数据需为十进制整数'); return }
+					data = Number(raw)
+				}
+				let tok
+				try { tok = S.simTokenEncode({ type: r.simType.value, serial: simSerial, data: data }) } catch (e) { plog('warn', e.message); return }
+				simSerial = simSerial >= 9999 ? 1 : simSerial + 1
+				r.tokenInput.value = tok
+				updateCiuButtons()
+				plog('info', '已生成 ' + S.simTokenText(S.simTokenDecode(tok)) + ': ' + tok)
 			})
 			r.tokenBtn.addEventListener('click', function () {
 				const t = r.tokenInput.value

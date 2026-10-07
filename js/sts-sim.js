@@ -73,6 +73,15 @@
 	function statusText(r) { return r.statusName + ' (0x' + r.status.toString(16).toUpperCase().padStart(2, '0') + ')' }
 	// 未 WOR_INIT: 新固件回 ERR_NOT_INIT(0x09)，旧固件与「无会话」共用 ERR_STATE(0x06)，两个都认
 	function notInit(r) { return r.status === H.STATUS.ERR_NOT_INIT || r.status === H.STATUS.ERR_STATE }
+	// 统计增量文本: 只列给定字段里有变化的，全无变化时说明一句；任一快照缺失返回 null
+	const INITIATOR_STATS = ['worTx', 'wakeOk', 'ackErr', 'dataTx', 'dataFail', 'dataRetx', 'retxExhaust', 'dackRx', 'endTx', 'upRx', 'upErr', 'idleExit', 'micFail', 'keyMiss', 'sessReplay', 'evtDrop']
+	const SENTRY_STATS = ['wakes', 'ciuWakes', 'uniWakes', 'wakePreempt', 'foreignIg', 'ackTx', 'ackFail', 'dataRx', 'dataErr', 'dackTx', 'dackFail', 'endRx', 'serveIdleExit', 'upQueued', 'upSent', 'micFail', 'keyMiss', 'replay', 'sessReplay', 'evtDrop']
+	function statsDelta(a, b, fields) {
+		if (!a || !b) return null
+		const out = []
+		fields.forEach(function (f) { if (a[f] != null && b[f] != null && b[f] !== a[f]) out.push(f + ' +' + ((b[f] - a[f]) >>> 0)) })
+		return out.length ? out.join('  ') : '关键计数全无变化'
+	}
 	function endText(e) { return 'reason=' + e.reason + ' ' + (H.END_REASON_NAME[e.reason] || '未知') + '，下行交付 ' + e.dlDelivered + '，上行交付 ' + e.upDelivered }
 
 	// 运行代际守卫: stop() 递增代际后，所有在途/后续请求都以 aborted 结束，
@@ -117,7 +126,7 @@
 	}
 	const CIU_DEFAULTS = {
 		targetDrn: '', localAddr: '2', pak: '',
-		ackTimeoutS: 15, upTimeoutS: 12, busyWaitS: 30, sessionRetries: 3,
+		ackTimeoutS: 15, upTimeoutS: 12, busyWaitS: 30, sessionRetries: 3, sendTiming: 'accept',
 	}
 	// 按产品错误码对照表预置，码表不在协议内枚举；CIU 原样送显，不认识的码走「其他码」输入。
 	// 顺序即显示优先级（从高到低），组包进寄存器 0x17 的告警码列表时保持这个顺序
@@ -194,6 +203,7 @@
 		o.upTimeoutS = clampInt(o.upTimeoutS, 1, 600, 12)
 		o.busyWaitS = clampInt(o.busyWaitS, 0, 600, 30)
 		o.sessionRetries = clampInt(o.sessionRetries, 0, 20, 3)
+		o.sendTiming = o.sendTiming === 'ack' ? 'ack' : 'accept'
 		return o
 	}
 
@@ -209,6 +219,23 @@
 		return {
 			need: need,
 			notInit: notInit,
+			// WOR_STATS_GET 快照（字段名 -> 计数）；失败返回 null，诊断用，不影响主流程
+			async worStats() {
+				try {
+					const r = await link.request(C.WOR_STATS_GET, [], { timeoutMs: 1000, retries: 0 })
+					if (r.status !== H.STATUS.OK || r.payload.length < 2) return null
+					const o = {}
+					const p = r.payload
+					H.WOR_STATS_FIELDS.forEach(function (f, i) {
+						const o4 = 2 + i * 4
+						if (o4 + 4 <= p.length) o[f] = (p[o4] | (p[o4 + 1] << 8) | (p[o4 + 2] << 16) | (p[o4 + 3] << 24)) >>> 0
+					})
+					return o
+				} catch (e) {
+					if (e && e.code === 'aborted') throw e
+					return null
+				}
+			},
 			async echo() {
 				let r
 				try {
@@ -429,6 +456,8 @@
 			valve: S.VALVE_POS_OPEN, valveFault: false, valveMoving: null, valveHold: null, valveWorkPending: false, valveSeq: 0, restoredPre: null,
 			records: Array.from({ length: RECORDS }, function () { return { empty: true, minutes: S.RECORD_EPOCH_UNSET, amount: 0 } }),
 			recordCount: 0, dedup: [], dedupSeq: 0, work: null, unbound: 0, drn: cfg.drn || '0',
+			// 模拟令牌的表端状态: 已用过的令牌（超出去重深度后再输按 USED）、后付费、换钥进行到第几步
+			simUsed: new Set(), postpaid: false, keyStep: 0,
 		}
 		const epoch2020 = new Date(2020, 0, 1).getTime() // 表计本地时间，自 2020-01-01 00:00 起的分钟数
 		function nowMin() { return Math.max(0, Math.floor((clock.now() - epoch2020) / 60000)) }
@@ -439,6 +468,7 @@
 			if (a.remaining < 100) v |= S.MST_LOW_CREDIT
 			if (a.batteryCv < 300) v |= S.MST_LOW_BATTERY
 			if (a.alarms.length) v |= S.MST_ALARM_LIST
+			if (a.postpaid) v |= S.MST_POSTPAID
 			return v
 		}
 		// 动作中位置报 00 不明；bit2 在动作中和关阀保持期内都置位（表示阀控测试进行中）
@@ -511,6 +541,54 @@
 			a.dedup.push({ digits: digits, payload: Uint8Array.from(payload), replayable: replayable, seq: ++a.dedupSeq })
 		}
 
+		// 模拟令牌（明文测试格式）: 按类型给出 STS 结果块并执行对应的表端动作。
+		// 同一令牌在去重深度内再输由去重回放上次结果（协议 2.1，保证句柄恢复重发不重复执行）；
+		// 超出深度后再输，按 STS 的 TID 防重放给 USED
+		function finishSimToken(w) {
+			const I = S.STS_IDX
+			const m = S.simTokenDecode(w.digits)
+			const code = function (v) { return { procStatus: S.TOKEN_DONE_NOEXEC, stsBlock: S.stsResultEncode({ index: I.CODE, value: v }) } }
+			let rsp
+			let replayable = true
+			let executed = false
+			let action = null
+			let note = ''
+			let consumed = true // 成功受理的令牌记为已用；指定结果码与失败结果不占用
+			if (!m.valid) { rsp = code(255); consumed = false; note = '模拟令牌' + m.reason + '，按 REJECT' }
+			else if (a.simUsed.has(w.digits)) { rsp = code(3); consumed = false; note = '模拟令牌已用过，按 USED' }
+			else {
+				switch (m.type) {
+					case '01':
+						if (a.remaining + m.data > INT32_MAX) { rsp = code(1); replayable = false; consumed = false; note = '充值后余额越界，OVER'; break }
+						a.remaining += m.data
+						a.totalPurchased = Math.min(4294967295, a.totalPurchased + m.data)
+						recordPush(m.data, w.acceptedMin)
+						rsp = { procStatus: S.TOKEN_DONE_EXEC, credited: m.data, remaining: a.remaining, stsBlock: S.stsResultEncode({ index: I.CREDIT, value: m.data }) }
+						executed = true
+						break
+					case '02': a.remaining = 0; rsp = code(8); note = '余额已清零'; break
+					case '03': a.postpaid = false; rsp = code(9); note = '切换为预付费'; break
+					case '04': a.postpaid = true; rsp = code(10); note = '切换为后付费（表计状态 bit5）'; break
+					case '05': action = 'open'; rsp = code(11); break
+					case '06': action = 'closed'; rsp = code(12); break
+					case '07': rsp = code(13); note = '清除窃水状态'; break
+					case '08': rsp = code(7); break
+					case '10': a.keyStep = 1; rsp = code(4); note = '换钥第一步，等第二枚'; break
+					case '11': rsp = code(a.keyStep === 1 ? 7 : 5); note = a.keyStep === 1 ? '两枚换钥令牌齐全，换钥完成（SUCCESS）' : '单独第二枚，2ND'; a.keyStep = 0; break
+					case '20': rsp = { procStatus: S.TOKEN_DONE_NOEXEC, stsBlock: S.stsResultEncode({ index: I.TEST, value: m.data }) }; note = '表计测试位图只回报，不执行测试动作'; break
+					default: // '90'
+						rsp = code(S.STS_CODE[m.data] ? m.data : 255)
+						replayable = m.data !== 1
+						consumed = false
+						note = '指定结果码，不做任何动作'
+				}
+			}
+			if (consumed) a.simUsed.add(w.digits)
+			const payload = S.tokenRspEncode(rsp)
+			dedupStore(w.digits, payload, replayable)
+			return { kind: 'token', payload: payload, executed: executed, sim: m, action: action, note: note }
+		}
+
 		return {
 			state: a,
 			cfg: cfg,
@@ -574,6 +652,7 @@
 				const w = a.work
 				a.work = null
 				if (!w) return null
+				if (w.kind === 'token' && S.simTokenDecode(w.digits)) return finishSimToken(w)
 				if (w.kind === 'token') {
 					const I = S.STS_IDX
 					let rsp
@@ -582,10 +661,8 @@
 						a.remaining += cfg.creditAmount
 						a.totalPurchased = Math.min(4294967295, a.totalPurchased + cfg.creditAmount)
 						recordPush(cfg.creditAmount, w.acceptedMin)
-						// MODE1 的 Value 是 STS 库的体积量，单位 0.01 kL: 体积模式下应用层是 dL，除以 100 取整；
-						// 金额模式没有体积换算（库内余额只有体积），模拟器直接填应用层原值
-						const stsVal = a.tariffCurrency ? cfg.creditAmount : Math.round(cfg.creditAmount / 100)
-						rsp = { procStatus: S.TOKEN_DONE_EXEC, credited: cfg.creditAmount, remaining: a.remaining, stsBlock: S.stsResultEncode({ index: I.CREDIT, value: stsVal }) }
+						// MODE1 的 Value 与本次充值量同数同单位
+						rsp = { procStatus: S.TOKEN_DONE_EXEC, credited: cfg.creditAmount, remaining: a.remaining, stsBlock: S.stsResultEncode({ index: I.CREDIT, value: cfg.creditAmount }) }
 					} else if (cfg.tokenMode === 'exec') {
 						// 余额是 i32，充进来会越界: 终局 OVER，绝不回绕成负数；取决于当前余额，用掉一些水后应当成功，不回放
 						rsp = { procStatus: S.TOKEN_DONE_NOEXEC, stsBlock: S.stsResultEncode({ index: I.CODE, value: 1 }) }
@@ -722,6 +799,7 @@
 		let holdTimer = null
 		let moveTimer = null
 		let sess = null // 当前唤醒会话: kind=2 通知开始，0x0281 结束；上行队列随会话清空
+		let statsBase = null // 上一会话结束时的统计快照，异常终结时与之对账
 		const info = { role: null, drn: null, fw: null, lastSession: null, sessions: 0, startedAt: 0 }
 
 		function log(level, text) { onLogCb({ at: clock.now(), level: level, text: text }) }
@@ -798,6 +876,9 @@
 			} catch (e) {
 				log('error', '待办存档失败: ' + e.message)
 			}
+			// 模拟令牌的开关阀: 与手动改阀门同一条路径（取消进行中的阀控测试）
+			if (out.action) { app.setValve(out.action); armValve() }
+			if (out.sim) log('info', S.simTokenText(out.sim) + (out.note ? '；' + out.note : '') + (out.action ? '；阀门' + (out.action === 'open' ? '已开' : '已关') : ''))
 			log('info', '令牌处理完成: ' + (out.executed ? '已执行，余额 ' + app.state.remaining : '未执行') + '，终局结果已存档')
 			pushState()
 		}
@@ -889,6 +970,19 @@
 				info.lastSession.upDelivered = e.upDelivered
 			}
 			pushState()
+			refreshStats(e.reason !== 1)
+		}
+		// 每个会话结束后刷新统计快照；异常终结（不是表端 END 正常收尾）时打出本会话的增量，
+		// 表端 dataRx 不增而 micFail/keyMiss/dataErr 增，说明会话帧到了但解不开
+		function refreshStats(report) {
+			const base = statsBase
+			mod.worStats().then(function (st1) {
+				if (report) {
+					const txt = statsDelta(base, st1, SENTRY_STATS)
+					if (txt) log('warn', '诊断: 本会话表端统计增量 ' + txt + '（dataRx 不增且 micFail/keyMiss/dataErr 不增 = 空口上没收到发起端的会话帧）')
+				}
+				if (st1) statsBase = st1
+			}).catch(function () { /* 停止或链路关闭 */ })
 		}
 
 		async function onDownlink(d) {
@@ -992,6 +1086,7 @@
 			else log('warn', 'WOR 状态不是 [1 SENTRY][1 GRID]: ' + (wst ? '[' + wst.role + '][' + wst.state + ' ' + (H.WOR_STATE_NAME[wst.state] || '') + ']' : '结果异常'))
 			// 10B 版本附带运行地址: 它才是模组实际值守的唤醒地址，DRN 改了但没复位时两者会不一致
 			if (wst && wst.localAddr != null && wst.localAddr !== dev.drn) log('warn', 'WOR 运行地址 ' + wst.localAddr + ' 与 DRN ' + dev.drn + ' 不一致，CIU 按 DRN 唤醒会唤不到；复位模组后重试')
+			statsBase = await mod.worStats()
 			// 不预置上行: 上行队列在每次被唤醒时由模组清空，只能在收到本会话请求后入队
 			if (gen !== runGen || stopped) throw abortErr()
 			unsubEvt = link.onEvt(onEvt)
@@ -1396,7 +1491,12 @@
 			}
 			activeSessions++
 			let result = null
+			let st0 = null
 			try {
+				// 会话前的统计快照，失败时与会话后对账（规范 §7.10: 0x0201 复核 + 0x020F 对账）
+				// 预算紧张时不做（一次查询最长 1s，不能把放弃拖过 60s）
+				const bl = budgetLeft()
+				if (bl == null || bl > 5000) st0 = await mod.worStats()
 				// 1. WAKE_CIU
 				const busyDeadline = clock.now() + cfg.busyWaitS * 1000
 				let tWake
@@ -1423,29 +1523,36 @@
 				const tAcc = clock.now()
 				tl.wakeMs = tAcc - tWake
 				log('info', 'WOR_WAKE_CIU 已受理（受理不是成功），耗时 ' + tl.wakeMs + 'ms')
-				// 2. 受理后立即 WOR_SEND；槽满(BUSY)等一拍再补；ERR_STATE 说明事务已终结（多为唤醒已失败）
+				// 2. 入队 WOR_SEND；槽满(BUSY)等一拍再补；ERR_STATE 说明事务已终结（多为唤醒已失败）。
+				// 默认受理后立即入队（规范的发送门是受理不是 ACK）；sendTiming='ack' 时等 ACK 后再入队，
+				// 用来在实板上排查「ACK 前入队的数据在 burst 期没被消费」这类模组问题
 				const ackDeadline = tAcc + cfg.ackTimeoutS * 1000
-				for (;;) {
-					checkAborted()
-					if (budgetOut()) return (result = fail('总等待预算 60s 已用完', 'budget'))
-					if (ended()) return (result = endFail('send'))
-					const r = await link.request(C.WOR_SEND, H.sendPayload(frame), reqOpt())
-					if (r.status === H.STATUS.OK) break
-					if (r.status === H.STATUS.ERR_BUSY) {
-						if (clock.now() >= ackDeadline) return (result = fail('WOR_SEND 一直 BUSY（槽满）', 'send'))
-						await waiter.sleep(Math.max(1, cap(BEAT_MS)))
-						continue
+				const sendStep = async function () {
+					for (;;) {
+						checkAborted()
+						if (budgetOut()) return fail('总等待预算 60s 已用完', 'budget')
+						if (ended()) return endFail('send')
+						const r = await link.request(C.WOR_SEND, H.sendPayload(frame), reqOpt())
+						if (r.status === H.STATUS.OK) break
+						if (r.status === H.STATUS.ERR_BUSY) {
+							if (clock.now() >= ackDeadline) return fail('WOR_SEND 一直 BUSY（槽满）', 'send')
+							await waiter.sleep(Math.max(1, cap(BEAT_MS)))
+							continue
+						}
+						if (r.status === H.STATUS.ERR_STATE) return fail('WOR_SEND 回 ERR_STATE：会话已终结（多为唤醒失败），整轮重来', 'send')
+						return fail('WOR_SEND 失败: ' + statusText(r), 'send')
 					}
-					if (r.status === H.STATUS.ERR_STATE) return (result = fail('WOR_SEND 回 ERR_STATE：会话已终结（多为唤醒失败），整轮重来', 'send'))
-					return (result = fail('WOR_SEND 失败: ' + statusText(r), 'send'))
+					tl.sendMs = clock.now() - t0
+					log('info', 'WOR_SEND 已入待发槽 ' + frame.length + 'B' + (cfg.sendTiming === 'ack' ? '（ACK 后入队）' : '') + ': ' + hexSpaced(frame))
+					return null
 				}
-				tl.sendMs = clock.now() - t0
-				log('info', 'WOR_SEND 已入待发槽 ' + frame.length + 'B: ' + hexSpaced(frame))
+				if (cfg.sendTiming !== 'ack') { const f = await sendStep(); if (f) return (result = f) }
 				// 3. 等 ACK；唤醒失败由 0x0281 reason=3 通知（burst 耗尽最坏约 12.4s），超时只是兜底
 				const ackOk = await waitCond(function () { return !!sess.ack || ended() }, cap(Math.max(0, ackDeadline - clock.now())))
 				if (!sess.ack && ended()) return (result = endFail('ack'))
 				if (!ackOk) return (result = fail(budgetOut() ? '总等待预算 60s 已用完' : '等 ACK 超时（' + cfg.ackTimeoutS + 's）', budgetOut() ? 'budget' : 'ack'))
 				tl.ackMs = sess.ack.at - t0
+				if (cfg.sendTiming === 'ack') { const f = await sendStep(); if (f) return (result = f) }
 				// 4. 等上行，从 ACK 起算；会话先终结（重传耗尽 / 失联 / 空轮询退出）就不必再等
 				const upOk = await waitCond(function () { return !!sess.up || ended() }, cap(Math.max(0, sess.ack.at + cfg.upTimeoutS * 1000 - clock.now())))
 				if (!sess.up && ended()) return (result = endFail('uplink'))
@@ -1458,8 +1565,19 @@
 				return (result = fail(e && e.message ? e.message : String(e), 'link'))
 			} finally {
 				try {
+					// 失败诊断: 收尾前看发起端此刻停在哪个状态（会话还没终结时才有意义）
+					const diag = result && !result.ok && sess.accepted && !aborted && !stopped && !budgetOut()
+					if (diag && !sess.end) {
+						const ws = await link.request(C.WOR_GET_STATUS, [], { timeoutMs: 1000, retries: 0 })
+						const d = ws.status === H.STATUS.OK ? H.decodeWorStatus(ws.payload) : null
+						if (d) log('warn', '诊断: 失败时发起端 WOR 状态 [' + d.role + ' ' + (H.WOR_ROLE_NAME[d.role] || '') + '][' + d.state + ' ' + (H.WOR_STATE_NAME[d.state] || '') + ']')
+					}
 					// 中止 / 停止时不再给模组发命令；会话由模组自己按空轮询或看门狗收尾
 					if (result) await closeSession(result.ok ? 'finish' : 'abort')
+					if (diag) {
+						const txt = statsDelta(st0, await mod.worStats(), INITIATOR_STATS)
+						if (txt) log('warn', '诊断: 本轮会话发起端统计增量 ' + txt + '（dataTx 不增 = 发起端没发出会话帧；dataRetx/retxExhaust 增 = 发了但收不到 DACK）')
+					}
 				} catch (e) { /* 收尾期间被中止: 不影响本轮结果 */ }
 				if (sess.end) { tl.endMs = sess.end.at - t0; tl.endReason = sess.end.reason }
 				activeSessions--
