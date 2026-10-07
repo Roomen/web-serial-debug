@@ -851,9 +851,11 @@ async function tests() {
 		assert.equal(res.sessions[0].timeline.endReason, 7)
 		const ct = logText(t.logs.ciu)
 		assert.match(ct, /诊断: 失败时发起端 WOR 状态 \[2 INITIATOR\]\[9 SESSION_TX\]/)
-		assert.match(ct, /诊断: 本轮会话发起端统计增量 wakeOk \+1  dataTx \+1（/)
+		// 0x020F 只在启动和失败时查: 增量里夹着启动读基本信息的正常会话，失败类计数仍只来自这次失败
+		assert.match(ct, /诊断: 发起端统计增量 .*dataTx \+\d+.*（自上次快照起，期间另有 \d+ 次会话也计入）/)
+		assert.doesNotMatch(ct, /dataRetx \+|retxExhaust \+/)
 		assert.match(logText(t.logs.meter), /会话终结 0x0281（reason=5 链路失联/)
-		assert.match(logText(t.logs.meter), /诊断: 本会话表端统计增量 wakes \+1  ciuWakes \+1  serveIdleExit \+1（dataRx 不增/)
+		assert.match(logText(t.logs.meter), /诊断: 表端统计增量 .*serveIdleExit \+1（自上次快照起，期间另有 \d+ 次会话也计入）（dataRx 不增/)
 		const t2 = setup()
 		await ready(t2)
 		t2.world.faults.stallQuiet = true
@@ -894,6 +896,7 @@ async function tests() {
 		const lastEnd = ends[1].at
 		await t.clock.advance(2000)
 		assert.equal(t.world.log.requests.filter(r => r.role === 'ciu' && r.cmd === H.CMD.WOR_GET_STATUS && r.at >= lastEnd).length, 0, 'END 后没有残留保活请求')
+		assert.equal(t.world.log.requests.filter(r => r.cmd === H.CMD.WOR_STATS_GET).length, 0, '成功会话两端都不查 0x020F')
 		t.ciu.stop(); t.meter.stop(); t.ciuLink.close(); t.meterLink.close()
 	}
 	// ACK EVT 丢失与串口安静故障同时出现：首轮没有启动保活机会，整轮重试仍能恢复。

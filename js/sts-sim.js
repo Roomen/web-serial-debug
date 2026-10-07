@@ -83,6 +83,9 @@
 		fields.forEach(function (f) { if (a[f] != null && b[f] != null && b[f] !== a[f]) out.push(f + ' +' + ((b[f] - a[f]) >>> 0)) })
 		return out.length ? out.join('  ') : '关键计数全无变化'
 	}
+	// 0x020F 只在启动和会话失败时查: 成功会话不查，失败时与上一次快照对账。中间夹着的正常会话
+	// 也计入增量（wakeOk、dataTx 这类会按次数变大），失败类计数（retxExhaust、micFail、idleExit 等）只来自失败
+	function statsSpan(n) { return n > 0 ? '（自上次快照起，期间另有 ' + n + ' 次会话也计入）' : '' }
 	function endText(e) { return 'reason=' + e.reason + ' ' + (H.END_REASON_NAME[e.reason] || '未知') + '，下行交付 ' + e.dlDelivered + '，上行交付 ' + e.upDelivered }
 
 	// 运行代际守卫: stop() 递增代际后，所有在途/后续请求都以 aborted 结束，
@@ -808,7 +811,8 @@
 		let holdTimer = null
 		let moveTimer = null
 		let sess = null // 当前唤醒会话: kind=2 通知开始，0x0281 结束；上行队列随会话清空
-		let statsBase = null // 上一会话结束时的统计快照，异常终结时与之对账
+		let statsBase = null // 启动或上次异常终结时的统计快照，异常终结时与之对账
+		let statsSince = 0 // 快照之后的正常会话数
 		const info = { role: null, drn: null, fw: null, lastSession: null, sessions: 0, startedAt: 0 }
 
 		function log(level, text) { onLogCb({ at: clock.now(), level: level, text: text }) }
@@ -981,17 +985,18 @@
 				info.lastSession.upDelivered = e.upDelivered
 			}
 			pushState()
-			refreshStats(e.reason !== 1)
+			if (e.reason === 1) statsSince++
+			else reportStats()
 		}
-		// 每个会话结束后刷新统计快照；异常终结（不是表端 END 正常收尾）时打出本会话的增量，
+		// 只在异常终结（不是表端 END 正常收尾）时查统计并打出增量，正常会话不查；
 		// 表端 dataRx 不增而 micFail/keyMiss/dataErr 增，说明会话帧到了但解不开
-		function refreshStats(report) {
+		function reportStats() {
 			const base = statsBase
+			const since = statsSince
+			statsSince = 0
 			mod.worStats().then(function (st1) {
-				if (report) {
-					const txt = statsDelta(base, st1, SENTRY_STATS)
-					if (txt) log('warn', '诊断: 本会话表端统计增量 ' + txt + '（dataRx 不增且 micFail/keyMiss/dataErr 不增 = 空口上没收到发起端的会话帧）')
-				}
+				const txt = statsDelta(base, st1, SENTRY_STATS)
+				if (txt) log('warn', '诊断: 表端统计增量 ' + txt + statsSpan(since) + '（dataRx 不增且 micFail/keyMiss/dataErr 不增 = 空口上没收到发起端的会话帧）')
 				if (st1) statsBase = st1
 			}).catch(function () { /* 停止或链路关闭 */ })
 		}
@@ -1373,6 +1378,8 @@
 		let target = BigInt(cfg.targetDrn)
 		let activeSessions = 0 // 正在进行的唤醒会话数；setTarget 只在为 0 时生效
 		let lastSessionEndAt = null
+		let ciuStatsBase = null // 启动或上次失败诊断时的统计快照
+		let ciuStatsSince = 0 // 快照之后未对账的会话数
 		const C = H.CMD
 		let running = false
 		let stopped = false
@@ -1530,12 +1537,7 @@
 			}
 			activeSessions++
 			let result = null
-			let st0 = null
 			try {
-				// 会话前的统计快照，失败时与会话后对账（规范 §7.10: 0x0201 复核 + 0x020F 对账）
-				// 预算紧张时不做（一次查询最长 1s，不能把放弃拖过 60s）
-				const bl = budgetLeft()
-				if (bl == null || bl > 5000) st0 = await mod.worStats()
 				// 发起端见终结时，表端还在 END linger；重新 WAKE 的部分前导可能落在收尾阶段，
 				// 实板连续问答因此常要第二个 burst；等满一拍后再开始下一轮，等待同样受应用层预算约束
 				const coolMs = lastSessionEndAt == null ? 0 : lastSessionEndAt + SESSION_COOLDOWN_MS - clock.now()
@@ -1619,10 +1621,15 @@
 					}
 					// 中止 / 停止时不再给模组发命令；会话由模组自己按空轮询或看门狗收尾
 					if (result) await closeSession(result.ok ? 'finish' : 'abort')
+					// 失败时才查 0x020F，与启动或上次失败时的快照对账（规范 §7.10: 0x0201 复核 + 0x020F 对账）
 					if (diag) {
-						const txt = statsDelta(st0, await mod.worStats(), INITIATOR_STATS)
-						if (txt) log('warn', '诊断: 本轮会话发起端统计增量 ' + txt + '（dataTx 不增 = 发起端没发出会话帧；dataRetx/retxExhaust 增 = 发了但收不到 DACK）')
-					}
+						const since = ciuStatsSince
+						ciuStatsSince = 0
+						const st1 = await mod.worStats()
+						const txt = statsDelta(ciuStatsBase, st1, INITIATOR_STATS)
+						if (st1) ciuStatsBase = st1
+						if (txt) log('warn', '诊断: 发起端统计增量 ' + txt + statsSpan(since) + '（dataTx 不增 = 发起端没发出会话帧；dataRetx/retxExhaust 增 = 发了但收不到 DACK）')
+					} else ciuStatsSince++
 				} catch (e) { /* 收尾期间被中止: 不影响本轮结果 */ }
 				stopKeepAlive()
 				if (sess.end) { tl.endMs = sess.end.at - t0; tl.endReason = sess.end.reason }
@@ -1915,6 +1922,7 @@
 			const ws = await link.request(C.WOR_GET_STATUS, [])
 			const wst = ws.status === H.STATUS.OK ? H.decodeWorStatus(ws.payload) : null
 			if (wst && wst.localAddr != null && wst.localAddr !== BigInt(cfg.localAddr)) log('warn', 'WOR 运行地址为 ' + wst.localAddr + '（模组早已初始化），与面板本机地址 ' + cfg.localAddr + ' 不同；复位模组后才会按面板地址初始化')
+			ciuStatsBase = await mod.worStats() // 失败诊断的对账基线；之后只在会话失败时再查
 			if (gen !== runGen || stopped) throw abortErr()
 			running = true
 			log('info', 'CIU 模拟就绪：本机地址 ' + cfg.localAddr + '，目标 DRN ' + cfg.targetDrn + '，应用层表号 ' + cfg.meterNo)
