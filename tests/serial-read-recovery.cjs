@@ -8,7 +8,7 @@ const start = source.indexOf('\tconst READ_RECOVER_WINDOW_MS =')
 const end = source.indexOf('\t//单个合并包的字节上限', start)
 const releaseStart = source.indexOf('\tasync function releasePort(sid) {')
 const releaseEnd = source.indexOf('\t//页面销毁时释放串口句柄', releaseStart)
-const statsStart = source.indexOf('\t\tgetStats(sid) {')
+const statsStart = source.indexOf('\t\tresetStats(sid) {')
 const statsEnd = source.indexOf('\n\n\t\tisManualClose', statsStart)
 const settle = () => new Promise(resolve => setImmediate(resolve))
 
@@ -16,10 +16,11 @@ function harness() {
 	let now = 100000
 	let timerId = 0
 	const sessions = Object.fromEntries(['S', 'A', 'B'].map(sid => [sid, {
-		open: true, opening: false, manualClose: false, reader: null, port: null,
+		open: true, opening: false, manualClose: false, reader: null, port: null, lineErrors: 0, lineErrNotified: false, packNote: false,
 		wantOpen: true, wantPortKey: 'synthetic', openedAt: now, rxBytes: 0, txBytes: 0
 	}]))
 	const logs = []
+	const notes = []
 	const received = []
 	const rxNotes = []
 	const timers = new Map()
@@ -47,14 +48,15 @@ function harness() {
 		clearTimeout: id => timers.delete(id),
 		setInterval: () => { throw new Error('unexpected interval') }, clearInterval: () => {},
 		addLogErr: (msg, sid) => logs.push({ msg, sid }),
-		dataReceived: (value, sid) => { received.push({ value, sid }); rxNotes.push(sid); context.api.noteSerialRx(sid) },
+		dataReceived: (value, sid, meta) => { received.push({ value, sid, meta: meta && { ...meta } }); rxNotes.push(sid); context.api.noteSerialRx(sid) },
+		addLogNote: (msg, sid) => notes.push({ msg, sid }), LOG_NOTE_LINE_GLITCH: 'line-glitch',
 		closeSerial: async sid => { sessions[sid].open = false; closed.push(sid) },
 		portHeldByOther: () => false, serialStatuChange: () => {}, updateOpenButton: () => {},
 		openSerial: async (sid, opts) => { opened.push({ sid, opts, port: sessions[sid].port }); sessions[sid].open = true; return true }
 	})
 	vm.runInContext(source.slice(start, end) + source.slice(releaseStart, releaseEnd) + `
 		recoverDeadReadLoop = async sid => recovered.push(sid)
-		SerialHub.getStats = ({ ${source.slice(statsStart, statsEnd)} }).getStats
+		Object.assign(SerialHub, { ${source.slice(statsStart, statsEnd)} })
 		globalThis.api = { readData, kickReaderOnForeground, resetRxWatch, rxWatch, noteSerialRx,
 			releasePort, rebuildSerialReceive,
 			invalidate: sid => ++readGenBySid[sid],
@@ -75,7 +77,7 @@ function harness() {
 		now = target
 		await settle()
 	}
-	return { sessions, hub, logs, received, rxNotes, timers, recovered, closed, opened, api: context.api, advance,
+	return { sessions, hub, logs, notes, received, rxNotes, timers, recovered, closed, opened, api: context.api, advance,
 		manualChanges: () => manualChanges, now: () => now }
 }
 
@@ -202,6 +204,260 @@ async function stop(h, sid, pending) {
 	await pending
 }
 
+// 手动驱动的接收流：push 一个动作就结算当前挂起的 read，错误时先换出新的 readable（与浏览器重建一致）。
+function liveStream(h, sid) {
+	let pending
+	const port = { readable: null, close: async () => {} }
+	function next() {
+		return { getReader: () => ({
+			read: () => new Promise((resolve, reject) => { pending = { resolve, reject } }),
+			releaseLock: () => {},
+			cancel: async () => { if (pending) pending.resolve({ done: true }) }
+		}) }
+	}
+	port.readable = next()
+	h.sessions[sid].port = port
+	return { push: async action => {
+		await settle()
+		if (typeof action === 'string') {
+			port.readable = next()
+			pending.reject(Object.assign(new Error('synthetic'), { name: action }))
+		} else pending.resolve({ done: false, value: action })
+		await settle()
+	} }
+}
+
+async function testLineErrorQuiet() {
+	// 每秒一次 FramingError 加两字节 00，持续 30 秒：只有 1 条普通提示，无红色错误、无退避。
+	const h = harness()
+	const device = liveStream(h, 'A')
+	const pending = h.api.readData('A')
+	for (let i = 0; i < 30; i++) {
+		await h.advance(1000)
+		await device.push('FramingError')
+		await device.push(Uint8Array.of(0, 0))
+	}
+	assert.equal(h.notes.length, 1)
+	assert.ok(h.notes[0].msg.includes('FramingError'))
+	assert.ok(h.notes[0].msg.includes('状态栏计数'))
+	assert.equal(h.notes[0].sid, 'A')
+	assert.deepEqual(h.logs, [])
+	assert.equal(h.hub.getStats('A').lineErrors, 30)
+	assert.equal(h.hub.getStats('A').receivePaused, false)
+	assert.equal(h.api.rxWatch('A').backoff, 0)
+	assert.equal(h.received.length, 30)
+	// 全 0 且紧随错误：每块都带标注元数据，字节原样进入 dataReceived
+	for (const r of h.received) {
+		assert.deepEqual([...r.value], [0, 0])
+		assert.deepEqual(r.meta, { lineGlitch: true })
+	}
+	assert.equal(h.hub.getStats('B').lineErrors, 0)
+	assert.equal(h.notes.length, 1)
+
+	// 同一连接内换另一种线路错误也不再提示，但继续计数
+	await device.push('BreakError')
+	await device.push('ParityError')
+	assert.equal(h.notes.length, 1)
+	assert.equal(h.hub.getStats('A').lineErrors, 32)
+
+	// 新连接(resetStats)清零计数并再提示一次，错误名按实际类型
+	h.hub.resetStats('A')
+	assert.equal(h.hub.getStats('A').lineErrors, 0)
+	await device.push('ParityError')
+	assert.equal(h.notes.length, 2)
+	assert.ok(h.notes[1].msg.includes('ParityError'))
+	assert.equal(h.hub.getStats('A').lineErrors, 1)
+	assert.deepEqual(h.logs, [])
+	await stop(h, 'A', pending)
+
+	// BufferOverrunError 是真丢数据：照常红色报错，不计入线路错误
+	const overrun = harness()
+	const overrunDevice = liveStream(overrun, 'A')
+	const overrunRead = overrun.api.readData('A')
+	await overrunDevice.push('BufferOverrunError')
+	assert.equal(overrun.logs.length, 1)
+	assert.ok(overrun.logs[0].msg.includes('BufferOverrunError'))
+	assert.deepEqual(overrun.notes, [])
+	assert.equal(overrun.hub.getStats('A').lineErrors, 0)
+	await stop(overrun, 'A', overrunRead)
+
+	// 线路错误风暴进入退避时，汇总仍是红色日志并带次数
+	const storm = harness()
+	stream(storm, 'A', failures(24))
+	const stormRead = storm.api.readData('A')
+	await settle()
+	assert.equal(storm.notes.length, 1)
+	assert.equal(storm.hub.getStats('A').lineErrors, 21)
+	assert.deepEqual(pauses(storm), [1])
+	assert.ok(storm.logs[0].msg.includes('读取错误 21 次'))
+	await stop(storm, 'A', stormRead)
+}
+
+async function testLineGlitchMeta() {
+	const cases = [
+		// [名称, 错误后延迟 ms, 数据, 是否标注]
+		['2 字节 00 立即到达', 0, [0, 0], true],
+		['50ms 边界', 50, [0, 0, 0], true],
+		['超过 50ms', 51, [0, 0], false],
+		['含非 0 字节', 0, [0, 1], false],
+		['超过 8 字节', 0, new Array(9).fill(0), false],
+		['恰好 8 字节', 0, new Array(8).fill(0), true]
+	]
+	for (const [name, delay, bytes, expected] of cases) {
+		const h = harness()
+		const device = liveStream(h, 'A')
+		const pending = h.api.readData('A')
+		await device.push('FramingError')
+		await h.advance(delay)
+		await device.push(Uint8Array.from(bytes))
+		assert.equal(h.received.length, 1, name)
+		assert.deepEqual([...h.received[0].value], bytes, name + ': 字节被改动')
+		assert.deepEqual(h.received[0].meta, expected ? { lineGlitch: true } : undefined, name)
+		await stop(h, 'A', pending)
+	}
+	// 只有线路错误后重建出的 reader 的第一次读取才可能被标注
+	const h = harness()
+	const device = liveStream(h, 'A')
+	const pending = h.api.readData('A')
+	await device.push('FramingError')
+	await device.push(Uint8Array.of(1))
+	await device.push(Uint8Array.of(0, 0))
+	assert.deepEqual(h.received.map(r => r.meta), [undefined, undefined])
+	// 非线路错误之后的全 0 块不标注
+	await device.push('NetworkError')
+	await device.push(Uint8Array.of(0, 0))
+	assert.equal(h.received[2].meta, undefined)
+	await stop(h, 'A', pending)
+}
+
+function packHarness(timeOut) {
+	let timerId = 0
+	const timers = new Map()
+	const flushed = []
+	const sess = { packBuf: [], packTimer: null, packStartTime: null, sekWaitStart: null, rxBytes: 0, packNote: false }
+	const hub = {
+		_sess: () => sess, mode: 'single',
+		getPackBuf: () => sess.packBuf, setPackBuf: (_, a) => { sess.packBuf = a },
+		getPackStartTime: () => sess.packStartTime, setPackStartTime: (_, t) => { sess.packStartTime = t },
+		getPackTimer: () => sess.packTimer, setPackTimer: (_, t) => { sess.packTimer = t },
+		getSekWaitStart: () => sess.sekWaitStart, setSekWaitStart: (_, t) => { sess.sekWaitStart = t },
+		activeSendPhys: () => 'S', isRoutable: () => false, logModeOf: () => 'single',
+		getPort: () => null, getReader: () => null, setReader: () => {}
+	}
+	const context = vm.createContext({
+		SerialHub: hub, window: {}, toolOptions: {}, LOG_NOTE_LINE_GLITCH: 'line-glitch',
+		setTimeout: (fn, ms) => { const id = ++timerId; timers.set(id, fn); return id },
+		clearTimeout: id => timers.delete(id),
+		noteSerialRx: () => {}, getLogTypeForSid: () => 'hex', logOptionsForSid: () => ({ timeOut }),
+		isRowLogType: () => true, schedulePersistLogs: () => {},
+		addLog: (buf, isReceive, startTime, sid, note) => flushed.push({ bytes: [...buf], note }),
+		addParseLog: () => {}, SERIAL_PACK_MAX_BYTES: 65536, readGenBySid: { S: 0 }, resetRxWatch: () => {}, portHeldByOther: () => false
+	})
+	const flushStart = source.indexOf('\tfunction flushSerialPack(')
+	const flushEnd = source.indexOf('\t//对外暴露的串口接口', flushStart)
+	vm.runInContext(`Object.assign(SerialHub, { ${source.slice(statsStart, statsEnd)} })
+		${source.slice(flushStart, flushEnd)}
+		${source.slice(releaseStart, releaseEnd)}
+		globalThis.api = { dataReceived, flushPendingRx, releasePort }`, context)
+	return { api: context.api, flushed, hub, fire: () => { const all = [...timers.values()]; timers.clear(); all.forEach(fn => fn()) } }
+}
+
+async function testPackNote() {
+	// 合包：只要含被标注的块，整行加标注；标注不进字节，没有标注的包不带
+	const merge = packHarness(50)
+	merge.api.dataReceived(Uint8Array.of(0xAA, 0xBB), 'S')
+	merge.api.dataReceived(Uint8Array.of(0, 0), 'S', { lineGlitch: true })
+	merge.api.dataReceived(Uint8Array.of(0xCC), 'S')
+	merge.fire()
+	assert.deepEqual(merge.flushed, [{ bytes: [0xAA, 0xBB, 0, 0, 0xCC], note: 'line-glitch' }])
+	merge.api.dataReceived(Uint8Array.of(1, 2), 'S')
+	merge.fire()
+	assert.equal(merge.flushed[1].note, '')
+	assert.deepEqual(merge.flushed[1].bytes, [1, 2])
+
+	// 不分包：立即输出
+	const direct = packHarness(0)
+	direct.api.dataReceived(Uint8Array.of(0, 0), 'S', { lineGlitch: true })
+	direct.api.dataReceived(Uint8Array.of(0, 0), 'S')
+	assert.deepEqual(direct.flushed, [{ bytes: [0, 0], note: 'line-glitch' }, { bytes: [0, 0], note: '' }])
+
+	// releasePort 清掉分包缓冲时一并清标注：新连接的第一包不得带上旧连接的标注
+	const released = packHarness(50)
+	released.api.dataReceived(Uint8Array.of(0, 0), 'S', { lineGlitch: true })
+	await released.api.releasePort('S')
+	released.api.dataReceived(Uint8Array.of(7), 'S')
+	released.fire()
+	assert.deepEqual(released.flushed, [{ bytes: [7], note: '' }])
+
+	// 发送前提前 flush(flushPendingRx)同样带走标注，且不残留到下一包
+	const early = packHarness(50)
+	early.api.dataReceived(Uint8Array.of(0, 0), 'S', { lineGlitch: true })
+	early.api.flushPendingRx('S')
+	early.api.dataReceived(Uint8Array.of(9), 'S')
+	early.fire()
+	assert.deepEqual(early.flushed, [{ bytes: [0, 0], note: 'line-glitch' }, { bytes: [9], note: '' }])
+}
+
+function renderHarness() {
+	const rows = []
+	function element() {
+		return { attrs: {}, children: [], className: '', textContent: '', innerHTML: '',
+			setAttribute(k, v) { this.attrs[k] = v }, appendChild(c) { this.children.push(c) } }
+	}
+	const context = vm.createContext({
+		textdecoder: new TextDecoder(), toolOptions: { showTime: false },
+		HTMLEncode: t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+		attrEscape: t => t, ansi_up: { ansi_to_html: t => t }, logSeq: 0, formatDate: () => '',
+		document: { createElement: element },
+		SerialHub: { activeSendPhys: () => 'A', logModeOf: () => 'dual', getSessionLabel: () => 'A路' },
+		logType: 'hex', getLogTypeForSid: () => context.logType,
+		appendLogNode: (row) => rows.push(row), isRowLogType: () => true
+	})
+	const a = source.indexOf('\tfunction bytesToHexArr(')
+	const b = source.indexOf('\t//第三方协议解析日志', a)
+	vm.runInContext(source.slice(a, b) + '\nglobalThis.api = { renderLogBody, addLog }', context)
+	return { context, rows, api: context.api }
+}
+
+async function testLogRendering() {
+	const { context, rows, api } = renderHarness()
+	const bytes = (...x) => Uint8Array.from(x)
+	// HEX 并排：整块全 00 才省略 TEXT 段，也不留换行
+	assert.equal(api.renderLogBody(bytes(0, 0), 'hex&text'), 'HEX:00 00')
+	assert.equal(api.renderLogBody(bytes(0, 0, 0), 'hex&ansi'), 'HEX:00 00 00')
+	// 含任何非 0 字节(包括控制字符、空白、0xFF)都照旧显示
+	assert.equal(api.renderLogBody(bytes(0x41, 0), 'hex&text'), 'HEX:41 00<br/>TEXT:A\0')
+	assert.equal(api.renderLogBody(bytes(0, 0x01), 'hex&text'), 'HEX:00 01<br/>TEXT:\0\x01')
+	assert.equal(api.renderLogBody(bytes(0x20, 0x0D), 'hex&text'), 'HEX:20 0D<br/>TEXT: \r')
+	assert.ok(api.renderLogBody(bytes(0xFF, 0xFE), 'hex&text').includes('<br/>TEXT:'))
+	assert.equal(api.renderLogBody(bytes(0xE4, 0xB8, 0xAD), 'hex&text'), 'HEX:E4 B8 AD<br/>TEXT:中')
+	assert.equal(api.renderLogBody(bytes(0x3C, 0x62, 0x3E), 'hex&text'), 'HEX:3C 62 3E<br/>TEXT:&lt;b&gt;')
+	assert.equal(api.renderLogBody(bytes(0x1B, 0x5B, 0x33, 0x31, 0x6D, 0x41), 'hex&ansi'), 'HEX:1B 5B 33 31 6D 41<br/>TEXT:\x1B[31mA')
+	// 单独 TEXT / ANSI 不变：全 00 也保留正文
+	assert.equal(api.renderLogBody(bytes(0, 0), 'text'), '\0\0')
+	assert.equal(api.renderLogBody(bytes(0, 0), 'ansi'), '\0\0')
+	assert.equal(api.renderLogBody(bytes(0x41), 'text'), 'A')
+
+	// 行标注：独立节点 + data-note，不进 data-hex 与 .log-body，三种显示模式都带
+	for (const type of ['hex', 'text', 'hex&text', 'ansi', 'hex&ansi']) {
+		rows.length = 0
+		context.logType = type
+		api.addLog(bytes(0, 0), true, new Date(0), 'A', 'line-glitch')
+		const row = rows[0]
+		assert.equal(row.attrs['data-hex'], '00 00', type)
+		assert.equal(row.attrs['data-note'], 'line-glitch', type)
+		assert.equal(row.children.length, 1, type)
+		assert.equal(row.children[0].className, 'log-note', type)
+		assert.equal(row.children[0].textContent, '紧随帧错误，疑似线路毛刺', type)
+		assert.ok(!row.innerHTML.includes('毛刺'), type + ': 标注混进了正文')
+		assert.ok(row.innerHTML.includes('class="log-len">2B</span>'), type)
+		rows.length = 0
+		api.addLog(bytes(0, 0), true, new Date(0), 'A')
+		assert.equal(rows[0].children.length, 0, type)
+		assert.equal(rows[0].attrs['data-note'], undefined, type)
+	}
+}
+
 async function testStatusBar() {
 	const workbench = fs.readFileSync(path.join(__dirname, '../js/workbench.js'), 'utf8')
 	function element() {
@@ -216,9 +472,9 @@ async function testStatusBar() {
 	const bar = element()
 	const elements = { 'serial-statusbar': bar }
 	const states = {
-		S: { open: false, openedAt: 0, txBytes: 0, rxBytes: 0, lastRxAt: 0 },
-		A: { open: true, openedAt: 10000, txBytes: 1, rxBytes: 0, lastRxAt: 0 },
-		B: { open: true, openedAt: 10000, txBytes: 0, rxBytes: 2, lastRxAt: 95000, receivePaused: true }
+		S: { open: false, openedAt: 0, txBytes: 0, rxBytes: 0, lastRxAt: 0, lineErrors: 0 },
+		A: { open: true, openedAt: 10000, txBytes: 1, rxBytes: 0, lastRxAt: 0, lineErrors: 0 },
+		B: { open: true, openedAt: 10000, txBytes: 0, rxBytes: 2, lastRxAt: 95000, receivePaused: true, lineErrors: 7 }
 	}
 	const calls = []
 	let opening = false
@@ -238,6 +494,18 @@ async function testStatusBar() {
 	assert.equal(a.lastRx.textContent, '未收到')
 	assert.equal(a.lastRx.hidden, false)
 	assert.equal(b.lastRx.textContent, '上次接收 5s 前 · 接收暂缓')
+	assert.equal(a.lineErr.hidden, true)
+	assert.equal(b.lineErr.hidden, false)
+	assert.equal(b.lineErr.textContent, '线路错误 7')
+	states.A.lineErrors = 12
+	states.B.lineErrors = 0
+	context.status.updateStatusBar()
+	assert.equal(a.lineErr.textContent, '线路错误 12')
+	assert.equal(a.lineErr.hidden, false)
+	assert.equal(b.lineErr.hidden, true)
+	states.A.lineErrors = 0
+	context.status.updateStatusBar()
+	assert.equal(a.lineErr.hidden, true)
 	assert.equal(a.name.textContent, '<synthetic>')
 	assert.equal(a.rebuild.attrs['aria-label'], '<synthetic>：重建接收')
 	assert.equal(b.rebuild.disabled, false)
@@ -298,7 +566,11 @@ async function run() {
 		assert.deepEqual(h.recovered, [])
 		assert.equal(device.closes(), 0)
 		assert.ok(h.logs.length <= 5)
-		assert.ok(h.logs[1].msg.includes(kind === 'done' ? '接收流关闭 21 次' : '读取错误 21 次'))
+		assert.ok(h.logs.find(x => x.msg.includes('接收暂缓')).msg.includes(kind === 'done' ? '接收流关闭 21 次' : '读取错误 21 次'))
+		// 线路类错误：第一条走普通提示而不是红色错误；流关闭仍是红色错误
+		assert.equal(h.notes.length, kind === 'done' ? 0 : 1)
+		assert.equal(h.logs.some(x => x.msg.includes('接收流已关闭')), kind === 'done')
+		assert.equal(h.logs.some(x => x.msg.includes('串口读取错误')), false)
 		await stop(h, 'A', pending)
 	}
 
@@ -426,6 +698,10 @@ async function run() {
 	manual.sessions.B.open = false
 	assert.equal(await manual.api.rebuildSerialReceive('B'), false)
 	assert.equal(manual.opened.length, 1)
+	await testLineErrorQuiet()
+	await testLineGlitchMeta()
+	await testPackNote()
+	await testLogRendering()
 	await testStatusBar()
 	console.log('serial read recovery: passed')
 }
