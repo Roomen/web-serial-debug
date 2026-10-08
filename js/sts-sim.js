@@ -1,10 +1,11 @@
 // STS 表端 / CIU 模拟引擎（不碰 DOM / localStorage / serialApi，只通过注入的 link 与 clock 工作）
 // 两层协议: 模组指令层 hostProto（hostproto-transaction.js 的 link）+ 应用层 STS-CIU（sts-ciu-protocol.js）
 // 会话是停等 ARQ: 锚点 +1s 起每 1.2s 一拍，发起端发一帧（数据 / 0B 征求 / END），表端拍 +600ms 回 DACK 并捎带上行队列队头一片；
-// 下行排空后进入轮询相（0B 征求拍持续，表端有上行即捎带），FINISH / ABORT / 空轮询 5s 收尾，终结经 EVT 0x0281 通知双侧
+// 下行排空后进入轮询相（0B 征求拍持续，表端有上行即捎带），会话由表端 END 或模组空闲看门狗（最后一次活动后约 8s）自行收尾，终结经 EVT 0x0281 通知双侧
 //   - 表端: 被唤醒时模组清空上行队列并发 kind=2 通知；收 kind=3 -> 算应答 -> WOR_SET_UPLINK 追加入队，下一个 DACK 捎带
-//   - CIU : WOR_WAKE_CIU 受理后立即 WOR_SEND 一帧 -> 等 kind=2(ACK) -> 等 kind=4(上行) -> WOR_FINISH 结束轮询相 -> 等 0x0281；
-//           一次应用层问答 = 一次唤醒会话
+//   - CIU : WOR_INIT(2, 本机 DRN) -> WOR_WAKE_CIU -> WOR_SEND 一帧（槽满 BUSY 隔 1.4s 重发）-> 等 kind=2(ACK) -> 等 kind=4(上行) -> 立即返回；
+//           不发 FINISH / ABORT，成败都不再碰会话，下一轮 WAKE 前硬等上一会话的 0x0281（有上限）再冷却；一次应用层问答 = 一次唤醒会话
+//           运行期两端都不查 WOR_GET_STATUS / 统计，不做会话保活
 // 受理不是成功: WAKE/SEND 回 OK 只是受理，TOKEN 处理状态 0 / WRITE 结果 0xFE 只是收下，终局靠 RESULT 轮询取回
 // 置备（钥表、DRN、netId）由外部工具完成，这里不下发钥表、不接触主密钥，只核对，并在角色不对且填了 PAK 时定形
 // clock 约定: { now() -> 毫秒时间戳, setTimeout(fn, ms) -> 句柄, clearTimeout(句柄) }
@@ -25,10 +26,13 @@
 	const VALVE_HOLD_MS = 10 * 60 * 1000
 	// 令牌结果模式: exec = 执行充值（状态 2 + MODE1）；1..13 / 255 = 状态 1 + MODE3 对应结果码；test = 状态 1 + MODE256 位图
 	const TOKEN_MODES = ['exec', 'test'].concat(Object.keys(S.STS_CODE))
-	const BEAT_MS = 1200 // 停等栅格一拍；WOR_SEND 槽满、上行队列满都等一拍再补
+	const BEAT_MS = 1200 // 停等栅格一拍；表端上行队列满等一拍再补
+	const SEND_BUSY_RETRY_MS = 1400 // WOR_SEND 槽满（模组 FIFO 深度 4）回 BUSY 后隔这么久重发同一帧，实板观测值
 	const SESSION_COOLDOWN_MS = 1200 // CIU 终结后表端仍在 linger；实板表端约晚 1s 回 GRID，留一拍再唤醒
 	const UPQ_RETRY = 4 // 上行队列满（BUSY）时的补发次数，超过就放弃，CIU 会按会话重发同一帧
-	const END_WAIT_MS = 8000 // FINISH / ABORT 之后等 0x0281 的上限: 收尾最多一拍 END + 重传，下一轮 WAKE 另有 BUSY 等待兜底
+	// 上一会话 0x0281 的硬等上限，从上一次 runSession 返回起算: 会话不再被主动结束，由模组空闲看门狗约 8s 后自行收尾
+	// （实板 reason=8），加上收尾与事件延迟留余量；到点仍没等到就照常冷却后 WAKE，BUSY 重试兜底
+	const PREV_END_WAIT_MS = 15000
 
 	// ===== 通用小工具 =====
 	function toU8(b) { return b instanceof Uint8Array ? b : Uint8Array.from(b || []) }
@@ -74,18 +78,6 @@
 	function statusText(r) { return r.statusName + ' (0x' + r.status.toString(16).toUpperCase().padStart(2, '0') + ')' }
 	// 未 WOR_INIT: 新固件回 ERR_NOT_INIT(0x09)，旧固件与「无会话」共用 ERR_STATE(0x06)，两个都认
 	function notInit(r) { return r.status === H.STATUS.ERR_NOT_INIT || r.status === H.STATUS.ERR_STATE }
-	// 统计增量文本: 只列给定字段里有变化的，全无变化时说明一句；任一快照缺失返回 null
-	const INITIATOR_STATS = ['worTx', 'wakeOk', 'ackErr', 'dataTx', 'dataFail', 'dataRetx', 'retxExhaust', 'dackRx', 'endTx', 'upRx', 'upErr', 'idleExit', 'micFail', 'keyMiss', 'sessReplay', 'evtDrop']
-	const SENTRY_STATS = ['wakes', 'ciuWakes', 'uniWakes', 'wakePreempt', 'foreignIg', 'ackTx', 'ackFail', 'dataRx', 'dataErr', 'dackTx', 'dackFail', 'endRx', 'serveIdleExit', 'upQueued', 'upSent', 'micFail', 'keyMiss', 'replay', 'sessReplay', 'evtDrop']
-	function statsDelta(a, b, fields) {
-		if (!a || !b) return null
-		const out = []
-		fields.forEach(function (f) { if (a[f] != null && b[f] != null && b[f] !== a[f]) out.push(f + ' +' + ((b[f] - a[f]) >>> 0)) })
-		return out.length ? out.join('  ') : '关键计数全无变化'
-	}
-	// 0x020F 只在启动和会话失败时查: 成功会话不查，失败时与上一次快照对账。中间夹着的正常会话
-	// 也计入增量（wakeOk、dataTx 这类会按次数变大），失败类计数（retxExhaust、micFail、idleExit 等）只来自失败
-	function statsSpan(n) { return n > 0 ? '（自上次快照起，期间另有 ' + n + ' 次会话也计入）' : '' }
 	function endText(e) { return 'reason=' + e.reason + ' ' + (H.END_REASON_NAME[e.reason] || '未知') + '，下行交付 ' + e.dlDelivered + '，上行交付 ' + e.upDelivered }
 
 	// 运行代际守卫: stop() 递增代际后，所有在途/后续请求都以 aborted 结束，
@@ -130,7 +122,7 @@
 	}
 	const CIU_DEFAULTS = {
 		targetDrn: '', pak: '',
-		ackTimeoutS: 15, upTimeoutS: 12, busyWaitS: 30, sessionRetries: 3, sendTiming: 'accept', keepAliveMs: 500,
+		ackTimeoutS: 15, upTimeoutS: 12, busyWaitS: 30, sessionRetries: 3, sendTiming: 'accept',
 	}
 	// 按产品错误码对照表预置，码表不在协议内枚举；CIU 原样送显，不认识的码走「其他码」输入。
 	// 顺序即显示优先级（从高到低），组包进寄存器 0x17 的告警码列表时保持这个顺序
@@ -208,7 +200,7 @@
 		o.busyWaitS = clampInt(o.busyWaitS, 0, 600, 30)
 		o.sessionRetries = clampInt(o.sessionRetries, 0, 20, 3)
 		o.sendTiming = o.sendTiming === 'ack' ? 'ack' : 'accept'
-		o.keepAliveMs = o.keepAliveMs === 0 || o.keepAliveMs === '0' ? 0 : clampInt(o.keepAliveMs, 200, 5000, 500)
+		delete o.keepAliveMs // 已移除的旧配置项，旧存档里可能还有
 		return o
 	}
 
@@ -224,23 +216,6 @@
 		return {
 			need: need,
 			notInit: notInit,
-			// WOR_STATS_GET 快照（字段名 -> 计数）；失败返回 null，诊断用，不影响主流程
-			async worStats() {
-				try {
-					const r = await link.request(C.WOR_STATS_GET, [], { timeoutMs: 1000, retries: 0 })
-					if (r.status !== H.STATUS.OK || r.payload.length < 2) return null
-					const o = {}
-					const p = r.payload
-					H.WOR_STATS_FIELDS.forEach(function (f, i) {
-						const o4 = 2 + i * 4
-						if (o4 + 4 <= p.length) o[f] = (p[o4] | (p[o4 + 1] << 8) | (p[o4 + 2] << 16) | (p[o4 + 3] << 24)) >>> 0
-					})
-					return o
-				} catch (e) {
-					if (e && e.code === 'aborted') throw e
-					return null
-				}
-			},
 			async echo() {
 				let r
 				try {
@@ -810,8 +785,6 @@
 		let holdTimer = null
 		let moveTimer = null
 		let sess = null // 当前唤醒会话: kind=2 通知开始，0x0281 结束；上行队列随会话清空
-		let statsBase = null // 启动或上次异常终结时的统计快照，异常终结时与之对账
-		let statsSince = 0 // 快照之后的正常会话数
 		const info = { role: null, drn: null, fw: null, lastSession: null, sessions: 0, startedAt: 0 }
 
 		function log(level, text) { onLogCb({ at: clock.now(), level: level, text: text }) }
@@ -984,20 +957,6 @@
 				info.lastSession.upDelivered = e.upDelivered
 			}
 			pushState()
-			if (e.reason === 1) statsSince++
-			else reportStats()
-		}
-		// 只在异常终结（不是表端 END 正常收尾）时查统计并打出增量，正常会话不查；
-		// 表端 dataRx 不增而 micFail/keyMiss/dataErr 增，说明会话帧到了但解不开
-		function reportStats() {
-			const base = statsBase
-			const since = statsSince
-			statsSince = 0
-			mod.worStats().then(function (st1) {
-				const txt = statsDelta(base, st1, SENTRY_STATS)
-				if (txt) log('warn', '诊断: 表端统计增量 ' + txt + statsSpan(since) + '（dataRx 不增且 micFail/keyMiss/dataErr 不增 = 空口上没收到发起端的会话帧）')
-				if (st1) statsBase = st1
-			}).catch(function () { /* 停止或链路关闭 */ })
 		}
 
 		async function onDownlink(d) {
@@ -1101,7 +1060,6 @@
 			else log('warn', 'WOR 状态不是 [1 SENTRY][1 GRID]: ' + (wst ? '[' + wst.role + '][' + wst.state + ' ' + (H.WOR_STATE_NAME[wst.state] || '') + ']' : '结果异常'))
 			// 10B 版本附带运行地址: 它才是模组实际值守的唤醒地址，DRN 改了但没复位时两者会不一致
 			if (wst && wst.localAddr != null && wst.localAddr !== dev.drn) log('warn', 'WOR 运行地址 ' + wst.localAddr + ' 与 DRN ' + dev.drn + ' 不一致，CIU 按 DRN 唤醒会唤不到；复位模组后重试')
-			statsBase = await mod.worStats()
 			// 不预置上行: 上行队列在每次被唤醒时由模组清空，只能在收到本会话请求后入队
 			if (gen !== runGen || stopped) throw abortErr()
 			unsubEvt = link.onEvt(onEvt)
@@ -1376,9 +1334,13 @@
 		let policy = createCiuPolicy(cfg.meterNo)
 		let target = BigInt(cfg.targetDrn)
 		let activeSessions = 0 // 正在进行的唤醒会话数；setTarget 只在为 0 时生效
-		let lastSessionEndAt = null
-		let ciuStatsBase = null // 启动或上次失败诊断时的统计快照
-		let ciuStatsSince = 0 // 快照之后未对账的会话数
+		let localDrn = null // 模组 DEV_ID_GET 回读的本机 DRN（BigInt），WOR_INIT 的地址
+		// CIU 不主动结束会话（不发 FINISH / ABORT），会话靠表端 END 或模组空闲看门狗自行收尾；
+		// 所以 0x0281 可能在 runSession 返回很久之后才到。lastAccepted 记最近一个已受理会话的终结状态，
+		// 由 CIU 级的 EVT 订阅填写（生命周期同引擎，不随单次 runSession 退订），下一轮 WAKE 前据此硬等
+		let lastAccepted = null
+		let unsubEnd = null
+		const endWaiters = [] // 正在硬等上一会话 0x0281 的等待者，CIU 级订阅收到 0x0281 时叫醒
 		const C = H.CMD
 		let running = false
 		let stopped = false
@@ -1404,15 +1366,60 @@
 		function checkAborted() { if (aborted || stopped) throw abortErr() }
 
 		// ---------- 会话层 ----------
-		// 一次应用层问答 = 一次唤醒会话: WAKE_CIU 受理后立即 WOR_SEND，等 ACK(kind=2) 再等上行(kind=4)，
-		// 拿到上行后 WOR_FINISH 结束轮询相并等 0x0281，下一轮 WAKE 才不会撞 BUSY。
-		// 不预挂 FINISH: 表端应答要等收到 kind=3 才入队，预挂会让发起端排空下行后直接发 END，应答就没有拍可捎带了
+		// 一次应用层问答 = 一次唤醒会话: WOR_INIT(2, 本机 DRN) -> WOR_WAKE_CIU -> WOR_SEND（槽满 BUSY 隔 1.4s 重发同一帧）
+		// -> 等 ACK(kind=2) -> 等上行(kind=4) -> 立即返回。不发 FINISH / ABORT: 会话由表端 END 或模组空闲看门狗
+		// （最后一次活动后约 8s，reason=8）自行收尾，FINISH 那时只会回 ERR_STATE；失败同样什么都不发。
+		// 下一轮 runSession 开头硬等上一已受理会话的 0x0281（上限 PREV_END_WAIT_MS）再冷却 SESSION_COOLDOWN_MS，
+		// 到点还没等到就照常 WAKE，BUSY 重试兜底。WAKE 前每次先 WOR_INIT: 回 BUSY 表示已初始化，照常继续
+
+		// 等待条件成立或超时；中止时抛 aborted。list 是会在事件到达时被叫醒的等待者数组
+		function condWait(list, cond, timeoutMs) {
+			return new Promise(function (resolve, reject) {
+				if (cond()) { resolve(true); return }
+				const w = { check: function () { if (cond()) done(true) } }
+				const timer = clock.setTimeout(function () { done(false) }, timeoutMs)
+				function done(v) {
+					clock.clearTimeout(timer)
+					const i = list.indexOf(w)
+					if (i !== -1) list.splice(i, 1)
+					sessionWaiters.delete(w)
+					if (aborted || stopped) reject(abortErr())
+					else resolve(v)
+				}
+				w.abort = function () { done(false) }
+				list.push(w)
+				sessionWaiters.add(w)
+			})
+		}
+		// CIU 级 0x0281 订阅: 最近一个已受理会话的终结只记在这里。runSession 返回后订阅仍在，stop() 才退订
+		function onCiuEvt(evt) {
+			if (evt.cmd !== H.EVT.WOR_SESSION_END) return
+			const e = H.decodeSessionEnd(evt.payload)
+			const rec = lastAccepted
+			if (!e || !rec || rec.ended) return
+			rec.ended = true
+			rec.endAt = clock.now()
+			rec.reason = e.reason
+			endWaiters.slice().forEach(function (w) { w.check() })
+		}
+		function ensureEndWatch() { if (!unsubEnd) unsubEnd = link.onEvt(onCiuEvt) }
+		// 本机 DRN 取自模组 DEV_ID_GET，不用 WOR_GET_STATUS（运行期不查状态）
+		async function ensureLocalDrn() {
+			if (localDrn == null) {
+				const d = await mod.devIdGet()
+				if (d.drn === 0n) throw new Error('CIU 模组 DRN 未置备（DEV_ID_GET 为 0），请先用 keytool 置备 DRN')
+				localDrn = d.drn
+				st.localAddr = d.drn.toString()
+			}
+			return localDrn
+		}
 		async function runSession(appFrame, accepts) {
 			const frame = toU8(appFrame)
 			const t0 = clock.now()
-			const tl = { wakeMs: null, sendMs: null, ackMs: null, upMs: null, endMs: null, endReason: null }
+			const tl = { initMs: null, wakeMs: null, sendMs: null, ackMs: null, upMs: null, endMs: null, endReason: null }
 			const fail = function (reason, stage) { return { ok: false, uplink: null, timeline: tl, reason: reason, stage: stage } }
 			if (frame.length < 1 || frame.length > 64) return fail('应用帧超过 64 字节', 'send')
+			ensureEndWatch()
 			// open: 只有 WAKE_CIU 请求在飞或已受理期间收到的事件才算本轮；BUSY 等待期间到达的旧 kind=2/4 只记日志。
 			// 0x0281 只在受理之后才算本轮: 上一会话的终结事件在串口上一定先于本轮的 WAKE 应答到达
 			const tgt = target // 本会话开始时的目标地址副本，来源比较与唤醒都用它，中途换目标也不影响在途会话
@@ -1425,8 +1432,7 @@
 					if (!e) return
 					if (!sess.accepted || sess.end) { log('info', '会话终结 0x0281 不属于本轮（' + endText(e) + '）'); return }
 					sess.end = { at: clock.now(), reason: e.reason, dl: e.dlDelivered, up: e.upDelivered }
-					lastSessionEndAt = sess.end.at
-					log(e.reason === 2 || e.reason === 1 ? 'info' : 'warn', '会话终结 0x0281（' + endText(e) + '），相对 WAKE 请求 ' + (sess.end.at - t0) + 'ms')
+					log(e.reason === 2 || e.reason === 1 || e.reason === 8 ? 'info' : 'warn', '会话终结 0x0281（' + endText(e) + '），相对 WAKE 请求 ' + (sess.end.at - t0) + 'ms')
 					notify()
 					return
 				}
@@ -1458,25 +1464,7 @@
 				}
 				notify()
 			})
-			// 等待条件成立或超时；中止时抛 aborted
-			const waitCond = function (cond, timeoutMs) {
-				return new Promise(function (resolve, reject) {
-					if (cond()) { resolve(true); return }
-					const w = { check: function () { if (cond()) done(true) } }
-					const timer = clock.setTimeout(function () { done(false) }, timeoutMs)
-					function done(v) {
-						clock.clearTimeout(timer)
-						const i = waiters.indexOf(w)
-						if (i !== -1) waiters.splice(i, 1)
-						sessionWaiters.delete(w)
-						if (aborted || stopped) reject(abortErr())
-						else resolve(v)
-					}
-					w.abort = function () { done(false) }
-					waiters.push(w)
-					sessionWaiters.add(w)
-				})
-			}
+			const waitCond = function (cond, timeoutMs) { return condWait(waiters, cond, timeoutMs) }
 			// 待办轮询阶段（已收到受理）60s 总预算约束这里所有在途等待；即答类返回 null 不受约束
 			const budgetLeft = function () { return policy.budgetLeft(clock.now()) }
 			const cap = function (ms) { const l = budgetLeft(); return l == null ? ms : Math.min(ms, l) }
@@ -1494,54 +1482,37 @@
 				const why = e.reason === 3 ? '唤醒失败（burst 耗尽，表端未应答）' : '会话已终结（' + (H.END_REASON_NAME[e.reason] || 'reason=' + e.reason) + '）'
 				return fail(why + (stage === 'uplink' ? '，没有收到本轮上行' : ''), stage)
 			}
-			// 收尾: 正常路径发 FINISH 结束轮询相，失败路径发 ABORT 立即断开；都等 0x0281，等不到也不算本轮失败
-			// 会话保活: ACK 后到会话终结前定时查 WOR_GET_STATUS。唤醒/ACK 阶段保持串口安静，
-			// 实板在这一阶段频繁查询会反复错过 ACK；数据阶段串口完全安静时，
-			// 发起端发出首帧后卡在 SESSION_TX（不重传、不收尾，表端 2 窗失联），有串口流量则会话正常推进，
-			// 属模组固件问题；保活是主机侧规避，同时记下最近状态供失败诊断。上一条没回来不叠发
-			let kaTimer = null
-			let kaBusy = false
-			let kaStopped = false
-			const keepAlive = function () {
-				if (!cfg.keepAliveMs || kaStopped || sess.end || stopped || aborted) return
-				kaTimer = clock.setTimeout(function () {
-					kaTimer = null
-					if (kaStopped || sess.end || stopped || aborted) return
-					if (kaBusy) { keepAlive(); return }
-					kaBusy = true
-					link.request(C.WOR_GET_STATUS, [], { timeoutMs: 500, retries: 0 }).then(function (r) {
-						const d = r && r.status === H.STATUS.OK && r.payload ? H.decodeWorStatus(r.payload) : null
-						if (d) sess.lastState = d
-					}, function () { /* 中止或超时: 只是保活，不影响会话 */ }).then(function () { kaBusy = false; keepAlive() })
-				}, cfg.keepAliveMs)
-			}
-			const stopKeepAlive = function () {
-				kaStopped = true // 在飞查询晚到时也不能重挂上一会话的保活，影响下一轮 ACK
-				if (kaTimer != null) { clock.clearTimeout(kaTimer); kaTimer = null }
-			}
-			const closeSession = async function (how) {
-				if (!sess.accepted || sess.end || stopped || aborted) return
-				const cmd = how === 'finish' ? C.WOR_FINISH : C.WOR_ABORT
-				// 预算已用完: 收尾命令照发（排在下一笔请求前面），但不再等它，放弃不能拖过 60s
-				if (budgetOut()) { link.request(cmd, [], { timeoutMs: 1000 }).catch(function () {}); return }
-				try {
-					const r = await link.request(cmd, [], reqOpt()) // 单次超时与重发都按剩余预算收紧
-					if (r.status !== H.STATUS.OK) { log('info', (how === 'finish' ? 'WOR_FINISH' : 'WOR_ABORT') + ' 回 ' + statusText(r) + '（会话多半已终结）'); return }
-				} catch (e) {
-					if (e && e.code === 'aborted') throw e
-					log('warn', (how === 'finish' ? 'WOR_FINISH' : 'WOR_ABORT') + ' 失败: ' + (e && e.message ? e.message : e))
-					return
-				}
-				if (!(await waitCond(ended, cap(END_WAIT_MS))) && !budgetOut()) log('warn', (how === 'finish' ? 'FINISH' : 'ABORT') + ' 后 ' + END_WAIT_MS / 1000 + 's 未收到 0x0281，下一轮 WAKE 若回 BUSY 会等待')
-			}
 			activeSessions++
 			let result = null
+			let rec = null
 			try {
+				// 0. 上一已受理会话还没见到 0x0281: 硬等它终结，等不到就等到上限。会话靠空闲看门狗自行收尾，
+				// 此时 WAKE 会撞 BUSY；等待与随后的冷却同样受应用层预算约束
+				const prev = lastAccepted
+				if (prev && !prev.ended && !budgetOut()) {
+					const leftMs = Math.max(0, (prev.doneAt == null ? clock.now() : prev.doneAt) + PREV_END_WAIT_MS - clock.now())
+					const tWait = clock.now()
+					if (leftMs > 0) {
+						log('info', '上一会话还没收到 0x0281（空闲看门狗约 8s 自行收尾），等它终结后再唤醒，最多再等 ' + Math.round(leftMs / 100) / 10 + 's')
+						if (await condWait(endWaiters, function () { return prev.ended }, cap(leftMs))) log('info', '上一会话已终结（reason=' + prev.reason + ' ' + (H.END_REASON_NAME[prev.reason] || '未知') + '），等了 ' + (clock.now() - tWait) + 'ms')
+					}
+					if (!prev.ended && !budgetOut()) log('warn', '上一会话 ' + PREV_END_WAIT_MS / 1000 + 's 内没有收到 0x0281（EVT 可能丢了），照常冷却后唤醒，若回 BUSY 会等待')
+				}
 				// 发起端见终结时，表端还在 END linger；重新 WAKE 的部分前导可能落在收尾阶段，
-				// 实板连续问答因此常要第二个 burst；等满一拍后再开始下一轮，等待同样受应用层预算约束
-				const coolMs = lastSessionEndAt == null ? 0 : lastSessionEndAt + SESSION_COOLDOWN_MS - clock.now()
+				// 实板连续问答因此常要第二个 burst；终结（或硬等超时）后再等满一拍，等待同样受应用层预算约束
+				const coolFrom = !prev ? null : prev.ended ? prev.endAt : clock.now()
+				const coolMs = coolFrom == null ? 0 : coolFrom + SESSION_COOLDOWN_MS - clock.now()
 				if (coolMs > 0 && !budgetOut()) await waiter.sleep(cap(coolMs))
-				// 1. WAKE_CIU
+				// 1. WOR_INIT(INITIATOR, 本机 DRN): 每次会话 WAKE 前都发，回 BUSY 表示已初始化，照常继续
+				const addr = await ensureLocalDrn()
+				checkAborted()
+				if (budgetOut()) return (result = fail('总等待预算 60s 已用完', 'budget'))
+				const ri = await link.request(C.WOR_INIT, H.woInitPayload(2, addr), reqOpt())
+				if (ri.status === H.STATUS.ERR_BUSY) log('info', 'WOR_INIT 回 BUSY（已初始化），继续')
+				else if (ri.status === H.STATUS.ERR_ROLE) return (result = fail('模组角色不是 CIU（WOR_INIT 回 ERR_ROLE）', 'init'))
+				else if (ri.status !== H.STATUS.OK) return (result = fail('WOR_INIT 失败: ' + statusText(ri), 'init'))
+				tl.initMs = clock.now() - t0
+				// 2. WAKE_CIU
 				const busyDeadline = clock.now() + cfg.busyWaitS * 1000
 				let tWake
 				for (;;) {
@@ -1564,10 +1535,12 @@
 					return (result = fail('WOR_WAKE_CIU 失败: ' + statusText(r), 'wake'))
 				}
 				sess.accepted = true
+				rec = { ended: false, endAt: null, reason: null, doneAt: null }
+				lastAccepted = rec
 				const tAcc = clock.now()
 				tl.wakeMs = tAcc - tWake
 				log('info', 'WOR_WAKE_CIU 已受理（受理不是成功），耗时 ' + tl.wakeMs + 'ms')
-				// 2. 入队 WOR_SEND；槽满(BUSY)等一拍再补；ERR_STATE 说明事务已终结（多为唤醒已失败）。
+				// 3. 入队 WOR_SEND；槽满(BUSY)隔 1.4s 重发同一帧；ERR_STATE 说明事务已终结（多为唤醒已失败）。
 				// 默认受理后立即入队（规范的发送门是受理不是 ACK）；sendTiming='ack' 时等 ACK 后再入队，
 				// 用来在实板上排查「ACK 前入队的数据在 burst 期没被消费」这类模组问题
 				const ackDeadline = tAcc + cfg.ackTimeoutS * 1000
@@ -1580,7 +1553,7 @@
 						if (r.status === H.STATUS.OK) break
 						if (r.status === H.STATUS.ERR_BUSY) {
 							if (clock.now() >= ackDeadline) return fail('WOR_SEND 一直 BUSY（槽满）', 'send')
-							await waiter.sleep(Math.max(1, cap(BEAT_MS)))
+							await waiter.sleep(Math.max(1, cap(SEND_BUSY_RETRY_MS)))
 							continue
 						}
 						if (r.status === H.STATUS.ERR_STATE) return fail('WOR_SEND 回 ERR_STATE：会话已终结（多为唤醒失败），整轮重来', 'send')
@@ -1591,14 +1564,13 @@
 					return null
 				}
 				if (cfg.sendTiming !== 'ack') { const f = await sendStep(); if (f) return (result = f) }
-				// 3. 等 ACK；唤醒失败由 0x0281 reason=3 通知（burst 耗尽最坏约 12.4s），超时只是兜底
+				// 4. 等 ACK；唤醒失败由 0x0281 reason=3 通知（burst 耗尽最坏约 12.4s），超时只是兜底
 				const ackOk = await waitCond(function () { return !!sess.ack || ended() }, cap(Math.max(0, ackDeadline - clock.now())))
 				if (!sess.ack && ended()) return (result = endFail('ack'))
 				if (!ackOk) return (result = fail(budgetOut() ? '总等待预算 60s 已用完' : '等 ACK 超时（' + cfg.ackTimeoutS + 's）', budgetOut() ? 'budget' : 'ack'))
 				tl.ackMs = sess.ack.at - t0
-				keepAlive()
 				if (cfg.sendTiming === 'ack') { const f = await sendStep(); if (f) return (result = f) }
-				// 4. 等上行，从 ACK 起算；会话先终结（重传耗尽 / 失联 / 空轮询退出）就不必再等
+				// 5. 等上行，从 ACK 起算；会话先终结（重传耗尽 / 失联 / 空闲看门狗）就不必再等
 				const upOk = await waitCond(function () { return !!sess.up || ended() }, cap(Math.max(0, sess.ack.at + cfg.upTimeoutS * 1000 - clock.now())))
 				if (!sess.up && ended()) return (result = endFail('uplink'))
 				if (!upOk) return (result = fail(budgetOut() ? '总等待预算 60s 已用完' : '等上行超时（ACK 后 ' + cfg.upTimeoutS + 's）', budgetOut() ? 'budget' : 'uplink'))
@@ -1609,28 +1581,8 @@
 				if (e && e.code === 'aborted') throw e
 				return (result = fail(e && e.message ? e.message : String(e), 'link'))
 			} finally {
-				try {
-					// 失败诊断: 收尾前看发起端此刻停在哪个状态（会话还没终结时才有意义）
-					const diag = result && !result.ok && sess.accepted && !aborted && !stopped && !budgetOut()
-					if (diag && !sess.end) {
-						const ws = await link.request(C.WOR_GET_STATUS, [], { timeoutMs: 1000, retries: 0 })
-						const d = ws.status === H.STATUS.OK ? H.decodeWorStatus(ws.payload) : null
-						if (d) log('warn', '诊断: 失败时发起端 WOR 状态 [' + d.role + ' ' + (H.WOR_ROLE_NAME[d.role] || '') + '][' + d.state + ' ' + (H.WOR_STATE_NAME[d.state] || '') + ']' +
-							(d.state === 9 && !cfg.keepAliveMs ? '：停在 SESSION_TX 且会话保活已关闭，这是会话期间串口安静时模组首帧后卡住的已知现象，请把「会话保活」设为 500ms' : ''))
-					}
-					// 中止 / 停止时不再给模组发命令；会话由模组自己按空轮询或看门狗收尾
-					if (result) await closeSession(result.ok ? 'finish' : 'abort')
-					// 失败时才查 0x020F，与启动或上次失败时的快照对账（规范 §7.10: 0x0201 复核 + 0x020F 对账）
-					if (diag) {
-						const since = ciuStatsSince
-						ciuStatsSince = 0
-						const st1 = await mod.worStats()
-						const txt = statsDelta(ciuStatsBase, st1, INITIATOR_STATS)
-						if (st1) ciuStatsBase = st1
-						if (txt) log('warn', '诊断: 发起端统计增量 ' + txt + statsSpan(since) + '（dataTx 不增 = 发起端没发出会话帧；dataRetx/retxExhaust 增 = 发了但收不到 DACK）')
-					} else ciuStatsSince++
-				} catch (e) { /* 收尾期间被中止: 不影响本轮结果 */ }
-				stopKeepAlive()
+				// 成败都不给模组发任何收尾命令；会话由空闲看门狗 / 表端 END 自行收尾，下一轮 runSession 硬等它的 0x0281
+				if (rec) rec.doneAt = clock.now()
 				if (sess.end) { tl.endMs = sess.end.at - t0; tl.endReason = sess.end.reason }
 				activeSessions--
 				unsub()
@@ -1639,7 +1591,7 @@
 		}
 
 		function fmtTimeline(tl) {
-			return ['wake', 'send', 'ack', 'up', 'end'].map(function (k) { return k + '=' + (tl[k + 'Ms'] == null ? '-' : tl[k + 'Ms'] + 'ms') }).join(' ') + (tl.endReason != null ? ' (reason=' + tl.endReason + ')' : '')
+			return ['init', 'wake', 'send', 'ack', 'up', 'end'].map(function (k) { return k + '=' + (tl[k + 'Ms'] == null ? '-' : tl[k + 'Ms'] + 'ms') }).join(' ') + (tl.endReason != null ? ' (reason=' + tl.endReason + ')' : '')
 		}
 
 		// ---------- 应用层单次问答: 会话失败或上行被静默丢弃 -> 重新 runSession 同一字节帧 ----------
@@ -1652,7 +1604,7 @@
 				setPhase('session')
 				st.sessionCount++
 				const s = await runSession(frame, function (b) { return policy.accepts(b) })
-				checkAborted() // 收尾（FINISH / 等 END）期间被中止: 不再采用这轮结果
+				checkAborted() // 返回后被中止: 不再采用这轮结果
 				const rec = { label: label, attempt: attempt, ok: false, reason: '', timeline: s.timeline, at: clock.now() }
 				sessions.push(rec)
 				st.lastTimeline = rec
@@ -1664,7 +1616,7 @@
 					if (attempt < maxAttempts) log('info', '重新唤醒并重发逐字节相同的应用帧（同 TXN）')
 					continue
 				}
-				// 预算按上行到达时刻判定与起算，不按收尾完成时刻: 收尾（FINISH / 等 END）的耗时不算进应用层等待
+				// 预算按上行到达时刻判定与起算
 				if (policy.budgetExpired(s.upAt)) { rec.reason = '上行到达时已超过 60s 总预算'; return { kind: 'budget' } }
 				const ev = policy.onFrame(s.uplink, s.upAt)
 				if (ev.kind === 'discard') {
@@ -1915,14 +1867,10 @@
 			await mod.echo()
 			st.fw = await mod.fwInfo()
 			st.role = await mod.ensureRole(2, cfg.pak)
-			const ws = await link.request(C.WOR_GET_STATUS, [])
-			if (mod.notInit(ws)) throw new Error('CIU WOR 尚未初始化，无法读取本机地址；请先在模组侧完成初始化')
-			mod.need(ws, 'WOR_GET_STATUS')
-			const wst = H.decodeWorStatus(ws.payload)
-			if (!wst || (ws.payload.length !== 2 && ws.payload.length < 10)) throw new Error('WOR_GET_STATUS 结果长度异常')
-			if (wst.localAddr == null) throw new Error('模组固件未返回 WOR 本机地址，请升级模组固件后重试')
-			st.localAddr = wst.localAddr.toString()
-			ciuStatsBase = await mod.worStats() // 失败诊断的对账基线；之后只在会话失败时再查
+			// 本机地址取 DEV_ID_GET 的 DRN，再做一次 WOR_INIT(INITIATOR, DRN): OK 或 BUSY（已初始化）都算就绪
+			const drn = await ensureLocalDrn()
+			const ri = await link.request(C.WOR_INIT, H.woInitPayload(2, drn))
+			if (ri.status !== H.STATUS.OK && ri.status !== H.STATUS.ERR_BUSY) throw new Error('WOR_INIT 失败: ' + statusText(ri) + (ri.status === H.STATUS.ERR_ROLE ? '（模组角色不是 CIU）' : ''))
 			if (gen !== runGen || stopped) throw abortErr()
 			running = true
 			log('info', 'CIU 模拟就绪：本机地址 ' + st.localAddr + '，目标 DRN ' + cfg.targetDrn + '，应用层表号 ' + cfg.meterNo)
@@ -1993,6 +1941,7 @@
 				gen++
 				running = false
 				aborted = true
+				if (unsubEnd) { unsubEnd(); unsubEnd = null }
 				waiter.abortAll()
 				sessionWaiters.forEach(function (w) { w.abort() })
 				log('info', 'CIU 模拟已停止')

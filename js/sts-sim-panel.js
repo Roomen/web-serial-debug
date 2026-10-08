@@ -67,7 +67,6 @@
 			{ k: 'upTimeoutS', label: '上行超时(s)', kind: 'num', min: 1, max: 600, w: 72 },
 			{ k: 'busyWaitS', label: 'BUSY 等待(s)', kind: 'num', min: 0, max: 600, w: 72 },
 			{ k: 'sessionRetries', label: '会话重试次数', kind: 'num', min: 0, max: 20, w: 72 },
-			{ k: 'keepAliveMs', label: '会话保活(ms)', kind: 'num', min: 0, max: 5000, w: 72, title: '收到 ACK 后每隔这么久向 CIU 模组查一次 WOR_GET_STATUS，0 = 关闭。唤醒阶段保持安静；实测数据阶段完全静默仍会卡住，保活可规避' },
 			{ k: 'sendTiming', label: 'WOR_SEND 时机', kind: 'sel', title: '规范允许 WAKE 受理后立即入队（默认）。实板上 ACK 后表端收不到会话帧时，切到「ACK 后」对比，可判断是否为 ACK 前入队的数据没被模组消费', options: [['accept', '受理后立即'], ['ack', 'ACK 后']] },
 			{ k: 'pak', label: 'PAK(32 位 HEX，不保存)', kind: 'text', maxlength: 32, w: 260, persist: false, sensitive: true, title: '仅当模组角色需要切换时用于 PROV_AUTH，不写入浏览器存储' },
 		]
@@ -281,7 +280,7 @@
 			alarmCfgBox.style.width = '100%'
 			meterForm.appendChild(alarmCfgBox)
 			meterForm.appendChild(el('div', 'sts-sim-hint small', 'DRN 启动时从模组自动读取。'))
-			ciuForm.appendChild(el('div', 'sts-sim-hint small', '本机地址仅从模组读取。'))
+			ciuForm.appendChild(el('div', 'sts-sim-hint small', '本机地址取自模组 DEV_ID_GET（DRN），启动与每次会话前用 WOR_INIT 设为发起端地址。'))
 			cfg.append(meterForm, ciuForm)
 			body.appendChild(cfg)
 
@@ -707,7 +706,7 @@
 					tb.appendChild(el('span', null, s.label + ' #' + s.attempt))
 					tb.appendChild(el('span', s.ok ? 'is-ok' : 'is-bad', s.ok ? 'OK' : (s.reason || '失败')))
 					;[tl.wakeMs, tl.sendMs, tl.ackMs, tl.upMs].forEach(function (v) { tb.appendChild(el('span', null, v == null ? '-' : String(v))) })
-					// 终结 = 收到 EVT 0x0281 的时刻与原因（2=FINISH 正常收尾）
+					// 终结 = 本轮返回前收到 EVT 0x0281 的时刻与原因；CIU 不结束会话，成功会话通常在返回后才由空闲看门狗收尾（r8），这里显示 -
 					tb.appendChild(el('span', null, tl.endMs == null ? '-' : tl.endMs + ' r' + tl.endReason))
 				})
 				box.appendChild(tb)
@@ -719,7 +718,7 @@
 			if (!ui.engine || ui.role !== 'ciu' || !ui.running) { r.ciuLocalAddr.textContent = '待读取'; r.phase.textContent = ''; renderSimUnit(); return }
 			const st = ui.engine.getState()
 			r.ciuLocalAddr.textContent = st.localAddr == null ? '待读取' : st.localAddr
-			const names = { idle: '空闲', session: '唤醒会话中（WAKE → SEND → 等 ACK → 等上行 → FINISH）', 'wait-poll': '等待下一次轮询' }
+			const names = { idle: '空闲', session: '唤醒会话中（INIT → WAKE → SEND → 等 ACK → 等上行，会话由空闲看门狗收尾）', 'wait-poll': '等待下一次轮询' }
 			let t = '阶段：' + (names[st.phase] || st.phase)
 			if (st.localAddr != null) t += '；本机地址 ' + st.localAddr
 			if (st.budgetLeftMs != null) t += '；总预算剩余 ' + Math.ceil(st.budgetLeftMs / 1000) + ' s'
