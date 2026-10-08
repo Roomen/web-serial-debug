@@ -1073,24 +1073,6 @@ body {
   color: var(--danger);
 }
 
-/* 普通系统提示(非错误)：淡化，不用红色 */
-.log-row[data-dir='sys'][data-level='info'] {
-  border-left-color: var(--text-muted);
-}
-
-.log-row[data-dir='sys'][data-level='info'] .log-dir {
-  color: var(--text-muted);
-}
-
-/* 行标注：与数据分开的淡色说明，不参与正文 */
-.log-row .log-note {
-  flex: 0 0 auto;
-  color: var(--text-muted);
-  font-size: 0.7rem;
-  line-height: 1.45;
-  white-space: nowrap;
-}
-
 .log-row:hover {
   background-color: var(--bg-surface-hover);
 }
@@ -7468,11 +7450,6 @@ body.blu-wave-fullscreen-open {
 }
 
 .sb-last-rx {
-	font-variant-numeric: tabular-nums;
-}
-
-.sb-line-err {
-	color: var(--warning);
 	font-variant-numeric: tabular-nums;
 }
 
