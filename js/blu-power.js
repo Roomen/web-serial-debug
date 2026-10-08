@@ -1963,6 +1963,7 @@
 			}
 		}
 		bluOpen = false
+		bluReadGen++
 		const r = bluReader
 		bluReader = null
 		if (r) {
@@ -1983,29 +1984,87 @@
 		scheduleUIUpdate()
 	}
 
+	// 读错误（缓冲溢出、断帧等）后 Chromium 会给 port.readable 换一条新流，设备仍在：取新 reader 接着读，
+	// 不能一出错就把设备判成断开。只有流换不出来或短时间错误过多才停。
+	const BLU_READ_RECOVER_WINDOW_MS = 10000
+	const BLU_READ_RECOVER_MAX = 20
+	const BLU_STREAM_SWAP_WAIT_MS = 2000
+	// 每次启动读循环和关闭设备时递增：关后立刻重开时，旧循环据此退出，不去抢新循环的流
+	let bluReadGen = 0
+
+	function bluErrText(e) {
+		if (!e) return '未知错误'
+		const name = e.name && e.name !== 'Error' ? e.name + ' - ' : ''
+		return name + (e.message || String(e))
+	}
+
 	async function bluReadLoop() {
-		while (bluOpen && bluPort && bluPort.readable) {
-			const r = bluPort.readable.getReader()
+		const port = bluPort
+		const gen = ++bluReadGen
+		const alive = function () { return bluOpen && bluPort === port && bluReadGen === gen }
+		let prevStream = null
+		let recoverCount = 0
+		let recoverWindowTs = 0
+		let parseErrors = 0
+		while (alive()) {
+			// 换流是异步的，期间 readable 仍是刚结束的旧流，对它取 reader 只会立刻读到 done
+			if (port.readable && port.readable === prevStream) {
+				const t0 = Date.now()
+				while (alive() && port.readable === prevStream && Date.now() - t0 < BLU_STREAM_SWAP_WAIT_MS) {
+					await new Promise(function (resolve) { setTimeout(resolve, 50) })
+				}
+				if (!alive()) return
+			}
+			const stream = port.readable
+			if (!stream || stream === prevStream) {
+				bluLog('接收流未能重建', 'error')
+				break
+			}
+			prevStream = stream
+			let r
+			try {
+				r = stream.getReader()
+			} catch (e) {
+				bluLog('无法创建读取器：' + bluErrText(e), 'error')
+				break
+			}
 			bluReader = r
-			let streamError = false
+			let failure = null
 			try {
 				while (true) {
 					const { value, done } = await r.read()
 					if (done) break
-					if (value && value.length) handleBluChunk(value, performance.now())
+					if (!value || !value.length) continue
+					// 解析异常是本页代码的问题，与串口无关：记一次日志后继续收，不能当成读错误把设备断开
+					try {
+						handleBluChunk(value, performance.now())
+					} catch (e) {
+						if (++parseErrors === 1) {
+							bluLog('数据处理出错（已跳过，继续接收）：' + bluErrText(e), 'error')
+							console.error(e)
+						}
+					}
 				}
 			} catch (e) {
-				if (bluOpen) {
-					bluLog('读取错误：' + (e.message || e), 'error')
-					streamError = true
-				}
+				failure = e
 			} finally {
 				if (bluReader === r) bluReader = null
 				try { r.releaseLock() } catch (e) {}
 			}
-			if (streamError || !bluOpen) break
+			if (!alive()) return
+			const now = Date.now()
+			if (now - recoverWindowTs > BLU_READ_RECOVER_WINDOW_MS) {
+				recoverCount = 0
+				recoverWindowTs = now
+			}
+			if (++recoverCount > BLU_READ_RECOVER_MAX) {
+				bluLog('短时间内接收出错过多，已停止接收', 'error')
+				break
+			}
+			bluLog((failure ? '读取错误：' + bluErrText(failure) : '接收流被关闭') +
+				'，正在重新建立接收流；期间的数据可能丢失', 'warn')
 		}
-		if (bluOpen) {
+		if (alive()) {
 			bluOpen = false
 			setStatus('读取中断', false)
 			releaseWakeLock()
