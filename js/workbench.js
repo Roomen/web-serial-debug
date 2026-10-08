@@ -390,9 +390,6 @@
 			const rxWrap = span('sb-metric')
 			rxWrap.append(span('sb-k', 'RX'), rx)
 			const lastRx = span('sb-last-rx')
-			const lineErr = span('sb-line-err')
-			lineErr.hidden = true
-			lineErr.title = '浏览器报告的线路错误(FramingError/BreakError/ParityError)次数；若接收内容乱码请检查波特率等串口参数'
 			const rebuild = document.createElement('button')
 			rebuild.type = 'button'
 			rebuild.className = 'sb-receive-reset'
@@ -404,9 +401,9 @@
 				try { await window.serialApi.rebuildReceive(sid) }
 				finally { updateStatusBar() }
 			})
-			seg.append(dot, name, stateEl, txWrap, rxWrap, lastRx, lineErr, rebuild)
+			seg.append(dot, name, stateEl, txWrap, rxWrap, lastRx, rebuild)
 			left.appendChild(seg)
-			statusRefs.sessions[sid] = { seg: seg, name: name, state: stateEl, tx: tx, rx: rx, txWrap: txWrap, rxWrap: rxWrap, lastRx: lastRx, lineErr: lineErr, rebuild: rebuild }
+			statusRefs.sessions[sid] = { seg: seg, name: name, state: stateEl, tx: tx, rx: rx, txWrap: txWrap, rxWrap: rxWrap, lastRx: lastRx, rebuild: rebuild }
 		})
 		const tasks = span('sb-group sb-tasks')
 		statusRefs.tasks = TASKS.map(function (t, idx) {
@@ -457,8 +454,6 @@
 				const age = st.lastRxAt ? '上次接收 ' + Math.max(0, Math.floor((now - st.lastRxAt) / 1000)) + 's 前' : '未收到'
 				r.lastRx.textContent = age + (st.receivePaused ? ' · 接收暂缓' : '')
 			}
-			r.lineErr.hidden = !(st.lineErrors > 0)
-			if (st.lineErrors > 0) r.lineErr.textContent = '线路错误 ' + st.lineErrors
 			r.rebuild.disabled = !st.open || hub.isOpening(sid)
 			r.rebuild.setAttribute('aria-label', label + '：重建接收')
 		})

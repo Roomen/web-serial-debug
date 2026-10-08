@@ -74,11 +74,8 @@
 			openedAt: 0,
 			txBytes: 0,
 			rxBytes: 0,
-			//线路类读取错误(Framing/Break/Parity)的累计次数与"本连接已提示过"标记，随 resetStats 清零
-			lineErrors: 0,
-			lineErrNotified: false,
 			//当前合并包里是否含"紧随线路错误的全 0 块"，与 packBuf 的字节分开存放，flush 时一并取走
-			packNote: false,
+			packGlitch: false,
 		}
 	}
 	const sessionSingle = makeSerialSession('COM')
@@ -133,29 +130,19 @@
 			s.openedAt = Date.now()
 			s.txBytes = 0
 			s.rxBytes = 0
-			s.lineErrors = 0
-			s.lineErrNotified = false
 		},
 		getStats(sid) {
 			const s = this._sess(sid)
 			const w = rxWatch(sid)
-			return { open: s.open, openedAt: s.openedAt, txBytes: s.txBytes, rxBytes: s.rxBytes, lineErrors: s.lineErrors,
+			return { open: s.open, openedAt: s.openedAt, txBytes: s.txBytes, rxBytes: s.rxBytes,
 				lastRxAt: w.lastRxAt, receivePaused: w.backoff === readGenBySid[sid] && !!w.backoff }
 		},
-		//记一次线路类读取错误；返回 true 表示这是本连接第一次，调用方负责写一条提示
-		noteLineError(sid) {
+		markPackGlitch(sid) { this._sess(sid).packGlitch = true },
+		takePackGlitch(sid) {
 			const s = this._sess(sid)
-			s.lineErrors++
-			if (s.lineErrNotified) return false
-			s.lineErrNotified = true
-			return true
-		},
-		markPackNote(sid) { this._sess(sid).packNote = true },
-		takePackNote(sid) {
-			const s = this._sess(sid)
-			const note = s.packNote ? LOG_NOTE_LINE_GLITCH : ''
-			s.packNote = false
-			return note
+			const glitch = s.packGlitch
+			s.packGlitch = false
+			return glitch
 		},
 
 		isManualClose(sid) { return this._sess(sid).manualClose },
@@ -2713,9 +2700,7 @@
 				if (dir && dir.innerText) head.push(dir.innerText)
 				if (sess && sess.innerText) head.push(sess.innerText)
 				if (len && len.innerText) head.push(len.innerText)
-				const noteEl = node.querySelector('.log-note')
-				//行标注不属于串口数据，导出时用 " # " 隔开追加在行末
-				const content = (body ? body.innerText : '') + (noteEl && noteEl.innerText ? ' # ' + noteEl.innerText : '')
+				const content = body ? body.innerText : ''
 				lines.push((head.join(' ') + ' ' + content).trim())
 			} else {
 				const t = node.innerText
@@ -3006,7 +2991,7 @@
 		clearTimeout(SerialHub.getPackTimer(sid))
 		SerialHub.setPackTimer(sid, null)
 		SerialHub.setPackBuf(sid, [])
-		SerialHub.takePackNote(sid)
+		SerialHub.takePackGlitch(sid)
 		SerialHub.setPackStartTime(sid, null)
 		SerialHub.setSekWaitStart(sid, null)
 		if (r) {
@@ -3966,9 +3951,9 @@
 
 	// 接收流异常先尝试重建；重复异常限制重建频率，不把设备空闲判为断线。
 	const READ_RECOVER_WINDOW_MS = 10000
-	// 线路类错误：设备/线缆毛刺造成，接收流能照常重建。每个连接只提示一次，之后只计数
+	// 线路类错误：设备/线缆毛刺造成，接收流能照常重建。直接忽略：不提示、不计数
 	const LINE_ERROR_TYPES = ['FramingError', 'BreakError', 'ParityError']
-	// 线路错误之后到达的这类短全 0 块，多半是同一次毛刺的尾巴：只标注，不丢弃、不改字节
+	// 线路错误之后到达的这类短全 0 块，多半是同一次毛刺的尾巴：连续的只占一行日志，字节不改
 	const LINE_GLITCH_MAX_GAP_MS = 50
 	const LINE_GLITCH_MAX_BYTES = 8
 	function isLineGlitchBlock(value, errAt, now) {
@@ -3990,9 +3975,6 @@
 	}
 	function addLogErrSafe(msg, sid) {
 		try { addLogErr(msg, sid) } catch (e) {}
-	}
-	function addLogNoteSafe(msg, sid) {
-		try { addLogNote(msg, sid) } catch (e) {}
 	}
 	function scheduleDeferredRecover(sid, reasonMsg) {
 		const w = rxWatch(sid)
@@ -4148,9 +4130,6 @@
 			const errorType = error ? (error.name || 'UnknownError') : ''
 			const lineError = LINE_ERROR_TYPES.indexOf(errorType) !== -1
 			lineErrAt = lineError ? now : 0
-			if (lineError && SerialHub.noteLineError(sid)) {
-				addLogNoteSafe('检测到线路帧错误(' + sid + ')：' + errorType + '，后续同类错误只在状态栏计数；若接收内容乱码请检查波特率等串口参数', sid)
-			}
 			if (now - recoverWindowTs > READ_RECOVER_WINDOW_MS) {
 				recoverCount = 0
 				recoverWindowTs = now
@@ -4289,12 +4268,13 @@
 		return need
 	}
 
-	//note 是随包携带的行标注(不属于串口字节)，只在行日志里显示
-	function flushSerialPack(buf, startTime, sid, note) {
+	//glitch: 整包都是紧随线路错误的全 0 块，紧接在同一路上一条毛刺行之后的直接并入那一行(不新增行、不送解析)
+	function flushSerialPack(buf, startTime, sid, glitch) {
 		sid = sid || SerialHub.activeSendPhys()
 		SerialHub.setSekWaitStart(sid, null)
 		if (!buf || !buf.length) return
-		if (isRowLogType(getLogTypeForSid(sid))) addLog(buf, true, startTime, sid, note)
+		glitch = !!glitch && isAllZero(buf)
+		if (isRowLogType(getLogTypeForSid(sid)) && addLog(buf, true, startTime, sid, glitch) === 'merged') return
 		addParseLog(buf.slice ? buf.slice() : [...buf], true, startTime, sid)
 	}
 
@@ -4311,11 +4291,11 @@
 		clearTimeout(SerialHub.getPackTimer(sid))
 		const pack = buf.slice()
 		SerialHub.setPackBuf(sid, [])
-		flushSerialPack(pack, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackNote(sid))
+		flushSerialPack(pack, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackGlitch(sid))
 	}
 
 	//串口分包合并
-	//meta.lineGlitch: 这块数据紧随线路错误且全为 0，仅用于行日志标注，不影响字节
+	//meta.lineGlitch: 这块数据紧随线路错误且全为 0，只影响行日志合并，不影响字节
 	function dataReceived(data, sid, meta) {
 		sid = sid || SerialHub.activeSendPhys()
 		noteSerialRx(sid)
@@ -4362,16 +4342,16 @@
 		//不能用 push(...data)：单次读回的块可能上万字节(bufferSize 最大约 1.6M)，
 		//展开成实参会超出调用栈上限抛 RangeError，被外层当成读错误误判为断线
 		for (let i = 0; i < data.length; i++) packBuf.push(data[i])
-		if (meta && meta.lineGlitch) SerialHub.markPackNote(sid)
+		if (meta && meta.lineGlitch) SerialHub.markPackGlitch(sid)
 		if (sidOpts.timeOut == 0) {
-			flushSerialPack(packBuf, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackNote(sid))
+			flushSerialPack(packBuf, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackGlitch(sid))
 			SerialHub.setPackBuf(sid, [])
 			return
 		}
 		//持续不断的流永远等不到 timeOut 间隔，缓冲会一直涨到把页面撑爆，超上限就强制断包
 		if (packBuf.length >= SERIAL_PACK_MAX_BYTES) {
 			clearTimeout(SerialHub.getPackTimer(sid))
-			flushSerialPack(packBuf, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackNote(sid))
+			flushSerialPack(packBuf, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackGlitch(sid))
 			SerialHub.setPackBuf(sid, [])
 			return
 		}
@@ -4397,7 +4377,7 @@
 				}
 				const pack = curBuf.slice()
 				SerialHub.setPackBuf(sid, [])
-				flushSerialPack(pack, startTime, sid, SerialHub.takePackNote(sid))
+				flushSerialPack(pack, startTime, sid, SerialHub.takePackGlitch(sid))
 			}, packTimeOut))
 		}
 		armFlush()
@@ -4796,14 +4776,14 @@
 		}
 	}
 	//添加日志
-	//行标注：随行单独存放(data-note 属性 + .log-note 节点)，不进 data-hex / .log-body，重渲染与持久化都不会混进数据
-	const LOG_NOTE_LINE_GLITCH = 'line-glitch'
-	const LOG_NOTE_TEXTS = { 'line-glitch': '紧随帧错误，疑似线路毛刺' }
-	function addLog(data, isReceive = true, atTime = null, sid = null, note = '') {
+	//glitch 行带 data-glitch 标记；同一路最近一行已是毛刺行时直接并入(返回 'merged')，不新增行、不改已有行，避免刷屏
+	function addLog(data, isReceive = true, atTime = null, sid = null, glitch = false) {
 		sid = sid || SerialHub.activeSendPhys()
 		const logType = getLogTypeForSid(sid)
 		// term 模式不走行日志；TX 也不写进 xterm（设备自己 echo）
 		if (logType === 'term') return
+		const rowSid = sid === 'B' ? 'B' : (sid === 'S' ? 'S' : 'A')
+		if (glitch && lastRowIsGlitch(sid, rowSid)) return 'merged'
 		let form = isReceive ? 'RX' : 'TX'
 		//无论当前 logType 是什么都算出 HEX,点击行解析要用
 		const dataHex = bytesToHexArr(data)
@@ -4817,7 +4797,8 @@
 		row.setAttribute('data-hex', dataHex.join(' '))
 		row.setAttribute('data-ts', String(ts))
 		row.setAttribute('data-seq', String(++logSeq))
-		row.setAttribute('data-sid', sid === 'B' ? 'B' : (sid === 'S' ? 'S' : 'A'))
+		row.setAttribute('data-sid', rowSid)
+		if (glitch) row.setAttribute('data-glitch', '1')
 		const sess = SerialHub.logModeOf(sid) === 'dual'
 			? SerialHub.getSessionLabel(sid)
 			: ''
@@ -4830,14 +4811,18 @@
 			sessHtml +
 			'<span class="log-len">' + data.length + 'B</span>' +
 			'<span class="log-body">' + newmsg + '</span>'
-		if (note && LOG_NOTE_TEXTS[note]) {
-			row.setAttribute('data-note', note)
-			const noteSpan = document.createElement('span')
-			noteSpan.className = 'log-note'
-			noteSpan.textContent = LOG_NOTE_TEXTS[note]
-			row.appendChild(noteSpan)
-		}
 		appendLogNode(row, sid)
+	}
+	//该路在日志容器里的最后一行(含 TX/系统行)是否为毛刺行
+	function lastRowIsGlitch(sid, rowSid) {
+		const container = SerialHub.getLogContainerFor(SerialHub.logModeOf(sid))
+		if (!container) return false
+		for (let i = container.children.length - 1; i >= 0; i--) {
+			const row = container.children[i]
+			if (row.getAttribute('data-sid') !== rowSid) continue
+			return row.getAttribute('data-glitch') === '1'
+		}
+		return false
 	}
 	//第三方协议解析日志
 	function addParseLog(data, isReceive, atTime = null, sid, sendName) {
@@ -4934,13 +4919,6 @@
 	}
 	//系统日志：有物理 sid 写到对应模式容器；否则写当前可见模式
 	function addLogErr(msg, sid) {
-		addSysLog(msg, sid, 'text-danger')
-	}
-	//普通提示：同样的系统行结构，但不用红色错误样式
-	function addLogNote(msg, sid) {
-		addSysLog(msg, sid, 'text-muted', 'info')
-	}
-	function addSysLog(msg, sid, bodyCls, level) {
 		const target = (sid === 'S' || sid === 'A' || sid === 'B')
 			? sid
 			: (SerialHub.mode === 'dual' ? 'A' : 'S')
@@ -4949,7 +4927,6 @@
 		let row = document.createElement('div')
 		row.className = 'log-row'
 		row.setAttribute('data-dir', 'sys')
-		if (level) row.setAttribute('data-level', level)
 		row.setAttribute('data-ts', String(when.getTime()))
 		row.setAttribute('data-seq', String(++logSeq))
 		row.setAttribute('data-sid', sid === 'B' ? 'B' : (sid === 'S' ? 'S' : (sid === 'A' ? 'A' : 'SYS')))
@@ -4958,13 +4935,13 @@
 		timeSpan.textContent = time
 		const dirSpan = document.createElement('span')
 		dirSpan.className = 'log-dir'
-		dirSpan.textContent = level ? 'i' : '!'
+		dirSpan.textContent = '!'
 		const bodySpan = document.createElement('span')
-		bodySpan.className = 'log-body ' + bodyCls
+		bodySpan.className = 'log-body text-danger'
 		bodySpan.textContent = msg
 		row.append(timeSpan, dirSpan, bodySpan)
 		appendLogNode(row, target)
-		if (getLogTypeForSid(target) === 'term') showToast(msg, level ? 4000 : null, level ? 'info' : 'error')
+		if (getLogTypeForSid(target) === 'term') showToast(msg, null, 'error')
 	}
 
 	//轻量顶部气泡(非确认框)。kind='error' 用红色、停留更久
