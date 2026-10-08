@@ -131,14 +131,19 @@
 		},
 		getStats(sid) {
 			const s = this._sess(sid)
-			return { open: s.open, openedAt: s.openedAt, txBytes: s.txBytes, rxBytes: s.rxBytes }
+			const w = rxWatch(sid)
+			return { open: s.open, openedAt: s.openedAt, txBytes: s.txBytes, rxBytes: s.rxBytes,
+				lastRxAt: w.lastRxAt, receivePaused: w.backoff === readGenBySid[sid] && !!w.backoff }
 		},
 
 		isManualClose(sid) { return this._sess(sid).manualClose },
 		setManualClose(sid, v) { this._sess(sid).manualClose = v },
 
 		isOpening(sid) { return this._sess(sid).opening },
-		setOpening(sid, v) { this._sess(sid).opening = v },
+		setOpening(sid, v) {
+			this._sess(sid).opening = v
+			if (window.Workbench) window.Workbench.refreshStatus()
+		},
 
 		getReader(sid) { return this._sess(sid).reader },
 		setReader(sid, r) { this._sess(sid).reader = r },
@@ -2968,6 +2973,7 @@
 	//所有释放路径(手动关闭/读流死/打开前清理/页面销毁)统一走这里, 避免 OS 句柄泄漏导致下次 open 报 NetworkError
 	async function releasePort(sid) {
 		sid = sid || SerialHub.activeSendPhys()
+		++readGenBySid[sid]
 		resetRxWatch(sid)
 		const port = SerialHub.getPort(sid)
 		const r = SerialHub.getReader(sid)
@@ -3151,9 +3157,12 @@
 		requestWakeLock(sid)
 		const w = rxWatch(sid)
 		w.openedAt = Date.now()
-		// rxRecover 仅表示自动重开后继续监控,不再驱动 stall 计时
+		// 手动重开允许重新尝试恢复
 		if (reason === 'user') reopenAttemptBySid[sid] = 0
-		readData(sid).catch(function (e) {
+		const readPromise = readData(sid)
+		const readGen = readGenBySid[sid]
+		readPromise.catch(function (e) {
+			if (readGenBySid[sid] !== readGen) return
 			addLogErrSafe('串口读取循环异常退出(' + sid + '): ' + (e && e.message ? e.message : e), sid)
 			if (SerialHub.isOpen(sid) && !SerialHub.isManualClose(sid)) {
 				recoverDeadReadLoop(sid, '读取循环异常退出，正在尝试重新打开').catch(function () {})
@@ -3796,6 +3805,7 @@
 		}
 	})
 	function serialStatuChange(statu, sid) {
+		if (window.Workbench) window.Workbench.refreshStatus()
 		sid = sid || SerialHub.uiSid('A')
 		if (!SerialHub.isVisible(sid)) return
 		// sid=B 永远写 #serial-status-b；双路 A 写 -a、单路 S 写 #serial-status
@@ -3929,22 +3939,19 @@
 		}
 	}
 
-	//线路层瞬时错误:设备还在,流只是被这一帧的错误打断,重新取 reader 即可继续收
-	//(长时间挂测时溢出/断帧几乎必然出现一次,不该因此判定断线)
-	const RECOVERABLE_READ_ERRORS = ['BufferOverrunError', 'BreakError', 'FramingError', 'ParityError']
+	// 接收流异常先尝试重建；重复异常限制重建频率，不把设备空闲判为断线。
 	const READ_RECOVER_WINDOW_MS = 10000
 	const READ_RECOVER_MAX = 20
 	const READ_STREAM_SWAP_WAIT_MS = 2000
-	// 每次启动读循环递增，等待换流期间若已关闭重开过，旧循环据此退出，不跨连接去抢新流
+	const READ_BACKOFF_DELAYS = [1000, 3000, 10000]
+	// 启动读循环及释放串口时递增，旧循环据此退出，不跨连接抢新流或处理迟到数据
 	const readGenBySid = { S: 0, A: 0, B: 0 }
-	// 卡死检测超时:读循环异常退出或线路错误后,等待此长时间仍无数据则判定 USB IN 卡死
-	const RX_STALL_MS = 2000
 	const REOPEN_DELAYS = [300, 1000, 3000]
 	const REOPEN_STABLE_MS = 10000
 	const reopenAttemptBySid = { S: 0, A: 0, B: 0 }
 
 	function makeRxWatch() {
-		return { lastRxAt: 0, openedAt: 0, kick: false, kickTried: false, swapping: 0, timer: null, deferTimer: null }
+		return { lastRxAt: 0, openedAt: 0, swapping: 0, backoff: 0, deferTimer: null }
 	}
 	function addLogErrSafe(msg, sid) {
 		try { addLogErr(msg, sid) } catch (e) {}
@@ -3974,13 +3981,10 @@
 	}
 	function resetRxWatch(sid) {
 		const w = rxWatch(sid)
-		clearTimeout(w.timer)
-		w.timer = null
 		w.lastRxAt = 0
 		w.openedAt = 0
-		w.kick = false
-		w.kickTried = false
 		w.swapping = 0
+		w.backoff = 0
 		if (w.deferTimer) {
 			clearInterval(w.deferTimer)
 			w.deferTimer = null
@@ -3989,48 +3993,7 @@
 	function noteSerialRx(sid) {
 		const w = rxWatch(sid)
 		w.lastRxAt = Date.now()
-		w.kickTried = false
 		reopenAttemptBySid[sid] = 0
-		clearTimeout(w.timer)
-		w.timer = null
-	}
-	function armRxStallWatch(sid) {
-		if (rxWatchSuppressed()) return
-		if (!SerialHub.isOpen(sid)) return
-		const w = rxWatch(sid)
-		const base = w.lastRxAt || w.openedAt
-		if (!base) return
-		const wait = RX_STALL_MS
-		clearTimeout(w.timer)
-		w.timer = setTimeout(function () {
-			w.timer = null
-			if (!SerialHub.isOpen(sid) || rxWatchSuppressed()) return
-			const last = w.lastRxAt || w.openedAt
-			if (last && Date.now() - last < wait) return
-			recoverStalledReader(sid)
-		}, wait)
-	}
-	async function recoverStalledReader(sid) {
-		if (rxWatchSuppressed()) return
-		if (!SerialHub.isOpen(sid) || SerialHub.isOpening(sid) || SerialHub.isManualClose(sid)) return
-		const w = rxWatch(sid)
-		const port = SerialHub.getPort(sid)
-		if (!port) return
-		if (!w.kickTried) {
-			w.kickTried = true
-			addLogErr('接收已停止，正在尝试恢复读取', sid)
-			const r = SerialHub.getReader(sid)
-			if (r) {
-				w.kick = true
-				try { await r.cancel() } catch (e) {}
-				armRxStallWatch(sid)
-				return
-			}
-			await recoverDeadReadLoop(sid, '读取循环已停止，正在重新打开串口')
-			return
-		}
-		addLogErr('恢复接收后仍无数据，正在重新打开串口', sid)
-		await recoverDeadReadLoop(sid, null)
 	}
 	async function recoverDeadReadLoop(sid, reasonMsg) {
 		if (!SerialHub.getPort(sid)) return
@@ -4066,7 +4029,7 @@
 					SerialHub.setOpening(sid, false)
 					return
 				}
-				openSerial(sid, { reason: 'hotplug', rxRecover: true }).then(function (ok) {
+				openSerial(sid, { reason: 'hotplug' }).then(function (ok) {
 					SerialHub.setOpening(sid, false)
 					// 打开失败时 readData 不会启动,继续下一档退避;成功则由读循环自己负责后续恢复
 					if (!ok && !SerialHub.isManualClose(sid) && SerialHub.getPort(sid)) {
@@ -4084,50 +4047,115 @@
 	function kickReaderOnForeground(sid) {
 		if (!SerialHub.isOpen(sid) || rxWatchSuppressed()) return
 		const w = rxWatch(sid)
-		const lastActive = w.lastRxAt || w.openedAt
-		if (lastActive && Date.now() - lastActive < 5000) return
+		const gen = readGenBySid[sid]
 		const r = SerialHub.getReader(sid)
 		if (!r) {
-			// 正在等 cancel 后的新流，读循环还活着
-			if (w.swapping) return
+			// 正在等系统重建接收流，读循环还活着
+			if (w.swapping || w.backoff) return
 			// 刚 setOpen 时 readData 可能还没取到 reader,延迟确认后再判定循环已死
 			setTimeout(function () {
+				if (readGenBySid[sid] !== gen) return
 				if (!SerialHub.isOpen(sid) || SerialHub.isOpening(sid) || SerialHub.isManualClose(sid)) return
-				if (rxWatchSuppressed() || SerialHub.getReader(sid) || w.swapping) return
+				if (rxWatchSuppressed() || SerialHub.getReader(sid) || w.swapping || w.backoff) return
 				addLogErr('切回前台时读取循环已停止，正在重新打开串口', sid)
 				recoverDeadReadLoop(sid, null)
 			}, 500)
 			return
 		}
-		w.kick = true
-		r.cancel().catch(function () {})
+		// 有 reader 时，无数据可能只是设备空闲；切回前台不主动取消健康的接收流。
 	}
 
-	//读串口数据
+	// 手动兜底：完整重开同一物理口，保留重连意图，不走错误恢复的退避计数。
+	async function rebuildSerialReceive(sid) {
+		if (!['S', 'A', 'B'].includes(sid) || !SerialHub.isOpen(sid) || SerialHub.isOpening(sid)) return false
+		const port = SerialHub.getPort(sid)
+		if (!port) return false
+		SerialHub.setOpening(sid, true)
+		reopenAttemptBySid[sid] = 0
+		try {
+			addLogErr('正在手动重建接收(' + sid + ')', sid)
+			SerialHub.setOpen(sid, false)
+			serialStatuChange(false, sid)
+			updateOpenButton(sid)
+			const releasing = releasePort(sid)
+			const gen = readGenBySid[sid]
+			await releasing
+			if (SerialHub.isManualClose(sid) || readGenBySid[sid] !== gen || SerialHub.getPort(sid) !== port) return false
+			return await openSerial(sid, { reason: 'receive-rebuild' })
+		} catch (error) {
+			addLogErrSafe('手动重建接收失败(' + sid + '): ' + (error.name || 'UnknownError') + ' - ' + (error.message || '未知错误'), sid)
+			return false
+		} finally {
+			SerialHub.setOpening(sid, false)
+		}
+	}
+
+	//读串口数据：只由流关闭/异常触发恢复，无收发活动不构成故障。
 	async function readData(sid) {
 		sid = sid || SerialHub.activeSendPhys()
-		let streamError = false
-		let streamClosed = false
 		let recoverCount = 0
 		let recoverWindowTs = 0
+		let backoffLevel = -1
+		let reportAt = Date.now()
+		let errorCount = 0
+		let closedCount = 0
 		let prevStream = null
-		let softClosed = false
 		const port = SerialHub.getPort(sid)
 		const w = rxWatch(sid)
 		const gen = ++readGenBySid[sid]
 		const alive = function () { return SerialHub.isOpen(sid) && readGenBySid[sid] === gen }
+		function noteFailure(error) {
+			const now = Date.now()
+			if (now - recoverWindowTs > READ_RECOVER_WINDOW_MS) {
+				recoverCount = 0
+				recoverWindowTs = now
+			}
+			recoverCount++
+			if (error) errorCount++
+			else closedCount++
+			if (backoffLevel < 0 && recoverCount > READ_RECOVER_MAX) backoffLevel = 0
+			if (backoffLevel < 0 && recoverCount === 1) {
+				if (error) {
+					const errorType = error.name || 'UnknownError'
+					const hint = errorType === 'NetworkError' || errorType === 'DeviceLostError'
+						? '设备可能已断开连接'
+						: (errorType === 'SecurityError' ? '串口权限错误，请重新授权' : '')
+					addLogErr('串口读取错误(' + sid + '): ' + errorType + ' - ' + (error.message || '未知错误') +
+						(hint ? '' : '，正在重新建立接收流；错误期间的数据可能丢失'), sid)
+					if (hint) addLogErr(hint, sid)
+				} else {
+					addLogErr('串口接收流已关闭(' + sid + ')，正在重新建立接收流', sid)
+				}
+			}
+		}
 
-		while (SerialHub.isOpen(sid) && port) {
+		while (alive() && port) {
+			if (backoffLevel >= 0) {
+				const delay = READ_BACKOFF_DELAYS[backoffLevel]
+				const now = Date.now()
+				addLogErr('过去 ' + Math.max(1, Math.ceil((now - reportAt) / 1000)) + ' 秒读取错误 ' + errorCount + ' 次、接收流关闭 ' + closedCount + ' 次，接收暂缓 ' + delay / 1000 + 's', sid)
+				reportAt = now
+				errorCount = 0
+				closedCount = 0
+				w.backoff = gen
+				try {
+					const deadline = now + delay
+					while (alive() && Date.now() < deadline) {
+						await new Promise(function (resolve) { setTimeout(resolve, Math.min(50, deadline - Date.now())) })
+					}
+				} finally {
+					if (w.backoff === gen) w.backoff = 0
+				}
+				if (!alive()) return
+				backoffLevel = Math.min(backoffLevel + 1, READ_BACKOFF_DELAYS.length - 1)
+			}
 			if (!port.readable) {
-				streamError = true
 				addLogErr('串口读取流不可用(' + sid + ')，将尝试重新打开', sid)
 				break
 			}
-			// cancel 后 Chromium 要等底层异步清理完才换新流，这之前 readable 仍是旧的已关闭流，
-			// 立刻 getReader 会马上读到 done：切回前台踢读器后被误判成「读取流已关闭」而整口重开
+			// Chromium 异步重建接收流，不能反复获取同一已关闭流的 reader。
 			if (port.readable === prevStream) {
 				const t0 = Date.now()
-				// 存代次而非布尔：旧循环醒来时不能清掉新循环的等待标志
 				w.swapping = gen
 				while (alive() && port.readable === prevStream && Date.now() - t0 < READ_STREAM_SWAP_WAIT_MS) {
 					await new Promise(function (resolve) { setTimeout(resolve, 50) })
@@ -4135,7 +4163,6 @@
 				if (w.swapping === gen) w.swapping = 0
 				if (!alive()) return
 				if (!port.readable || port.readable === prevStream) {
-					streamError = true
 					addLogErr('串口读取流未能重建(' + sid + ')，将尝试重新打开', sid)
 					break
 				}
@@ -4145,34 +4172,26 @@
 			try {
 				r = prevStream.getReader()
 			} catch (error) {
-				const errorType = error.name || 'UnknownError'
-				const errorMsg = error.message || '未知错误'
-				addLogErr('无法创建串口读取器(' + sid + '): ' + errorType + ' - ' + errorMsg, sid)
-				streamError = true
+				addLogErr('无法创建串口读取器(' + sid + '): ' + (error.name || 'UnknownError') + ' - ' + (error.message || '未知错误'), sid)
 				break
 			}
 			SerialHub.setReader(sid, r)
-			if (softClosed) {
-				softClosed = false
-				addLogErr('串口读取流被系统关闭(' + sid + ')，已自动恢复继续接收', sid)
-			}
 			try {
 				while (true) {
 					const { value, done } = await r.read()
+					if (!alive()) return
 					if (done) {
-						if (w.kick) break
-						// 非主动 cancel 的 done：端口仍在就等新流换 reader 接着读，不整口重开
-						const now = Date.now()
-						if (now - recoverWindowTs > READ_RECOVER_WINDOW_MS) {
-							recoverCount = 0
-							recoverWindowTs = now
-						}
-						recoverCount++
-						if (recoverCount > READ_RECOVER_MAX) streamClosed = true
-						else softClosed = true
+						noteFailure(null)
 						break
 					}
 					if (!value || !value.length) continue
+					if (backoffLevel >= 0) addLogErr('接收已恢复(' + sid + ')', sid)
+					backoffLevel = -1
+					recoverCount = 0
+					recoverWindowTs = Date.now()
+					reportAt = Date.now()
+					errorCount = 0
+					closedCount = 0
 					try {
 						dataReceived(value, sid)
 					} catch (e) {
@@ -4180,60 +4199,15 @@
 					}
 				}
 			} catch (error) {
-				if (w.kick) {
-					// 主动 cancel 以恢复卡住的 USB IN, 不当作断线
-				} else if (SerialHub.isOpen(sid)) {
-					const errorType = error.name || 'UnknownError'
-					const errorMsg = error.message || '未知错误'
-					const canRecover = RECOVERABLE_READ_ERRORS.indexOf(errorType) !== -1 &&
-						port && port.readable
-					if (canRecover) {
-						const now = Date.now()
-						if (now - recoverWindowTs > READ_RECOVER_WINDOW_MS) {
-							recoverCount = 0
-							recoverWindowTs = now
-						}
-						recoverCount++
-						if (recoverCount > READ_RECOVER_MAX) {
-							addLogErr('串口读取错误(' + sid + '): ' + errorType + ' - ' + errorMsg, sid)
-							addLogErr('短时间内错误过多，已停止自动恢复，请检查波特率/接线/缓冲区大小', sid)
-							streamError = true
-						} else {
-							addLogErr('串口读取错误(' + sid + '): ' + errorType + ' - ' + errorMsg + '，已自动恢复继续接收', sid)
-							armRxStallWatch(sid)
-						}
-					} else {
-						addLogErr('串口读取错误(' + sid + '): ' + errorType + ' - ' + errorMsg, sid)
-						if (errorType === 'NetworkError' || errorType === 'DeviceLostError') {
-							addLogErr('设备可能已断开连接', sid)
-						} else if (errorType === 'SecurityError') {
-							addLogErr('串口权限错误，请重新授权', sid)
-						}
-						streamError = true
-					}
-				}
+				if (!alive()) return
+				noteFailure(error)
 			} finally {
-				w.kick = false
 				if (SerialHub.getReader(sid) === r) SerialHub.setReader(sid, null)
-				try {
-					r.releaseLock()
-				} catch (e) {}
-			}
-			if (streamError || streamClosed || !SerialHub.isOpen(sid)) break
-			if (!port.readable) {
-				streamError = true
-				addLogErr('串口读取流已失效(' + sid + ')，将尝试重新打开', sid)
-				break
+				try { r.releaseLock() } catch (e) {}
 			}
 		}
-
-		if (SerialHub.isOpen(sid) && !SerialHub.isManualClose(sid)) {
-			const msg = streamError
-				? '读取中断，可重新打开串口或等待设备重连'
-				: (streamClosed
-					? '串口读取流已关闭(' + sid + ')，可重新打开串口'
-					: '串口读取循环已停止(' + sid + ')，将尝试重新打开')
-			await recoverDeadReadLoop(sid, msg)
+		if (alive() && !SerialHub.isManualClose(sid)) {
+			await recoverDeadReadLoop(sid, '读取流无法重建，正在尝试重新打开串口')
 		}
 	}
 
@@ -4382,6 +4356,9 @@
 	//对外暴露的串口接口(供固件升级/协议测试等模块使用)
 	//onReceive 支持多订阅者; 旧单回调 _onReceive 仍兼容
 	window.serialApi = {
+		async rebuildReceive(id) {
+			return await rebuildSerialReceive(id)
+		},
 		async writeData(data) {
 			await writeData(data, SerialHub.activeSendPhys())
 		},

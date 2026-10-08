@@ -7449,6 +7449,31 @@ body.blu-wave-fullscreen-open {
   color: var(--text-primary);
 }
 
+.sb-last-rx {
+	font-variant-numeric: tabular-nums;
+}
+
+.sb-receive-reset {
+	padding: 1px 5px;
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text-secondary);
+	font: inherit;
+}
+
+.sb-receive-reset:disabled {
+	opacity: 0.45;
+}
+
+#serial-statusbar {
+	overflow-x: auto;
+}
+
+#serial-statusbar .sb-group {
+	flex-shrink: 0;
+}
+
 .sb-task {
   display: inline-flex;
   align-items: center;
