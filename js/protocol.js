@@ -2137,6 +2137,113 @@
 		return h
 	}
 
+	// 日志「解析」格式的视图模型（渲染与转义见 js/parse-view.js）；不是 SEK 帧返回 null
+	const LOG_META_LABEL = { 协议版本号: '协议版本', 信号强度RSRP: 'RSRP', 信噪比SNR: 'SNR', 覆盖等级ECL: 'ECL', 信号质量CSQ: 'CSQ' }
+	const LOG_META_SKIP = ['帧结束符', '数据域字节数', '平台时间BCD', '控制码', '功能码', '设备唯一编码']
+	function logFieldText(v) {
+		if (v == null) return ''
+		if (typeof v === 'object' && !Array.isArray(v)) {
+			if (v.name !== undefined) return v.value + (v.name ? ' ' + v.name : '')
+			return ''
+		}
+		return String(v)
+	}
+	function logResultKind(code) {
+		if (code === 1) return 'ok'
+		if (code === 0) return 'warn'
+		return 'bad'
+	}
+	function logTagItems(t, sec) {
+		const items = t.items || []
+		const pairOf = function (it) {
+			const kind = it.resultCode !== undefined ? logResultKind(it.resultCode) : ''
+			return [it.name || ('ID' + it.id), it.decoded || hexbytes(it.raw), 'ID' + it.id, kind]
+		}
+		const regular = []
+		let html = ''
+		items.forEach(function (it) {
+			if (it.series && it.seriesRows && it.seriesRows.length) html += seriesPanelHtml(it, 'raw:' + escHtml(hexbytes(it.raw)), null)
+			else regular.push(it)
+		})
+		const groups = W.SK_TAG_GROUPS && W.SK_TAG_GROUPS[String(t.tag)]
+		if (groups) {
+			const used = new Set()
+			sec.groups = []
+			groups.forEach(function (g) {
+				const gi = regular.filter(function (it) { return g.ids.indexOf(it.id) >= 0 })
+				if (!gi.length) return
+				gi.forEach(function (it) { used.add(it.id) })
+				sec.groups.push({ title: g.title, pairs: gi.map(pairOf) })
+			})
+			const rest = regular.filter(function (it) { return !used.has(it.id) })
+			if (rest.length) sec.groups.push({ title: '其它', pairs: rest.map(pairOf) })
+		} else if (regular.length) {
+			sec.pairs = regular.map(pairOf)
+		}
+		if (html) sec.html = html
+	}
+	W.skLogView = function (r) {
+		if (!r || !r.fields || (r.dir !== 'up' && r.dir !== 'down')) return null
+		const errs = r.errors || []
+		if (errs.indexOf('帧起始符错误') >= 0) return null
+		const f = r.fields
+		const fcObj = f['功能码']
+		const fc = fcObj && typeof fcObj === 'object' ? fcObj.value : fcObj
+		const fcName = fcObj && typeof fcObj === 'object' ? fcObj.name : ''
+		const fcHex = fc == null ? '' : '0x' + (fc & 0xff).toString(16).toUpperCase().padStart(2, '0')
+		const m = { title: fcName || '未知功能码', code: fcHex, dir: r.dir, badges: [], meta: [], notes: [], sections: [], errors: [] }
+		if (r.dir === 'up' && f['设备唯一编码']) m.subject = { label: '设备', value: f['设备唯一编码'] }
+		// 校验、加密、截断、后续帧
+		if (r.missingTail) m.badges.push({ text: '无CRC', kind: 'warn', title: '缺少 CRC 与帧结束符（帧未收完）' })
+		else if (!r.crcOk) m.badges.push({ text: 'CRC ✗', kind: 'bad', title: 'CRC 校验失败 收到0x' + (r.crcRecv >>> 0).toString(16) + ' 计算0x' + (r.crcCalc >>> 0).toString(16) })
+		else m.badges.push({ text: 'CRC ✓', kind: 'ok', title: 'CRC 校验通过' })
+		if (!r.missingTail && !r.endOk) m.badges.push({ text: '结束符✗', kind: 'bad', title: '帧结束符不是 0x16' })
+		if (r.encrypted) {
+			if (r.needKey) m.badges.push({ text: '🔒 缺密钥', kind: 'warn', title: '加密报文，需要密钥' })
+			else if (!r.decryptOk) m.badges.push({ text: '🔒 解密失败', kind: 'warn', title: 'AES 解密失败，检查密钥与加密方式' })
+			else m.badges.push({ text: '🔒', kind: 'info', title: '加密报文，已解密' })
+		}
+		if (r.truncated || r.missingTail) m.badges.push({ text: '截断', kind: 'warn', title: '报文长度不足声明的数据域长度' })
+		if (f['控制码'] && f['控制码']['后续帧']) m.badges.push({ text: '后续帧', kind: 'info', title: '控制码标明还有后续帧' })
+		// 其余帧头信息
+		for (const k in f) {
+			if (LOG_META_SKIP.indexOf(k) >= 0) continue
+			const txt = logFieldText(f[k])
+			if (txt !== '') m.meta.push([LOG_META_LABEL[k] || k, txt])
+		}
+		if (r.needKey) m.notes.push({ kind: 'warn', text: '加密报文：请在协议面板「高级 · 加解密与密钥」填入密钥后再解析' })
+		// 基准水量：只在这帧的流量字段确实要用到基准时才提示
+		const sb = r.sessionBase || { has: W.skSession.hasBase(), label: W.skSession.baseLabel, source: W.skSession.baseSource }
+		const tlv = r.tlv || []
+		const needBase = tlv.some(function (t) {
+			return (t.items || []).some(function (it) { return it.seriesBase || (it.decoded && String(it.decoded).indexOf('1L默认') >= 0) })
+		})
+		const tagNeedsBase = function (t) {
+			if (t.tag === 9 || (t.tag >= 94 && t.tag <= 99)) return true
+			if (t.tag !== 5) return false
+			return (t.items || []).some(function (it) { return it.id !== 20 })
+		}
+		const usesBase = needBase || tlv.some(tagNeedsBase)
+		if (sb.has) {
+			if (usesBase) m.notes.push({ kind: 'info', text: '基准水量 ' + sb.label + (sb.source ? '（' + sb.source + '·本会话）' : '') + '，流量已换算为升/立方米' })
+		} else if (usesBase) {
+			m.notes.push({ kind: 'warn', text: '未读到基准水量（Tag2/3 ID29），流量暂按 1L/圈 显示，建议先「查询核心数据」或「查询终端参数」' })
+		}
+		tlv.forEach(function (t) {
+			const sec = { title: 'Tag' + t.tag + ' ' + (t.name || '') }
+			if (t.error) sec.errors = [t.error]
+			logTagItems(t, sec)
+			m.sections.push(sec)
+		})
+		errs.forEach(function (e) {
+			if (e === '加密报文,请输入密钥' || e === '无法解析') return
+			m.errors.push(e)
+		})
+		// 帧起始符对但什么字段都没解出来：当作不是本协议的帧
+		if (!m.sections.length && !m.meta.length && !m.subject) return null
+		return m
+	}
+
 	//生成「字节偏移 -> {tip, grp}」映射,供日志 HEX 悬停提示使用
 	//grp 相同的字节在悬停时一起高亮(同一字段 / 同一 TLV ID)
 	W.skByteMap = function (r) {

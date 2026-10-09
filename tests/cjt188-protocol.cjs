@@ -4,9 +4,8 @@ const fs = require('node:fs')
 const vm = require('node:vm')
 const path = require('node:path')
 const window = { registerProtocol() {} }
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/cjt188-protocol.js'), 'utf8'), {
-	window, Uint8Array, document: { getElementById() { return null } },
-})
+const context = vm.createContext({ window, Uint8Array, document: { getElementById() { return null } } })
+for (const file of ['parse-view', 'cjt188-protocol']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/' + file + '.js'), 'utf8'), context)
 const parse = window.cjt188ParseFrame
 const find = window.cjt188FindFrame
 const byteMap = window.cjt188ByteMap
@@ -78,4 +77,29 @@ assert.ok(byteMap(result).slice(3).every(label => label === ''))
 const corrupted = malformed.slice()
 corrupted[17] ^= 1
 assert.doesNotMatch(parse(corrupted).errors.join(), /地址偏移/)
+
+// 日志「解析」视图模型: 合法帧给带 title 的模型，垃圾数据返回 null；模型里的文本保持原样，转义是渲染器的事
+const J = x => JSON.parse(JSON.stringify(x))
+{
+	const m = J(window.cjt188LogView(parse(read)))
+	assert.equal(m.title, '读数据')
+	assert.equal(m.code, '0x01')
+	assert.equal(m.dir, 'up')
+	assert.deepEqual(m.subject, { label: '表号', value: '12345678901234' })
+	assert.ok(m.badges.some(b => b.text === '应答') && m.badges.some(b => b.kind === 'ok'))
+	assert.deepEqual(m.sections[0].pairs[0], ['当前累计流量', 'BCD 1', '单位标识 0x29'])
+	assert.equal(window.cjt188LogView(parse(request)).dir, 'down')
+	assert.equal(window.cjt188LogView(parse(request)).subject.value.includes('广播'), true)
+	// 校验和错误仍给模型，但带醒目的失败徽标
+	const bad = read.slice()
+	bad[bad.length - 2] ^= 1
+	assert.ok(window.cjt188LogView(parse(bad)).badges.some(b => b.kind === 'bad'))
+	for (const junk of [[], [0xfe, 0xfe], hex('00 11 22 33'), noise, [0x68, 0x10]]) assert.equal(window.cjt188LogView(parse(junk)), null)
+	// 设备字符串原样放进模型，渲染时才转义
+	const evil = J(window.cjt188LogView({ fields: { 功能码: { value: '0x01', name: '<img src=x>' }, 表号: '<script>', 数据标识: '', 序号: 0 }, dir: 'up', errors: [], ctrl: 0x81, dataLen: 3, csOk: true, endOk: true }))
+	assert.equal(evil.title, '<img src=x>')
+	assert.equal(evil.subject.value, '<script>')
+	const html = window.ParseView.render(evil)
+	assert.ok(!html.includes('<img') && !html.includes('<script>') && html.includes('&lt;script&gt;'))
+}
 console.log('CJ/T 188 regression checks passed')

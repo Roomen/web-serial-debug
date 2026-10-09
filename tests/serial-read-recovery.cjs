@@ -309,7 +309,6 @@ function packHarness(timeOut) {
 	let timerId = 0
 	const timers = new Map()
 	const flushed = []
-	const parsed = []
 	let addLogResult
 	const sess = { packBuf: [], packTimer: null, packStartTime: null, sekWaitStart: null, rxBytes: 0, packGlitch: false }
 	const hub = {
@@ -322,24 +321,27 @@ function packHarness(timeOut) {
 		getPort: () => null, getReader: () => null, setReader: () => {}
 	}
 	const context = vm.createContext({
-		SerialHub: hub, window: {}, toolOptions: {},
+		SerialHub: hub, window: {}, toolOptions: {}, logType: 'hex',
 		setTimeout: (fn, ms) => { const id = ++timerId; timers.set(id, fn); return id },
 		clearTimeout: id => timers.delete(id),
-		noteSerialRx: () => {}, getLogTypeForSid: () => 'hex', logOptionsForSid: () => ({ timeOut }),
+		noteSerialRx: () => {}, getLogTypeForSid: () => context.logType, logOptionsForSid: () => ({ timeOut }),
 		isRowLogType: () => true, schedulePersistLogs: () => {},
 		addLog: (buf, isReceive, startTime, sid, glitch) => { flushed.push({ bytes: [...buf], glitch }); return addLogResult },
-		addParseLog: buf => parsed.push([...buf]), SERIAL_PACK_MAX_BYTES: 65536, readGenBySid: { S: 0 }, resetRxWatch: () => {}, portHeldByOther: () => false
+		parseLogType: t => ({ parse: /parse/.test(t) }), SERIAL_PACK_MAX_BYTES: 65536, SEK_INCOMPLETE_WAIT_MAX_MS: 3000, readGenBySid: { S: 0 }, resetRxWatch: () => {}, portHeldByOther: () => false
 	})
+	const peekStart = source.indexOf('\tfunction peekSekIncompleteNeed(')
+	const peekEnd = source.indexOf('\n\t}\n', peekStart) + 4
 	const flushStart = source.indexOf('\tfunction flushSerialPack(')
 	const flushEnd = source.indexOf('\t//对外暴露的串口接口', flushStart)
 	const zeroStart = source.indexOf('\tfunction isAllZero(')
 	const zeroEnd = source.indexOf('\n\t}\n', zeroStart) + 4
 	vm.runInContext(`Object.assign(SerialHub, { ${source.slice(statsStart, statsEnd)} })
 		${source.slice(zeroStart, zeroEnd)}
+		${source.slice(peekStart, peekEnd)}
 		${source.slice(flushStart, flushEnd)}
 		${source.slice(releaseStart, releaseEnd)}
 		globalThis.api = { dataReceived, flushPendingRx, releasePort }`, context)
-	return { api: context.api, flushed, parsed, hub, setAddLogResult: v => { addLogResult = v }, fire: () => { const all = [...timers.values()]; timers.clear(); all.forEach(fn => fn()) } }
+	return { api: context.api, context, flushed, hub, setAddLogResult: v => { addLogResult = v }, fire: () => { const all = [...timers.values()]; timers.clear(); all.forEach(fn => fn()) } }
 }
 
 async function testPackGlitch() {
@@ -364,13 +366,23 @@ async function testPackGlitch() {
 	direct.api.dataReceived(Uint8Array.of(0, 0), 'S')
 	assert.deepEqual(direct.flushed, [{ bytes: [0, 0], glitch: true }, { bytes: [0, 0], glitch: false }])
 
-	// 并入上一条毛刺行的包不再送协议解析；新开的毛刺行照常送
+	// 并入上一条毛刺行时 addLog 返回 merged，不再新增行
 	const parse = packHarness(0)
 	parse.api.dataReceived(Uint8Array.of(0, 0), 'S', { lineGlitch: true })
 	parse.setAddLogResult('merged')
 	parse.api.dataReceived(Uint8Array.of(0, 0), 'S', { lineGlitch: true })
 	assert.equal(parse.flushed.length, 2)
-	assert.deepEqual(parse.parsed, [[0, 0]])
+
+	// 日志格式含「解析」时，未收满声明长度的 SEK 帧在分包超时后继续等；不含解析且当前协议不是 SEK 时照常输出
+	const half = Uint8Array.from([0xA9, 0x9A, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0])
+	for (const [type, waits] of [['hex', false], ['hex&parse', true], ['parse', true], ['text', false]]) {
+		const h = packHarness(50)
+		h.context.logType = type
+		h.context.window._activeProtocol = 'gz'
+		h.api.dataReceived(half, 'S')
+		h.fire()
+		assert.equal(h.flushed.length, waits ? 0 : 1, type)
+	}
 
 	// releasePort 清掉分包缓冲时一并清毛刺标记：新连接的第一包不得带上旧连接的标记
 	const released = packHarness(50)
@@ -400,15 +412,18 @@ function renderHarness() {
 		textdecoder: new TextDecoder(), toolOptions: { showTime: false },
 		HTMLEncode: t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
 		attrEscape: t => t, ansi_up: { ansi_to_html: t => t }, logSeq: 0, formatDate: () => '',
-		document: { createElement: element },
+		document: { createElement: element }, window: {}, getProtocolParseOpts: () => ({}),
+		skParseFrame: data => ({ raw: Array.from(data) }),
 		SerialHub: { activeSendPhys: () => 'A', logModeOf: () => 'dual', getSessionLabel: () => 'A路',
 			getLogContainerFor: () => ({ children: rows }) },
 		logType: 'hex', getLogTypeForSid: () => context.logType,
 		appendLogNode: (row) => rows.push(row), isRowLogType: () => true
 	})
 	const a = source.indexOf('\tfunction bytesToHexArr(')
-	const b = source.indexOf('\t//第三方协议解析日志', a)
-	vm.runInContext(source.slice(a, b) + '\nglobalThis.api = { renderLogBody, addLog }', context)
+	const b = source.indexOf('\t//日志正文渲染到此为止', a)
+	vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/parse-view.js'), 'utf8'), context)
+	context.window.getActiveProtocol = () => context.proto
+	vm.runInContext(source.slice(a, b) + '\nglobalThis.api = { renderLogBody, addLog, parseLogType }', context)
 	return { context, rows, api: context.api }
 }
 
@@ -456,6 +471,50 @@ async function testLogRendering() {
 		assert.equal(rows[3].attrs['data-glitch'], '1', type)
 		assert.ok(!rows[3].innerHTML.includes('毛刺'), type)
 	}
+
+	// logType 拆解：'&' 也出现在 &parse 后缀里，并排判断只看 hex 与 text 是否同时存在
+	assert.deepEqual(JSON.parse(JSON.stringify(api.parseLogType('hex&ansi&parse'))), { hex: true, text: true, ansi: true, parse: true })
+	assert.deepEqual(JSON.parse(JSON.stringify(api.parseLogType('parse'))), { hex: false, text: false, ansi: false, parse: true })
+	assert.deepEqual(JSON.parse(JSON.stringify(api.parseLogType('term'))), { hex: false, text: false, ansi: false, parse: false })
+	assert.equal(api.renderLogBody(bytes(0x41, 0x42), 'hex&parse'), '41 42')
+	assert.equal(api.renderLogBody(bytes(0x41, 0x42), 'text&parse'), 'AB')
+
+	// 解析段：协议 logView 出模型，ParseView 统一转义
+	const model = { title: '<b>标题</b>', dir: 'up', subject: { label: '设备', value: '<script>x</script>' }, sections: [{ pairs: [['<k>', '<v>']] }] }
+	context.proto = { logView: () => model }
+	const html = api.renderLogBody(bytes(0x41, 0x42), 'hex&text&parse', { isReceive: true })
+	assert.ok(html.startsWith('HEX:41 42<br/>TEXT:AB<div class="pv pv-up">'), html)
+	assert.ok(!html.includes('<script>') && !html.includes('<b>') && !html.includes('<k>'), html)
+	assert.ok(html.includes('&lt;script&gt;x&lt;/script&gt;'))
+	// TX 只留头部一行，其余折叠进 <details>
+	assert.ok(api.renderLogBody(bytes(0x41), 'parse', { isReceive: false, sendName: '读取' }).startsWith('<details class="pv pv-up pv-fold">'))
+	// 不是本协议的帧：与 HEX/TEXT 同显时只是没有解析段；只选「解析」回退 HEX 并标未识别
+	context.proto = { logView: () => null }
+	assert.equal(api.renderLogBody(bytes(0x41, 0x42), 'hex&parse', { isReceive: true }), '41 42')
+	assert.equal(api.renderLogBody(bytes(0x41, 0x42), 'parse', { isReceive: true }).replace(/<span[^>]*>/, '<span>'), '<span>未识别</span> 41 42')
+	// logView 抛异常按未识别处理；固件升级期间(noParse)不解析
+	context.proto = { logView: () => { throw new Error('boom') } }
+	assert.equal(api.renderLogBody(bytes(0x41), 'hex&parse', { isReceive: true }), '41')
+	context.proto = { logView: () => model }
+	assert.equal(api.renderLogBody(bytes(0x41), 'hex&parse', { isReceive: true, noParse: true }), '41')
+	assert.ok(api.renderLogBody(bytes(0x41), 'parse', { isReceive: true, noParse: true }).includes('未识别'))
+	// 没有 logView 的协议退回 formatFrame 老样式
+	context.proto = { formatFrame: () => '<div class="sk-parse">legacy</div>' }
+	assert.equal(api.renderLogBody(bytes(0x41), 'parse', { isReceive: true }), '<div class="pv pv-legacy"><div class="sk-parse">legacy</div></div>')
+
+	// 行上记录升级期间不解析与快捷发送名称，供重渲使用
+	rows.length = 0
+	context.logType = 'hex&parse'
+	context.proto = { logView: () => model }
+	context.window.serialApi = { suppressParse: true }
+	api.addLog(bytes(0x41), false, new Date(5), 'A', false, '读取')
+	assert.equal(rows[0].attrs['data-noparse'], '1')
+	assert.equal(rows[0].attrs['data-name'], '读取')
+	assert.ok(!rows[0].innerHTML.includes('class="pv'))
+	context.window.serialApi = { suppressParse: false }
+	api.addLog(bytes(0x41), true, new Date(6), 'A')
+	assert.equal(rows[1].attrs['data-noparse'], undefined)
+	assert.ok(rows[1].innerHTML.includes('class="pv pv-up"'))
 }
 
 async function testStatusBar() {

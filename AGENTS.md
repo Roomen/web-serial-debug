@@ -2,7 +2,7 @@
 
 ## 项目结构
 
-静态 Web Serial 串口调试工具，无构建系统、无需安装依赖。入口 `index.html` 负责页面结构，并通过 CDN 加载 Bootstrap、Bootstrap Icons、xterm.js、JSZip。主要业务逻辑在 `js/common.js`（串口开关、快捷发送、日志展示、协议注册表等）；协议解析、固件升级/打包、BLU 功耗分析各自拆在 `js/` 下的独立文件里，按 `index.html` 末尾的 `<script>` 顺序加载。样式集中在 `css/style.css`，图片放在 `imgs/`。
+静态 Web Serial 串口调试工具，无构建系统、无需安装依赖。入口 `index.html` 负责页面结构，并通过 CDN 加载 Bootstrap、Bootstrap Icons、xterm.js、JSZip。主要业务逻辑在 `js/common.js`（串口开关、快捷发送、日志展示、协议注册表等）；协议解析、固件升级/打包、BLU 功耗分析各自拆在 `js/` 下的独立文件里，按 `index.html` 末尾的 `<script>` 顺序加载。样式集中在 `css/style.css`，图片放在 `imgs/`。日志格式「解析」（`logType` 带 `parse`，可与 HEX/TEXT 同行显示或单独显示）由协议的 `logView(r)` 返回视图模型（不识别的帧返回 null，多帧返回数组），`js/parse-view.js` 的 `ParseView.render` 统一转义并渲染成行内 `.pv` 块，没有 `logView` 的协议退回 `formatFrame` 的老样式，底部「协议解析」面板仍用 `formatFrame`；模型里的文本一律由渲染器转义，只有 `section.html` 原样插入，只能放协议自己拼且已转义的片段。不要再加独立的实时解析开关，也不要在日志里另插解析块；`renderLogBody` 里 HEX/TEXT 并排只认 `parseLogType(t)` 拆出的 hex 与 text 同时存在，不要对 `logType` 做 `includes('&')`，因为 `&parse` 后缀里也有 `&`。含解析的历史行重渲必须按行序做完（SEK 解析会更新会话基准水量，ansi_up 也是流式状态），行数多时按时间片分批，不要改成倒序或并发。
 
 串口调试视图的工具面板由 `js/workbench.js` 管理：每个工具是一个面板，用 `Workbench.registerPanel({ id, title, label, icon, el })` 注册，可停靠在右栏或底栏（底栏与协议解析共用外壳），最右侧停靠栏负责开合，底部状态栏显示连接时长、收发字节和运行中的后台任务。面板 DOM 是原样搬进停靠区的（不克隆），所以面板内控件的 id 和已绑定事件不受影响。新增工具时注册成面板，不要再往右栏里加 Bootstrap tab；需要跳到某个面板时调用 `Workbench.open(id)`，不要去点 DOM 按钮。右栏/底栏的开合状态沿用 `common.js` 里的 `serialRightPane` / `parsePanelDock`，不要另写一套。协议选择只有顶栏的 `#serial-protocol-select` 一处，不要在面板里再放一份镜像。随机读写、批量配置面板的「协议不支持」提示和停靠栏图标变暗，靠的是 CSS 匹配卡片上的内联 `style="display: none"`（协议模块用 `el.style.display` 控制显隐）；如果把协议模块改成切 class，要同步改 `css/style.css` 里 Workbench 段的这两个选择器，否则提示会不报错地失效。
 
@@ -22,15 +22,16 @@ CIU 上电后只 `WOR_INIT` 一次：启动时先查 `WOR_GET_STATUS`，未初�
 - `node tests/cjt188-protocol.cjs`：CJ/T 188 协议解析的回归测试，改 `js/cjt188-protocol.js` 后必须跑。测试只用合成数据，不要放真实设备日志。
 - `node tests/sts-ciu-protocol.cjs`：STS 应用层协议（`js/sts-ciu-protocol.js`）的编解码、接收判定与边界回归，改该文件后必须跑。
 - `node tests/hostproto-protocol.cjs`：hostProto 模组指令层（`js/hostproto-protocol.js`）的 CRC/组帧/找帧重同步/解析展示，以及事务层（`js/hostproto-transaction.js`，假时钟）回归，改这两个文件后必须跑。
+- `node tests/parse-view.cjs`：日志「解析」渲染器（`js/parse-view.js`）的转义、折叠、键值对拆分，以及 SEK / 工装 / W-MBUS 三个协议 `logView` 的模型回归，改渲染器或这些 `logView` 后必须跑。
 - `node tests/sts-sim.cjs`：STS 表端与 CIU 两个模拟引擎（`js/sts-sim.js`）经假模组对的端到端回归，含会话丢弃注入、表端重启、预算耗尽，改引擎后必须跑。
 - `node tests/sts-sim-panel.cjs`：「STS 模拟」面板（`js/sts-sim-panel.js`，假 DOM + 假引擎）的单路/双路隔离、配置持久化与不落盘项、启停与断线重连、启动超时退避回归，改面板后必须跑。以上 STS / hostProto 测试同样只用合成数据，不要放真实钥表、PAK 或设备标识。
-- 其余没有自动化测试，涉及 UI 或串口逻辑的修改要在浏览器里连接真实或虚拟串口手动验证：日志相关检查 HEX、TEXT、ANSI 三种显示模式；发送路径检查 HEX/TEXT 输入、循环发送、CRLF 追加和快捷发送按钮；配置相关刷新页面，确认 localStorage 中的设置能正确恢复。
+- 其余没有自动化测试，涉及 UI 或串口逻辑的修改要在浏览器里连接真实或虚拟串口手动验证：日志相关检查 HEX、TEXT、ANSI、解析四种显示模式；发送路径检查 HEX/TEXT 输入、循环发送、CRLF 追加和快捷发送按钮；配置相关刷新页面，确认 localStorage 中的设置能正确恢复。
 
 ## 编码风格
 
 保持原生 HTML/CSS/JavaScript：浏览器全局 API、`let`/`const`、单引号、无分号、Tab 缩进；CSS 用 Tab 缩进和简单选择器；HTML 四空格缩进，大量使用 Bootstrap 工具类。新增元素 ID 优先沿用 `serial-*` 命名模式。不要引入框架、打包器或转译工具；调整 CDN 依赖直接改 `index.html`。
 
-布尔类控件按语义选形态，不按外观拉平，统一的类在 `css/style.css` 末尾「统一控件」段：`.ctl-switch` 用于改完立即生效并持久化的设置（实时解析、失败继续、打包为 ZIP 之类）；`.ctl-chip` 用于修饰「待发送 / 待生成内容」的表单项（HEX、+\r\n、前导码、输出包类型、去 DC），也用于日志正文的显示格式复选（HEX / TEXT / ANSI 彩色），选中态除了变色还加一个 ✓，不能只靠颜色区分，另有 `--mono`（协议字面量用等宽）、`--sm`、`--micro` 三个尺寸/字体修饰类，拿不到 `<input>` 的地方（JS 拼出来的工具条按钮，如 BLU 串口发送面板的 HEX/CRLF）用同款视觉的 `.ctl-chip-btn`，状态同样只认 `aria-pressed`；`.ctl-toggle` 用于工具栏上的视图/工具按下态（自动滚动、暂停滚动、均值带、±1σ、Y 轴锁定、全屏、上电），状态源**只认 `aria-pressed`**，不要再用 `.active` / `.is-on` / 按钮文案存状态——状态存在按钮文案里时，多处代码各读一遍，改文案就会让功能静默反向；`.ctl-seg` 用于 N 选一（单路/双路、主发 A/B），选中态是实心填充，跟 `.ctl-toggle` 的描边按下态必须看得出区别。展开/收起（`aria-expanded`，如协议解析折叠、停靠栏开合）不属于以上任何一类，不要套这些类。`.ctl-switch` 把 Bootstrap `form-switch` 的 float + 负 margin 排版换成了 flex，所以同时清掉了 `padding-left` / `float` / `margin`，少清一项 label 就会压到开关上。
+布尔类控件按语义选形态，不按外观拉平，统一的类在 `css/style.css` 末尾「统一控件」段：`.ctl-switch` 用于改完立即生效并持久化的设置（悬停提示、失败继续、打包为 ZIP 之类）；`.ctl-chip` 用于修饰「待发送 / 待生成内容」的表单项（HEX、+\r\n、前导码、输出包类型、去 DC），也用于日志正文的显示格式复选（HEX / TEXT / 解析 / ANSI 彩色），选中态除了变色还加一个 ✓，不能只靠颜色区分，另有 `--mono`（协议字面量用等宽）、`--sm`、`--micro` 三个尺寸/字体修饰类，拿不到 `<input>` 的地方（JS 拼出来的工具条按钮，如 BLU 串口发送面板的 HEX/CRLF）用同款视觉的 `.ctl-chip-btn`，状态同样只认 `aria-pressed`；`.ctl-toggle` 用于工具栏上的视图/工具按下态（自动滚动、暂停滚动、均值带、±1σ、Y 轴锁定、全屏、上电），状态源**只认 `aria-pressed`**，不要再用 `.active` / `.is-on` / 按钮文案存状态——状态存在按钮文案里时，多处代码各读一遍，改文案就会让功能静默反向；`.ctl-seg` 用于 N 选一（单路/双路、主发 A/B），选中态是实心填充，跟 `.ctl-toggle` 的描边按下态必须看得出区别。展开/收起（`aria-expanded`，如协议解析折叠、停靠栏开合）不属于以上任何一类，不要套这些类。`.ctl-switch` 把 Bootstrap `form-switch` 的 float + 负 margin 排版换成了 flex，所以同时清掉了 `padding-left` / `float` / `margin`，少清一项 label 就会压到开关上。
 
 不要设置鼠标指针样式（CSS `cursor`、JS `style.cursor`），`css/style.css` 末尾已把 Bootstrap 给按钮加的手型还原为默认；也不要给悬停状态加位移或缩放（`transform`）。指针在相邻元素间来回切换样式、元素悬停时移动导致鼠标在进出之间反复触发，移动鼠标会显得发抖。各视图顶栏统一用 `.view-bar`（功耗分析的 `.blu-connect-bar` 同样式），与串口调试的连接条同高、贴边。
 

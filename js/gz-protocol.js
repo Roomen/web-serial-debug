@@ -807,6 +807,46 @@
 		return h
 	}
 
+	// 日志「解析」格式的视图模型（渲染与转义见 js/parse-view.js）；不是工装帧返回 null。
+	// 检测项徽标用 .gz-flag 样式，异常前置；html 里的文本全部经 escHtml
+	function logView(r) {
+		if (!r || r.devType == null || r.cmd == null || !r.fields) return null
+		const f = r.fields
+		const view = r.infoView || null
+		const metrics = (view && view.metrics) || []
+		const flags = (view && view.flags) || []
+		const dev = f['设备类型']
+		const cmd = f['命令字']
+		const station = f['工位'] ? String(f['工位']) : ''
+		const m = {
+			title: cmd && cmd.name && cmd.name !== '未知' ? cmd.name : '命令字 ' + (cmd ? cmd.value : ''),
+			code: cmd ? cmd.value : '',
+			dir: r.dir === 'up' || r.dir === 'down' ? r.dir : '',
+			subject: dev ? { label: '设备', value: (dev.name && dev.name !== '未知' ? dev.name : dev.value) + (station ? ' · ' + station : '') } : null,
+			badges: [r.xorOk ? { text: 'XOR ✓', kind: 'ok', title: 'XOR 校验通过' } : { text: 'XOR ✗', kind: 'bad', title: 'XOR 校验失败' }],
+			meta: [['设备类型', dev ? dev.value : ''], ['信息长度', f['信息长度'] + ' B']],
+			notes: [],
+			sections: [],
+			errors: (r.errors || []).slice(),
+		}
+		const tested = flags.filter(x => x.ok === true || x.ok === false)
+		const failN = tested.filter(x => x.ok === false).length
+		if (tested.length) m.badges.push(failN ? { text: failN + '/' + tested.length + ' 异常', kind: 'bad' } : { text: '检测全过 ' + tested.length, kind: 'ok' })
+		if (metrics.length) m.sections.push({ pairs: metrics.map(x => [x.label, x.value, '', x.warn ? 'warn' : '']) })
+		if (flags.length) {
+			const rank = x => x.ok === false ? 0 : x.ok === true ? 2 : 1
+			const html = flags.slice().sort((a, b) => rank(a) - rank(b)).map(fl => {
+				const cls = fl.ok === true ? 'ok' : fl.ok === false ? 'bad' : 'na'
+				const icon = fl.ok === true ? '✓' : fl.ok === false ? '✗' : '·'
+				return '<span class="gz-flag ' + cls + '" title="' + escHtml(fl.name) + '">' + icon + ' ' + escHtml(fl.label != null ? fl.label : fl.name) + '</span>'
+			}).join(' ')
+			m.sections.push({ title: '检测项', html: '<div class="pv-flags">' + html + '</div>' })
+		}
+		if (view && view.note) m.notes.push({ text: view.note, kind: 'info' })
+		if (!metrics.length && !flags.length && r.decoded) m.sections.push({ pre: r.decoded })
+		return m
+	}
+
 	function byteMap(r) {
 		const raw = (r.raw instanceof Uint8Array) ? r.raw : Uint8Array.from(r.raw || [])
 		const n = raw.length
@@ -922,6 +962,7 @@
 	W.gzParseFrame = parseFrame
 	W.gzFindFrame = findFrame
 	W.gzFormatFrame = formatFrame
+	W.gzLogView = logView
 	W.gzByteMap = byteMap
 	W.gzBuildDownFrame = buildDownFrame
 	W.GZ_DEV_TYPES = DEV_TYPES
@@ -935,6 +976,7 @@
 			name: '工装通信协议',
 			parseFrame: parseFrame,
 			formatFrame: formatFrame,
+			logView: logView,
 			findFrame: findFrame,
 			byteMap: byteMap,
 			buildDownFrame: function (opts) {
