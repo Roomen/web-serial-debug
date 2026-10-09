@@ -345,6 +345,10 @@
                                             </div>
                                             <div class="serial-field">
                                                 <label class="serial-field-label" for="serial-timer-out">分包</label>
+                                                <div class="ctl-seg serial-split-seg" role="group" aria-label="分包方式">
+                                                    <button type="button" id="serial-split-time" aria-pressed="true" title="按字节间隔超时分包">超时</button>
+                                                    <button type="button" id="serial-split-line" aria-pressed="false" title="按换行(\n / \r\n)分行，抓模组文本日志用；超时只兜底没有换行的残行">换行</button>
+                                                </div>
                                                 <input type="number" id="serial-timer-out" class="form-control serial-field-input"
                                                     placeholder="0不分包" value="200" min="0" title="分包超时(ms)，0 表示不分包">
                                             </div>

@@ -480,8 +480,10 @@
 		showTime: true,
 		//日志类型
 		logType: 'hex',
-		//分包合并时间
+		//分包合并时间；按换行分行时是没等到换行的残行的兜底超时，0 表示只按换行
 		timeOut: 200,
+		//分包方式 time(按超时) | line(按 \n 分行，模组文本日志用)
+		splitMode: 'time',
 		//日志最大行数,超出后从顶部裁剪
 		maxLogRows: 10000,
 		//末尾加回车换行
@@ -512,9 +514,10 @@
 		skProtocol: 'sek',
 	}
 	let toolOptions = Object.assign({}, DEFAULT_TOOL_OPTIONS)
-	// 日志条（分包超时 / 最大行数 / 日志类型 / 自动滚动）单双路独立，与 serialOptions 同一策略
+	// 日志条（分包方式与超时 / 最大行数 / 日志类型 / 自动滚动）单双路独立，与 serialOptions 同一策略
 	const TOOL_OPTIONS_DUAL_KEY = 'toolOptionsDual'
-	const LOG_OPTION_KEYS = ['timeOut', 'maxLogRows', 'logType', 'autoScroll']
+	const LOG_OPTION_KEYS = ['timeOut', 'splitMode', 'maxLogRows', 'logType', 'autoScroll']
+	const SPLIT_MODES = ['time', 'line']
 	// logType 的合法值域。写侧(setLogType)和读侧(pickLogOptions / 启动恢复)必须用同一份:
 	// 只校验"是字符串"会让 localStorage 里的陈旧值(比如站点回滚后旧代码不认识的新值)活下来,
 	// 那时 isRowLogType 为假且又不等于 term,接收数据既不写行日志也不写终端,日志会静默全无
@@ -533,10 +536,11 @@
 		return typeof t === 'string' && LOG_TYPES.indexOf(t) !== -1
 	}
 	function pickLogOptions(src) {
-		const out = { timeOut: 200, maxLogRows: 10000, logType: 'hex', autoScroll: true }
+		const out = { timeOut: 200, splitMode: 'time', maxLogRows: 10000, logType: 'hex', autoScroll: true }
 		if (!src || typeof src !== 'object') return out
 		const t = parseInt(src.timeOut, 10)
 		if (!isNaN(t) && t >= 0) out.timeOut = t
+		if (SPLIT_MODES.indexOf(src.splitMode) !== -1) out.splitMode = src.splitMode
 		const m = parseInt(src.maxLogRows, 10)
 		if (!isNaN(m) && m >= 100) out.maxLogRows = m
 		if (isValidLogType(src.logType)) out.logType = src.logType
@@ -606,7 +610,9 @@
 		const logType = activeLogOptions().logType
 		const typeLabel = LOG_TYPE_LABELS[logType] || 'Hex'
 		const timeout = timeoutEl ? parseInt(timeoutEl.value, 10) : 0
-		const timeoutTxt = !timeout ? '不分包' : timeout + 'ms'
+		const timeoutTxt = activeLogOptions().splitMode === 'line'
+			? (!timeout ? '换行' : '换行+' + timeout + 'ms')
+			: (!timeout ? '不分包' : timeout + 'ms')
 		// 终端不走分包与行数裁剪,拼上去是在说假话
 		if (logType === 'term') {
 			text.textContent = LOG_TYPE_LABELS.term
@@ -704,7 +710,7 @@
 		// term 下都无效,禁掉别留假开关
 		const rowsEl = document.getElementById('serial-max-rows')
 		const timeoutEl = document.getElementById('serial-timer-out');
-		[rowsEl, timeoutEl].forEach(function (el) {
+		[rowsEl, timeoutEl, document.getElementById('serial-split-time'), document.getElementById('serial-split-line')].forEach(function (el) {
 			if (!el) return
 			el.disabled = isTerm
 			el.setAttribute('aria-disabled', isTerm ? 'true' : 'false')
@@ -751,6 +757,7 @@
 		LOG_OPTION_KEYS.forEach(function (k) { toolOptions[k] = opts[k] })
 		const t = document.getElementById('serial-timer-out')
 		if (t) t.value = opts.timeOut
+		applySplitModeUi(opts.splitMode)
 		const m = document.getElementById('serial-max-rows')
 		if (m) m.value = opts.maxLogRows
 		toolOptions.logType = opts.logType
@@ -2144,6 +2151,7 @@
 				// 就地校正 4 个日志字段的非法值, 与 pickLogOptions() 口径一致
 				const t = parseInt(toolOptions.timeOut, 10)
 				toolOptions.timeOut = !isNaN(t) && t >= 0 ? t : DEFAULT_TOOL_OPTIONS.timeOut
+				if (SPLIT_MODES.indexOf(toolOptions.splitMode) === -1) toolOptions.splitMode = DEFAULT_TOOL_OPTIONS.splitMode
 				const m = parseInt(toolOptions.maxLogRows, 10)
 				toolOptions.maxLogRows = !isNaN(m) && m >= 100 ? m : DEFAULT_TOOL_OPTIONS.maxLogRows
 				if (!isValidLogType(toolOptions.logType)) {
@@ -2360,6 +2368,26 @@
 	document.getElementById('serial-timer-out').addEventListener('change', (e) => {
 		changeOption('timeOut', parseInt(e.target.value))
 		updateLogSettingsSummary()
+	})
+	// 分包方式：超时只看字节间隔；换行按 \n 立即成行，超时只兜底没有换行的残行
+	function applySplitModeUi(mode) {
+		const line = mode === 'line'
+		const timeBtn = document.getElementById('serial-split-time')
+		const lineBtn = document.getElementById('serial-split-line')
+		if (timeBtn) timeBtn.setAttribute('aria-pressed', line ? 'false' : 'true')
+		if (lineBtn) lineBtn.setAttribute('aria-pressed', line ? 'true' : 'false')
+		const t = document.getElementById('serial-timer-out')
+		if (t) {
+			t.placeholder = line ? '0只按换行' : '0不分包'
+			t.title = line ? '没等到换行的残行多久后先输出(ms)，0 表示只按换行' : '分包超时(ms)，0 表示不分包'
+		}
+	}
+	;['time', 'line'].forEach(function (mode) {
+		document.getElementById('serial-split-' + mode).addEventListener('click', function () {
+			changeOption('splitMode', mode)
+			applySplitModeUi(mode)
+			updateLogSettingsSummary()
+		})
 	})
 	document.getElementById('serial-max-rows').addEventListener('change', (e) => {
 		let max = parseInt(e.target.value)
@@ -4352,6 +4380,25 @@
 		}
 	}
 
+	// 二进制协议帧里可能出现 0x0A，按换行切会把帧拆坏：缓冲以 SEK 帧头开头且要按协议分包时不按行切
+	function sekFrameStart(sid, buf) {
+		return buf.length >= 2 && buf[0] === 0xA9 && buf[1] === 0x9A && wantProtocolFraming(sid)
+	}
+	// 按换行分行：缓冲里每个以 \n 结尾(含 \r\n)的完整行各成一行日志，残行留在缓冲里等后续字节或兜底超时。
+	// 同一次读回里的后续行没有更精确的到达时间，用切出时刻；hostProto 半帧和 SEK 帧交给原有的协议分包
+	function drainLinePack(sid) {
+		const buf = SerialHub.getPackBuf(sid)
+		if (hostProtoIncomplete(buf) || sekFrameStart(sid, buf)) return
+		let start = 0
+		for (let i = 0; i < buf.length; i++) {
+			if (buf[i] !== 0x0A) continue
+			flushSerialPack(buf.slice(start, i + 1), SerialHub.getPackStartTime(sid), sid, start === 0 && SerialHub.takePackGlitch(sid))
+			start = i + 1
+			SerialHub.setPackStartTime(sid, new Date())
+		}
+		if (start > 0) SerialHub.setPackBuf(sid, buf.slice(start))
+	}
+
 	//glitch: 整包都是紧随线路错误的全 0 块，紧接在同一路上一条毛刺行之后的直接并入那一行(不新增行)
 	function flushSerialPack(buf, startTime, sid, glitch) {
 		sid = sid || SerialHub.activeSendPhys()
@@ -4446,7 +4493,16 @@
 			clearTimeout(SerialHub.getPackTimer(sid))
 			return
 		}
-		if (sidOpts.timeOut == 0 && !hostProtoIncomplete(packBuf)) {
+		const lineMode = sidOpts.splitMode === 'line'
+		if (lineMode) {
+			drainLinePack(sid)
+			packBuf = SerialHub.getPackBuf(sid)
+			if (!packBuf.length) {
+				clearTimeout(SerialHub.getPackTimer(sid))
+				return
+			}
+		}
+		if (!lineMode && sidOpts.timeOut == 0 && !hostProtoIncomplete(packBuf)) {
 			flushSerialPack(packBuf, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackGlitch(sid))
 			SerialHub.setPackBuf(sid, [])
 			return
@@ -4460,6 +4516,8 @@
 		}
 		//清除之前的时钟
 		clearTimeout(SerialHub.getPackTimer(sid))
+		//按换行且超时为 0：残行一直等到换行(或发送前 flushPendingRx、字节上限)；协议半帧仍按下面的等待窗口兜底
+		if (lineMode && sidOpts.timeOut == 0 && !hostProtoIncomplete(packBuf) && !sekFrameStart(sid, packBuf)) return
 		const startTime = SerialHub.getPackStartTime(sid)
 		const packTimeOut = Math.max(1, sidOpts.timeOut == 0 ? 50 : sidOpts.timeOut)
 		const armFlush = () => {

@@ -3303,6 +3303,11 @@ hr {
   box-shadow: 0 0 0 3px var(--accent-light) !important;
 }
 
+/* 分包方式与超时同一行，分段组压小一号给输入框留位置 */
+.serial-split-seg > button {
+  padding: 4px 8px;
+}
+
 .serial-baud-combo {
   flex: 1;
   position: relative;

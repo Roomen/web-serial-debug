@@ -4,6 +4,8 @@
 
 静态 Web Serial 串口调试工具，无构建系统、无需安装依赖。入口 `index.html` 负责页面结构，并通过 CDN 加载 Bootstrap、Bootstrap Icons、xterm.js、JSZip。主要业务逻辑在 `js/common.js`（串口开关、快捷发送、日志展示、协议注册表等）；协议解析、固件升级/打包、BLU 功耗分析各自拆在 `js/` 下的独立文件里，按 `index.html` 末尾的 `<script>` 顺序加载。样式集中在 `css/style.css`，图片放在 `imgs/`。日志格式「解析」（`logType` 带 `parse`，可与 HEX/TEXT 同行显示或单独显示）由协议的 `logView(r)` 返回视图模型（不识别的帧返回 null，多帧返回数组），`js/parse-view.js` 的 `ParseView.render` 统一转义并渲染成行内 `.pv` 块，没有 `logView` 的协议退回 `formatFrame` 的老样式，底部「协议解析」面板仍用 `formatFrame`；模型里的文本一律由渲染器转义，只有 `section.html` 原样插入，只能放协议自己拼且已转义的片段。不要再加独立的实时解析开关，也不要在日志里另插解析块；`renderLogBody` 里 HEX/TEXT 并排只认 `parseLogType(t)` 拆出的 hex 与 text 同时存在，不要对 `logType` 做 `includes('&')`，因为 `&parse` 后缀里也有 `&`。含解析的历史行重渲必须按行序做完（SEK 解析会更新会话基准水量，ansi_up 也是流式状态），行数多时按时间片分批，不要改成倒序或并发；重放必须在隔离状态里做（每批换入重放用的 `skSession` 快照与 ansi_up 实例、批末换回实时状态），只有期间没有新行、也没有连接重置时，才把重放末态交给实时状态，否则批次之间到达的实时基准会被剩余历史帧覆盖，重连清掉的基准也会被恢复回来。
 
+接收分包有两种方式（日志设置里的「超时 / 换行」，单双路各存一份 `splitMode`）：超时按字节间隔合包，0 为每次读回立即输出；换行按 `\n`（含 `\r\n`，行尾留在行内）立即成行，超时值只兜底没等到换行的残行，0 表示只等换行（发送前 `flushPendingRx` 仍会输出残行）。换行模式下 hostProto 半帧和以 SEK 帧头开头的缓冲不按 `0x0A` 切，交回协议分包，因为二进制帧里常有 0x0A。
+
 串口调试视图的工具面板由 `js/workbench.js` 管理：每个工具是一个面板，用 `Workbench.registerPanel({ id, title, label, icon, el })` 注册，可停靠在右栏或底栏（底栏与协议解析共用外壳），最右侧停靠栏负责开合，底部状态栏显示连接时长、收发字节和运行中的后台任务。面板 DOM 是原样搬进停靠区的（不克隆），所以面板内控件的 id 和已绑定事件不受影响。新增工具时注册成面板，不要再往右栏里加 Bootstrap tab；需要跳到某个面板时调用 `Workbench.open(id)`，不要去点 DOM 按钮。右栏/底栏的开合状态沿用 `common.js` 里的 `serialRightPane` / `parsePanelDock`，不要另写一套。协议选择只有顶栏的 `#serial-protocol-select` 一处，不要在面板里再放一份镜像。随机读写、批量配置面板的「协议不支持」提示和停靠栏图标变暗，靠的是 CSS 匹配卡片上的内联 `style="display: none"`（协议模块用 `el.style.display` 控制显隐）；如果把协议模块改成切 class，要同步改 `css/style.css` 里 Workbench 段的这两个选择器，否则提示会不报错地失效。
 
 hostProto 模组协议与 STS 应用层协议各占一组文件：`js/hostproto-protocol.js` 是模组指令层的帧编解码，并注册成顶栏的 `hostproto` 日志解析协议；`js/hostproto-transaction.js` 是主机端事务层（串行请求应答、逐字节同帧重发、EVT 分发），平台依赖全部注入；`js/sts-ciu-protocol.js` 是应用层报文的编解码与接收判定，只导出 `window.stsCiu` 供嵌套解码和引擎使用，不单独注册成顶栏协议；`js/sts-sim.js` 是表端和 CIU 两个模拟引擎，不碰 DOM、localStorage 和 `serialApi`，只经注入的 link 与时钟工作；`js/sts-sim-panel.js` 才是「STS 模拟」面板的界面与串口接线。改引擎行为时不要把 DOM 或串口依赖带进 `js/sts-sim.js`，否则 node 里的端到端测试就跑不起来。
@@ -23,6 +25,7 @@ CIU 上电后只 `WOR_INIT` 一次：启动时先查 `WOR_GET_STATUS`，未初�
 - `node tests/sts-ciu-protocol.cjs`：STS 应用层协议（`js/sts-ciu-protocol.js`）的编解码、接收判定与边界回归，改该文件后必须跑。
 - `node tests/hostproto-protocol.cjs`：hostProto 模组指令层（`js/hostproto-protocol.js`）的 CRC/组帧/找帧重同步/解析展示，以及事务层（`js/hostproto-transaction.js`，假时钟）回归，改这两个文件后必须跑。
 - `node tests/parse-view.cjs`：日志「解析」渲染器（`js/parse-view.js`）的转义、折叠、键值对拆分，以及 SEK / 工装 / W-MBUS 三个协议 `logView` 的模型回归，改渲染器或这些 `logView` 后必须跑。
+- `node tests/serial-line-split.cjs`：接收分包（`js/common.js` 里 `//单个合并包的字节上限` 到 `//对外暴露的串口接口` 之间，按锚点注释截取，别删）的按超时 / 按换行两种方式及协议帧保护回归，改这段后必须跑。
 - `node tests/sts-sim.cjs`：STS 表端与 CIU 两个模拟引擎（`js/sts-sim.js`）经假模组对的端到端回归，含会话丢弃注入、表端重启、预算耗尽，改引擎后必须跑。
 - `node tests/sts-sim-panel.cjs`：「STS 模拟」面板（`js/sts-sim-panel.js`，假 DOM + 假引擎）的单路/双路隔离、配置持久化与不落盘项、启停与断线重连、启动超时退避回归，改面板后必须跑。以上 STS / hostProto 测试同样只用合成数据，不要放真实钥表、PAK 或设备标识。
 - 其余没有自动化测试，涉及 UI 或串口逻辑的修改要在浏览器里连接真实或虚拟串口手动验证：日志相关检查 HEX、TEXT、ANSI、解析四种显示模式；发送路径检查 HEX/TEXT 输入、循环发送、CRLF 追加和快捷发送按钮；配置相关刷新页面，确认 localStorage 中的设置能正确恢复。
