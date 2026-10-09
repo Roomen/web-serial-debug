@@ -78,6 +78,68 @@ const corrupted = malformed.slice()
 corrupted[17] ^= 1
 assert.doesNotMatch(parse(corrupted).errors.join(), /地址偏移/)
 
+// Fake-DOM regression: valve operation options must preserve hexadecimal values through frame building.
+{
+	class Element {
+		constructor(value = '') {
+			this.value = value
+			this.dataset = {}
+			this.style = {}
+			this.options = []
+			this.listeners = {}
+			this.checked = true
+		}
+		set innerHTML(value) { if (value === '') this.options = [] }
+		addEventListener(type, callback) { this.listeners[type] = callback }
+		appendChild(option) {
+			this.options.push(option)
+			if (this.options.length === 1) this.selectedIndex = 0
+		}
+		querySelector() { return null }
+		click() { if (this.listeners.click) this.listeners.click() }
+	}
+	const elements = new Map()
+	const ids = [
+		'cjt188-down-cmd', 'cjt188-down-addr', 'cjt188-down-addr-reset', 'cjt188-down-seq',
+		'cjt188-down-preamble', 'cjt188-down-param-group', 'cjt188-down-param-label',
+		'cjt188-down-param-val', 'cjt188-down-param-sel', 'cjt188-down-err', 'cjt188-down-build',
+		'cjt188-down-send', 'cjt188-down-preview', 'serial-protocol-select', 'cjt188-down-title',
+		'cjt188-down-card', 'sk-down-card', 'sk-rw-card', 'sk-batch-card', 'serial-protocol-advanced',
+	]
+	for (const id of ids) elements.set(id, new Element(id === 'cjt188-down-cmd' ? '0x04' : id === 'serial-protocol-select' ? 'cjt188' : ''))
+	const fakeDocument = {
+		getElementById(id) { return elements.get(id) || null },
+		createElement() { return new Element() },
+	}
+	const uiContext = vm.createContext({
+		window: { registerProtocol() {} },
+		document: fakeDocument,
+		localStorage: { getItem() { return null }, setItem() {} },
+		Uint8Array,
+	})
+	vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/cjt188-protocol.js'), 'utf8'), uiContext)
+	const paramSel = elements.get('cjt188-down-param-sel')
+	assert.deepEqual(paramSel.options.map(option => option.textContent), ['0x55 开阀', '0x77 除锈', '0x99 关阀'])
+	Object.defineProperty(paramSel, 'value', { configurable: true, get() { return this.options[this.selectedIndex].value } })
+	elements.get('cjt188-down-build').click()
+	const defaultFrame = hex(elements.get('cjt188-down-preview').value)
+	assert.equal(defaultFrame[parse(defaultFrame).frameOffset + 14], 0x55)
+	assert.equal(elements.get('cjt188-down-err').textContent, '')
+	for (const protocol of ['cjt188', 'sk-ultrasonic']) {
+		elements.get('serial-protocol-select').value = protocol
+		for (const [index, op] of [0x55, 0x77, 0x99].entries()) {
+			paramSel.selectedIndex = index
+			elements.get('cjt188-down-preview').value = ''
+			elements.get('cjt188-down-build').click()
+			const built = hex(elements.get('cjt188-down-preview').value)
+			const parsed = parse(built)
+			assert.equal(parsed.ok, true)
+			assert.equal(built[parsed.frameOffset + 14], op)
+			assert.equal(elements.get('cjt188-down-err').textContent, '')
+		}
+	}
+}
+
 // 日志「解析」视图模型: 合法帧给带 title 的模型，垃圾数据返回 null；模型里的文本保持原样，转义是渲染器的事
 const J = x => JSON.parse(JSON.stringify(x))
 {
