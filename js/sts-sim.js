@@ -3,7 +3,8 @@
 // 会话是停等 ARQ: 锚点 +1s 起每 1.2s 一拍，发起端发一帧（数据 / 0B 征求 / END），表端拍 +600ms 回 DACK 并捎带上行队列队头一片；
 // 下行排空后进入轮询相（0B 征求拍持续，表端有上行即捎带），会话由表端 END 或模组空闲看门狗（最后一次活动后约 8s）自行收尾，终结经 EVT 0x0281 通知双侧
 //   - 表端: 被唤醒时模组清空上行队列并发 kind=2 通知；收 kind=3 -> 算应答 -> WOR_SET_UPLINK 追加入队，下一个 DACK 捎带
-//   - CIU : WOR_INIT(2, 本机 DRN) -> WOR_WAKE_CIU -> WOR_SEND 一帧（槽满 BUSY 隔 1.4s 重发）-> 等 kind=2(ACK) -> 等 kind=4(上行) -> 立即返回；
+//   - CIU : 启动时 WOR_GET_STATUS，未初始化才 WOR_INIT(2, 本机 DRN)；每次会话 WOR_WAKE_CIU -> WOR_SEND 一帧（槽满 BUSY 隔 1.4s 重发）-> 等 kind=2(ACK) -> 等 kind=4(上行) -> 立即返回；
+//           WAKE 回未初始化（模组中途复位）才补一次 WOR_INIT 再 WAKE；
 //           不发 FINISH / ABORT，成败都不再碰会话，下一轮 WAKE 前硬等上一会话的 0x0281（有上限）再冷却；一次应用层问答 = 一次唤醒会话
 //           运行期两端都不查 WOR_GET_STATUS / 统计，不做会话保活
 // 受理不是成功: WAKE/SEND 回 OK 只是受理，TOKEN 处理状态 0 / WRITE 结果 0xFE 只是收下，终局靠 RESULT 轮询取回
@@ -1366,11 +1367,12 @@
 		function checkAborted() { if (aborted || stopped) throw abortErr() }
 
 		// ---------- 会话层 ----------
-		// 一次应用层问答 = 一次唤醒会话: WOR_INIT(2, 本机 DRN) -> WOR_WAKE_CIU -> WOR_SEND（槽满 BUSY 隔 1.4s 重发同一帧）
+		// 一次应用层问答 = 一次唤醒会话: WOR_WAKE_CIU -> WOR_SEND（槽满 BUSY 隔 1.4s 重发同一帧）
 		// -> 等 ACK(kind=2) -> 等上行(kind=4) -> 立即返回。不发 FINISH / ABORT: 会话由表端 END 或模组空闲看门狗
 		// （最后一次活动后约 8s，reason=8）自行收尾，FINISH 那时只会回 ERR_STATE；失败同样什么都不发。
 		// 下一轮 runSession 开头硬等上一已受理会话的 0x0281（上限 PREV_END_WAIT_MS）再冷却 SESSION_COOLDOWN_MS，
-		// 到点还没等到就照常 WAKE，BUSY 重试兜底。WAKE 前每次先 WOR_INIT: 回 BUSY 表示已初始化，照常继续
+		// 到点还没等到就照常 WAKE，BUSY 重试兜底。WOR_INIT 上电后只需一次（启动时按 WOR_GET_STATUS 判定），
+		// 重复 INIT 只会回 BUSY；会话里只有 WAKE 回未初始化（模组中途复位）才补一次 INIT 再 WAKE
 
 		// 等待条件成立或超时；中止时抛 aborted。list 是会在事件到达时被叫醒的等待者数组
 		function condWait(list, cond, timeoutMs) {
@@ -1403,7 +1405,7 @@
 			endWaiters.slice().forEach(function (w) { w.check() })
 		}
 		function ensureEndWatch() { if (!unsubEnd) unsubEnd = link.onEvt(onCiuEvt) }
-		// 本机 DRN 取自模组 DEV_ID_GET，不用 WOR_GET_STATUS（运行期不查状态）
+		// 本机 DRN 取自模组 DEV_ID_GET，不从 WOR_GET_STATUS 的运行地址取
 		async function ensureLocalDrn() {
 			if (localDrn == null) {
 				const d = await mod.devIdGet()
@@ -1503,18 +1505,10 @@
 				const coolFrom = !prev ? null : prev.ended ? prev.endAt : clock.now()
 				const coolMs = coolFrom == null ? 0 : coolFrom + SESSION_COOLDOWN_MS - clock.now()
 				if (coolMs > 0 && !budgetOut()) await waiter.sleep(cap(coolMs))
-				// 1. WOR_INIT(INITIATOR, 本机 DRN): 每次会话 WAKE 前都发，回 BUSY 表示已初始化，照常继续
-				const addr = await ensureLocalDrn()
-				checkAborted()
-				if (budgetOut()) return (result = fail('总等待预算 60s 已用完', 'budget'))
-				const ri = await link.request(C.WOR_INIT, H.woInitPayload(2, addr), reqOpt())
-				if (ri.status === H.STATUS.ERR_BUSY) log('info', 'WOR_INIT 回 BUSY（已初始化），继续')
-				else if (ri.status === H.STATUS.ERR_ROLE) return (result = fail('模组角色不是 CIU（WOR_INIT 回 ERR_ROLE）', 'init'))
-				else if (ri.status !== H.STATUS.OK) return (result = fail('WOR_INIT 失败: ' + statusText(ri), 'init'))
-				tl.initMs = clock.now() - t0
-				// 2. WAKE_CIU
+				// 1. WAKE_CIU（WOR_INIT 已在启动时完成；回未初始化说明模组中途复位，补一次 INIT 再 WAKE）
 				const busyDeadline = clock.now() + cfg.busyWaitS * 1000
 				let tWake
+				let reinit = false
 				for (;;) {
 					checkAborted()
 					if (budgetOut()) return (result = fail('总等待预算 60s 已用完', 'budget'))
@@ -1530,7 +1524,19 @@
 						continue
 					}
 					if (r.status === H.STATUS.ERR_ROLE) return (result = fail('模组角色不是 CIU（ERR_ROLE）', 'wake'))
-					if (notInit(r)) return (result = fail('WorLink 未初始化（' + r.statusName + '），请重新启动模拟', 'wake'))
+					if (notInit(r)) {
+						if (reinit) return (result = fail('WorLink 未初始化（' + r.statusName + '），补 WOR_INIT 后仍未就绪，请重新启动模拟', 'wake'))
+						reinit = true
+						log('warn', 'WOR_WAKE_CIU 回 ' + r.statusName + '（WorLink 未初始化，模组可能复位过），补 WOR_INIT 后重试')
+						const addr = await ensureLocalDrn()
+						checkAborted()
+						const tInit = clock.now()
+						const ri = await link.request(C.WOR_INIT, H.woInitPayload(2, addr), reqOpt())
+						if (ri.status === H.STATUS.ERR_ROLE) return (result = fail('模组角色不是 CIU（WOR_INIT 回 ERR_ROLE）', 'init'))
+						if (ri.status !== H.STATUS.OK && ri.status !== H.STATUS.ERR_BUSY) return (result = fail('WOR_INIT 失败: ' + statusText(ri), 'init'))
+						tl.initMs = clock.now() - tInit
+						continue
+					}
 					if (r.status === H.STATUS.ERR_FMT) return (result = fail('WOR_WAKE_CIU 被拒（ERR_FMT）：模组 ciu 槽未置备（用 keytool 装配钥表），或目标 DRN 不是单播地址', 'wake'))
 					return (result = fail('WOR_WAKE_CIU 失败: ' + statusText(r), 'wake'))
 				}
@@ -1867,10 +1873,20 @@
 			await mod.echo()
 			st.fw = await mod.fwInfo()
 			st.role = await mod.ensureRole(2, cfg.pak)
-			// 本机地址取 DEV_ID_GET 的 DRN，再做一次 WOR_INIT(INITIATOR, DRN): OK 或 BUSY（已初始化）都算就绪
+			// 本机地址取 DEV_ID_GET 的 DRN；WOR_INIT 上电后只需一次，先 WOR_GET_STATUS，未初始化才 INIT(INITIATOR, DRN)
 			const drn = await ensureLocalDrn()
-			const ri = await link.request(C.WOR_INIT, H.woInitPayload(2, drn))
-			if (ri.status !== H.STATUS.OK && ri.status !== H.STATUS.ERR_BUSY) throw new Error('WOR_INIT 失败: ' + statusText(ri) + (ri.status === H.STATUS.ERR_ROLE ? '（模组角色不是 CIU）' : ''))
+			const ws = await link.request(C.WOR_GET_STATUS, [])
+			if (mod.notInit(ws)) {
+				log('info', 'WOR 未初始化，WOR_INIT(INITIATOR, addr=DRN)')
+				const ri = await link.request(C.WOR_INIT, H.woInitPayload(2, drn))
+				if (ri.status !== H.STATUS.OK && ri.status !== H.STATUS.ERR_BUSY) throw new Error('WOR_INIT 失败: ' + statusText(ri) + (ri.status === H.STATUS.ERR_ROLE ? '（模组角色不是 CIU）' : ''))
+			} else {
+				mod.need(ws, 'WOR_GET_STATUS')
+				const wst = H.decodeWorStatus(ws.payload)
+				if (wst) log('info', 'WOR 已初始化 [' + wst.role + ' ' + (H.WOR_ROLE_NAME[wst.role] || '未知') + '][' + wst.state + ' ' + (H.WOR_STATE_NAME[wst.state] || '') + ']，不再 WOR_INIT')
+				if (wst && wst.role !== 2) log('warn', 'WOR 角色不是 INITIATOR（' + wst.role + '），唤醒可能被拒；复位模组后重试')
+				if (wst && wst.localAddr != null && wst.localAddr !== drn) log('warn', 'WOR 运行地址 ' + wst.localAddr + ' 与 DRN ' + drn + ' 不一致；复位模组后重试')
+			}
 			if (gen !== runGen || stopped) throw abortErr()
 			running = true
 			log('info', 'CIU 模拟就绪：本机地址 ' + st.localAddr + '，目标 DRN ' + cfg.targetDrn + '，应用层表号 ' + cfg.meterNo)

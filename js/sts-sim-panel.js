@@ -280,7 +280,7 @@
 			alarmCfgBox.style.width = '100%'
 			meterForm.appendChild(alarmCfgBox)
 			meterForm.appendChild(el('div', 'sts-sim-hint small', 'DRN 启动时从模组自动读取。'))
-			ciuForm.appendChild(el('div', 'sts-sim-hint small', '本机地址取自模组 DEV_ID_GET（DRN），启动与每次会话前用 WOR_INIT 设为发起端地址。'))
+			ciuForm.appendChild(el('div', 'sts-sim-hint small', '本机地址取自模组 DEV_ID_GET（DRN）；启动时查 WOR_GET_STATUS，未初始化才用 WOR_INIT 设为发起端地址。'))
 			cfg.append(meterForm, ciuForm)
 			body.appendChild(cfg)
 

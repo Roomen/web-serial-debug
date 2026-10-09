@@ -4,7 +4,7 @@
 // 锚点 +1s 起每 1.2s 一拍: 有下行就发一帧（拍 +450ms 以 kind=3 到表端），否则征求拍；拍 +600ms DACK 捎带表端上行队列队头，以 kind=4 给 CIU；
 // 下行排空后无活动 8s 由空闲看门狗收尾（reason=8，两侧各报），END 的 DACK 到达时双侧各报 EVT 0x0281；唤醒失败 12.4s 后报 reason=3；
 // CIU 不发 FINISH / ABORT（模型仍支持这两条命令，用来数「发了几次」）；WOR_INIT 在已初始化的模组上回 ERR_BUSY
-// CIU 模组带 DRN（本机地址，DEV_ID_GET 回读）；运行期任何一端都不应再查 WOR_GET_STATUS / 统计
+// CIU 模组带 DRN（本机地址，DEV_ID_GET 回读）；CIU 只在启动时查一次 WOR_GET_STATUS，运行期任何一端都不应再查 WOR_GET_STATUS / 统计
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const vm = require('node:vm')
@@ -171,7 +171,7 @@ function makeWorld(clock, opts) {
 				mod.worInit = true
 				mod.addr = H.u64(p, 1)
 				return OK
-			case 0x0201: return mod.worInit ? { status: 0, data: [mod.role === 1 ? 1 : (mod.session ? 2 : 0), mod.role === 1 ? (mod.sentry ? 1 : 0) : (mod.session ? 9 : 0), ...H.u64Bytes(mod.addr)] } : { status: o.notInitStatus }
+			case 0x0201: return mod.worInit ? { status: 0, data: [mod.role === 1 ? 1 : 2, mod.role === 1 ? (mod.sentry ? 1 : 0) : (mod.session ? 9 : 0), ...H.u64Bytes(mod.addr)] } : { status: o.notInitStatus }
 			case 0x020f: { // 53×u32，只填假模组维护的几个计数
 				const out = [212, 0]
 				H.WOR_STATS_FIELDS.forEach(f => { const v = mod.stats[f] || 0; out.push(v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >>> 24) & 0xff) })
@@ -445,27 +445,42 @@ async function tests() {
 		t.world.faults.wakeStatus = null
 	}
 
-	// ---- CIU 本机地址与 WOR_INIT: 地址取自 DEV_ID_GET 的 DRN，不采用旧配置，不查 WOR_GET_STATUS ----
+	// ---- CIU 本机地址与 WOR_INIT: 地址取自 DEV_ID_GET 的 DRN，不采用旧配置；启动查一次 WOR_GET_STATUS，未初始化才 INIT ----
 	for (const localAddr of ['7', 'invalid old value', '']) {
-		const t = setup({ ciu: { localAddr }, world: { ciuDrn: 11n } })
+		const t = setup({ ciu: { localAddr }, world: { ciuDrn: 11n, ciuInit: false } })
 		await ready(t)
 		assert.equal(t.ciu.getState().localAddr, '11')
 		const cr = t.world.log.requests.filter(r => r.role === 'ciu')
 		assert.ok(cr.filter(r => r.cmd === H.CMD.PROV_DEV_ID_GET).length >= 1)
-		assert.equal(cr.filter(r => r.cmd === H.CMD.WOR_GET_STATUS).length, 0, 'CIU 从不查 WOR_GET_STATUS')
+		assert.equal(cr.filter(r => r.cmd === H.CMD.WOR_GET_STATUS).length, 1, 'CIU 只在启动时查一次 WOR_GET_STATUS')
 		const inits = t.world.log.inits.filter(i => i.role === 'ciu')
-		assert.ok(inits.length >= 1)
+		assert.equal(inits.length, 1, '上电后只 INIT 一次，会话前不再 INIT')
 		assert.ok(inits.every(i => i.payloadRole === 2 && i.addr === 11n), 'WOR_INIT(role=2, addr=本机 DRN)')
 		t.meter.stop(); t.ciu.stop()
 	}
 	{
-		// 全新发起端: 启动时的 INIT 回 OK 并采用该地址；之后每次会话前再 INIT，已初始化回 BUSY 照常继续
+		// 全新发起端: 启动时 GET_STATUS 回未初始化 -> INIT 回 OK 并采用该地址；之后的会话不再 INIT
 		const t = setup({ world: { ciuInit: false } })
 		await ready(t)
 		assert.equal(t.world.ciu.worInit, true)
 		assert.equal(t.world.ciu.addr, CIU_ADDR)
-		assert.equal(t.world.log.inits.filter(i => i.role === 'ciu').length >= 2, true) // 启动 + 启动时读基本信息的会话
 		assert.equal((await drive(t.clock, t.ciu.status())).ok, true)
+		assert.equal(t.world.log.inits.filter(i => i.role === 'ciu').length, 1)
+		t.meter.stop(); t.ciu.stop()
+	}
+	{
+		// 已初始化的发起端（ERR_STATE 旧固件同理）: 启动只查 GET_STATUS，不发 INIT
+		const t = setup()
+		await ready(t)
+		assert.equal((await drive(t.clock, t.ciu.status())).ok, true)
+		assert.equal(t.world.log.inits.filter(i => i.role === 'ciu').length, 0, '已初始化不再 INIT')
+		assert.match(logText(t.logs.ciu), /WOR 已初始化 \[2 INITIATOR\]/)
+		t.meter.stop(); t.ciu.stop()
+	}
+	{
+		const t = setup({ world: { ciuInit: false, notInitStatus: H.STATUS.ERR_STATE } })
+		await ready(t)
+		assert.equal(t.world.log.inits.filter(i => i.role === 'ciu').length, 1, '旧固件 ERR_STATE 也认作未初始化')
 		t.meter.stop(); t.ciu.stop()
 	}
 	{
@@ -477,7 +492,7 @@ async function tests() {
 		t.ciu.stop()
 	}
 	{
-		const t = setup()
+		const t = setup({ world: { ciuInit: false } })
 		t.world.faults.initStatus = H.STATUS.ERR_ROLE
 		await assert.rejects(drive(t.clock, t.ciu.start()), /WOR_INIT 失败.*ERR_ROLE.*模组角色不是 CIU/)
 		assert.equal(t.ciu.getState().running, false)
@@ -514,11 +529,11 @@ async function tests() {
 		assert.equal(res.sessions[0].label, 'TOKEN')
 		assert.ok(res.sessions.slice(1).every(s => s.label === 'RESULT 轮询'))
 		assert.ok(t.clock.now() - t0 < 60000)
-		// 每轮会话的时间线: init -> wake 受理 <= send <= ack <= 上行（不等终结）；首拍数据的 DACK（锚点 +1.6s）就捎带了应答
+		// 每轮会话的时间线: wake 受理 <= send <= ack <= 上行（不等终结）；首拍数据的 DACK（锚点 +1.6s）就捎带了应答
 		const tl = res.sessions[0].timeline
 		assert.ok(tl.wakeMs != null && tl.sendMs >= tl.wakeMs && tl.ackMs >= tl.sendMs && tl.upMs > tl.ackMs)
 		assert.ok(Math.abs((tl.upMs - tl.ackMs) - 1350) < 20, 'up-ack ' + (tl.upMs - tl.ackMs)) // ACK 在锚点 +250ms
-		assert.ok(tl.initMs != null && tl.initMs <= tl.sendMs)
+		assert.equal(tl.initMs, null) // 会话里不 INIT，只有补 INIT 时才记
 		assert.equal(tl.endReason, null) // 成功后立即返回，不等 0x0281
 		assert.equal(tl.endMs, null)
 		assert.equal(t.world.log.finishes, 0)
@@ -876,25 +891,30 @@ async function tests() {
 		assert.equal(t.world.log.requests.slice(requestAt).filter(r => r.role === 'ciu' && r.cmd === H.CMD.WOR_WAKE_CIU).length, 0, '等待期间取消后不发出唤醒')
 		t.ciu.stop(); t.meter.stop(); t.ciuLink.close(); t.meterLink.close()
 	}
-	// 每次会话先 WOR_INIT(role=2, 本机 DRN) 再 WAKE_CIU（紧挨着），已初始化回 ERR_BUSY 照常继续
+	// 会话前不再 WOR_INIT；WAKE 回未初始化（模组中途复位）才补一次 INIT 再 WAKE
 	{
 		const t = setup()
 		await ready(t)
 		const at = t.world.log.requests.length
 		for (let i = 0; i < 3; i++) assert.equal((await drive(t.clock, t.ciu.status())).ok, true)
 		const reqs = t.world.log.requests.slice(at).filter(r => r.role === 'ciu')
-		const wakes = reqs.map((r, i) => i).filter(i => reqs[i].cmd === H.CMD.WOR_WAKE_CIU)
-		assert.ok(wakes.length >= 3)
-		for (const i of wakes) {
-			assert.equal(reqs[i - 1].cmd, H.CMD.WOR_INIT)
-			assert.equal(reqs[i - 1].payload[0], 2, 'role = INITIATOR')
-			assert.equal(H.u64(reqs[i - 1].payload, 1), CIU_ADDR)
-			assert.ok(reqs[i].at - reqs[i - 1].at < 20, 'INIT 紧挨着 WAKE')
-		}
-		assert.match(logText(t.logs.ciu), /WOR_INIT 回 BUSY（已初始化），继续/)
-		// 其它状态: ERR_ROLE 给出明确原因，不 WAKE；别的错误带状态名
-		const w0 = t.world.log.wakes
+		assert.ok(reqs.filter(r => r.cmd === H.CMD.WOR_WAKE_CIU).length >= 3)
+		assert.equal(reqs.filter(r => r.cmd === H.CMD.WOR_INIT).length, 0, '会话前不 INIT')
+		// 模组复位丢了 WorLink 初始化: WAKE 回 ERR_NOT_INIT -> INIT(role=2, 本机 DRN) -> 再 WAKE 成功
+		t.world.ciu.worInit = false
+		const i0 = t.world.log.inits.length
+		assert.equal((await drive(t.clock, t.ciu.status())).ok, true)
+		const ni = t.world.log.inits.slice(i0)
+		assert.equal(ni.length, 1)
+		assert.equal(ni[0].payloadRole, 2, 'role = INITIATOR')
+		assert.equal(ni[0].addr, CIU_ADDR)
+		assert.match(logText(t.logs.ciu), /补 WOR_INIT 后重试/)
+		assert.equal((await drive(t.clock, t.ciu.status())).ok, true)
+		assert.equal(t.world.log.inits.length, i0 + 1, '补过之后不再 INIT')
+		// 补 INIT 的其它状态: ERR_ROLE 给出明确原因；别的错误带状态名；都不再 WAKE
+		t.world.ciu.worInit = false
 		t.world.faults.initStatus = H.STATUS.ERR_ROLE
+		const w0 = t.world.log.wakes
 		const r1 = await drive(t.clock, t.ciu.runSession(hex('38 12 34 56 78 03')))
 		assert.equal(r1.ok, false)
 		assert.equal(r1.stage, 'init')
@@ -903,6 +923,13 @@ async function tests() {
 		const r2 = await drive(t.clock, t.ciu.runSession(hex('38 12 34 56 78 03')))
 		assert.match(r2.reason, /WOR_INIT 失败: ERR_FMT/)
 		assert.equal(t.world.log.wakes, w0, 'INIT 失败不 WAKE')
+		// INIT 回 OK 但 WAKE 仍未初始化: 只补一次，不循环
+		t.world.faults.initStatus = H.STATUS.OK
+		const i1 = t.world.log.inits.length
+		const r3 = await drive(t.clock, t.ciu.runSession(hex('38 12 34 56 78 03')))
+		assert.equal(r3.ok, false)
+		assert.match(r3.reason, /补 WOR_INIT 后仍未就绪/)
+		assert.equal(t.world.log.inits.length, i1 + 1)
 		t.ciu.stop(); t.meter.stop(); t.ciuLink.close(); t.meterLink.close()
 	}
 	// 不发 FINISH / ABORT，运行期两端都不查 WOR_GET_STATUS / 统计（成功、各种失败、重试都一样）
@@ -923,7 +950,8 @@ async function tests() {
 		await drive(t.clock, t.ciu.status())
 		const banned = [H.CMD.WOR_GET_STATUS, H.CMD.WOR_STATS_GET, H.CMD.WOR_FINISH, H.CMD.WOR_ABORT]
 		assert.equal(t.world.log.requests.slice(at).filter(r => banned.includes(r.cmd)).length, 0, '运行期没有 GET_STATUS / 统计 / FINISH / ABORT')
-		assert.equal(t.world.log.requests.filter(r => r.role === 'ciu' && banned.includes(r.cmd)).length, 0, 'CIU 从启动起就不发这些')
+		assert.equal(t.world.log.requests.filter(r => r.role === 'ciu' && banned.includes(r.cmd) && r.cmd !== H.CMD.WOR_GET_STATUS).length, 0, 'CIU 从启动起就不发统计 / FINISH / ABORT')
+		assert.equal(t.world.log.requests.filter(r => r.role === 'ciu' && r.cmd === H.CMD.WOR_GET_STATUS).length, 1, 'CIU 只在启动时查一次 WOR_GET_STATUS')
 		assert.equal(t.world.log.finishes, 0)
 		assert.equal(t.world.log.aborts, 0)
 		assert.doesNotMatch(logText(t.logs.ciu), /诊断:/)
