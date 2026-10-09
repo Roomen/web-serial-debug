@@ -43,6 +43,102 @@
 	darkQuery.addEventListener('change', () => {
 		if (themeChoice() === 'auto') applyTheme()
 	})
+
+	/* ========== Layout: 经典 / 现代 ========== */
+	// 与主题一样是纯界面偏好：不进导出配置、不被「重置所有参数」清掉；缺省(含存储不可用)为经典。
+	// data-layout 只改样式作用域，切换不刷新页面、不碰串口与日志状态；index.html 首屏前已按同一规则预置
+	const LAYOUT_KEY = 'serial-debug-layout'
+	const DUAL_VIEW_KEY = 'serial-debug-dual-view'
+
+	// 会话内以这份为准，持久化只是尽力保存：存储写失败时也不能让 data-layout 与已搬好的 DOM、分布局状态键对不上
+	let sessionLayout = (function () {
+		try { return localStorage.getItem(LAYOUT_KEY) === 'modern' ? 'modern' : 'classic' } catch (e) { return 'classic' }
+	})()
+
+	function layoutChoice() {
+		return sessionLayout
+	}
+
+	function applyLayout() {
+		const choice = sessionLayout
+		document.documentElement.dataset.layout = choice
+		;['classic', 'modern'].forEach((c) => {
+			const btn = document.getElementById('serial-layout-' + c)
+			if (btn) btn.setAttribute('aria-pressed', String(c === choice))
+		})
+	}
+
+	window.getLayoutChoice = layoutChoice
+	// 停靠区开合/宽高、工作台面板分布按布局各存一份：现代布局的调整只写带 Modern 后缀的键，经典布局的键原样不动
+	function layoutStateKey(key) {
+		return document.documentElement.dataset.layout === 'modern' ? key + 'Modern' : key
+	}
+	window.layoutStateKey = layoutStateKey
+	window.setLayoutChoice = function (choice) {
+		const next = choice === 'modern' ? 'modern' : 'classic'
+		sessionLayout = next
+		try {
+			if (next === 'modern') localStorage.setItem(LAYOUT_KEY, 'modern')
+			else localStorage.removeItem(LAYOUT_KEY)
+		} catch (e) { /* 存储不可用时本次会话内仍生效，下次回到默认 */ }
+		if (document.documentElement.dataset.layout === next) return
+		applyLayout()
+		// 先搬 DOM(全局连接条/状态栏、检查器、固件页合并，js/workbench.js)，再让各停靠区按新布局的键重放开合与宽高；
+		// 两步都同步做完才量尺寸，重放时量到的已是新布局下的 DOM
+		document.dispatchEvent(new CustomEvent('serial-layout-move', { detail: { layout: next } }))
+		document.dispatchEvent(new CustomEvent('serial-layout-change', { detail: { layout: next } }))
+		// 两套布局的尺寸不同：日志头压缩档要重量，波形等依赖容器尺寸的画布也监听 resize
+		fitLogHeader()
+		window.dispatchEvent(new Event('resize'))
+	}
+
+	// 双路视图(列表/气泡)只在现代布局的双路行日志里有入口；气泡是纯 CSS 对现有行的重排，这里只存偏好
+	// 与布局一样会话内以内存值为准，存储写失败时本次会话照常切换
+	let sessionDualView = (function () {
+		try { return localStorage.getItem(DUAL_VIEW_KEY) === 'bubble' ? 'bubble' : 'list' } catch (e) { return 'list' }
+	})()
+
+	function dualViewChoice() {
+		return sessionDualView
+	}
+
+	function applyDualView() {
+		const choice = sessionDualView
+		document.documentElement.dataset.dualView = choice
+		;['list', 'bubble'].forEach((c) => {
+			const btn = document.getElementById('serial-dual-view-' + c)
+			if (btn) btn.setAttribute('aria-pressed', String(c === choice))
+		})
+	}
+
+	window.getDualViewChoice = dualViewChoice
+	window.setDualViewChoice = function (choice) {
+		const next = choice === 'bubble' ? 'bubble' : 'list'
+		sessionDualView = next
+		try {
+			if (next === 'bubble') localStorage.setItem(DUAL_VIEW_KEY, 'bubble')
+			else localStorage.removeItem(DUAL_VIEW_KEY)
+		} catch (e) { /* 同上 */ }
+		applyDualView()
+		// 行高变了：开着自动滚动就留在底部，别停在换算前的位置
+		const auto = document.getElementById('serial-auto-scroll')
+		const logs = document.getElementById('serial-logs-dual')
+		if (logs && auto && auto.getAttribute('aria-pressed') === 'true') logs.scrollTop = logs.scrollHeight
+		fitLogHeader()
+	}
+
+	applyLayout()
+	applyDualView()
+	function bindSeg(segId, prefix, apply) {
+		const seg = document.getElementById(segId)
+		if (!seg) return
+		seg.addEventListener('click', (e) => {
+			const btn = e.target.closest('button')
+			if (btn && seg.contains(btn)) apply(btn.id.slice(prefix.length))
+		})
+	}
+	bindSeg('serial-layout-seg', 'serial-layout-', (c) => window.setLayoutChoice(c))
+	bindSeg('serial-dual-view-seg', 'serial-dual-view-', (c) => window.setDualViewChoice(c))
 	// 事务钉扎: 升级/批量配置等事务进行中锁定主发口, 防止中途切换把后续帧发到另一台设备
 	let pinSid = null
 	let pinDepth = 0
@@ -631,7 +727,7 @@
 		let top = Infinity
 		let bottom = -Infinity
 		let tallest = 0
-		header.querySelectorAll('.serial-log-title, #serial-log-view-seg, #serial-log-legend, #serial-log-settings-btn, .serial-log-actions').forEach(function (el) {
+		header.querySelectorAll('.serial-log-title, #serial-log-view-seg, #serial-log-legend, #serial-dual-view-seg, #serial-log-settings-btn, .serial-log-actions').forEach(function (el) {
 			const r = el.getBoundingClientRect()
 			if (!r.width) return
 			top = Math.min(top, r.top)
@@ -817,6 +913,7 @@
 			try { selectedLogRows[mode].classList.remove('selected') } catch (e) {}
 			selectedLogRows[mode] = null
 		}
+		document.dispatchEvent(new CustomEvent('serial-log-select'))
 		persistLogsNow()
 	}
 
@@ -1105,17 +1202,57 @@
 		}
 	})
 	//添加快捷发送
-	document.getElementById('serial-quick-send-add').addEventListener('click', (e) => {
-		const item = {
-			name: '发送',
-			content: '',
-			hex: false,
-		}
+	function appendQuickItem(item) {
 		currQuickSend.list.push(item)
 		quickSendContent.insertAdjacentHTML('beforeend', getQuickItemHtml(item))
 		quickSendContent.lastElementChild._quickItem = item
 		saveQuickList()
+	}
+	document.getElementById('serial-quick-send-add').addEventListener('click', (e) => {
+		appendQuickItem({
+			name: '发送',
+			content: '',
+			hex: false,
+		})
 	})
+	//「基于此帧」动作(现代布局检查器底部)：取当前模式下选中的日志行，重发走 serialApi.writeRaw，存快捷发送走 appendQuickItem
+	function selectedLogFrame() {
+		const row = selectedLogRows[logModeKey()]
+		if (!row || !row.isConnected) return null
+		const hex = row.getAttribute('data-hex') || ''
+		if (!hex.trim()) return null
+		const pick = function (sel) {
+			const el = row.querySelector(sel)
+			return el ? el.textContent.trim() : ''
+		}
+		let name = pick('.pv-tag')
+		if (!name) {
+			const title = pick('.pv-title')
+			if (title && title !== '帧') name = title
+		}
+		if (!name) {
+			const ts = parseInt(row.getAttribute('data-ts'), 10)
+			const d = new Date(isNaN(ts) ? Date.now() : ts)
+			const pad = (v) => (v < 10 ? '0' : '') + v
+			name = '帧 ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds())
+		}
+		return { dir: row.getAttribute('data-dir') || '', hex: hex.trim(), name: name }
+	}
+	window.serialFrameActions = {
+		selected: selectedLogFrame,
+		async resend() {
+			const f = selectedLogFrame()
+			if (!f || f.dir !== 'tx') return
+			const bytes = Uint8Array.from(f.hex.split(/\s+/).filter(Boolean).map((h) => parseInt(h, 16)))
+			await window.serialApi.writeRaw(bytes)
+		},
+		saveQuick() {
+			const f = selectedLogFrame()
+			if (!f || !currQuickSend || !Array.isArray(currQuickSend.list)) return
+			appendQuickItem({ name: f.name, content: f.hex, hex: true })
+			showToast('已存为快捷发送：' + f.name)
+		},
+	}
 	function getQuickItemHtml(item) {
 		const rawName = item.name || '发送'
 		const name = HTMLEncode(rawName)
@@ -2924,6 +3061,7 @@
 			}
 			row.classList.add('selected')
 			selectedLogRows[mode] = row
+			document.dispatchEvent(new CustomEvent('serial-log-select'))
 			//锁定时只换解析内容，不展开面板、也不把底栏切到解析
 			const locked = window.parsePanelDock && window.parsePanelDock.isLocked()
 			if (!locked && typeof window.expandParsePanel === 'function') {
@@ -5407,14 +5545,14 @@
 				const v = parseInt(cs.getPropertyValue('--pane-' + p), 10)
 				if (!isNaN(v)) o[p] = v
 			}
-			localStorage.setItem(WIDTH_KEY, JSON.stringify(o))
+			localStorage.setItem(layoutStateKey(WIDTH_KEY), JSON.stringify(o))
 		}
 		function saveSidebarState() {
 			const state = {}
 			document.querySelectorAll('.sidebar .collapse').forEach(function (el) {
 				state[el.parentElement.id || ''] = el.classList.contains('show')
 			})
-			localStorage.setItem('sidebarCollapsed', JSON.stringify(state))
+			localStorage.setItem(layoutStateKey('sidebarCollapsed'), JSON.stringify(state))
 		}
 		function setCollapsed(pane, collapsed) {
 			const sidebar = sidebarOf(pane)
@@ -5491,15 +5629,68 @@
 
 		//恢复上次的宽度与折叠状态
 		try {
-			const w = JSON.parse(localStorage.getItem(WIDTH_KEY) || '{}')
+			const w = JSON.parse(localStorage.getItem(layoutStateKey(WIDTH_KEY)) || '{}')
 			for (const p of PANES) {
 				if (w[p]) applyWidth(p, w[p])
 			}
 		} catch (e) {}
 		try {
-			const state = JSON.parse(localStorage.getItem('sidebarCollapsed') || '{}')
+			const state = JSON.parse(localStorage.getItem(layoutStateKey('sidebarCollapsed')) || '{}')
 			if (state['serial-tools'] === false) setCollapsed('right', true)
 		} catch (e) {}
+
+		//切换布局：各布局的宽度与折叠互不影响。本次会话里去过的布局按离开时的原样(内联宽度、折叠暂存)还回去，
+		//没去过的按该布局自己的键重放(现代布局没存过就沿用当前状态)，不把另一套布局的调整带过来
+		const layoutMem = {}
+		let memLayout = document.documentElement.dataset.layout === 'modern' ? 'modern' : 'classic'
+		function cleanStyleAttr() {
+			if (!main.getAttribute('style')) main.removeAttribute('style')
+		}
+		document.addEventListener('serial-layout-change', function () {
+			const next = document.documentElement.dataset.layout === 'modern' ? 'modern' : 'classic'
+			layoutMem[memLayout] = {
+				width: main.style.getPropertyValue('--pane-right'),
+				stashed: stashedWidth.right || '',
+				collapsed: isCollapsed('right'),
+			}
+			memLayout = next
+			const mem = layoutMem[next]
+			if (mem) {
+				if (isCollapsed('right') !== mem.collapsed) setCollapsed('right', mem.collapsed)
+				if (mem.width) main.style.setProperty('--pane-right', mem.width)
+				else main.style.removeProperty('--pane-right')
+				stashedWidth.right = mem.stashed
+				cleanStyleAttr()
+				return
+			}
+			let w = null
+			let state = null
+			try { w = JSON.parse(localStorage.getItem(layoutStateKey(WIDTH_KEY)) || 'null') } catch (e) {}
+			try { state = JSON.parse(localStorage.getItem(layoutStateKey('sidebarCollapsed')) || 'null') } catch (e) {}
+			//经典布局没存过就是页面初始状态(展开、默认宽度)
+			if (next === 'classic') {
+				w = w || {}
+				state = state || {}
+			}
+			if (w) {
+				for (const p of PANES) {
+					stashedWidth[p] = ''
+					main.style.removeProperty('--pane-' + p)
+					if (w[p]) applyWidth(p, w[p])
+				}
+				cleanStyleAttr()
+			}
+			if (state) {
+				const collapsed = state['serial-tools'] === false
+				if (isCollapsed('right') !== collapsed) setCollapsed('right', collapsed)
+				else if (collapsed) {
+					//已经是折叠态时重放的宽度要按折叠规则让位
+					stashedWidth.right = main.style.getPropertyValue('--pane-right')
+					main.style.removeProperty('--pane-right')
+					cleanStyleAttr()
+				}
+			}
+		})
 	})()
 
 	// 协议解析面板：顶缝拖高度，header 只负责点击折叠(与串口发送一致)
@@ -5534,9 +5725,30 @@
 			logMain.style.setProperty('--parse-h', px + 'px')
 			return px
 		}
+		//恢复保存的高度：串口视图隐藏时量不出可用高度，钳位会把高度压到下限再被存回去，
+		//所以隐藏时原值写成内联、不钳位，等日志区重新有尺寸(ResizeObserver)再按需钳一次
+		let clampPending = false
+		function restoreHeight(px) {
+			if (logMain.clientHeight > 0) {
+				clampPending = false
+				return applyHeight(px)
+			}
+			px = Math.max(MIN_H, Math.round(px))
+			logMain.style.setProperty('--parse-h', px + 'px')
+			clampPending = true
+			return px
+		}
+		if (typeof ResizeObserver !== 'undefined') {
+			new ResizeObserver(function () {
+				if (!clampPending || !logMain.clientHeight) return
+				clampPending = false
+				const v = parseInt(logMain.style.getPropertyValue('--parse-h'), 10)
+				if (!isNaN(v) && v > maxHeight()) applyHeight(v)
+			}).observe(logMain)
+		}
 		function saveState() {
 			const v = parseInt(logMain.style.getPropertyValue('--parse-h'), 10)
-			localStorage.setItem(STATE_KEY, JSON.stringify({
+			localStorage.setItem(layoutStateKey(STATE_KEY), JSON.stringify({
 				height: isNaN(v) ? DEFAULT_H : v,
 				collapsed: isCollapsed(),
 				locked: isLocked()
@@ -5616,6 +5828,15 @@
 				e.stopPropagation()
 				setLocked(!isLocked())
 				saveState()
+				//锁定是行为偏好，不分布局：另一套布局存过状态的话一并改掉
+				const other = layoutStateKey(STATE_KEY) === STATE_KEY ? STATE_KEY + 'Modern' : STATE_KEY
+				try {
+					const o = JSON.parse(localStorage.getItem(other) || 'null')
+					if (o && typeof o === 'object') {
+						o.locked = isLocked()
+						localStorage.setItem(other, JSON.stringify(o))
+					}
+				} catch (err) {}
 			})
 		}
 
@@ -5631,8 +5852,8 @@
 
 		//恢复上次的高度与折叠状态；无记录时默认折叠，把空间留给日志
 		let saved = {}
-		try { saved = JSON.parse(localStorage.getItem(STATE_KEY) || '{}') } catch (e) {}
-		if (saved.height) applyHeight(saved.height)
+		try { saved = JSON.parse(localStorage.getItem(layoutStateKey(STATE_KEY)) || '{}') } catch (e) {}
+		if (saved.height) restoreHeight(saved.height)
 		setLocked(saved.locked === true)
 		if (typeof saved.collapsed === 'boolean') {
 			setCollapsed(saved.collapsed)
@@ -5640,6 +5861,28 @@
 			setCollapsed(true)
 		}
 		syncParsePanelEmpty()
+
+		//切换布局：底栏高度与折叠同样各布局一份(锁定是行为偏好，保持当前)。本次会话去过的布局原样还回去，
+		//不经 applyHeight 重新钳位：视图隐藏时量不出高度，钳位会把高度压到下限
+		const layoutMem = {}
+		let memLayout = document.documentElement.dataset.layout === 'modern' ? 'modern' : 'classic'
+		document.addEventListener('serial-layout-change', function () {
+			const next = document.documentElement.dataset.layout === 'modern' ? 'modern' : 'classic'
+			layoutMem[memLayout] = { height: logMain.style.getPropertyValue('--parse-h'), collapsed: isCollapsed() }
+			memLayout = next
+			let mem = layoutMem[next]
+			logMain.style.removeProperty('--parse-h')
+			if (mem) {
+				if (mem.height) logMain.style.setProperty('--parse-h', mem.height)
+			} else {
+				let st = null
+				try { st = JSON.parse(localStorage.getItem(layoutStateKey(STATE_KEY)) || 'null') } catch (e) {}
+				if (st && st.height) restoreHeight(st.height)
+				mem = { collapsed: st && typeof st.collapsed === 'boolean' ? st.collapsed : true }
+			}
+			if (!logMain.getAttribute('style')) logMain.removeAttribute('style')
+			setCollapsed(mem.collapsed)
+		})
 	})()
 
 	// 串口发送面板：点击标题栏折叠/展开（对齐协议解析面板）
