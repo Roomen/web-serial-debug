@@ -927,6 +927,9 @@
 			// 下发 HEX 框是各协议共用的发送缓冲(188/WMBUS 下发也写它)，切协议后留着旧帧会被「立即下发」原样发出
 			const downPreviewEl = document.getElementById('serial-protocol-down-preview')
 			if (downPreviewEl) downPreviewEl.value = ''
+			// 再按新协议当前选中的常用指令重新生成, 不用手动点「生成HEX」
+			const downPresetEl = document.getElementById('serial-protocol-down-preset')
+			if (downPresetEl && downPresetEl.value) downPresetEl.dispatchEvent(new Event('change'))
 		})
 	}
 
@@ -1586,6 +1589,8 @@
 	//生成下发HEX
 	let _downSeq = 1
 	document.getElementById('serial-protocol-build').addEventListener('click', (e) => {
+		// 先清掉旧帧: 生成失败时不能留着上一帧被「立即下发」原样发出
+		document.getElementById('serial-protocol-down-preview').value = ''
 		let tlv
 		try {
 			tlv = JSON.parse(document.getElementById('serial-protocol-down-tlv').value || '[]')
@@ -1619,6 +1624,12 @@
 			addLogErr('生成帧失败:' + err.toString())
 		}
 	})
+	// 加密开关或密钥变了, 按新设置重生成当前帧, 避免发出旧的明文/旧密钥帧
+	function rebuildDownPreview() {
+		// 预览框各协议共用, 只有 SEK 的帧才按 SEK 的 TLV 重生成
+		if (window._activeProtocol !== 'sek') return
+		if (document.getElementById('serial-protocol-down-tlv').value.trim()) document.getElementById('serial-protocol-build').click()
+	}
 	//点击生成的 HEX 预览即可复制
 	const downPreview = document.getElementById('serial-protocol-down-preview')
 	if (downPreview) {
@@ -1633,12 +1644,15 @@
 	}
 	//立即下发
 	document.getElementById('serial-protocol-send').addEventListener('click', (e) => {
-		const preview = document.getElementById('serial-protocol-down-preview').value
-		if (!preview) {
+		const previewEl = document.getElementById('serial-protocol-down-preview')
+		if (!previewEl.value && document.getElementById('serial-protocol-down-tlv').value.trim()) {
+			document.getElementById('serial-protocol-build').click()
+		}
+		if (!previewEl.value) {
 			addLogErr('请先生成HEX再下发')
 			return
 		}
-		sendHex(preview)
+		sendHex(previewEl.value)
 	})
 
 	//常用指令(下行下发)初始化
@@ -1964,6 +1978,8 @@
 			if (!name) return
 			const preset = presetItemByName(name)
 			if (!preset) return
+			// 参数不完整时下面会提前返回, 不能留着上一条指令的帧
+			document.getElementById('serial-protocol-down-preview').value = ''
 			if (funcSel.value !== preset.func) {
 				_skipFuncEvent = true
 				document.getElementById('serial-protocol-down-func').value = preset.func
@@ -2701,10 +2717,12 @@
 	document.getElementById('serial-protocol-key-ascii').addEventListener('change', function (e) {
 		changeOption('skKeyAscii', this.value)
 		rerenderParseRows()
+		rebuildDownPreview()
 	})
 	document.getElementById('serial-protocol-key-hex').addEventListener('change', function (e) {
 		changeOption('skKeyHex', this.value)
 		rerenderParseRows()
+		rebuildDownPreview()
 	})
 	document.getElementById('serial-protocol-enc-type').addEventListener('change', function (e) {
 		changeOption('skEncType', this.value)
@@ -2714,6 +2732,7 @@
 	if (downEncryptToggle) {
 		downEncryptToggle.addEventListener('change', function () {
 			changeOption('skDownEncrypt', this.checked)
+			rebuildDownPreview()
 		})
 	}
 
