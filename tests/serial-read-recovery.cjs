@@ -305,41 +305,51 @@ async function testLineGlitchMeta() {
 	await stop(h, 'A', pending)
 }
 
-function packHarness(timeOut) {
+function packHarness(timeOut, protocol) {
+	let now = 100000
 	let timerId = 0
 	const timers = new Map()
 	const flushed = []
 	const parsed = []
 	let addLogResult
-	const sess = { packBuf: [], packTimer: null, packStartTime: null, sekWaitStart: null, rxBytes: 0, packGlitch: false }
+	const makeSession = () => ({ packBuf: [], packTimer: null, packStartTime: null, sekWaitStart: null, rxBytes: 0, packGlitch: false })
+	const sessions = Object.fromEntries(['S', 'A', 'B'].map(sid => [sid, makeSession()]))
+	const sidFlushed = []
+	const times = []
 	const hub = {
-		_sess: () => sess, mode: 'single',
-		getPackBuf: () => sess.packBuf, setPackBuf: (_, a) => { sess.packBuf = a },
-		getPackStartTime: () => sess.packStartTime, setPackStartTime: (_, t) => { sess.packStartTime = t },
-		getPackTimer: () => sess.packTimer, setPackTimer: (_, t) => { sess.packTimer = t },
-		getSekWaitStart: () => sess.sekWaitStart, setSekWaitStart: (_, t) => { sess.sekWaitStart = t },
+		_sess: sid => sessions[sid], mode: 'single',
+		getPackBuf: sid => sessions[sid].packBuf, setPackBuf: (sid, a) => { sessions[sid].packBuf = a },
+		getPackStartTime: sid => sessions[sid].packStartTime, setPackStartTime: (sid, t) => { sessions[sid].packStartTime = t },
+		getPackTimer: sid => sessions[sid].packTimer, setPackTimer: (sid, t) => { sessions[sid].packTimer = t },
+		getSekWaitStart: sid => sessions[sid].sekWaitStart, setSekWaitStart: (sid, t) => { sessions[sid].sekWaitStart = t },
 		activeSendPhys: () => 'S', isRoutable: () => false, logModeOf: () => 'single',
 		getPort: () => null, getReader: () => null, setReader: () => {}
 	}
 	const context = vm.createContext({
-		SerialHub: hub, window: {}, toolOptions: {},
+		SerialHub: hub, window: { _activeProtocol: protocol }, toolOptions: {}, logType: 'hex',
+		Uint8Array, Date: class extends Date { constructor(...args) { super(...(args.length ? args : [now])) } static now() { return now } },
+		SEK_INCOMPLETE_WAIT_MAX_MS: 3000,
 		setTimeout: (fn, ms) => { const id = ++timerId; timers.set(id, fn); return id },
 		clearTimeout: id => timers.delete(id),
-		noteSerialRx: () => {}, getLogTypeForSid: () => 'hex', logOptionsForSid: () => ({ timeOut }),
+		addLogErrSafe: () => {}, noteSerialRx: () => {}, getLogTypeForSid: () => context.logType, logOptionsForSid: () => ({ timeOut }),
 		isRowLogType: () => true, schedulePersistLogs: () => {},
-		addLog: (buf, isReceive, startTime, sid, glitch) => { flushed.push({ bytes: [...buf], glitch }); return addLogResult },
-		addParseLog: buf => parsed.push([...buf]), SERIAL_PACK_MAX_BYTES: 65536, readGenBySid: { S: 0 }, resetRxWatch: () => {}, portHeldByOther: () => false
+		addLog: (buf, isReceive, startTime, sid, glitch) => { flushed.push({ bytes: [...buf], glitch }); sidFlushed.push(sid); times.push(Number(startTime)); parsed.push([...buf]); return addLogResult },
+		parseLogType: t => ({ parse: /parse/.test(t) }), SERIAL_PACK_MAX_BYTES: 65536, readGenBySid: { S: 0 }, resetRxWatch: () => {}, portHeldByOther: () => false
 	})
-	const flushStart = source.indexOf('\tfunction flushSerialPack(')
+	vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/hostproto-protocol.js'), 'utf8'), context)
+	const peekStart = source.indexOf('\tfunction peekSekIncompleteNeed(')
+	const peekEnd = source.indexOf('\n\t}\n', peekStart) + 4
+	const flushStart = source.indexOf('\tfunction hostProtoLogging(')
 	const flushEnd = source.indexOf('\t//对外暴露的串口接口', flushStart)
 	const zeroStart = source.indexOf('\tfunction isAllZero(')
 	const zeroEnd = source.indexOf('\n\t}\n', zeroStart) + 4
 	vm.runInContext(`Object.assign(SerialHub, { ${source.slice(statsStart, statsEnd)} })
 		${source.slice(zeroStart, zeroEnd)}
+		${source.slice(peekStart, peekEnd)}
 		${source.slice(flushStart, flushEnd)}
 		${source.slice(releaseStart, releaseEnd)}
 		globalThis.api = { dataReceived, flushPendingRx, releasePort }`, context)
-	return { api: context.api, flushed, parsed, hub, setAddLogResult: v => { addLogResult = v }, fire: () => { const all = [...timers.values()]; timers.clear(); all.forEach(fn => fn()) } }
+	return { api: context.api, flushed, parsed, hub, context, sidFlushed, times, H: context.window.hostProto, setAddLogResult: v => { addLogResult = v }, fire: (ms = 50) => { now += ms; const all = [...timers.values()]; timers.clear(); all.forEach(fn => fn()) } }
 }
 
 async function testPackGlitch() {
@@ -364,13 +374,23 @@ async function testPackGlitch() {
 	direct.api.dataReceived(Uint8Array.of(0, 0), 'S')
 	assert.deepEqual(direct.flushed, [{ bytes: [0, 0], glitch: true }, { bytes: [0, 0], glitch: false }])
 
-	// 并入上一条毛刺行的包不再送协议解析；新开的毛刺行照常送
+	// 并入上一条毛刺行时 addLog 返回 merged，不再新增行
 	const parse = packHarness(0)
 	parse.api.dataReceived(Uint8Array.of(0, 0), 'S', { lineGlitch: true })
 	parse.setAddLogResult('merged')
 	parse.api.dataReceived(Uint8Array.of(0, 0), 'S', { lineGlitch: true })
 	assert.equal(parse.flushed.length, 2)
-	assert.deepEqual(parse.parsed, [[0, 0]])
+
+	// 日志格式含「解析」时，未收满声明长度的 SEK 帧在分包超时后继续等；不含解析且当前协议不是 SEK 时照常输出
+	const half = Uint8Array.from([0xA9, 0x9A, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0])
+	for (const [type, waits] of [['hex', false], ['hex&parse', true], ['parse', true], ['text', false]]) {
+		const h = packHarness(50)
+		h.context.logType = type
+		h.context.window._activeProtocol = 'gz'
+		h.api.dataReceived(half, 'S')
+		h.fire()
+		assert.equal(h.flushed.length, waits ? 0 : 1, type)
+	}
 
 	// releasePort 清掉分包缓冲时一并清毛刺标记：新连接的第一包不得带上旧连接的标记
 	const released = packHarness(50)
@@ -389,6 +409,77 @@ async function testPackGlitch() {
 	assert.deepEqual(early.flushed, [{ bytes: [0, 0], glitch: true }, { bytes: [0], glitch: false }])
 }
 
+function testHostProtoPack() {
+	for (const timeout of [0, 50]) {
+		const h = packHarness(timeout, 'hostproto')
+		const frame = h.H.buildFrame({ type: h.H.TYPE_EVT, cmd: 0x0280, seq: 0, payload: [1, 2, 3] })
+		const response = h.H.buildFrame({ type: h.H.TYPE_RSP, cmd: 0x020c, seq: 7, payload: [0] })
+		// A 的最后一字节未到，B 的完整帧和发送前 flush 都不得切掉 A 的半帧。
+		h.api.dataReceived(frame.slice(0, -1), 'A')
+		h.api.dataReceived(response, 'B')
+		h.fire()
+		h.api.flushPendingRx('A')
+		assert.deepEqual(h.sidFlushed, ['B'])
+		h.api.dataReceived(Uint8Array.from([frame.at(-1), ...response]), 'A')
+		assert.deepEqual(h.sidFlushed, ['B', 'A', 'A'])
+		assert.deepEqual(h.parsed, [[...response], [...frame], [...response]])
+		assert.ok(h.parsed.every(bytes => h.H.parseFrame(bytes).ok))
+		assert.equal(h.hub.getPackBuf('A').length, 0)
+
+		// 每一个可能的 read 边界，包括单独 EB，都能还原完整帧。
+		for (let split = 1; split < frame.length; split++) {
+			const before = h.parsed.length
+			h.api.dataReceived(frame.slice(0, split), 'A')
+			h.api.flushPendingRx('A')
+			h.api.dataReceived(frame.slice(split), 'A')
+			// 只有 FF 前导的块允许提前作为原始日志输出。
+			assert.ok(h.H.parseFrame(h.parsed.at(-1)).ok, 'split ' + split)
+			assert.deepEqual(h.parsed.slice(before).flat(), [...frame])
+		}
+
+		// 真实订阅者同步 TX 的顺序：完整 RX 已进入日志，不会把尾字节留到下一行。
+		h.hub.mode = 'dual'
+		h.hub.isRoutable = () => true
+		h.hub.activeSendSid = () => 'B'
+		const callbacks = []
+		h.context.window.serialApi = { _receivers: [{ sid: 'A', cb: bytes => {
+			callbacks.push([...bytes])
+			h.api.flushPendingRx('A')
+		} }] }
+		h.api.dataReceived(frame.slice(0, -1), 'A')
+		const before = h.parsed.length
+		h.api.dataReceived(frame.slice(-1), 'A')
+		assert.deepEqual(h.parsed.slice(before), [[...frame]])
+		assert.equal(callbacks.length, 2)
+		assert.equal(h.hub.getPackBuf('A').length, 0)
+
+		// 前帧补齐时同块开始的下一帧，使用本次 RX 的时间。
+		h.api.dataReceived(frame.slice(0, -1), 'A')
+		h.fire(10)
+		h.api.dataReceived(Uint8Array.from([frame.at(-1), ...response.slice(0, -1)]), 'A')
+		const firstTime = h.times.at(-1)
+		h.api.dataReceived(response.slice(-1), 'A')
+		assert.equal(h.times.at(-1), firstTime + 10)
+
+		// 日志显示异常也不能阻止原始字节进入协议订阅者。
+		const beforeError = callbacks.length
+		const originalLog = h.context.addLog
+		h.context.addLog = () => { throw new Error('synthetic render failure') }
+		h.api.dataReceived(response, 'A')
+		assert.equal(callbacks.length, beforeError + 1)
+		assert.deepEqual(callbacks.at(-1), [...response])
+		h.context.addLog = originalLog
+
+		// 半帧永久缺尾也必须有界输出，后续完整帧可重新同步。
+		h.api.dataReceived(frame.slice(0, -1), 'A')
+		h.fire()
+		h.fire(3000)
+		assert.equal(h.hub.getPackBuf('A').length, 0)
+		h.api.dataReceived(response, 'A')
+		assert.deepEqual(h.parsed.at(-1), [...response])
+	}
+}
+
 function renderHarness() {
 	const rows = []
 	function element() {
@@ -400,15 +491,18 @@ function renderHarness() {
 		textdecoder: new TextDecoder(), toolOptions: { showTime: false },
 		HTMLEncode: t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
 		attrEscape: t => t, ansi_up: { ansi_to_html: t => t }, logSeq: 0, formatDate: () => '',
-		document: { createElement: element },
+		document: { createElement: element }, window: {}, getProtocolParseOpts: () => ({}),
+		skParseFrame: data => ({ raw: Array.from(data) }),
 		SerialHub: { activeSendPhys: () => 'A', logModeOf: () => 'dual', getSessionLabel: () => 'A路',
 			getLogContainerFor: () => ({ children: rows }) },
 		logType: 'hex', getLogTypeForSid: () => context.logType,
 		appendLogNode: (row) => rows.push(row), isRowLogType: () => true
 	})
 	const a = source.indexOf('\tfunction bytesToHexArr(')
-	const b = source.indexOf('\t//第三方协议解析日志', a)
-	vm.runInContext(source.slice(a, b) + '\nglobalThis.api = { renderLogBody, addLog }', context)
+	const b = source.indexOf('\t//日志正文渲染到此为止', a)
+	vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/parse-view.js'), 'utf8'), context)
+	context.window.getActiveProtocol = () => context.proto
+	vm.runInContext(source.slice(a, b) + '\nglobalThis.api = { renderLogBody, addLog, parseLogType }', context)
 	return { context, rows, api: context.api }
 }
 
@@ -456,6 +550,116 @@ async function testLogRendering() {
 		assert.equal(rows[3].attrs['data-glitch'], '1', type)
 		assert.ok(!rows[3].innerHTML.includes('毛刺'), type)
 	}
+
+	// logType 拆解：'&' 也出现在 &parse 后缀里，并排判断只看 hex 与 text 是否同时存在
+	assert.deepEqual(JSON.parse(JSON.stringify(api.parseLogType('hex&ansi&parse'))), { hex: true, text: true, ansi: true, parse: true })
+	assert.deepEqual(JSON.parse(JSON.stringify(api.parseLogType('parse'))), { hex: false, text: false, ansi: false, parse: true })
+	assert.deepEqual(JSON.parse(JSON.stringify(api.parseLogType('term'))), { hex: false, text: false, ansi: false, parse: false })
+	assert.equal(api.renderLogBody(bytes(0x41, 0x42), 'hex&parse'), '41 42')
+	assert.equal(api.renderLogBody(bytes(0x41, 0x42), 'text&parse'), 'AB')
+
+	// 解析段：协议 logView 出模型，ParseView 统一转义
+	const model = { title: '<b>标题</b>', dir: 'up', subject: { label: '设备', value: '<script>x</script>' }, sections: [{ pairs: [['<k>', '<v>']] }] }
+	context.proto = { logView: () => model }
+	const html = api.renderLogBody(bytes(0x41, 0x42), 'hex&text&parse', { isReceive: true })
+	assert.ok(html.startsWith('HEX:41 42<br/>TEXT:AB<div class="pv pv-up">'), html)
+	assert.ok(!html.includes('<script>') && !html.includes('<b>') && !html.includes('<k>'), html)
+	assert.ok(html.includes('&lt;script&gt;x&lt;/script&gt;'))
+	// TX 只留头部一行，其余折叠进 <details>
+	assert.ok(api.renderLogBody(bytes(0x41), 'parse', { isReceive: false, sendName: '读取' }).startsWith('<details class="pv pv-up pv-fold">'))
+	// 不是本协议的帧：与 HEX/TEXT 同显时只是没有解析段；只选「解析」回退 HEX 并标未识别
+	context.proto = { logView: () => null }
+	assert.equal(api.renderLogBody(bytes(0x41, 0x42), 'hex&parse', { isReceive: true }), '41 42')
+	assert.equal(api.renderLogBody(bytes(0x41, 0x42), 'parse', { isReceive: true }).replace(/<span[^>]*>/, '<span>'), '<span>未识别</span> 41 42')
+	// logView 抛异常按未识别处理；固件升级期间(noParse)不解析
+	context.proto = { logView: () => { throw new Error('boom') } }
+	assert.equal(api.renderLogBody(bytes(0x41), 'hex&parse', { isReceive: true }), '41')
+	context.proto = { logView: () => model }
+	assert.equal(api.renderLogBody(bytes(0x41), 'hex&parse', { isReceive: true, noParse: true }), '41')
+	assert.ok(api.renderLogBody(bytes(0x41), 'parse', { isReceive: true, noParse: true }).includes('未识别'))
+	// 没有 logView 的协议退回 formatFrame 老样式
+	context.proto = { formatFrame: () => '<div class="sk-parse">legacy</div>' }
+	assert.equal(api.renderLogBody(bytes(0x41), 'parse', { isReceive: true }), '<div class="pv pv-legacy"><div class="sk-parse">legacy</div></div>')
+
+	// 行上记录升级期间不解析与快捷发送名称，供重渲使用
+	rows.length = 0
+	context.logType = 'hex&parse'
+	context.proto = { logView: () => model }
+	context.window.serialApi = { suppressParse: true }
+	api.addLog(bytes(0x41), false, new Date(5), 'A', false, '读取')
+	assert.equal(rows[0].attrs['data-noparse'], '1')
+	assert.equal(rows[0].attrs['data-name'], '读取')
+	assert.ok(!rows[0].innerHTML.includes('class="pv'))
+	context.window.serialApi = { suppressParse: false }
+	api.addLog(bytes(0x41), true, new Date(6), 'A')
+	assert.equal(rows[1].attrs['data-noparse'], undefined)
+	assert.ok(rows[1].innerHTML.includes('class="pv pv-up"'))
+}
+
+// 分批重渲在隔离的会话里重放历史：批次间的实时基准、连接重置都不能被剩余历史批次覆盖
+async function testParseRerenderIsolation() {
+	const { context, api } = renderHarness()
+	let clock = 0
+	const timers = []
+	class FakeDate extends Date { static now() { return clock } }
+	const session = {
+		deviceUid: null, baseCode: null,
+		resetBase() { this.baseCode = null },
+		setBase(code) { this.baseCode = code },
+		snapshot() { return { deviceUid: this.deviceUid, baseCode: this.baseCode } },
+		restore(s) { this.deviceUid = s.deviceUid; this.baseCode = s.baseCode },
+	}
+	Object.assign(context, {
+		Date: FakeDate, setTimeout: fn => timers.push(fn), AnsiUp: function () {},
+		PARSE_RERENDER_SYNC_ROWS: 150, PARSE_RERENDER_SLICE_MS: 12, rerenderGen: 0, sessionResetSeq: 0,
+		logOptionsSingle: { autoScroll: false }, logOptionsDual: { autoScroll: false },
+		// B0 xx 帧在解析时设置会话基准，其余帧只是读出当前基准，与 SEK 的 Tag2/3-ID29 行为一致
+		skParseFrame: data => { clock += 5; if (data[0] === 0xB0) session.setBase(data[1]); return {} },
+	})
+	context.SerialHub.getLogContainerFor = () => null
+	context.window.skSession = session
+	context.proto = { logView: () => ({ title: 'base' + session.baseCode }) }
+	function makeRow(hex) {
+		const body = { innerHTML: '' }
+		return { attrs: { 'data-hex': hex, 'data-dir': 'rx' }, classList: { contains: c => c === 'log-row' },
+			getAttribute(k) { return k in this.attrs ? this.attrs[k] : null }, querySelector: () => body, body }
+	}
+	function makeContainer() {
+		const children = [makeRow('B0 01')]
+		for (let i = 0; i < 159; i++) children.push(makeRow('01 02'))
+		return { children, get lastElementChild() { return children[children.length - 1] } }
+	}
+	const runTimers = () => { while (timers.length) timers.shift()() }
+	const vmApi = vm.runInContext('({ rerenderLogBodies })', context)
+
+	// 批次之间实时收到新基准 2，并追加了一行：历史重放仍按自己的基准 1，实时基准保持 2
+	session.setBase(2)
+	let box = makeContainer()
+	vmApi.rerenderLogBodies(box, 'parse')
+	assert.ok(timers.length, '160 行应分批')
+	assert.equal(session.baseCode, 2)
+	session.setBase(2)
+	box.children.push(makeRow('01 02'))
+	runTimers()
+	assert.equal(session.baseCode, 2)
+	assert.ok(box.children[159].body.innerHTML.includes('base1'), box.children[159].body.innerHTML)
+
+	// 批次之间连接重置清空了基准：剩余批次与收尾都不能把历史基准恢复回实时会话
+	session.setBase(2)
+	box = makeContainer()
+	vmApi.rerenderLogBodies(box, 'parse')
+	session.resetBase()
+	context.sessionResetSeq++
+	runTimers()
+	assert.equal(session.baseCode, null)
+
+	// 期间没有实时活动：重放末态交给实时会话，与同步重渲的行为一致
+	session.resetBase()
+	box = makeContainer()
+	vmApi.rerenderLogBodies(box, 'parse')
+	runTimers()
+	assert.equal(session.baseCode, 1)
+	assert.ok(api.parseLogType('parse').parse)
 }
 
 async function testStatusBar() {
@@ -689,7 +893,9 @@ async function run() {
 	await testLineErrorQuiet()
 	await testLineGlitchMeta()
 	await testPackGlitch()
+	testHostProtoPack()
 	await testLogRendering()
+	await testParseRerenderIsolation()
 	await testStatusBar()
 	console.log('serial read recovery: passed')
 }

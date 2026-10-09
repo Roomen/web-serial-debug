@@ -598,7 +598,7 @@
 			errors.push('TYPE ' + f.type + ' 未定义')
 		}
 		body.segs = body.segs.map(s => ({ off: base + s.off, len: s.len, tip: s.tip, grp: s.grp, nested: s.nested }))
-		return { fields: fields, lines: body.lines, segs: body.segs, errors: errors }
+		return { fields: fields, lines: body.lines, segs: body.segs, errors: errors, status: f.type === TYPE_RSP && p.length ? p[0] : null }
 	}
 
 	// 解析一段数据（可含前导、多个帧、噪声）: 帧本体解出来，多帧依次展示
@@ -676,6 +676,54 @@
 		return h + '</div>'
 	}
 
+	// 日志「解析」格式的视图模型（渲染与转义见 js/parse-view.js）：每帧一个模型，没有有效帧返回 null
+	const LOG_SUBJECT_KEYS = ['目标地址', 'DRN', '来源地址 src', '本机地址']
+	function frameModel(fr) {
+		const PV = W.ParseView
+		const f = fr.fields
+		const m = {
+			title: f.命令.name,
+			code: f.命令.value,
+			dir: fr.type === TYPE_REQ ? 'down' : 'up',
+			badges: [{ text: TYPE_NAME[fr.type] || 'TYPE ' + fr.type, kind: 'info', title: f.方向 }],
+			meta: [['SEQ', f.SEQ], ['载荷', f.载荷长度 + ' B']],
+			notes: [],
+			sections: [],
+			errors: fr.errors.slice(),
+		}
+		if (fr.status != null) {
+			const st = STATUS_NAME[fr.status] || hexByte(fr.status)
+			m.badges.push({ text: st, kind: fr.status === STATUS.OK ? 'ok' : fr.status === STATUS.PENDING ? 'warn' : 'bad', title: f.状态 ? f.状态.value + ' ' + f.状态.name : '' })
+		}
+		m.badges.push({ text: 'CRC ✓', kind: 'ok', title: 'CRC16 校验通过' })
+		const idx = fr.lines.findIndex(l => l.indexOf('STS-CIU 应用帧') === 0)
+		const mainLines = idx < 0 ? fr.lines : fr.lines.slice(0, idx)
+		const main = PV.linesToPairs(mainLines.join('\n'))
+		const si = main.pairs.findIndex(p => LOG_SUBJECT_KEYS.indexOf(p[0]) >= 0)
+		if (si >= 0) {
+			const p = main.pairs.splice(si, 1)[0]
+			m.subject = { label: p[0].replace(/\s*src$/, ''), value: p[1] + (p[2] ? ' ' + p[2] : '') }
+		}
+		main.notes.forEach(t => {
+			if (/^[（(].*[）)]$/.test(t)) return // （无载荷）之类的占位
+			m.notes.push({ text: t, kind: /应为|不足|不符|非法/.test(t) ? 'warn' : 'info' })
+		})
+		if (main.pairs.length) m.sections.push({ title: fr.type === TYPE_RSP ? '应答结果' : fr.type === TYPE_EVT ? '事件内容' : '请求载荷', pairs: main.pairs })
+		if (idx >= 0) {
+			const inner = PV.linesToPairs(fr.lines.slice(idx + 1).join('\n'))
+			m.sections.push({
+				title: fr.lines[idx].replace(/[:：]\s*$/, ''),
+				pairs: inner.pairs,
+				pre: inner.notes.length ? inner.notes.join('\n') : '',
+			})
+		}
+		return m
+	}
+	function logView(r) {
+		if (!r || !r.frames || !r.frames.length) return null
+		return r.frames.map(frameModel)
+	}
+
 	function byteMap(r) {
 		const bytes = Array.isArray(r.raw) ? r.raw : Array.from(r.raw || [])
 		const n = bytes.length
@@ -729,7 +777,7 @@
 		SOF0, SOF1, VER, OVERHEAD, MAX_PAY, MAX_FRAME, WAKE_LEN, TYPE_REQ, TYPE_RSP, TYPE_EVT, TYPE_NAME,
 		STATUS, STATUS_NAME, STATUS_DESC, ROLE_NAME, WOR_ROLE_NAME, WOR_STATE_NAME, KIND_NAME, END_REASON_NAME, BOOT_MODE_NAME,
 		CMD, EVT, CMD_NAME, EVT_NAME, NO_RETRY, LINK_STAT_FIELDS, WOR_STATS_FIELDS, cmdName,
-		crc16, buildFrame, scan, findFrame, parseFrame, formatFrame, byteMap, buildDownFrame,
+		crc16, buildFrame, scan, findFrame, parseFrame, formatFrame, logView, byteMap, buildDownFrame,
 		u64, u64Bytes, hexToBytes, hexSpaced, asciiSafe,
 		woInitPayload, wakePayload, sendPayload, setUplinkPayload, devIdSetPayload,
 		decodeDevId, decodeWorStatus, decodeFwInfo, decodeWorFrame, decodeSessionEnd,
@@ -741,6 +789,7 @@
 				name: 'hostProto 模组',
 				parseFrame: parseFrame,
 				formatFrame: formatFrame,
+				logView: logView,
 				findFrame: findFrame,
 				byteMap: byteMap,
 				buildDownFrame: buildDownFrame,

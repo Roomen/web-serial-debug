@@ -480,8 +480,10 @@
 		showTime: true,
 		//日志类型
 		logType: 'hex',
-		//分包合并时间
+		//分包合并时间；按换行分行时是没等到换行的残行的兜底超时，0 表示只按换行
 		timeOut: 200,
+		//分包方式 time(按超时) | line(按 \n 分行，模组文本日志用)
+		splitMode: 'time',
 		//日志最大行数,超出后从顶部裁剪
 		maxLogRows: 10000,
 		//末尾加回车换行
@@ -496,8 +498,6 @@
 		sendContent: '',
 		//快捷发送选中索引
 		quickSendIndex: 0,
-		//第三方协议解析开关
-		skParseEnable: false,
 		//悬停提示(静默解析)开关
 		skHoverEnable: false,
 		//解密模式 auto|always|never
@@ -514,21 +514,33 @@
 		skProtocol: 'sek',
 	}
 	let toolOptions = Object.assign({}, DEFAULT_TOOL_OPTIONS)
-	// 日志条（分包超时 / 最大行数 / 日志类型 / 自动滚动）单双路独立，与 serialOptions 同一策略
+	// 日志条（分包方式与超时 / 最大行数 / 日志类型 / 自动滚动）单双路独立，与 serialOptions 同一策略
 	const TOOL_OPTIONS_DUAL_KEY = 'toolOptionsDual'
-	const LOG_OPTION_KEYS = ['timeOut', 'maxLogRows', 'logType', 'autoScroll']
+	const LOG_OPTION_KEYS = ['timeOut', 'splitMode', 'maxLogRows', 'logType', 'autoScroll']
+	const SPLIT_MODES = ['time', 'line']
 	// logType 的合法值域。写侧(setLogType)和读侧(pickLogOptions / 启动恢复)必须用同一份:
 	// 只校验"是字符串"会让 localStorage 里的陈旧值(比如站点回滚后旧代码不认识的新值)活下来,
 	// 那时 isRowLogType 为假且又不等于 term,接收数据既不写行日志也不写终端,日志会静默全无
-	const LOG_TYPES = ['hex', 'text', 'hex&text', 'ansi', 'hex&ansi', 'term']
+	// 行格式可再带 &parse 后缀(同一行里追加协议解析段),parse 单独出现表示只显示解析
+	const LOG_TYPES = ['hex', 'text', 'hex&text', 'ansi', 'hex&ansi', 'term',
+		'parse', 'hex&parse', 'text&parse', 'ansi&parse', 'hex&text&parse', 'hex&ansi&parse']
+	// 解析段重渲的状态: 启动恢复与 registerProtocol 在 IIFE 早期就会触发重渲,声明必须靠前(let/const 有暂时性死区)
+	let parseRerenderTimer = 0
+	//含解析段的历史行超过这个数就分片重渲，别在一帧里卡住界面
+	const PARSE_RERENDER_SYNC_ROWS = 150
+	const PARSE_RERENDER_SLICE_MS = 12
+	let rerenderGen = 0
+	//连接重置 SEK 会话的次数，历史重渲收尾时据此判断能否把重放末态交给实时会话
+	let sessionResetSeq = 0
 	function isValidLogType(t) {
 		return typeof t === 'string' && LOG_TYPES.indexOf(t) !== -1
 	}
 	function pickLogOptions(src) {
-		const out = { timeOut: 200, maxLogRows: 10000, logType: 'hex', autoScroll: true }
+		const out = { timeOut: 200, splitMode: 'time', maxLogRows: 10000, logType: 'hex', autoScroll: true }
 		if (!src || typeof src !== 'object') return out
 		const t = parseInt(src.timeOut, 10)
 		if (!isNaN(t) && t >= 0) out.timeOut = t
+		if (SPLIT_MODES.indexOf(src.splitMode) !== -1) out.splitMode = src.splitMode
 		const m = parseInt(src.maxLogRows, 10)
 		if (!isNaN(m) && m >= 100) out.maxLogRows = m
 		if (isValidLogType(src.logType)) out.logType = src.logType
@@ -540,7 +552,8 @@
 	let logOptionsDual = pickLogOptions(toolOptions)
 	const selectedLogRows = { single: null, dual: null }
 	const LOG_CACHE_KEY = 'serialLogCache'
-	const LOG_CACHE_VER = 1
+	// 2: 解析段改为行内 .pv 结构，旧版缓存里的独立解析块不再兼容，整份丢弃
+	const LOG_CACHE_VER = 2
 	let pendingTermRestore = null
 	let persistLogsTimer = 0
 	function activeLogOptions() {
@@ -559,7 +572,7 @@
 		return (logOptionsForSid(sid).logType) || 'hex'
 	}
 	function isRowLogType(t) {
-		return t === 'hex' || t === 'text' || t === 'hex&text' || t === 'ansi' || t === 'hex&ansi'
+		return isValidLogType(t) && t !== 'term'
 	}
 	function getTermHost() {
 		return document.getElementById(logModeKey() === 'dual' ? 'serial-term-dual' : 'serial-term-single')
@@ -582,6 +595,12 @@
 		'ansi': '彩色Ansi',
 		'hex&ansi': 'Hex和Ansi',
 		'term': '终端',
+		'parse': '解析',
+		'hex&parse': 'Hex+解析',
+		'text&parse': 'Text+解析',
+		'ansi&parse': '彩色Ansi+解析',
+		'hex&text&parse': 'Hex和Text+解析',
+		'hex&ansi&parse': 'Hex和Ansi+解析',
 	}
 	function updateLogSettingsSummary() {
 		const text = document.getElementById('serial-log-settings-text')
@@ -591,10 +610,13 @@
 		const logType = activeLogOptions().logType
 		const typeLabel = LOG_TYPE_LABELS[logType] || 'Hex'
 		const timeout = timeoutEl ? parseInt(timeoutEl.value, 10) : 0
-		const timeoutTxt = !timeout ? '不分包' : timeout + 'ms'
-		// 终端不走行数裁剪,拼上去是在说假话;分包仍决定协议解析的帧边界,要留着
+		// 按换行时超时只兜底残行，不是分包依据，摘要里不写，免得读成「换行再加超时」
+		const timeoutTxt = activeLogOptions().splitMode === 'line'
+			? '按换行'
+			: (!timeout ? '不分包' : timeout + 'ms')
+		// 终端不走分包与行数裁剪,拼上去是在说假话
 		if (logType === 'term') {
-			text.textContent = LOG_TYPE_LABELS.term + ' · ' + timeoutTxt
+			text.textContent = LOG_TYPE_LABELS.term
 		} else {
 			let rows = rowsEl ? parseInt(rowsEl.value, 10) : 10000
 			if (isNaN(rows)) rows = 10000
@@ -659,20 +681,23 @@
 		const isTerm = val === 'term'
 		if (!isTerm) lastRowLogType[modeKey] = val
 		const rowType = isTerm ? (lastRowLogType[modeKey] || 'hex') : val
-		const hasHex = rowType.includes('hex')
-		const hasAnsi = rowType.includes('ansi')
-		const hasText = rowType.includes('text') || hasAnsi
+		const fmt = parseLogType(rowType)
+		const hasHex = fmt.hex
+		const hasAnsi = fmt.ansi
+		const hasText = fmt.text
 		const viewRow = document.getElementById('serial-log-view-row')
 		const viewTerm = document.getElementById('serial-log-view-term')
 		if (viewRow) viewRow.setAttribute('aria-pressed', isTerm ? 'false' : 'true')
 		if (viewTerm) viewTerm.setAttribute('aria-pressed', isTerm ? 'true' : 'false')
 		const fmtHex = document.getElementById('serial-log-fmt-hex')
 		const fmtText = document.getElementById('serial-log-fmt-text')
+		const fmtParse = document.getElementById('serial-log-fmt-parse')
 		const ansiBtn = document.getElementById('serial-log-ansi')
 		if (fmtHex) fmtHex.setAttribute('aria-pressed', hasHex ? 'true' : 'false')
 		if (fmtText) fmtText.setAttribute('aria-pressed', hasText ? 'true' : 'false')
+		if (fmtParse) fmtParse.setAttribute('aria-pressed', fmt.parse ? 'true' : 'false')
 		if (ansiBtn) ansiBtn.setAttribute('aria-pressed', hasAnsi ? 'true' : 'false');
-		[fmtHex, fmtText].forEach(function (b) {
+		[fmtHex, fmtText, fmtParse].forEach(function (b) {
 			if (!b) return
 			b.disabled = isTerm
 			b.setAttribute('aria-disabled', isTerm ? 'true' : 'false')
@@ -682,14 +707,15 @@
 			ansiBtn.disabled = ansiDisabled
 			ansiBtn.setAttribute('aria-disabled', ansiDisabled ? 'true' : 'false')
 		}
-		// 行数裁剪只作用于行日志容器(trimLogRows),term 下无效,禁掉别留假开关。
-		// 分包超时不一样: flushSerialPack 里 addParseLog 是无条件调的,term 下它照样决定协议解析的帧边界,
-		// 所以终端档必须保持可改——曾经把两个一起禁掉,等于拿走一个仍在起作用的控件
+		// 分包与行数裁剪只作用于行日志(flushSerialPack 的合包只喂 addLog,trimLogRows 只裁行容器),
+		// term 下都无效,禁掉别留假开关
 		const rowsEl = document.getElementById('serial-max-rows')
-		if (rowsEl) {
-			rowsEl.disabled = isTerm
-			rowsEl.setAttribute('aria-disabled', isTerm ? 'true' : 'false')
-		}
+		const timeoutEl = document.getElementById('serial-timer-out');
+		[rowsEl, timeoutEl, document.getElementById('serial-split-time'), document.getElementById('serial-split-line')].forEach(function (el) {
+			if (!el) return
+			el.disabled = isTerm
+			el.setAttribute('aria-disabled', isTerm ? 'true' : 'false')
+		})
 		updateLogSettingsSummary()
 	}
 	// logType 的统一写入口:校验 + 落盘 + 同步控件 + 应用视图 + 重渲历史日志正文。
@@ -732,6 +758,7 @@
 		LOG_OPTION_KEYS.forEach(function (k) { toolOptions[k] = opts[k] })
 		const t = document.getElementById('serial-timer-out')
 		if (t) t.value = opts.timeOut
+		applySplitModeUi(opts.splitMode)
 		const m = document.getElementById('serial-max-rows')
 		if (m) m.value = opts.maxLogRows
 		toolOptions.logType = opts.logType
@@ -757,7 +784,7 @@
 		const isTerm = type === 'term'
 		if (logs) {
 			logs.hidden = isTerm
-			logs.classList.toggle('ansi', type === 'ansi' || type === 'hex&ansi')
+			logs.classList.toggle('ansi', parseLogType(type).ansi)
 			logs.classList.toggle('is-dual', mode === 'dual')
 		}
 		updateLogLegend()
@@ -798,6 +825,8 @@
 
 	window.registerProtocol = function (id, impl) {
 		window._protocols[id] = impl
+		// 当前协议晚于日志恢复才注册(启动时 gz/wmbus 等脚本在 common.js 之后加载): 已有的解析段按它重渲
+		if (id === window._activeProtocol) scheduleParseRerender()
 		if (!document.getElementById('serial-protocol-select')) return
 		var sel = document.getElementById('serial-protocol-select')
 		var exists = Array.from(sel.options).some(function (o) { return o.value === id })
@@ -816,6 +845,7 @@
 				name: 'SEK',
 				parseFrame: skParseFrame,
 				formatFrame: skFormatFrame,
+				logView: typeof skLogView === 'function' ? skLogView : null,
 				findFrame: typeof skFindFrame === 'function' ? skFindFrame : null,
 				byteMap: typeof skByteMap === 'function' ? skByteMap : null,
 				buildDownFrame: typeof skBuildDownFrame === 'function' ? skBuildDownFrame : null,
@@ -890,6 +920,7 @@
 			window._activeProtocol = this.value
 			toolOptions.skProtocol = this.value
 			localStorage.setItem('toolOptions', JSON.stringify(toolOptions))
+			rerenderParseRows()
 			// 刷新常用指令列表
 			if (typeof rebuildProtocolPresets === 'function') rebuildProtocolPresets()
 			// 下发 HEX 框是各协议共用的发送缓冲(188/WMBUS 下发也写它)，切协议后留着旧帧会被「立即下发」原样发出
@@ -2121,6 +2152,7 @@
 				// 就地校正 4 个日志字段的非法值, 与 pickLogOptions() 口径一致
 				const t = parseInt(toolOptions.timeOut, 10)
 				toolOptions.timeOut = !isNaN(t) && t >= 0 ? t : DEFAULT_TOOL_OPTIONS.timeOut
+				if (SPLIT_MODES.indexOf(toolOptions.splitMode) === -1) toolOptions.splitMode = DEFAULT_TOOL_OPTIONS.splitMode
 				const m = parseInt(toolOptions.maxLogRows, 10)
 				toolOptions.maxLogRows = !isNaN(m) && m >= 100 ? m : DEFAULT_TOOL_OPTIONS.maxLogRows
 				if (!isValidLogType(toolOptions.logType)) {
@@ -2137,11 +2169,27 @@
 		toolOptions.skDownEncrypt = false
 	}
 	logOptionsSingle = pickLogOptions(toolOptions)
+	let hasStoredDual = false
 	try {
 		const rawDual = localStorage.getItem(TOOL_OPTIONS_DUAL_KEY)
+		hasStoredDual = !!rawDual
 		logOptionsDual = rawDual ? pickLogOptions(JSON.parse(rawDual)) : pickLogOptions(null)
 	} catch (e) {
 		logOptionsDual = pickLogOptions(null)
+	}
+	// 旧版的独立解析开关(skParseEnable)已并入日志格式「解析」: 开着的用户把单路/双路的行格式各自补上 parse,迁移后删掉旧键,只迁一次
+	if (toolOptions.skParseEnable !== undefined) {
+		if (toolOptions.skParseEnable === true) {
+			;[logOptionsSingle, logOptionsDual].forEach(function (o) {
+				if (isRowLogType(o.logType) && !parseLogType(o.logType).parse) o.logType += '&parse'
+			})
+			toolOptions.logType = logOptionsSingle.logType
+		}
+		delete toolOptions.skParseEnable
+		try {
+			localStorage.setItem('toolOptions', JSON.stringify(toolOptions))
+			if (hasStoredDual) localStorage.setItem(TOOL_OPTIONS_DUAL_KEY, JSON.stringify(logOptionsDual))
+		} catch (e) {}
 	}
 	restoreLogsFromCache()
 	applyLogOptionsToUI()
@@ -2150,7 +2198,6 @@
 	document.getElementById('serial-loop-send').checked = toolOptions.loopSend
 	document.getElementById('serial-loop-send-time').value = toolOptions.loopSendTime
 	document.getElementById('serial-send-content').value = toolOptions.sendContent
-	document.getElementById('serial-protocol-enable').checked = toolOptions.skParseEnable
 	document.getElementById('serial-protocol-hover').checked = toolOptions.skHoverEnable
 	if (toolOptions.skDecryptMode) {
 		set('serial-protocol-decrypt', toolOptions.skDecryptMode)
@@ -2170,6 +2217,8 @@
 			if (found) sel.value = toolOptions.skProtocol
 		}
 	}
+	// 启动时 applyLogOptionsToUI 先于协议恢复执行,历史行的解析段要按恢复后的协议重渲
+	scheduleParseRerender()
 	quickSend.value = toolOptions.quickSendIndex
 	quickSend.dispatchEvent(new Event('change'))
 	resetLoopSend()
@@ -2321,6 +2370,26 @@
 		changeOption('timeOut', parseInt(e.target.value))
 		updateLogSettingsSummary()
 	})
+	// 分包方式：超时只看字节间隔；换行按 \n 立即成行，超时只兜底没有换行的残行
+	function applySplitModeUi(mode) {
+		const line = mode === 'line'
+		const timeBtn = document.getElementById('serial-split-time')
+		const lineBtn = document.getElementById('serial-split-line')
+		if (timeBtn) timeBtn.setAttribute('aria-pressed', line ? 'false' : 'true')
+		if (lineBtn) lineBtn.setAttribute('aria-pressed', line ? 'true' : 'false')
+		const t = document.getElementById('serial-timer-out')
+		if (t) {
+			t.placeholder = line ? '0只按换行' : '0不分包'
+			t.title = line ? '没等到换行的残行多久后先输出(ms)，0 表示只按换行' : '分包超时(ms)，0 表示不分包'
+		}
+	}
+	;['time', 'line'].forEach(function (mode) {
+		document.getElementById('serial-split-' + mode).addEventListener('click', function () {
+			changeOption('splitMode', mode)
+			applySplitModeUi(mode)
+			updateLogSettingsSummary()
+		})
+	})
 	document.getElementById('serial-max-rows').addEventListener('change', (e) => {
 		let max = parseInt(e.target.value)
 		if (isNaN(max) || max < 100) {
@@ -2333,21 +2402,26 @@
 		updateLogSettingsSummary()
 	})
 	// 视图/格式/ANSI 按钮统一走 setLogType,由它负责校验、落盘、同步 UI、重渲历史。
-	// HEX/TEXT 是复选,读当前 aria-pressed 算出下一个 logType;两个都不选时忽略这次点击
+	// HEX/TEXT/解析 是复选,读当前 aria-pressed 算出下一个 logType;三个都不选时忽略这次点击
 	function currentLogFmtState() {
 		const fmtHex = document.getElementById('serial-log-fmt-hex')
 		const fmtText = document.getElementById('serial-log-fmt-text')
+		const fmtParse = document.getElementById('serial-log-fmt-parse')
 		const ansiBtn = document.getElementById('serial-log-ansi')
 		return {
 			hasHex: !!fmtHex && fmtHex.getAttribute('aria-pressed') === 'true',
 			hasText: !!fmtText && fmtText.getAttribute('aria-pressed') === 'true',
+			hasParse: !!fmtParse && fmtParse.getAttribute('aria-pressed') === 'true',
 			hasAnsi: !!ansiBtn && ansiBtn.getAttribute('aria-pressed') === 'true',
 		}
 	}
-	function composeLogType(hasHex, hasText, hasAnsi) {
-		if (hasHex && hasText) return hasAnsi ? 'hex&ansi' : 'hex&text'
-		if (hasText) return hasAnsi ? 'ansi' : 'text'
-		return 'hex'
+	function composeLogType(hasHex, hasText, hasAnsi, hasParse) {
+		let base = ''
+		if (hasHex && hasText) base = hasAnsi ? 'hex&ansi' : 'hex&text'
+		else if (hasText) base = hasAnsi ? 'ansi' : 'text'
+		else if (hasHex) base = 'hex'
+		if (hasParse) return base ? base + '&parse' : 'parse'
+		return base || 'hex'
 	}
 	document.getElementById('serial-log-view-row').addEventListener('click', function () {
 		setLogType(lastRowLogType[logModeKey()] || 'hex')
@@ -2358,13 +2432,13 @@
 	document.getElementById('serial-log-fmt-hex').addEventListener('click', function () {
 		const s = currentLogFmtState()
 		const hasHex = !s.hasHex
-		if (!hasHex && !s.hasText) return
-		setLogType(composeLogType(hasHex, s.hasText, s.hasAnsi))
+		if (!hasHex && !s.hasText && !s.hasParse) return
+		setLogType(composeLogType(hasHex, s.hasText, s.hasAnsi, s.hasParse))
 	})
 	document.getElementById('serial-log-fmt-text').addEventListener('click', function () {
 		const s = currentLogFmtState()
 		const hasText = !s.hasText
-		if (!hasText && !s.hasHex) return
+		if (!hasText && !s.hasHex && !s.hasParse) return
 		const modeKey = logModeKey()
 		let hasAnsi
 		if (hasText) {
@@ -2373,14 +2447,20 @@
 			lastAnsiOn[modeKey] = s.hasAnsi
 			hasAnsi = false
 		}
-		setLogType(composeLogType(s.hasHex, hasText, hasAnsi))
+		setLogType(composeLogType(s.hasHex, hasText, hasAnsi, s.hasParse))
+	})
+	document.getElementById('serial-log-fmt-parse').addEventListener('click', function () {
+		const s = currentLogFmtState()
+		const hasParse = !s.hasParse
+		if (!hasParse && !s.hasHex && !s.hasText) return
+		setLogType(composeLogType(s.hasHex, s.hasText, s.hasAnsi, hasParse))
 	})
 	document.getElementById('serial-log-ansi').addEventListener('click', function () {
 		const s = currentLogFmtState()
 		if (!s.hasText) return
 		const hasAnsi = !s.hasAnsi
 		lastAnsiOn[logModeKey()] = hasAnsi
-		setLogType(composeLogType(s.hasHex, s.hasText, hasAnsi))
+		setLogType(composeLogType(s.hasHex, s.hasText, hasAnsi, s.hasParse))
 	})
 	updateLogSettingsSummary()
 	;(function () {
@@ -2600,23 +2680,25 @@
 		changeOption('loopSendTime', parseInt(this.value))
 		resetLoopSend()
 	})
-	document.getElementById('serial-protocol-enable').addEventListener('change', function (e) {
-		changeOption('skParseEnable', this.checked)
-	})
 	document.getElementById('serial-protocol-hover').addEventListener('change', function (e) {
 		changeOption('skHoverEnable', this.checked)
 	})
+	// 密钥、解密模式、加密方式变了,日志里已有的解析段也要按新参数重渲
 	document.getElementById('serial-protocol-decrypt').addEventListener('change', function (e) {
 		changeOption('skDecryptMode', this.value)
+		rerenderParseRows()
 	})
 	document.getElementById('serial-protocol-key-ascii').addEventListener('change', function (e) {
 		changeOption('skKeyAscii', this.value)
+		rerenderParseRows()
 	})
 	document.getElementById('serial-protocol-key-hex').addEventListener('change', function (e) {
 		changeOption('skKeyHex', this.value)
+		rerenderParseRows()
 	})
 	document.getElementById('serial-protocol-enc-type').addEventListener('change', function (e) {
 		changeOption('skEncType', this.value)
+		rerenderParseRows()
 	})
 	const downEncryptToggle = document.getElementById('serial-protocol-down-encrypt')
 	if (downEncryptToggle) {
@@ -3155,6 +3237,8 @@
 				window.skSession.resetBase()
 				window.skSession.deviceUid = null
 			} catch (e) { /* */ }
+			// 进行中的历史重渲收尾时不得再把重放末态交给已清空的实时会话
+			sessionResetSeq++
 		}
 		setSerialWantOpen(true, sid)
 		// 记录设备身份 keys，reload 后按身份匹配恢复（不依赖 getPorts 顺序）
@@ -3909,8 +3993,7 @@
 			await writer.write(data)
 			SerialHub._sess(sid).txBytes += data.length
 			const shown = opts.logData ? Uint8Array.from(opts.logData) : data
-			addLog(shown, false, sendTime, sid)
-			addParseLog([...shown], false, sendTime, sid, sendName)
+			addLog(shown, false, sendTime, sid, false, sendName)
 		} catch (error) {
 			if (opts.throwOnError) throw new Error('串口写入失败')
 			const errorType = error.name || 'UnknownError'
@@ -4239,7 +4322,7 @@
 
 	//单个合并包的字节上限，超过就强制断包，避免连续流下缓冲无限增长
 	const SERIAL_PACK_MAX_BYTES = 65536
-	// SEK 帧在分包静默后若仍未收满声明长度, 最多再多等这么久(防低波特/间隙拆帧)
+	// SEK / hostProto 半帧在分包静默后最多再等这么久（防低波特/间隙拆帧）
 	const SEK_INCOMPLETE_WAIT_MAX_MS = 3000
 
 	// 若缓冲以 A9 9A 开头且声明长度未到, 返回期望总长; 已完整或非 SEK 返回 0
@@ -4268,23 +4351,72 @@
 		return need
 	}
 
-	//glitch: 整包都是紧随线路错误的全 0 块，紧接在同一路上一条毛刺行之后的直接并入那一行(不新增行、不送解析)
+	// hostProto 日志按 CRC 校验后的帧边界输出；read() 的分块和 TX 都不是接收帧边界。
+	function hostProtoLogging() {
+		return window._activeProtocol === 'hostproto' && window.hostProto
+	}
+	function hostProtoIncomplete(buf) {
+		const h = hostProtoLogging()
+		if (!h || !buf.length) return false
+		const scan = h.scan(Uint8Array.from(buf), 0, false)
+		return scan.status === 'wait' || (scan.status === 'none' && scan.keep > 0)
+	}
+	function holdIncompleteHostProto(sid, buf) {
+		if (!hostProtoIncomplete(buf)) return false
+		if (SerialHub.getSekWaitStart(sid) == null) SerialHub.setSekWaitStart(sid, Date.now())
+		return Date.now() - SerialHub.getSekWaitStart(sid) < SEK_INCOMPLETE_WAIT_MAX_MS
+	}
+	function drainHostProtoPack(sid) {
+		const h = hostProtoLogging()
+		if (!h) return
+		for (;;) {
+			const buf = SerialHub.getPackBuf(sid)
+			const scan = h.scan(Uint8Array.from(buf), 0, false)
+			if (scan.status !== 'frame') return
+			const end = scan.offset + scan.total
+			const pack = buf.slice(0, end)
+			SerialHub.setPackBuf(sid, buf.slice(end))
+			flushSerialPack(pack, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackGlitch(sid))
+			if (end < buf.length) SerialHub.setPackStartTime(sid, new Date())
+		}
+	}
+
+	// 二进制协议帧里可能出现 0x0A，按换行切会把帧拆坏：缓冲以 SEK 帧头开头且要按协议分包时不按行切
+	function sekFrameStart(sid, buf) {
+		return buf.length >= 2 && buf[0] === 0xA9 && buf[1] === 0x9A && wantProtocolFraming(sid)
+	}
+	// 按换行分行：缓冲里每个以 \n 结尾(含 \r\n)的完整行各成一行日志，残行留在缓冲里等后续字节或兜底超时。
+	// 同一次读回里的后续行没有更精确的到达时间，用切出时刻；hostProto 半帧和 SEK 帧交给原有的协议分包
+	function drainLinePack(sid) {
+		const buf = SerialHub.getPackBuf(sid)
+		if (hostProtoIncomplete(buf) || sekFrameStart(sid, buf)) return
+		let start = 0
+		for (let i = 0; i < buf.length; i++) {
+			if (buf[i] !== 0x0A) continue
+			flushSerialPack(buf.slice(start, i + 1), SerialHub.getPackStartTime(sid), sid, start === 0 && SerialHub.takePackGlitch(sid))
+			start = i + 1
+			SerialHub.setPackStartTime(sid, new Date())
+		}
+		if (start > 0) SerialHub.setPackBuf(sid, buf.slice(start))
+	}
+
+	//glitch: 整包都是紧随线路错误的全 0 块，紧接在同一路上一条毛刺行之后的直接并入那一行(不新增行)
 	function flushSerialPack(buf, startTime, sid, glitch) {
 		sid = sid || SerialHub.activeSendPhys()
 		SerialHub.setSekWaitStart(sid, null)
 		if (!buf || !buf.length) return
 		glitch = !!glitch && isAllZero(buf)
-		if (isRowLogType(getLogTypeForSid(sid)) && addLog(buf, true, startTime, sid, glitch) === 'merged') return
-		addParseLog(buf.slice ? buf.slice() : [...buf], true, startTime, sid)
+		if (isRowLogType(getLogTypeForSid(sid))) addLog(buf, true, startTime, sid, glitch)
 	}
 
 	// 发送前先把本口已到达、还在等分包超时的 RX 输出：订阅者（协议事务、STS 模拟）拿到字节就立即应答，
 	// 不先输出的话 TX 行会排在触发它的 RX 之前，随后到的应答还会并进同一条 RX，日志顺序与真实时序相反。
-	// 代价是 TX 前后紧贴的 RX 碎片会被切成两行。未收满的 SEK 帧仍在等待窗口内时不切，否则解析会被拆坏。
+	// 未收满的 SEK / hostProto 帧仍在等待窗口内时不切，否则解析会被拆坏。
 	function flushPendingRx(sid) {
 		const buf = SerialHub.getPackBuf(sid)
 		if (!buf.length) return
-		const wantProto = toolOptions.skParseEnable || toolOptions.skHoverEnable || (window._activeProtocol === 'sek')
+		if (holdIncompleteHostProto(sid, buf)) return
+		const wantProto = wantProtocolFraming(sid)
 		const need = wantProto ? peekSekIncompleteNeed(buf) : 0
 		const waitStart = SerialHub.getSekWaitStart(sid)
 		if (need > 0 && buf.length < need && (waitStart == null || Date.now() - waitStart < SEK_INCOMPLETE_WAIT_MAX_MS)) return
@@ -4294,12 +4426,22 @@
 		flushSerialPack(pack, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackGlitch(sid))
 	}
 
+	// 分包要不要按 SEK 帧声明长度多等一会儿: 该路日志显示解析、开了悬停提示或当前协议就是 SEK
+	function wantProtocolFraming(sid) {
+		return parseLogType(getLogTypeForSid(sid)).parse || !!toolOptions.skHoverEnable || (window._activeProtocol === 'sek')
+	}
 	//串口分包合并
 	//meta.lineGlitch: 这块数据紧随线路错误且全为 0，只影响行日志合并，不影响字节
 	function dataReceived(data, sid, meta) {
 		sid = sid || SerialHub.activeSendPhys()
 		noteSerialRx(sid)
 		SerialHub._sess(sid).rxBytes += data.length
+		// 先组装并记录本次 RX，再通知可能同步发出 TX 的订阅者，避免发送前 flush 拆掉上一块半帧。
+		try {
+			logReceivedData(data, sid, meta)
+		} catch (e) {
+			addLogErrSafe('记录接收数据出错(' + sid + '): ' + (e && e.message ? e.message : e), sid)
+		}
 		//立即把原始字节交给固件升级/协议测试等模块,由其自行按协议帧边界组装
 		// 只转发当前可见模式的会话，隐藏模式的口继续收日志但不污染 serialApi
 		// 单路: 全量转发(与 main 语义一致)
@@ -4327,12 +4469,15 @@
 				api._onReceive(data)
 			}
 		}
+	}
+
+	function logReceivedData(data, sid, meta) {
 		const sidLogType = getLogTypeForSid(sid)
 		if (sidLogType === 'term' && window.SerialTerm) {
 			window.SerialTerm.write(SerialHub.logModeOf(sid), data)
 			schedulePersistLogs()
 		}
-		const packBuf = SerialHub.getPackBuf(sid)
+		let packBuf = SerialHub.getPackBuf(sid)
 		const sidOpts = logOptionsForSid(sid)
 		//新的合并包开始:记下第一个字节到达的时间,日志显示要用这个而不是flush时间
 		if (packBuf.length === 0) {
@@ -4343,7 +4488,22 @@
 		//展开成实参会超出调用栈上限抛 RangeError，被外层当成读错误误判为断线
 		for (let i = 0; i < data.length; i++) packBuf.push(data[i])
 		if (meta && meta.lineGlitch) SerialHub.markPackGlitch(sid)
-		if (sidOpts.timeOut == 0) {
+		drainHostProtoPack(sid)
+		packBuf = SerialHub.getPackBuf(sid)
+		if (!packBuf.length) {
+			clearTimeout(SerialHub.getPackTimer(sid))
+			return
+		}
+		const lineMode = sidOpts.splitMode === 'line'
+		if (lineMode) {
+			drainLinePack(sid)
+			packBuf = SerialHub.getPackBuf(sid)
+			if (!packBuf.length) {
+				clearTimeout(SerialHub.getPackTimer(sid))
+				return
+			}
+		}
+		if (!lineMode && sidOpts.timeOut == 0 && !hostProtoIncomplete(packBuf)) {
 			flushSerialPack(packBuf, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackGlitch(sid))
 			SerialHub.setPackBuf(sid, [])
 			return
@@ -4357,15 +4517,19 @@
 		}
 		//清除之前的时钟
 		clearTimeout(SerialHub.getPackTimer(sid))
+		//按换行且超时为 0：残行一直等到换行(或发送前 flushPendingRx、字节上限)；协议半帧仍按下面的等待窗口兜底
+		if (lineMode && sidOpts.timeOut == 0 && !hostProtoIncomplete(packBuf) && !sekFrameStart(sid, packBuf)) return
 		const startTime = SerialHub.getPackStartTime(sid)
-		const packTimeOut = sidOpts.timeOut
+		const packTimeOut = Math.max(1, sidOpts.timeOut == 0 ? 50 : sidOpts.timeOut)
 		const armFlush = () => {
 			SerialHub.setPackTimer(sid, setTimeout(() => {
 				const curBuf = SerialHub.getPackBuf(sid)
+				if (holdIncompleteHostProto(sid, curBuf)) {
+					armFlush()
+					return
+				}
 				// 协议感知: SEK 帧声明长度未到时, 在上限内继续等后续字节
-				const wantProto = toolOptions.skParseEnable || toolOptions.skHoverEnable ||
-					(window._activeProtocol === 'sek')
-				if (wantProto) {
+				if (wantProtocolFraming(sid)) {
 					const need = peekSekIncompleteNeed(curBuf)
 					if (need > 0 && curBuf.length < need && curBuf.length < SERIAL_PACK_MAX_BYTES) {
 						if (SerialHub.getSekWaitStart(sid) == null) SerialHub.setSekWaitStart(sid, Date.now())
@@ -4694,12 +4858,51 @@
 		for (let i = 0; i < data.length; i++) if (data[i] !== 0) return false
 		return data.length > 0
 	}
+	//logType 拆成 { hex, text, ansi, parse }：ansi 一定带 text；term 与非法值全为 false。
+	//所有判断都走这里，别再对 logType 字符串做 includes（'&' 现在也出现在 '&parse' 后缀里）
+	function parseLogType(t) {
+		const parts = typeof t === 'string' ? t.split('&') : []
+		const ansi = parts.indexOf('ansi') !== -1
+		return {
+			hex: parts.indexOf('hex') !== -1,
+			text: parts.indexOf('text') !== -1 || ansi,
+			ansi: ansi,
+			parse: parts.indexOf('parse') !== -1,
+		}
+	}
+	//协议解析段：用当前协议的 logView 出视图模型，再由 ParseView 统一转义渲染；协议没有 logView 就退回 formatFrame 的老样式。
+	//不是本协议的帧（logView 返回 null）、解析抛异常、固件升级期间(opts.noParse)都返回空串，由调用方决定怎么显示这一行
+	function renderParseSegment(data, opts) {
+		if (opts.noParse) return ''
+		try {
+			const r = skParseFrame(data, getProtocolParseOpts())
+			const p = window.getActiveProtocol()
+			if (p && typeof p.logView === 'function') {
+				const model = p.logView(r)
+				if (!model || (Array.isArray(model) && !model.length)) return ''
+				return window.ParseView.render(model, { collapsed: !opts.isReceive, tag: opts.sendName, dir: opts.isReceive ? 'up' : 'down' })
+			}
+			if (p && typeof p.formatFrame === 'function') return window.ParseView.renderLegacy(p.formatFrame(r))
+		} catch (e) { /* 当作未识别 */ }
+		return ''
+	}
 	//按 logType 把原始字节渲染成日志正文 HTML,不依赖具体某一行,可无损重算(历史日志切换类型用)
-	function renderLogBody(data, logType) {
+	//opts: { isReceive, noParse, sendName } 只影响解析段
+	function renderLogBody(data, logType, opts) {
+		opts = opts || {}
+		const fmt = parseLogType(logType)
+		//HEX 与 TEXT 并排时各自加前缀
+		const both = fmt.hex && fmt.text
 		const dataHex = bytesToHexArr(data)
+		const parseHtml = fmt.parse ? renderParseSegment(data, opts) : ''
+		//只选了「解析」却没有解析结果：回退显示 HEX 并标注未识别，保证这一行不是空的
+		const unknownOnly = fmt.parse && !parseHtml && !fmt.hex && !fmt.text
 		let newmsg = ''
-		if (logType.includes('hex')) {
-			if (logType.includes('&')) {
+		if (fmt.hex || unknownOnly) {
+			if (unknownOnly) {
+				newmsg += '<span class="pv-unk" title="当前协议无法识别这一帧，改显示原始 HEX">未识别</span> '
+			}
+			if (both) {
 				newmsg += 'HEX:'
 			}
 			if (toolOptions.skHoverEnable && typeof skByteMap === 'function') {
@@ -4709,17 +4912,17 @@
 						keyHex: toolOptions.skKeyHex || undefined,
 						decryptMode: toolOptions.skDecryptMode,
 					}))
-				let spanHtml = ''
-				for (let i = 0; i < data.length; i++) {
-					const h = dataHex[i]
-					const cell = bm[i]
-					if (cell && cell.tip) {
-						spanHtml += '<span class="sk-hex-byte" data-grp="' + attrEscape(cell.grp) + '" data-tip="' + attrEscape(cell.tip) + '">' + h + '</span>'
-					} else {
-						spanHtml += h
+					let spanHtml = ''
+					for (let i = 0; i < data.length; i++) {
+						const h = dataHex[i]
+						const cell = bm[i]
+						if (cell && cell.tip) {
+							spanHtml += '<span class="sk-hex-byte" data-grp="' + attrEscape(cell.grp) + '" data-tip="' + attrEscape(cell.tip) + '">' + h + '</span>'
+						} else {
+							spanHtml += h
+						}
+						if (i < data.length - 1) spanHtml += ' '
 					}
-					if (i < data.length - 1) spanHtml += ' '
-				}
 					newmsg += spanHtml + '<br/>'
 				} catch (e) {
 					newmsg += dataHex.join(' ') + '<br/>'
@@ -4728,22 +4931,22 @@
 				newmsg += dataHex.join(' ') + '<br/>'
 			}
 		}
-		if (logType.includes('text')) {
+		if (fmt.text && !fmt.ansi) {
 			let dataText = textdecoder.decode(Uint8Array.from(data))
 			//HEX 并排且整块全 0 时整段省略(行尾多余的 <br/> 由末尾统一去掉)；单独 TEXT 照旧
-			const showText = !logType.includes('&') || !isAllZero(data)
+			const showText = !both || !isAllZero(data)
 			if (showText) {
-				if (logType.includes('&')) {
+				if (both) {
 					newmsg += 'TEXT:'
 				}
 				//转义HTML标签,防止内容被当作标签渲染
 				newmsg += HTMLEncode(dataText)
 			}
 		}
-		if (logType.includes('ansi')) {
+		if (fmt.ansi) {
 			//HEX 并排且整块全 0：省略 TEXT 段(00 不影响 ansi_up 的颜色状态，不必转换)
-			if (!logType.includes('&') || !isAllZero(data)) {
-				if (logType.includes('&')) {
+			if (!both || !isAllZero(data)) {
+				if (both) {
 					newmsg += 'TEXT:'
 				}
 				const dataText = textdecoder.decode(Uint8Array.from(data))
@@ -4752,32 +4955,113 @@
 		}
 		//行尾多余的换行会撑出一条空行
 		newmsg = newmsg.replace(/<br\/?>$/i, '')
-		return newmsg
+		return newmsg + parseHtml
 	}
-	//按容器当前所有行的 data-hex 重算正文,用于历史日志随类型切换重渲
+	//按容器当前所有行的 data-hex 重算正文,用于历史日志随类型/协议/密钥切换重渲
+	//含解析段且行数多时按时间片顺序分批做完(必须按行序：SEK 解析带会话基准水量的状态；ansi_up 也是流式状态)，
+	//新一轮重渲会让上一轮的剩余批次作废
 	function rerenderLogBodies(container, logType) {
 		if (!container) return
 		// term 不是行日志格式,渲染出来会是空正文,会把历史行洗白,必须挡在这里
 		if (!isRowLogType(logType)) return
-		// ansi_up 是流式渲染器,把当前前景/背景色作为实例状态跨包延续(在线收数时这是对的)。
-		// 重渲是从头重放整段历史,不先复位就会拿上一次渲染的末态当起点,把染色点之前的行也染上色。
-		// 按序重放完最后一行,实例状态恰好等于在线路径应有的末态,所以只需在开头换一个干净实例
-		if (logType.includes('ansi')) ansi_up = new AnsiUp()
+		const gen = ++rerenderGen
+		const fmt = parseLogType(logType)
+		// ansi_up 与 SEK 会话(基准水量/设备号)都是流式状态。重渲从头重放整段历史，必须从干净状态起步，
+		// 否则会拿上一次渲染的末态当起点(把染色点之前的行也染上色)。分批重放时批次之间会有实时收数，
+		// 所以重放在隔离的状态里做：每批换入重放状态、批末换回实时状态，实时解析与重放互不覆盖。
+		// 全部重放完、期间既没来新行也没发生连接重置时，重放末态就是实时路径应有的末态，才交给实时状态
+		const session = window.skSession && typeof window.skSession.snapshot === 'function' ? window.skSession : null
+		let replayAnsi = fmt.ansi ? new AnsiUp() : null
+		let replaySession = null
+		if (session) {
+			const live = session.snapshot()
+			session.resetBase()
+			session.deviceUid = null
+			replaySession = session.snapshot()
+			session.restore(live)
+		}
+		const resetSeqAtStart = sessionResetSeq
+		const rows = []
 		for (let i = 0; i < container.children.length; i++) {
 			const row = container.children[i]
-			if (!row || !row.classList || !row.classList.contains('log-row')) continue
-			const hexAttr = row.getAttribute('data-hex')
-			if (!hexAttr) continue
-			const bytes = hexAttr.split(' ').filter(Boolean).map(function (h) { return parseInt(h, 16) })
-			if (!bytes.length) continue
-			const body = row.querySelector('.log-body')
-			if (!body) continue
-			body.innerHTML = renderLogBody(bytes, logType)
+			if (row && row.classList && row.classList.contains('log-row') && row.getAttribute('data-hex')) rows.push(row)
 		}
+		const bindCharts = typeof skBindSeriesCharts === 'function'
+		const renderRow = function (row) {
+			const bytes = row.getAttribute('data-hex').split(' ').filter(Boolean).map(function (h) { return parseInt(h, 16) })
+			if (!bytes.length) return
+			const body = row.querySelector('.log-body')
+			if (!body) return
+			body.innerHTML = renderLogBody(bytes, logType, {
+				isReceive: row.getAttribute('data-dir') === 'rx',
+				noParse: row.getAttribute('data-noparse') === '1',
+				sendName: row.getAttribute('data-name') || '',
+			})
+			if (fmt.parse && bindCharts) {
+				try { skBindSeriesCharts(body) } catch (e) { /* ignore chart bind */ }
+			}
+		}
+		const pinBottom = function () {
+			const opts = container === SerialHub.getLogContainerFor('dual') ? logOptionsDual : logOptionsSingle
+			if (opts.autoScroll) container.scrollTop = container.scrollHeight - container.clientHeight
+		}
+		const lastRowAtStart = container.lastElementChild
+		//在重放状态里渲染 rows[from, to)，渲染完换回实时状态
+		const renderSlice = function (from, to) {
+			const liveAnsi = ansi_up
+			const liveSession = session ? session.snapshot() : null
+			if (replayAnsi) ansi_up = replayAnsi
+			if (session) session.restore(replaySession)
+			try {
+				for (let i = from; i < to; i++) renderRow(rows[i])
+			} finally {
+				if (session) {
+					replaySession = session.snapshot()
+					session.restore(liveSession)
+				}
+				ansi_up = liveAnsi
+			}
+		}
+		const finish = function () {
+			if (container.lastElementChild !== lastRowAtStart) return
+			if (replayAnsi) ansi_up = replayAnsi
+			if (session && sessionResetSeq === resetSeqAtStart) session.restore(replaySession)
+		}
+		if (!fmt.parse || rows.length <= PARSE_RERENDER_SYNC_ROWS) {
+			renderSlice(0, rows.length)
+			finish()
+			if (fmt.parse) pinBottom()
+			return
+		}
+		let next = 0
+		const step = function () {
+			if (gen !== rerenderGen) return
+			const end = Date.now() + PARSE_RERENDER_SLICE_MS
+			// 按 8 行一组换入/换出状态并检查时间，别每行都拷一次会话
+			while (next < rows.length && Date.now() < end) {
+				const to = Math.min(rows.length, next + 8)
+				renderSlice(next, to)
+				next = to
+			}
+			pinBottom()
+			if (next < rows.length) setTimeout(step, 0)
+			else finish()
+		}
+		step()
+	}
+	//当前模式的日志含解析段时,按最新的协议/密钥等参数重渲历史行
+	function rerenderParseRows() {
+		const logType = activeLogOptions().logType
+		if (parseLogType(logType).parse) rerenderLogBodies(SerialHub.getLogContainer(), logType)
+	}
+	function scheduleParseRerender() {
+		clearTimeout(parseRerenderTimer)
+		parseRerenderTimer = setTimeout(rerenderParseRows, 0)
 	}
 	//添加日志
 	//glitch 行带 data-glitch 标记；同一路最近一行已是毛刺行时直接并入(返回 'merged')，不新增行、不改已有行，避免刷屏
-	function addLog(data, isReceive = true, atTime = null, sid = null, glitch = false) {
+	//sendName: TX 行的快捷发送名称，显示在解析头部
+	function addLog(data, isReceive = true, atTime = null, sid = null, glitch = false, sendName = '') {
 		sid = sid || SerialHub.activeSendPhys()
 		const logType = getLogTypeForSid(sid)
 		// term 模式不走行日志；TX 也不写进 xterm（设备自己 echo）
@@ -4785,9 +5069,11 @@
 		const rowSid = sid === 'B' ? 'B' : (sid === 'S' ? 'S' : 'A')
 		if (glitch && lastRowIsGlitch(sid, rowSid)) return 'merged'
 		let form = isReceive ? 'RX' : 'TX'
+		//固件升级期间不解析，行上记一笔，之后切换格式重渲时也不补解析
+		const noParse = !!(window.serialApi && window.serialApi.suppressParse)
 		//无论当前 logType 是什么都算出 HEX,点击行解析要用
 		const dataHex = bytesToHexArr(data)
-		const newmsg = renderLogBody(data, logType)
+		const newmsg = renderLogBody(data, logType, { isReceive: isReceive, noParse: noParse, sendName: sendName })
 		const when = atTime || new Date()
 		const ts = when.getTime ? when.getTime() : Date.now()
 		let time = toolOptions.showTime ? formatDate(when) : ''
@@ -4799,6 +5085,8 @@
 		row.setAttribute('data-seq', String(++logSeq))
 		row.setAttribute('data-sid', rowSid)
 		if (glitch) row.setAttribute('data-glitch', '1')
+		if (noParse) row.setAttribute('data-noparse', '1')
+		if (sendName) row.setAttribute('data-name', sendName)
 		const sess = SerialHub.logModeOf(sid) === 'dual'
 			? SerialHub.getSessionLabel(sid)
 			: ''
@@ -4812,6 +5100,9 @@
 			'<span class="log-len">' + data.length + 'B</span>' +
 			'<span class="log-body">' + newmsg + '</span>'
 		appendLogNode(row, sid)
+		if (parseLogType(logType).parse && typeof skBindSeriesCharts === 'function') {
+			try { skBindSeriesCharts(row) } catch (e) { /* ignore chart bind */ }
+		}
 	}
 	//该路在日志容器里的最后一行(含 TX/系统行)是否为毛刺行
 	function lastRowIsGlitch(sid, rowSid) {
@@ -4824,74 +5115,7 @@
 		}
 		return false
 	}
-	//第三方协议解析日志
-	function addParseLog(data, isReceive, atTime = null, sid, sendName) {
-		if (!toolOptions.skParseEnable) {
-			return
-		}
-		if (window.serialApi && window.serialApi.suppressParse) {
-			return
-		}
-		sid = sid || SerialHub.activeSendPhys()
-		// 隐藏模式的解析不要写进当前可见的协议面板/日志（S 作为主发口时仍需解析）
-		if (!SerialHub.isRoutable(sid)) return
-		let html
-		try {
-			const r = skParseFrame(data, {
-				keyAscii: toolOptions.skKeyAscii || undefined,
-				keyHex: toolOptions.skKeyHex || undefined,
-				decryptMode: toolOptions.skDecryptMode,
-			})
-			const form = isReceive ? 'RX' : 'TX'
-			const dir = isReceive ? 'rx' : 'tx'
-			const dirCls = isReceive ? 'sk-parse-up' : 'sk-parse-down'
-			const time = toolOptions.showTime ? formatDate(atTime || new Date()) : ''
-			const prompt = r.needKey ? '<div class="sk-parse-err">⚠ 加密报文,请在右侧「第三方协议」中的「密钥(ASCII)」或「密钥(HEX)」输入框填入密钥后再解析</div>' : ''
-			const nameHtml = (!isReceive && sendName)
-				? '<span class="sk-parse-send-name">' + HTMLEncode(sendName) + '</span>'
-				: ''
-			const timeHtml = time ? '<span class="log-time">' + time + '</span>' : ''
-			const label = '<span class="sk-parse-label">' + timeHtml +
-				'<span class="log-dir">' + form + '</span>' +
-				'<span class="sk-parse-kind">解析</span>' + nameHtml + '</span>'
-			const body = prompt + skFormatFrame(r)
-			if (isReceive) {
-				html = '<div class="sk-parse-block ' + dirCls + '" data-dir="' + dir + '">' + label + body + '</div>'
-			} else {
-				html = '<div class="sk-parse-block ' + dirCls + '" data-dir="' + dir + '">' +
-					'<details class="sk-parse-fold">' +
-					'<summary>' + label + '</summary>' +
-					body +
-					'</details></div>'
-			}
-		} catch (err) {
-			html = '<div class="sk-parse-block sk-parse-error"><span class="text-danger small">第三方协议解析异常:' + HTMLEncode(String(err)) + '</span></div>'
-		}
-		let tempNode = document.createElement('div')
-		tempNode.innerHTML = html
-		tempNode.className = 'sk-parse-log'
-		tempNode.setAttribute('data-dir', isReceive ? 'rx' : 'tx')
-		tempNode.setAttribute('data-sid', sid === 'B' ? 'B' : (sid === 'S' ? 'S' : 'A'))
-		// 解析日志同样参与 (ts, seq) 全序排序
-		const when = atTime || new Date()
-		tempNode.setAttribute('data-ts', String(when.getTime ? when.getTime() : Date.now()))
-		tempNode.setAttribute('data-seq', String(++logSeq))
-		if (getLogTypeForSid(sid) === 'term') {
-			const out = document.getElementById('serial-protocol-output')
-			if (out) {
-				while (tempNode.firstChild) out.appendChild(tempNode.firstChild)
-				if (toolOptions.autoScroll) out.scrollTop = out.scrollHeight - out.clientHeight
-			}
-			if (typeof skBindSeriesCharts === 'function') {
-				try { skBindSeriesCharts(out) } catch (e) { /* ignore */ }
-			}
-			return
-		}
-		appendLogNode(tempNode, sid)
-		if (typeof skBindSeriesCharts === 'function') {
-			try { skBindSeriesCharts(tempNode) } catch (e) { /* ignore */ }
-		}
-	}
+	//日志正文渲染到此为止（tests/serial-read-recovery.cjs 按此截取，别删）
 	//HTML转义
 	function HTMLEncode(html) {
 		var temp = document.createElement('div')

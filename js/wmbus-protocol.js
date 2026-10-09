@@ -604,6 +604,64 @@
 		return h
 	}
 
+	// 日志「解析」格式的视图模型（渲染与转义见 js/parse-view.js）；不是 W-MBUS 帧返回 null。
+	// CMAC 不过时解密内容不可信，只给头部信息；角色密钥一律脱敏
+	W.wmbusLogView = function (r) {
+		const PV = W.ParseView
+		const f = r && r.fields
+		if (!f || !f.设备地址ADDR || (r.errors || []).some(function (e) { return e.indexOf('CI字段非法') === 0 })) return null
+		const cmd = f['命令CMD']
+		const rc = f['结果码']
+		const key = f['密钥角色KeyID']
+		const m = {
+			title: !r.macOk ? '加密帧' : cmd ? cmd.name : rc ? '命令应答' : '加密帧',
+			code: r.macOk && cmd ? cmd.value : '',
+			dir: r.dir,
+			subject: { label: '设备', value: f.设备地址ADDR },
+			badges: [],
+			meta: [['KeyID', key ? key.value + ' ' + key.name : ''], ['MCNT', f['消息计数器MCNT']], ['明文长度', f['明文长度LEN'] + ' B']],
+			notes: [],
+			sections: [],
+			errors: (r.errors || []).slice(),
+		}
+		m.badges.push(r.macOk
+			? { text: 'CMAC ✓', kind: 'ok', title: 'AES-CMAC 校验通过' }
+			: { text: 'CMAC ✗', kind: 'bad', title: f['CMAC校验'] })
+		m.badges.push({ text: '🔒', kind: 'info', title: 'AES-128-CBC 加密' })
+		if (r.macOk && rc) m.badges.push({ text: rc.name, kind: rc.value === 0 ? 'ok' : 'bad', title: '结果码 ' + rc.value })
+		if (!r.macOk) {
+			m.notes.push({ kind: 'warn', text: 'CMAC 校验失败，解密内容不可信已隐藏（密钥角色不匹配、数据被篡改或重放）；点击该行可在底部「协议解析」查看' })
+			return m
+		}
+		const note = t => {
+			const x = t.replace(/^[（(](.*)[）)]$/, '$1')
+			if (x !== '无参数' && x !== '空载荷') m.notes.push({ text: x, kind: 'info' })
+		}
+		const mask = pairs => pairs.forEach(p => { if (p[0] === '密钥') p[1] = '****（已脱敏）' })
+		if (!rc) {
+			const parsed = PV.linesToPairs(r.decoded || '')
+			mask(parsed.pairs)
+			if (parsed.pairs.length) m.sections.push({ title: r.dir === 'up' ? '上报内容' : '命令参数', pairs: parsed.pairs })
+			parsed.notes.forEach(note)
+			return m
+		}
+		// 应答：具体对应哪个读命令帧里没有，下面是按长度/结构的推测
+		const pairs = []
+		const pre = []
+		String(r.decoded || '').split('\n').forEach(line => {
+			if (/^无 payload/.test(line)) return
+			if (/^DIF\/VIF 记录解析/.test(line)) {
+				const i = line.indexOf('): ')
+				line.slice(i + 3).split('; ').forEach(seg => { pairs.push.apply(pairs, PV.linesToPairs(seg).pairs) })
+			} else if (line.trim()) {
+				pre.push(line)
+			}
+		})
+		if (pairs.length) m.sections.push({ title: '读计量数据应答（按 DIF/VIF 推测）', pairs: pairs })
+		if (pre.length) m.sections.push({ title: '应答载荷（按长度推测）', pre: pre.join('\n') })
+		return m
+	}
+
 	W.wmbusByteMap = function (r) {
 		const raw = (r.raw instanceof Uint8Array) ? r.raw : Uint8Array.from(r.raw || [])
 		const n = raw.length
@@ -693,6 +751,7 @@
 			name: 'W-MBUS',
 			parseFrame: W.wmbusParseFrame,
 			formatFrame: W.wmbusFormatFrame,
+			logView: W.wmbusLogView,
 			findFrame: W.wmbusFindFrame,
 			byteMap: W.wmbusByteMap,
 			buildDownFrame: W.wmbusBuildDownFrame,
