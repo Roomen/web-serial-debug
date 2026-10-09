@@ -1,6 +1,8 @@
 // 功耗分析的串口事件道（仅现代布局）：把串口日志行按墙钟时间画到电流波形下方，与波形共用视窗。
-// 时间对齐：blu-power.js 在入库时经 createAnchorTrack().note(样点下标, tMs) 稀疏记录「样点下标 ↔ 墙钟」锚点，
-// tMs 与日志行 data-ts 都是本机时钟，事件按墙钟二分锚点插值成小数样点下标，再走波形的 toX。
+// 时间对齐：blu-power.js 在入库时经 createAnchorTrack().note(样点下标, tMs) 稀疏记录「样点下标 ↔ performance 时间」锚点
+// (另记当时的墙钟偏移)。日志行进 DOM 时按当下偏移把 data-ts 换成 performance 时间记下(stamps)，事件按它二分锚点
+// 插值成小数样点下标，再走波形的 toX；系统时钟回拨/跳变不影响实时行的对齐。页面加载前就有的行(会话恢复)没有
+// 时间戳，按锚点的分段墙钟偏移换算。
 // 只读串口日志 DOM（.log-row 的 data-ts/dir/sid/seq/hex），不改 common.js；悬停文本一律 textContent。
 // 纯函数（二分、锚点映射、密集合并、索引构建）同时导出给 node 回归测试，不碰 DOM。
 ;(function () {
@@ -40,46 +42,54 @@
 	}
 
 	/**
-	 * 样点下标 ↔ 墙钟锚点。只做记录，不影响采样数据。
-	 * note(li, tMs)：每个成功入库的样点调用一次（li 严格递增，tMs 为 performance.now 时间轴）。
+	 * 样点下标 ↔ 时间锚点。只做记录，不影响采样数据。
+	 * note(li, tMs)：每个成功入库的样点调用一次（li 严格递增，tMs 为 performance.now 时间轴，单调）。
 	 * 每 intervalMs 记一个锚点；相邻样点间隔超过 gapMs（停采后续采、USB 卡顿）时把断点两侧都记下，
-	 * 避免线性插值把间隙摊到前一段样点上。墙钟 = tMs + (Date.now() - performance.now())，在记锚点时取，
-	 * 跟随系统时钟调整；若墙钟回拨则钳成单调。
+	 * 避免线性插值把间隙摊到前一段样点上。映射以单调的 performance 时间轴为准(perfToLi / liToPerf)；
+	 * 每个锚点另记当时的墙钟偏移 Date.now() - performance.now()，偏移突变超过 jumpMs(系统时钟回拨/跳变)时
+	 * 开一个新映射段，墙钟换算(wallToPerf / wallToLi / liToWall)按段查找，不把墙钟钳成单调。
+	 * 插值直接在锚点数组上二分，末样点(未必是锚点)单独处理，不复制数组：每帧对每条可见日志都要调一次。
 	 */
 	function createAnchorTrack(opts) {
 		opts = opts || {}
 		const intervalMs = opts.intervalMs > 0 ? opts.intervalMs : 200
 		const gapMs = opts.gapMs > 0 ? opts.gapMs : 20
+		const jumpMs = opts.jumpMs > 0 ? opts.jumpMs : 500
 		const wallOffset = typeof opts.wallOffset === 'function'
 			? opts.wallOffset
 			: function () { return Date.now() - performance.now() }
 		let lis = []
-		let walls = []
+		let ts = []
+		let offs = []
+		// 各映射段起点在锚点数组里的下标
+		let segs = []
 		let lastLi = -1
 		let lastT = 0
 		let lastOff = 0
 		let lastAnchorT = -Infinity
 
-		function pushAnchor(li, w) {
-			const n = walls.length
-			if (n && w < walls[n - 1]) w = walls[n - 1]
+		function pushAnchor(li, t, off) {
+			const n = lis.length
 			if (n && lis[n - 1] === li) {
-				walls[n - 1] = w
+				ts[n - 1] = t
+				offs[n - 1] = off
 				return
 			}
+			if (!n || Math.abs(off - offs[n - 1]) > jumpMs) segs.push(n)
 			lis.push(li)
-			walls.push(w)
+			ts.push(t)
+			offs.push(off)
 		}
 
 		function note(li, tMs) {
 			if (lastLi >= 0 && tMs - lastT > gapMs) {
-				pushAnchor(lastLi, lastT + lastOff)
+				pushAnchor(lastLi, lastT, lastOff)
 				lastOff = wallOffset()
-				pushAnchor(li, tMs + lastOff)
+				pushAnchor(li, tMs, lastOff)
 				lastAnchorT = tMs
 			} else if (tMs - lastAnchorT >= intervalMs) {
 				lastOff = wallOffset()
-				pushAnchor(li, tMs + lastOff)
+				pushAnchor(li, tMs, lastOff)
 				lastAnchorT = tMs
 			}
 			lastLi = li
@@ -88,7 +98,9 @@
 
 		function reset() {
 			lis = []
-			walls = []
+			ts = []
+			offs = []
+			segs = []
 			lastLi = -1
 			lastT = 0
 			lastOff = 0
@@ -99,55 +111,93 @@
 			return lastLi >= 0 && lis.length > 0
 		}
 
-		/** 末样点（未必是锚点）的墙钟 */
-		function endWall() {
-			const w = lastT + lastOff
-			const n = walls.length
-			return n && w < walls[n - 1] ? walls[n - 1] : w
-		}
-
-		/** 有效映射段（含末样点虚拟锚点） */
-		function points() {
-			const n = lis.length
-			if (n && lis[n - 1] !== lastLi) return { li: lis.concat([lastLi]), wall: walls.concat([endWall()]) }
-			return { li: lis, wall: walls }
-		}
-
 		function range() {
 			if (!has()) return null
-			return { li0: lis[0], li1: lastLi, wall0: walls[0], wall1: endWall() }
+			return { li0: lis[0], li1: lastLi, t0: ts[0], t1: lastT, wall0: ts[0] + offs[0], wall1: lastT + lastOff }
 		}
 
-		function interp(xs, ys, x) {
-			const n = xs.length
-			if (!n || x < xs[0] || x > xs[n - 1]) return null
+		/** 有效点数：锚点 + 末样点虚拟锚点(末样点不是锚点时) */
+		function count() {
+			const n = lis.length
+			return n && lis[n - 1] !== lastLi ? n + 1 : n
+		}
+
+		/** xs/ys 为锚点数组，xTail/yTail 为末样点；x 超出已采集范围返回 null */
+		function interp(xs, xTail, ys, yTail, x) {
+			const real = xs.length
+			const n = count()
+			if (!n) return null
+			const xEnd = n > real ? xTail : xs[real - 1]
+			if (!(x >= xs[0] && x <= xEnd)) return null
 			if (n === 1) return ys[0]
-			let k = upperBound(xs, x) - 1
+			let k = n > real && x >= xs[real - 1] ? real - 1 : upperBound(xs, x) - 1
 			if (k >= n - 1) k = n - 2
 			if (k < 0) k = 0
-			const dx = xs[k + 1] - xs[k]
-			if (!(dx > 0)) return ys[k + 1]
-			return ys[k] + (ys[k + 1] - ys[k]) * (x - xs[k]) / dx
+			const x0 = xs[k]
+			const y0 = ys[k]
+			const x1 = k + 1 < real ? xs[k + 1] : xTail
+			const y1 = k + 1 < real ? ys[k + 1] : yTail
+			const dx = x1 - x0
+			if (!(dx > 0)) return y1
+			return y0 + (y1 - y0) * (x - x0) / dx
+		}
+
+		/** performance 时间 → 小数样点下标；超出已采集范围返回 null */
+		function perfToLi(t) {
+			if (!has()) return null
+			return interp(ts, lastT, lis, lastLi, t)
+		}
+
+		/** 样点下标 → performance 时间；超出范围返回 null */
+		function liToPerf(li) {
+			if (!has()) return null
+			return interp(lis, lastLi, ts, lastT, li)
+		}
+
+		/**
+		 * 墙钟毫秒 → performance 时间。按段查：时钟回拨后新旧两段的墙钟区间可能重叠，取最新一段
+		 * (实时日志行有 performance 时间戳就不走这里，见界面部分的 stamps)。落在所有段外时按最新偏移换算。
+		 */
+		function wallToPerf(ms) {
+			if (!has()) return ms - wallOffset()
+			for (let s = segs.length - 1; s >= 0; s--) {
+				const i0 = segs[s]
+				const last = s === segs.length - 1
+				const i1 = last ? lis.length - 1 : segs[s + 1] - 1
+				const wLo = ts[i0] + offs[i0]
+				const wHi = last ? lastT + lastOff : ts[i1] + offs[i1]
+				if (ms < wLo || ms > wHi) continue
+				// 段内偏移只有毫秒级漂移：先按段首偏移估 t，再取该处锚点的偏移
+				const est = ms - offs[i0]
+				let k = upperBound(ts, est) - 1
+				if (k < i0) k = i0
+				if (k > i1) k = i1
+				return ms - offs[k]
+			}
+			return ms - lastOff
 		}
 
 		/** 墙钟毫秒 → 小数样点下标；超出已采集范围返回 null */
 		function wallToLi(ms) {
 			if (!has()) return null
-			const p = points()
-			return interp(p.wall, p.li, ms)
+			return perfToLi(wallToPerf(ms))
 		}
 
-		/** 样点下标 → 墙钟毫秒；超出范围返回 null */
+		/** 样点下标 → 墙钟毫秒(按该样点所在段的偏移)；超出范围返回 null */
 		function liToWall(li) {
-			if (!has()) return null
-			const p = points()
-			return interp(p.li, p.wall, li)
+			const t = liToPerf(li)
+			if (t == null) return null
+			let k = upperBound(lis, li) - 1
+			if (k < 0) k = 0
+			return t + offs[k]
 		}
 
 		return {
 			note: note, reset: reset, has: has, range: range,
+			perfToLi: perfToLi, liToPerf: liToPerf, wallToPerf: wallToPerf,
 			wallToLi: wallToLi, liToWall: liToWall,
 			anchorCount: function () { return lis.length },
+			segmentCount: function () { return segs.length },
 		}
 	}
 
@@ -179,14 +229,19 @@
 		return sid === 'B' ? 'B' : 'A'
 	}
 
-	/** 一条日志行（或带 getAttribute 的替身）→ 事件条目；不是有效日志行返回 null */
-	function entryFromRow(row) {
+	/**
+	 * 一条日志行（或带 getAttribute 的替身）→ 事件条目；不是有效日志行返回 null。
+	 * toPerf(row, ts) 给出该行的 performance 时间(对齐用)；不给时 pt 为 null，按墙钟排序
+	 */
+	function entryFromRow(row, toPerf) {
 		if (!row || typeof row.getAttribute !== 'function') return null
 		const ts = parseInt(row.getAttribute('data-ts') || '', 10)
 		if (!(ts > 0)) return null
 		const d = row.getAttribute('data-dir')
+		const pt = typeof toPerf === 'function' ? toPerf(row, ts) : null
 		return {
 			ts: ts,
+			pt: typeof pt === 'number' && isFinite(pt) ? pt : null,
 			dir: d === 'tx' || d === 'rx' ? d : 'sys',
 			sid: row.getAttribute('data-sid') || '',
 			seq: row.getAttribute('data-seq') || '',
@@ -194,22 +249,27 @@
 		}
 	}
 
-	/** 条目列表 → 各道 { ts: [], items: [] }，按 (ts, seq) 升序 */
+	/** 条目的对齐时间：有 performance 时间用它，否则退回墙钟 */
+	function keyOf(e) {
+		return e.pt != null ? e.pt : e.ts
+	}
+
+	/** 条目列表 → 各道 { ts: [], items: [] }，ts 为对齐时间(见 keyOf)，按 (对齐时间, seq) 升序 */
 	function buildLanes(entries, dual) {
 		const lanes = {}
 		const keys = dual ? ['A', 'B'] : ['S']
 		for (let i = 0; i < keys.length; i++) lanes[keys[i]] = { ts: [], items: [] }
 		let sorted = true
 		for (let i = 1; i < entries.length; i++) {
-			if (entries[i].ts < entries[i - 1].ts) { sorted = false; break }
+			if (keyOf(entries[i]) < keyOf(entries[i - 1])) { sorted = false; break }
 		}
 		const list = sorted ? entries : entries.slice().sort(function (a, b) {
-			return a.ts - b.ts || (Number(a.seq) || 0) - (Number(b.seq) || 0)
+			return keyOf(a) - keyOf(b) || (Number(a.seq) || 0) - (Number(b.seq) || 0)
 		})
 		for (let i = 0; i < list.length; i++) {
 			const e = list[i]
 			const lane = lanes[laneKeyOf(e.sid, dual)]
-			lane.ts.push(e.ts)
+			lane.ts.push(keyOf(e))
 			lane.items.push(e)
 		}
 		return lanes
@@ -274,6 +334,27 @@
 	let lastRows = 0
 	// 日志索引缓存：增量追加 + 头部裁剪，其余变化整表重建
 	const cache = { container: null, dual: false, rows: [], entries: [], pos: new Map(), lanes: null }
+	// 日志行 → performance 时间：行进 DOM 时按当下的墙钟偏移换算，之后系统时钟怎么调都不变
+	const stamps = new WeakMap()
+
+	function stampRows(records) {
+		const off = Date.now() - performance.now()
+		for (let i = 0; i < records.length; i++) {
+			const added = records[i].addedNodes
+			for (let j = 0; j < added.length; j++) {
+				const n = added[j]
+				if (n.nodeType !== 1 || stamps.has(n) || !n.classList.contains('log-row')) continue
+				const ts = parseInt(n.getAttribute('data-ts') || '', 10)
+				if (ts > 0) stamps.set(n, ts - off)
+			}
+		}
+	}
+
+	function rowPerf(row, ts) {
+		const t = stamps.get(row)
+		if (t != null) return t
+		return track ? track.wallToPerf(ts) : ts - (Date.now() - performance.now())
+	}
 
 	function E(id) { return document.getElementById(id) }
 	function isModern() { return document.documentElement.dataset.layout === 'modern' }
@@ -299,7 +380,7 @@
 		cache.pos.set(r, cache.rows.length)
 		cache.rows.push(r)
 		if (r.classList && r.classList.contains('log-row')) {
-			const e = entryFromRow(r)
+			const e = entryFromRow(r, rowPerf)
 			if (e) cache.entries.push(e)
 		}
 	}
@@ -446,7 +527,7 @@
 		let anyInData = false
 		if (lanes) {
 			for (let r = 0; r < keys.length; r++) {
-				const sl = visibleSlice(lanes[keys[r]].ts, rng.wall0, rng.wall1)
+				const sl = visibleSlice(lanes[keys[r]].ts, rng.t0, rng.t1)
 				if (sl[1] > sl[0]) { anyInData = true; break }
 			}
 		}
@@ -456,8 +537,8 @@
 		}
 
 		const vr = layout.vr
-		const wallLo = track.liToWall(Math.max(vr.start, rng.li0))
-		const wallHi = track.liToWall(Math.min(vr.end, rng.li1))
+		const tLo = track.liToPerf(Math.max(vr.start, rng.li0))
+		const tHi = track.liToPerf(Math.min(vr.end, rng.li1))
 		const waveRect = layout.canvasRect
 		const dx = waveRect ? waveRect.left - rect.left : 0
 		const xMin = left + dx
@@ -465,11 +546,11 @@
 		let shown = 0
 		for (let r = 0; r < keys.length; r++) {
 			const lane = lanes[keys[r]]
-			if (wallLo == null || wallHi == null) break
-			const sl = visibleSlice(lane.ts, wallLo, wallHi)
+			if (tLo == null || tHi == null) break
+			const sl = visibleSlice(lane.ts, tLo, tHi)
 			const groups = { tx: { xs: [], idx: [] }, rx: { xs: [], idx: [] }, sys: { xs: [], idx: [] } }
 			for (let i = sl[0]; i < sl[1]; i++) {
-				const li = track.wallToLi(lane.ts[i])
+				const li = track.perfToLi(lane.ts[i])
 				if (li == null) continue
 				const x = layout.toX(li) + dx
 				if (x < xMin - 1 || x > xMax + 1) continue
@@ -640,7 +721,11 @@
 			if (!wrap || !wrap.offsetWidth) return
 			scheduleLanePaint()
 		}
-		const mo = new MutationObserver(onLogs)
+		// 先记时间戳再重画：观察器始终开着(经典布局、别的视图也记)，否则之后切到现代布局时实时行没有 performance 时间
+		const mo = new MutationObserver(function (records) {
+			stampRows(records)
+			onLogs()
+		})
 		const s = E('serial-logs-single')
 		const d = E('serial-logs-dual')
 		if (s) mo.observe(s, { childList: true })

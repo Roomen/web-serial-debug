@@ -63,19 +63,92 @@ assert.equal(L.draw, undefined, 'node 下不挂界面')
 	assert.ok(mid > 999 && mid < 1000)
 }
 
-// ---- 锚点：墙钟回拨钳成单调 ----
+// ---- 锚点：毫秒级墙钟漂移不分段 ----
 {
 	let off = 100
 	const tr = L.createAnchorTrack({ intervalMs: 10, gapMs: 50, wallOffset: () => off })
 	for (let i = 0; i < 20; i++) tr.note(i, i)
-	off = 50 // 系统时钟回拨 50 ms
+	off = 97 // NTP 小幅调整：仍是同一段
 	for (let i = 20; i < 40; i++) tr.note(i, i)
-	let prev = -Infinity
-	for (let i = 0; i < 40; i++) {
-		const w = tr.liToWall(i)
-		assert.ok(w >= prev, 'liToWall 单调')
-		prev = w
+	assert.equal(tr.segmentCount(), 1)
+	// performance 时间轴上的映射不受墙钟影响
+	assert.ok(Math.abs(tr.perfToLi(25.5) - 25.5) < 1e-9)
+	assert.ok(Math.abs(tr.liToPerf(12) - 12) < 1e-9)
+}
+
+// ---- 锚点：系统时钟回拨开新段，不钳位 ----
+{
+	let off = 1000
+	const tr = L.createAnchorTrack({ intervalMs: 10, gapMs: 50, jumpMs: 5, wallOffset: () => off })
+	for (let i = 0; i < 100; i++) tr.note(i, i) // 墙钟 1000..1099
+	off = 950 // 回拨 50 ms：之后墙钟 1050..1149，与前段 1050..1099 重叠
+	for (let i = 100; i < 200; i++) tr.note(i, i)
+	assert.equal(tr.segmentCount(), 2)
+	// 回拨前的事件(墙钟只在旧段里)：落回原样点
+	assert.ok(Math.abs(tr.wallToLi(1020) - 20) < 1e-6)
+	// 只在新段里的墙钟
+	assert.ok(Math.abs(tr.wallToLi(1140) - 190) < 1e-6)
+	// 重叠区取最新一段(回拨之后的实时日志)
+	assert.ok(Math.abs(tr.wallToLi(1070) - 120) < 1e-6)
+	// performance 时间戳(实时行走这条路)不受回拨影响：两边都精确
+	assert.ok(Math.abs(tr.perfToLi(70) - 70) < 1e-9)
+	assert.ok(Math.abs(tr.perfToLi(120) - 120) < 1e-9)
+	assert.equal(tr.wallToPerf(1020), 20)
+	assert.equal(tr.wallToPerf(1070), 120)
+	// liToWall 按样点所在段的偏移
+	assert.equal(tr.liToWall(50), 1050)
+	assert.equal(tr.liToWall(150), 1100)
+	// 钳位方案会把回拨后的样点全部压到 1099 附近；分段后墙钟保持真实值
+	assert.ok(tr.liToWall(199) - tr.liToWall(100) > 90)
+	// 系统时钟前跳同样开段，前跳的间隙不会摊到相邻样点上
+	off = 5000
+	for (let i = 200; i < 300; i++) tr.note(i, i)
+	assert.equal(tr.segmentCount(), 3)
+	assert.ok(Math.abs(tr.wallToLi(5250) - 250) < 1e-6)
+	assert.ok(Math.abs(tr.wallToLi(1140) - 190) < 1e-6)
+	const r = tr.range()
+	assert.equal(r.t0, 0)
+	assert.equal(r.t1, 299)
+}
+
+// ---- 日志行带 performance 时间时按它排序与对齐 ----
+{
+	const rows = [
+		{ 'data-ts': '5000', 'data-dir': 'tx', 'data-sid': 'S', 'data-seq': '1' },
+		{ 'data-ts': '4000', 'data-dir': 'rx', 'data-sid': 'S', 'data-seq': '2' }, // 回拨后的墙钟更小
+	]
+	const pts = [10, 20]
+	const fr = (a) => ({ getAttribute(k) { return Object.prototype.hasOwnProperty.call(a, k) ? a[k] : null } })
+	const es = rows.map((a, i) => L.entryFromRow(fr(a), () => pts[i]))
+	assert.equal(es[0].pt, 10)
+	const lanes = L.buildLanes(es, false)
+	assert.deepEqual(Array.from(lanes.S.ts), [10, 20], '按 performance 时间(真实先后)排序')
+	assert.equal(lanes.S.items[0].ts, 5000, '展示仍用墙钟')
+}
+
+// ---- 规模：长采集的锚点 × 大量日志，插值不复制锚点数组 ----
+{
+	const tr = L.createAnchorTrack({ intervalMs: 200, gapMs: 20, wallOffset: () => 1.7e12 })
+	// 1 小时 @ 5 点/s 的入库节奏 ≈ 18k 锚点；末样点不是锚点(走虚拟末点分支)
+	for (let i = 0; i < 18000; i++) tr.note(i * 40, i * 200)
+	tr.note(18000 * 40, 18000 * 200 - 100)
+	assert.ok(tr.anchorCount() >= 17999)
+	const span = 18000 * 200 - 100
+	const N = 10000
+	let sum = 0
+	const t0 = process.hrtime.bigint()
+	for (let k = 0; k < N; k++) {
+		const li = tr.wallToLi(1.7e12 + (k / N) * span)
+		sum += li
 	}
+	for (let k = 0; k < N; k++) sum += tr.perfToLi((k / N) * span)
+	const ms = Number(process.hrtime.bigint() - t0) / 1e6
+	assert.ok(sum > 0)
+	// 每次复制 18k 数组时这里是数百毫秒；二分不复制只要几毫秒。阈值放宽到 50 ms 防机器抖动
+	assert.ok(ms < 50, '2 万次映射耗时 ' + ms.toFixed(1) + ' ms')
+	// 末样点虚拟锚点仍然正确
+	assert.ok(Math.abs(tr.perfToLi(span) - 18000 * 40) < 1e-6)
+	assert.ok(Math.abs(tr.perfToLi(span - 50) - (17999 * 40 + 20)) < 1e-6)
 }
 
 // ---- 密集合并 ----

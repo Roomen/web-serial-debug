@@ -50,12 +50,17 @@
 	const LAYOUT_KEY = 'serial-debug-layout'
 	const DUAL_VIEW_KEY = 'serial-debug-dual-view'
 
-	function layoutChoice() {
+	// 会话内以这份为准，持久化只是尽力保存：存储写失败时也不能让 data-layout 与已搬好的 DOM、分布局状态键对不上
+	let sessionLayout = (function () {
 		try { return localStorage.getItem(LAYOUT_KEY) === 'modern' ? 'modern' : 'classic' } catch (e) { return 'classic' }
+	})()
+
+	function layoutChoice() {
+		return sessionLayout
 	}
 
 	function applyLayout() {
-		const choice = layoutChoice()
+		const choice = sessionLayout
 		document.documentElement.dataset.layout = choice
 		;['classic', 'modern'].forEach((c) => {
 			const btn = document.getElementById('serial-layout-' + c)
@@ -71,6 +76,7 @@
 	window.layoutStateKey = layoutStateKey
 	window.setLayoutChoice = function (choice) {
 		const next = choice === 'modern' ? 'modern' : 'classic'
+		sessionLayout = next
 		try {
 			if (next === 'modern') localStorage.setItem(LAYOUT_KEY, 'modern')
 			else localStorage.removeItem(LAYOUT_KEY)
@@ -87,12 +93,17 @@
 	}
 
 	// 双路视图(列表/气泡)只在现代布局的双路行日志里有入口；气泡是纯 CSS 对现有行的重排，这里只存偏好
-	function dualViewChoice() {
+	// 与布局一样会话内以内存值为准，存储写失败时本次会话照常切换
+	let sessionDualView = (function () {
 		try { return localStorage.getItem(DUAL_VIEW_KEY) === 'bubble' ? 'bubble' : 'list' } catch (e) { return 'list' }
+	})()
+
+	function dualViewChoice() {
+		return sessionDualView
 	}
 
 	function applyDualView() {
-		const choice = dualViewChoice()
+		const choice = sessionDualView
 		document.documentElement.dataset.dualView = choice
 		;['list', 'bubble'].forEach((c) => {
 			const btn = document.getElementById('serial-dual-view-' + c)
@@ -103,6 +114,7 @@
 	window.getDualViewChoice = dualViewChoice
 	window.setDualViewChoice = function (choice) {
 		const next = choice === 'bubble' ? 'bubble' : 'list'
+		sessionDualView = next
 		try {
 			if (next === 'bubble') localStorage.setItem(DUAL_VIEW_KEY, 'bubble')
 			else localStorage.removeItem(DUAL_VIEW_KEY)
@@ -5713,6 +5725,27 @@
 			logMain.style.setProperty('--parse-h', px + 'px')
 			return px
 		}
+		//恢复保存的高度：串口视图隐藏时量不出可用高度，钳位会把高度压到下限再被存回去，
+		//所以隐藏时原值写成内联、不钳位，等日志区重新有尺寸(ResizeObserver)再按需钳一次
+		let clampPending = false
+		function restoreHeight(px) {
+			if (logMain.clientHeight > 0) {
+				clampPending = false
+				return applyHeight(px)
+			}
+			px = Math.max(MIN_H, Math.round(px))
+			logMain.style.setProperty('--parse-h', px + 'px')
+			clampPending = true
+			return px
+		}
+		if (typeof ResizeObserver !== 'undefined') {
+			new ResizeObserver(function () {
+				if (!clampPending || !logMain.clientHeight) return
+				clampPending = false
+				const v = parseInt(logMain.style.getPropertyValue('--parse-h'), 10)
+				if (!isNaN(v) && v > maxHeight()) applyHeight(v)
+			}).observe(logMain)
+		}
 		function saveState() {
 			const v = parseInt(logMain.style.getPropertyValue('--parse-h'), 10)
 			localStorage.setItem(layoutStateKey(STATE_KEY), JSON.stringify({
@@ -5820,7 +5853,7 @@
 		//恢复上次的高度与折叠状态；无记录时默认折叠，把空间留给日志
 		let saved = {}
 		try { saved = JSON.parse(localStorage.getItem(layoutStateKey(STATE_KEY)) || '{}') } catch (e) {}
-		if (saved.height) applyHeight(saved.height)
+		if (saved.height) restoreHeight(saved.height)
 		setLocked(saved.locked === true)
 		if (typeof saved.collapsed === 'boolean') {
 			setCollapsed(saved.collapsed)
@@ -5844,7 +5877,7 @@
 			} else {
 				let st = null
 				try { st = JSON.parse(localStorage.getItem(layoutStateKey(STATE_KEY)) || 'null') } catch (e) {}
-				if (st && st.height && st.height !== DEFAULT_H) applyHeight(st.height)
+				if (st && st.height) restoreHeight(st.height)
 				mem = { collapsed: st && typeof st.collapsed === 'boolean' ? st.collapsed : true }
 			}
 			if (!logMain.getAttribute('style')) logMain.removeAttribute('style')
