@@ -4239,7 +4239,7 @@
 
 	//单个合并包的字节上限，超过就强制断包，避免连续流下缓冲无限增长
 	const SERIAL_PACK_MAX_BYTES = 65536
-	// SEK 帧在分包静默后若仍未收满声明长度, 最多再多等这么久(防低波特/间隙拆帧)
+	// SEK / hostProto 半帧在分包静默后最多再等这么久（防低波特/间隙拆帧）
 	const SEK_INCOMPLETE_WAIT_MAX_MS = 3000
 
 	// 若缓冲以 A9 9A 开头且声明长度未到, 返回期望总长; 已完整或非 SEK 返回 0
@@ -4268,6 +4268,36 @@
 		return need
 	}
 
+	// hostProto 日志按 CRC 校验后的帧边界输出；read() 的分块和 TX 都不是接收帧边界。
+	function hostProtoLogging() {
+		return window._activeProtocol === 'hostproto' && window.hostProto
+	}
+	function hostProtoIncomplete(buf) {
+		const h = hostProtoLogging()
+		if (!h || !buf.length) return false
+		const scan = h.scan(Uint8Array.from(buf), 0, false)
+		return scan.status === 'wait' || (scan.status === 'none' && scan.keep > 0)
+	}
+	function holdIncompleteHostProto(sid, buf) {
+		if (!hostProtoIncomplete(buf)) return false
+		if (SerialHub.getSekWaitStart(sid) == null) SerialHub.setSekWaitStart(sid, Date.now())
+		return Date.now() - SerialHub.getSekWaitStart(sid) < SEK_INCOMPLETE_WAIT_MAX_MS
+	}
+	function drainHostProtoPack(sid) {
+		const h = hostProtoLogging()
+		if (!h) return
+		for (;;) {
+			const buf = SerialHub.getPackBuf(sid)
+			const scan = h.scan(Uint8Array.from(buf), 0, false)
+			if (scan.status !== 'frame') return
+			const end = scan.offset + scan.total
+			const pack = buf.slice(0, end)
+			SerialHub.setPackBuf(sid, buf.slice(end))
+			flushSerialPack(pack, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackGlitch(sid))
+			if (end < buf.length) SerialHub.setPackStartTime(sid, new Date())
+		}
+	}
+
 	//glitch: 整包都是紧随线路错误的全 0 块，紧接在同一路上一条毛刺行之后的直接并入那一行(不新增行、不送解析)
 	function flushSerialPack(buf, startTime, sid, glitch) {
 		sid = sid || SerialHub.activeSendPhys()
@@ -4280,10 +4310,11 @@
 
 	// 发送前先把本口已到达、还在等分包超时的 RX 输出：订阅者（协议事务、STS 模拟）拿到字节就立即应答，
 	// 不先输出的话 TX 行会排在触发它的 RX 之前，随后到的应答还会并进同一条 RX，日志顺序与真实时序相反。
-	// 代价是 TX 前后紧贴的 RX 碎片会被切成两行。未收满的 SEK 帧仍在等待窗口内时不切，否则解析会被拆坏。
+	// 未收满的 SEK / hostProto 帧仍在等待窗口内时不切，否则解析会被拆坏。
 	function flushPendingRx(sid) {
 		const buf = SerialHub.getPackBuf(sid)
 		if (!buf.length) return
+		if (holdIncompleteHostProto(sid, buf)) return
 		const wantProto = toolOptions.skParseEnable || toolOptions.skHoverEnable || (window._activeProtocol === 'sek')
 		const need = wantProto ? peekSekIncompleteNeed(buf) : 0
 		const waitStart = SerialHub.getSekWaitStart(sid)
@@ -4300,6 +4331,12 @@
 		sid = sid || SerialHub.activeSendPhys()
 		noteSerialRx(sid)
 		SerialHub._sess(sid).rxBytes += data.length
+		// 先组装并记录本次 RX，再通知可能同步发出 TX 的订阅者，避免发送前 flush 拆掉上一块半帧。
+		try {
+			logReceivedData(data, sid, meta)
+		} catch (e) {
+			addLogErrSafe('记录接收数据出错(' + sid + '): ' + (e && e.message ? e.message : e), sid)
+		}
 		//立即把原始字节交给固件升级/协议测试等模块,由其自行按协议帧边界组装
 		// 只转发当前可见模式的会话，隐藏模式的口继续收日志但不污染 serialApi
 		// 单路: 全量转发(与 main 语义一致)
@@ -4327,12 +4364,15 @@
 				api._onReceive(data)
 			}
 		}
+	}
+
+	function logReceivedData(data, sid, meta) {
 		const sidLogType = getLogTypeForSid(sid)
 		if (sidLogType === 'term' && window.SerialTerm) {
 			window.SerialTerm.write(SerialHub.logModeOf(sid), data)
 			schedulePersistLogs()
 		}
-		const packBuf = SerialHub.getPackBuf(sid)
+		let packBuf = SerialHub.getPackBuf(sid)
 		const sidOpts = logOptionsForSid(sid)
 		//新的合并包开始:记下第一个字节到达的时间,日志显示要用这个而不是flush时间
 		if (packBuf.length === 0) {
@@ -4343,7 +4383,13 @@
 		//展开成实参会超出调用栈上限抛 RangeError，被外层当成读错误误判为断线
 		for (let i = 0; i < data.length; i++) packBuf.push(data[i])
 		if (meta && meta.lineGlitch) SerialHub.markPackGlitch(sid)
-		if (sidOpts.timeOut == 0) {
+		drainHostProtoPack(sid)
+		packBuf = SerialHub.getPackBuf(sid)
+		if (!packBuf.length) {
+			clearTimeout(SerialHub.getPackTimer(sid))
+			return
+		}
+		if (sidOpts.timeOut == 0 && !hostProtoIncomplete(packBuf)) {
 			flushSerialPack(packBuf, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackGlitch(sid))
 			SerialHub.setPackBuf(sid, [])
 			return
@@ -4358,10 +4404,14 @@
 		//清除之前的时钟
 		clearTimeout(SerialHub.getPackTimer(sid))
 		const startTime = SerialHub.getPackStartTime(sid)
-		const packTimeOut = sidOpts.timeOut
+		const packTimeOut = Math.max(1, sidOpts.timeOut == 0 ? 50 : sidOpts.timeOut)
 		const armFlush = () => {
 			SerialHub.setPackTimer(sid, setTimeout(() => {
 				const curBuf = SerialHub.getPackBuf(sid)
+				if (holdIncompleteHostProto(sid, curBuf)) {
+					armFlush()
+					return
+				}
 				// 协议感知: SEK 帧声明长度未到时, 在上限内继续等后续字节
 				const wantProto = toolOptions.skParseEnable || toolOptions.skHoverEnable ||
 					(window._activeProtocol === 'sek')
