@@ -9030,7 +9030,7 @@ details.sts-sim-alarm-picker {
 	}
 }
 
-/* =============================================
+/* ======================================
    界面布局：经典 / 现代
    经典布局不动。现代布局的全部样式都挂在 html[data-layout='modern'] 下；
    此段只有三处基础规则作用于经典布局：「配置」菜单里的布局选择行(可见)、
@@ -9547,4 +9547,125 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row >
 	html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) {
 		max-width: 88%;
 	}
+=======
+/* ========== 功耗分析：串口事件道（仅现代布局） ========== */
+/* 经典布局下整条道不进布局流；TX/RX 颜色由 JS 画布按这里的变量取，图例共用 */
+.blu-serial-lane {
+	display: none;
+}
+
+html[data-layout='modern'] .blu-serial-lane {
+	--blu-lane-tx: #c2410c;
+	--blu-lane-rx: #15803d;
+	--blu-lane-sys: #94a3b8;
+	display: flex;
+	flex-direction: column;
+	flex-shrink: 0;
+	border-left: 1px solid var(--border-color);
+	border-right: 1px solid var(--border-color);
+	border-top: 1px dashed var(--border-color);
+	background: var(--bg-surface);
+}
+
+html[data-layout='modern'][data-theme='dark'] .blu-serial-lane {
+	--blu-lane-tx: #fb923c;
+	--blu-lane-rx: #4ade80;
+	--blu-lane-sys: #8e8e93;
+}
+
+@media (prefers-color-scheme: dark) {
+	html[data-layout='modern']:not([data-theme='light']) .blu-serial-lane {
+		--blu-lane-tx: #fb923c;
+		--blu-lane-rx: #4ade80;
+		--blu-lane-sys: #8e8e93;
+	}
+}
+
+html[data-layout='modern'] .blu-serial-lane-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	padding: 2px 8px 0 8px;
+	font-size: 0.68rem;
+	line-height: 1.4;
+	color: var(--text-muted);
+}
+
+html[data-layout='modern'] .blu-serial-lane-title {
+	color: var(--text-secondary);
+	font-weight: 600;
+}
+
+html[data-layout='modern'] .blu-serial-lane-key {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-family: var(--font-mono);
+}
+
+html[data-layout='modern'] .blu-serial-lane-key::before {
+	content: '';
+	width: 10px;
+	height: 6px;
+	border-radius: 1px;
+}
+
+html[data-layout='modern'] .blu-serial-lane-key--tx::before {
+	background: var(--blu-lane-tx);
+}
+
+html[data-layout='modern'] .blu-serial-lane-key--rx::before {
+	background: var(--blu-lane-rx);
+}
+
+html[data-layout='modern'] .blu-serial-lane-status {
+	margin-left: auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .blu-serial-lane-canvas {
+	display: block;
+	width: 100%;
+	height: 22px;
+	user-select: none;
+}
+
+html[data-layout='modern'] .blu-serial-lane[data-rows='2'] .blu-serial-lane-canvas {
+	height: 40px;
+}
+
+html[data-layout='modern'] .blu-serial-lane-tip {
+	position: fixed;
+	z-index: 1090;
+	max-width: min(420px, calc(100vw - 16px));
+	padding: 6px 8px;
+	font-size: 0.72rem;
+	line-height: 1.45;
+	color: var(--text-primary);
+	background: var(--bg-modal);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-sm);
+	box-shadow: var(--shadow-lg);
+	pointer-events: none;
+	overflow-wrap: anywhere;
+}
+
+html[data-layout='modern'] .blu-serial-lane-tip[hidden] {
+	display: none;
+}
+
+html[data-layout='modern'] .blu-serial-lane-tip-head {
+	font-weight: 600;
+}
+
+html[data-layout='modern'] .blu-serial-lane-tip-hex {
+	font-family: var(--font-mono);
+}
+
+html[data-layout='modern'] .blu-serial-lane-tip-hint {
+	color: var(--text-muted);
 }

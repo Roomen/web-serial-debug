@@ -28,6 +28,7 @@ CIU 上电后只 `WOR_INIT` 一次：启动时先查 `WOR_GET_STATUS`，未初�
 - `node tests/serial-line-split.cjs`：接收分包（`js/common.js` 里 `//单个合并包的字节上限` 到 `//对外暴露的串口接口` 之间，按锚点注释截取，别删）的按超时 / 按换行两种方式及协议帧保护回归，改这段后必须跑。
 - `node tests/sts-sim.cjs`：STS 表端与 CIU 两个模拟引擎（`js/sts-sim.js`）经假模组对的端到端回归，含会话丢弃注入、表端重启、预算耗尽，改引擎后必须跑。
 - `node tests/sts-sim-panel.cjs`：「STS 模拟」面板（`js/sts-sim-panel.js`，假 DOM + 假引擎）的单路/双路隔离、配置持久化与不落盘项、启停与断线重连、启动超时退避回归，改面板后必须跑。以上 STS / hostProto 测试同样只用合成数据，不要放真实钥表、PAK 或设备标识。
+- `node tests/blu-serial-lane.cjs`：功耗分析串口事件道（`js/blu-serial-lane.js`，仅现代布局显示）的纯函数回归：样点下标与墙钟的锚点映射（含停采续采间隙、墙钟回拨）、可见范围二分、密集合并、日志行分道，改该文件后必须跑。
 - 其余没有自动化测试，涉及 UI 或串口逻辑的修改要在浏览器里连接真实或虚拟串口手动验证：日志相关检查 HEX、TEXT、ANSI、解析四种显示模式；发送路径检查 HEX/TEXT 输入、循环发送、CRLF 追加和快捷发送按钮；配置相关刷新页面，确认 localStorage 中的设置能正确恢复。
 
 ## 编码风格
