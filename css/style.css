@@ -9029,3 +9029,522 @@ details.sts-sim-alarm-picker {
 		min-height: 160px;
 	}
 }
+
+/* =============================================
+   界面布局：经典 / 现代
+   经典布局不动。现代布局的全部样式都挂在 html[data-layout='modern'] 下；
+   此段只有三处基础规则作用于经典布局：「配置」菜单里的布局选择行(可见)、
+   右栏标签条与双路视图切换这两个新元素(display:none，不占位)
+   ============================================= */
+
+/* 「配置」菜单顶部的布局选择行 */
+.rail-config-layout {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 4px 12px 6px;
+}
+
+.rail-config-layout-title {
+	font-size: 0.72rem;
+	font-weight: 600;
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+
+/* 新增元素：经典布局下不可见、不占位，现代布局才打开 */
+.wb-right-tabs,
+#serial-dual-view-seg {
+	display: none;
+}
+
+/* ---------- 现代布局：令牌 ---------- */
+html[data-layout='modern'] {
+	--radius-sm: 6px;
+	--radius-md: 6px;
+	--radius-lg: 8px;
+	--radius-xl: 10px;
+	--shadow-sm: none;
+	--mdn-rail: #1c2330;
+	--mdn-rail-hi: #2c3646;
+	--mdn-rail-fg: #aab4c3;
+	--mdn-rail-muted: #98a4b5;
+	--mdn-rail-accent: #7fb1ff;
+	--mdn-bar: #1c2330;
+	--mdn-bar-edge: #11161f;
+	--mdn-bar-fg: #c5cedb;
+	--mdn-bar-hi: #eef2f7;
+	--mdn-bar-dim: #98a4b5;
+}
+
+html[data-layout='modern'][data-theme='light'] {
+	--bg-body: #eef1f5;
+	--bg-surface-hover: #f3f6fa;
+	--bg-sidebar-toggle: #e3e8ef;
+	--text-primary: #1c2330;
+	--text-secondary: #5a6474;
+	--text-muted: #6b7686;
+	--border-color: #d0d7e2;
+	--border-light: #e3e8ef;
+	--accent: #1f5fbf;
+	--accent-hover: #174c99;
+	--accent-light: rgba(31, 95, 191, 0.08);
+	--border-focus: #1f5fbf;
+	--text-link: #1f5fbf;
+	--mdn-subtle: #f6f8fb;
+	--mdn-tx-bg: #fde9d9;
+	--mdn-tx-fg: #8a3a00;
+	--mdn-tx-line: #d9731a;
+	--mdn-rx-bg: #dcefe3;
+	--mdn-rx-fg: #145c32;
+}
+
+html[data-layout='modern'][data-theme='dark'] {
+	--accent: #6ea8ff;
+	--accent-hover: #8dbcff;
+	--accent-light: rgba(110, 168, 255, 0.16);
+	--accent-text: #0b1220;
+	--border-focus: #6ea8ff;
+	--text-link: #6ea8ff;
+	--mdn-rail: #161b24;
+	--mdn-subtle: #262628;
+	--mdn-tx-bg: #4a2a12;
+	--mdn-tx-fg: #ffc79a;
+	--mdn-tx-line: #f0a060;
+	--mdn-rx-bg: #143a27;
+	--mdn-rx-fg: #9be3b8;
+}
+
+/* 深色下强调色变亮，原先写死白字的实心强调色底要换深字，否则对比度不够 */
+html[data-layout='modern'][data-theme='dark'] ::selection,
+html[data-layout='modern'][data-theme='dark'] .ctl-seg > button.active,
+html[data-layout='modern'][data-theme='dark'] .ctl-seg > button[aria-pressed='true'],
+html[data-layout='modern'][data-theme='dark'] .fw-drop-badge,
+html[data-layout='modern'][data-theme='dark'] .sk-rw-progress-bar {
+	color: #0b1220;
+}
+
+/* ---------- 现代布局：左侧导航栏 ---------- */
+html[data-layout='modern'] #activity-rail {
+	background: var(--mdn-rail);
+	border-right-color: var(--mdn-bar-edge);
+}
+
+html[data-layout='modern'][data-theme] .rail-brand img {
+	filter: none;
+	opacity: 0.92;
+}
+
+html[data-layout='modern'] #activity-rail .rail-item {
+	width: calc(100% - 8px);
+	margin: 0 4px;
+	border-radius: 8px;
+	color: var(--mdn-rail-fg);
+}
+
+html[data-layout='modern'] #activity-rail .rail-item:hover,
+html[data-layout='modern'] #activity-rail .rail-item.active {
+	background: var(--mdn-rail-hi);
+	color: #fff;
+}
+
+html[data-layout='modern'] #activity-rail .rail-item.active::before {
+	display: none;
+}
+
+html[data-layout='modern'] .rail-bottom {
+	border-top-color: var(--mdn-rail-hi);
+}
+
+html[data-layout='modern'] .rail-divider {
+	background: var(--mdn-rail-hi);
+}
+
+html[data-layout='modern'] .theme-switch {
+	background: var(--mdn-rail-hi);
+}
+
+html[data-layout='modern'] .theme-switch button {
+	color: var(--mdn-rail-fg);
+}
+
+html[data-layout='modern'] .theme-switch button:hover {
+	color: #fff;
+}
+
+html[data-layout='modern'] .theme-switch button.active {
+	background: #f1f4f8;
+	color: #1f5fbf;
+}
+
+html[data-layout='modern'] .theme-switch button:focus-visible {
+	outline-color: var(--mdn-rail-accent);
+}
+
+html[data-layout='modern'] .rail-version {
+	color: var(--mdn-rail-muted);
+	font-size: 0.55rem;
+}
+
+html[data-layout='modern'] .rail-version--update {
+	color: var(--mdn-rail-accent);
+}
+
+html[data-layout='modern'] .rail-version-dot {
+	background: var(--mdn-rail-accent);
+}
+
+/* ---------- 现代布局：顶部条 / 日志头 / 发送区 / 状态栏 ---------- */
+html[data-layout='modern'] #serial-connect-bar {
+	box-shadow: none;
+}
+
+html[data-layout='modern'] #log-main > div:first-child {
+	background: var(--mdn-subtle);
+}
+
+html[data-layout='modern'] #serial-send-panel {
+	background: var(--mdn-subtle);
+}
+
+html[data-layout='modern'] #serial-statusbar {
+	background: var(--mdn-bar);
+	border-top-color: var(--mdn-bar-edge);
+	color: var(--mdn-bar-fg);
+	font-family: var(--font-mono);
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-name,
+html[data-layout='modern'] #serial-statusbar .sb-num,
+html[data-layout='modern'] #serial-statusbar .sb-state,
+html[data-layout='modern'] #serial-statusbar .sb-session.is-open .sb-state {
+	color: var(--mdn-bar-hi);
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-k,
+html[data-layout='modern'] #serial-statusbar .sb-hint {
+	color: var(--mdn-bar-dim);
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-dot {
+	background: #6f7b8c;
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-session[data-sid='S'].is-open .sb-dot {
+	background: var(--mdn-rail-accent);
+	box-shadow: 0 0 0 3px rgba(127, 177, 255, 0.2);
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-session[data-sid='A'].is-open .sb-dot {
+	background: #10b981;
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-session[data-sid='B'].is-open .sb-dot {
+	background: #f59e0b;
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-receive-reset {
+	border-color: #3a4558;
+	color: var(--mdn-bar-fg);
+}
+
+/* ---------- 现代布局：日志行 TX / RX ---------- */
+/* 标签：TX 暖色、RX 绿色，浅/深色各一套，文字对底色 >= 4.5:1 */
+html[data-layout='modern'] .log-row[data-dir='tx'] > .log-dir {
+	color: var(--mdn-tx-fg);
+	background-color: var(--mdn-tx-bg);
+}
+
+html[data-layout='modern'] .log-row[data-dir='rx'] > .log-dir {
+	color: var(--mdn-rx-fg);
+	background-color: var(--mdn-rx-bg);
+}
+
+html[data-layout='modern'] .serial-log-legend:not(.is-dual) [data-leg='left'] {
+	color: var(--mdn-tx-fg);
+	background: var(--mdn-tx-bg);
+}
+
+html[data-layout='modern'] .serial-log-legend:not(.is-dual) [data-leg='right'] {
+	color: var(--mdn-rx-fg);
+	background: var(--mdn-rx-bg);
+}
+
+/* 行：细分隔线；TX 行的色条与底色跟着标签走暖色(双路与 ANSI 深底不动) */
+html[data-layout='modern'] .serial-logs .log-row {
+	padding: 3px 10px;
+	border-bottom: 1px solid var(--border-light);
+	border-radius: 0;
+}
+
+html[data-layout='modern'] .serial-logs:not(.ansi):not(.is-dual) .log-row[data-dir='tx'] {
+	border-left-color: var(--mdn-tx-line);
+	background-color: color-mix(in srgb, var(--mdn-tx-line) 8%, transparent);
+}
+
+html[data-layout='modern'] .serial-logs:not(.ansi):not(.is-dual) .log-row[data-dir='tx']:hover {
+	background-color: color-mix(in srgb, var(--mdn-tx-line) 15%, transparent);
+}
+
+html[data-layout='modern'] .serial-logs:not(.ansi):not(.is-dual) .log-row[data-dir='tx'].selected,
+html[data-layout='modern'] .serial-logs:not(.ansi):not(.is-dual) .log-row[data-dir='tx'].selected:hover {
+	background-color: color-mix(in srgb, var(--mdn-tx-line) 22%, transparent);
+	box-shadow: inset 0 0 0 1.5px var(--mdn-tx-line);
+}
+
+/* ---------- 现代布局：右栏标签条 ---------- */
+html[data-layout='modern'] #wb-right-title {
+	display: none;
+}
+
+html[data-layout='modern'] .wb-dock-head {
+	min-height: 34px;
+	padding-bottom: 0;
+}
+
+html[data-layout='modern'] .wb-right-tabs {
+	flex: 1 1 auto;
+	display: flex;
+	align-items: stretch;
+	gap: 0;
+	min-width: 0;
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+
+html[data-layout='modern'] .wb-right-tabs::-webkit-scrollbar {
+	display: none;
+}
+
+html[data-layout='modern'] .wb-right-tab {
+	flex: 0 0 auto;
+	height: 34px;
+	margin-bottom: -1px;
+	padding: 0 5px;
+	border: 0;
+	border-bottom: 2px solid transparent;
+	background: transparent;
+	color: var(--text-secondary);
+	font-family: var(--font-sans);
+	font-size: 0.72rem;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .wb-right-tab:hover:not(:disabled) {
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] .wb-right-tab[aria-selected='true'] {
+	border-bottom-color: var(--accent);
+	color: var(--accent);
+	font-weight: 700;
+}
+
+html[data-layout='modern'] .wb-right-tab:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+html[data-layout='modern'] .wb-right-tab:disabled {
+	opacity: 0.4;
+}
+
+/* ---------- 现代布局：双路视图切换(列表 / 气泡) ---------- */
+/* 仅 现代布局 + 双路 + 行日志视图 时显示：双路由图例的 is-dual 判断，行日志由视图切换的按下态判断 */
+html[data-layout='modern'] .serial-log-headline:has(#serial-log-legend.is-dual):has(#serial-log-view-row[aria-pressed='true']) #serial-dual-view-seg {
+	display: inline-flex;
+}
+
+/* ---------- 现代布局：双路气泡(纯 CSS 重排现有行，不改行 DOM) ----------
+   A 路靠左、B 路靠右；TX = 实心填充气泡，RX = 面色底 + 路色描边；其余行(系统行等)居中成小号胶囊。
+   颜色全走变量：--bb-c 路色、--bb-t 路色深字、--bb-bg / --bb-bd / --bb-ring 由方向与状态改写 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual {
+	--bb-surface: var(--bg-surface);
+	--bb-a: #10b981;
+	--bb-a-t: #065f46;
+	--bb-b: #f59e0b;
+	--bb-b-t: #92400e;
+	--bb-on: #fff;
+}
+
+html[data-layout='modern'][data-theme='dark'][data-dual-view='bubble'] #serial-logs-dual {
+	--bb-a: #34d399;
+	--bb-a-t: #6ee7b7;
+	--bb-b: #fbbf24;
+	--bb-b-t: #fcd34d;
+	--bb-on: #10151c;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi) {
+	background-color: var(--mdn-subtle);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi {
+	--bb-surface: #2c2c30;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'] {
+	--bb-c: var(--bb-a);
+	--bb-t: var(--bb-a-t);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'] {
+	--bb-c: var(--bb-b);
+	--bb-t: var(--bb-b-t);
+}
+
+/* 系统行：居中小号胶囊(默认形态，A/B 气泡在下面覆盖) */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row {
+	--bb-bg: var(--bb-surface);
+	--bb-bd: var(--border-light);
+	--bb-ring: 0 0 0 0 transparent;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
+	gap: 2px 8px;
+	width: fit-content;
+	max-width: 86%;
+	margin: 6px auto;
+	padding: 1px 12px;
+	border: 1px solid var(--bb-bd);
+	border-radius: 10px;
+	background-color: var(--bb-bg);
+	box-shadow: var(--bb-ring);
+	font-size: 0.7rem;
+	line-height: 1.5;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:hover {
+	--bb-bg: var(--bg-surface-hover);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row.selected {
+	--bb-bg: color-mix(in srgb, var(--danger) 12%, var(--bb-surface));
+	--bb-ring: 0 0 0 1.5px var(--danger);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-time:empty {
+	display: none;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-body {
+	flex: 0 1 auto;
+}
+
+/* A / B 的收发行：气泡版式 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) {
+	display: block;
+	max-width: 68%;
+	margin-block: 5px;
+	padding: 6px 10px 7px;
+	border-width: 1.5px;
+	border-radius: 12px;
+	font-size: 0.75rem;
+	line-height: 1.6;
+	color: var(--bb-t);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A']:is([data-dir='tx'], [data-dir='rx']) {
+	margin-inline: 0 auto;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B']:is([data-dir='tx'], [data-dir='rx']) {
+	margin-inline: auto 0;
+}
+
+/* TX：实心填充、无边框 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] {
+	--bb-bg: color-mix(in srgb, var(--bb-c) 16%, var(--bb-surface));
+	--bb-bd: transparent;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx']:hover {
+	--bb-bg: color-mix(in srgb, var(--bb-c) 24%, var(--bb-surface));
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'].selected {
+	--bb-bg: color-mix(in srgb, var(--bb-c) 30%, var(--bb-surface));
+	--bb-ring: 0 0 0 2px var(--bb-c);
+}
+
+/* RX：面色底 + 路色实线描边 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'] {
+	--bb-bg: var(--bb-surface);
+	--bb-bd: var(--bb-c);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx']:hover {
+	--bb-bg: color-mix(in srgb, var(--bb-c) 8%, var(--bb-surface));
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'].selected {
+	--bb-bg: color-mix(in srgb, var(--bb-c) 14%, var(--bb-surface));
+	--bb-ring: 0 0 0 2px color-mix(in srgb, var(--bb-c) 45%, transparent);
+}
+
+/* 第一行：时间 + 方向标签 + 会话名 + 长度(行内排)；正文是块级、另起一行占满气泡宽。
+   气泡改成块级容器而不是 flex 换行：气泡宽度取「首行」与「正文」中较宽者，不会因为 flex 单行 max-content 把短帧也撑到上限 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > :is(.log-time, .log-dir, .log-sess, .log-len) {
+	display: inline-block;
+	margin-right: 8px;
+	vertical-align: middle;
+	color: var(--bb-t);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-time:empty {
+	display: none;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-body {
+	display: block;
+	max-width: 100%;
+	margin-top: 3px;
+	color: var(--bb-t);
+	overflow-x: auto;
+}
+
+/* 方向标签：文字清零，改由 ::before 显示「↑ 发送 / ↓ 接收」(复制日志读的是元素文本，伪元素不进剪贴板) */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-dir {
+	min-width: 0;
+	padding: 0 7px;
+	border: 1px solid var(--bb-t);
+	font-size: 0;
+	line-height: 1.45;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-dir::before {
+	font-size: 0.65rem;
+	font-weight: 700;
+	letter-spacing: 0.03em;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] > .log-dir {
+	background-color: var(--bb-t);
+	color: var(--bb-on);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'] > .log-dir {
+	background-color: transparent;
+	color: var(--bb-t);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='tx'] > .log-dir::before {
+	content: '↑ 发送';
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='rx'] > .log-dir::before {
+	content: '↓ 接收';
+}
+
+/* 正文里的解析块不得溢出气泡 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-body :is(.pv, .sk-parse, .sk-parse-block, pre, table, img, canvas, svg) {
+	max-width: 100%;
+	box-sizing: border-box;
+}
+
+@media (max-width: 768px) {
+	html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) {
+		max-width: 88%;
+	}
+}

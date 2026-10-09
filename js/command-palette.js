@@ -346,6 +346,16 @@
 				run: function () { if (window.setThemeChoice) window.setThemeChoice(t[0]) }
 			})
 		})
+		const layoutNow = typeof window.getLayoutChoice === 'function' ? window.getLayoutChoice() : 'classic'
+		;[['classic', '经典', 'jingdian classic'], ['modern', '现代', 'xiandai modern']].forEach(function (t) {
+			list.push({
+				group: '视图',
+				title: '界面布局：' + t[1],
+				detail: layoutNow === t[0] ? '当前' : '',
+				alias: 'jiemian buju layout ' + t[2],
+				run: function () { if (window.setLayoutChoice) window.setLayoutChoice(t[0]) }
+			})
+		})
 		const main = el('main')
 		const rightCollapsed = !!(main && main.classList.contains('right-collapsed'))
 		list.push({

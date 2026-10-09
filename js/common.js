@@ -43,6 +43,80 @@
 	darkQuery.addEventListener('change', () => {
 		if (themeChoice() === 'auto') applyTheme()
 	})
+
+	/* ========== Layout: 经典 / 现代 ========== */
+	// 与主题一样是纯界面偏好：不进导出配置、不被「重置所有参数」清掉；缺省(含存储不可用)为经典。
+	// data-layout 只改样式作用域，切换不刷新页面、不碰串口与日志状态；index.html 首屏前已按同一规则预置
+	const LAYOUT_KEY = 'serial-debug-layout'
+	const DUAL_VIEW_KEY = 'serial-debug-dual-view'
+
+	function layoutChoice() {
+		try { return localStorage.getItem(LAYOUT_KEY) === 'modern' ? 'modern' : 'classic' } catch (e) { return 'classic' }
+	}
+
+	function applyLayout() {
+		const choice = layoutChoice()
+		document.documentElement.dataset.layout = choice
+		;['classic', 'modern'].forEach((c) => {
+			const btn = document.getElementById('serial-layout-' + c)
+			if (btn) btn.setAttribute('aria-pressed', String(c === choice))
+		})
+	}
+
+	window.getLayoutChoice = layoutChoice
+	window.setLayoutChoice = function (choice) {
+		const next = choice === 'modern' ? 'modern' : 'classic'
+		try {
+			if (next === 'modern') localStorage.setItem(LAYOUT_KEY, 'modern')
+			else localStorage.removeItem(LAYOUT_KEY)
+		} catch (e) { /* 存储不可用时本次会话内仍生效，下次回到默认 */ }
+		applyLayout()
+		// 两套布局的尺寸不同：日志头压缩档要重量，波形等依赖容器尺寸的画布也监听 resize
+		fitLogHeader()
+		window.dispatchEvent(new Event('resize'))
+	}
+
+	// 双路视图(列表/气泡)只在现代布局的双路行日志里有入口；气泡是纯 CSS 对现有行的重排，这里只存偏好
+	function dualViewChoice() {
+		try { return localStorage.getItem(DUAL_VIEW_KEY) === 'bubble' ? 'bubble' : 'list' } catch (e) { return 'list' }
+	}
+
+	function applyDualView() {
+		const choice = dualViewChoice()
+		document.documentElement.dataset.dualView = choice
+		;['list', 'bubble'].forEach((c) => {
+			const btn = document.getElementById('serial-dual-view-' + c)
+			if (btn) btn.setAttribute('aria-pressed', String(c === choice))
+		})
+	}
+
+	window.getDualViewChoice = dualViewChoice
+	window.setDualViewChoice = function (choice) {
+		const next = choice === 'bubble' ? 'bubble' : 'list'
+		try {
+			if (next === 'bubble') localStorage.setItem(DUAL_VIEW_KEY, 'bubble')
+			else localStorage.removeItem(DUAL_VIEW_KEY)
+		} catch (e) { /* 同上 */ }
+		applyDualView()
+		// 行高变了：开着自动滚动就留在底部，别停在换算前的位置
+		const auto = document.getElementById('serial-auto-scroll')
+		const logs = document.getElementById('serial-logs-dual')
+		if (logs && auto && auto.getAttribute('aria-pressed') === 'true') logs.scrollTop = logs.scrollHeight
+		fitLogHeader()
+	}
+
+	applyLayout()
+	applyDualView()
+	function bindSeg(segId, prefix, apply) {
+		const seg = document.getElementById(segId)
+		if (!seg) return
+		seg.addEventListener('click', (e) => {
+			const btn = e.target.closest('button')
+			if (btn && seg.contains(btn)) apply(btn.id.slice(prefix.length))
+		})
+	}
+	bindSeg('serial-layout-seg', 'serial-layout-', (c) => window.setLayoutChoice(c))
+	bindSeg('serial-dual-view-seg', 'serial-dual-view-', (c) => window.setDualViewChoice(c))
 	// 事务钉扎: 升级/批量配置等事务进行中锁定主发口, 防止中途切换把后续帧发到另一台设备
 	let pinSid = null
 	let pinDepth = 0
@@ -631,7 +705,7 @@
 		let top = Infinity
 		let bottom = -Infinity
 		let tallest = 0
-		header.querySelectorAll('.serial-log-title, #serial-log-view-seg, #serial-log-legend, #serial-log-settings-btn, .serial-log-actions').forEach(function (el) {
+		header.querySelectorAll('.serial-log-title, #serial-log-view-seg, #serial-log-legend, #serial-dual-view-seg, #serial-log-settings-btn, .serial-log-actions').forEach(function (el) {
 			const r = el.getBoundingClientRect()
 			if (!r.width) return
 			top = Math.min(top, r.top)

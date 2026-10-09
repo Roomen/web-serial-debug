@@ -28,6 +28,15 @@
                 t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
             }
             document.documentElement.setAttribute('data-theme', t)
+            // 界面布局(经典/现代)与双路视图(列表/气泡)：同样首屏前定下；缺省即经典、列表
+            var layout = 'classic'
+            var dualView = 'list'
+            try {
+                if (localStorage.getItem('serial-debug-layout') === 'modern') layout = 'modern'
+                if (localStorage.getItem('serial-debug-dual-view') === 'bubble') dualView = 'bubble'
+            } catch (e) { /* 存储不可用时按默认 */ }
+            document.documentElement.dataset.layout = layout
+            document.documentElement.dataset.dualView = dualView
         })()
     </script>
     <script>
@@ -110,6 +119,14 @@
                         <span class="rail-label">配置</span>
                     </button>
                     <ul class="dropdown-menu rail-config-menu" aria-labelledby="rail-config-btn">
+                        <li class="rail-config-layout">
+                            <span class="rail-config-layout-title">界面布局</span>
+                            <div class="ctl-seg" id="serial-layout-seg" role="group" aria-label="界面布局">
+                                <button type="button" id="serial-layout-classic" aria-pressed="true">经典</button>
+                                <button type="button" id="serial-layout-modern" aria-pressed="false">现代</button>
+                            </div>
+                        </li>
+                        <li><hr class="dropdown-divider"></li>
                         <li><button class="dropdown-item" type="button" id="serial-import"><i class="bi bi-folder-plus"></i> 导入配置…</button></li>
                         <li><button class="dropdown-item" type="button" id="serial-export"><i class="bi bi-folder-symlink"></i> 导出配置</button></li>
                         <li><hr class="dropdown-divider"></li>
@@ -318,6 +335,11 @@
                                     <span class="serial-log-legend-item" data-leg="left" id="serial-log-legend-left">TX</span>
                                     <span class="serial-log-legend-item" data-leg="right" id="serial-log-legend-right">RX</span>
                                 </span>
+                                <!-- 仅现代布局 + 双路 + 行日志时显示(见 css 末尾)：双路合流的显示方式 -->
+                                <div class="ctl-seg" id="serial-dual-view-seg" role="group" aria-label="双路显示方式">
+                                    <button type="button" id="serial-dual-view-list" aria-pressed="true">列表</button>
+                                    <button type="button" id="serial-dual-view-bubble" aria-pressed="false">气泡</button>
+                                </div>
                             </div>
 
                             <div class="btn-toolbar">
@@ -481,6 +503,7 @@
                             <!-- 右侧停靠区：标题栏 + 当前面板；面板由 js/workbench.js 注册与切换 -->
                             <div class="wb-dock-head" id="wb-right-head">
                                 <span class="wb-dock-title" id="wb-right-title"></span>
+                                <div class="wb-right-tabs" id="wb-right-tabs" role="tablist" aria-label="右侧面板"></div>
                                 <button class="wb-dock-action" id="wb-right-move" type="button" title="移到底部">
                                     <i class="bi bi-layout-split"></i>
                                 </button>
