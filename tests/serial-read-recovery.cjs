@@ -517,6 +517,72 @@ async function testLogRendering() {
 	assert.ok(rows[1].innerHTML.includes('class="pv pv-up"'))
 }
 
+// 分批重渲在隔离的会话里重放历史：批次间的实时基准、连接重置都不能被剩余历史批次覆盖
+async function testParseRerenderIsolation() {
+	const { context, api } = renderHarness()
+	let clock = 0
+	const timers = []
+	class FakeDate extends Date { static now() { return clock } }
+	const session = {
+		deviceUid: null, baseCode: null,
+		resetBase() { this.baseCode = null },
+		setBase(code) { this.baseCode = code },
+		snapshot() { return { deviceUid: this.deviceUid, baseCode: this.baseCode } },
+		restore(s) { this.deviceUid = s.deviceUid; this.baseCode = s.baseCode },
+	}
+	Object.assign(context, {
+		Date: FakeDate, setTimeout: fn => timers.push(fn), AnsiUp: function () {},
+		PARSE_RERENDER_SYNC_ROWS: 150, PARSE_RERENDER_SLICE_MS: 12, rerenderGen: 0, sessionResetSeq: 0,
+		logOptionsSingle: { autoScroll: false }, logOptionsDual: { autoScroll: false },
+		// B0 xx 帧在解析时设置会话基准，其余帧只是读出当前基准，与 SEK 的 Tag2/3-ID29 行为一致
+		skParseFrame: data => { clock += 5; if (data[0] === 0xB0) session.setBase(data[1]); return {} },
+	})
+	context.SerialHub.getLogContainerFor = () => null
+	context.window.skSession = session
+	context.proto = { logView: () => ({ title: 'base' + session.baseCode }) }
+	function makeRow(hex) {
+		const body = { innerHTML: '' }
+		return { attrs: { 'data-hex': hex, 'data-dir': 'rx' }, classList: { contains: c => c === 'log-row' },
+			getAttribute(k) { return k in this.attrs ? this.attrs[k] : null }, querySelector: () => body, body }
+	}
+	function makeContainer() {
+		const children = [makeRow('B0 01')]
+		for (let i = 0; i < 159; i++) children.push(makeRow('01 02'))
+		return { children, get lastElementChild() { return children[children.length - 1] } }
+	}
+	const runTimers = () => { while (timers.length) timers.shift()() }
+	const vmApi = vm.runInContext('({ rerenderLogBodies })', context)
+
+	// 批次之间实时收到新基准 2，并追加了一行：历史重放仍按自己的基准 1，实时基准保持 2
+	session.setBase(2)
+	let box = makeContainer()
+	vmApi.rerenderLogBodies(box, 'parse')
+	assert.ok(timers.length, '160 行应分批')
+	assert.equal(session.baseCode, 2)
+	session.setBase(2)
+	box.children.push(makeRow('01 02'))
+	runTimers()
+	assert.equal(session.baseCode, 2)
+	assert.ok(box.children[159].body.innerHTML.includes('base1'), box.children[159].body.innerHTML)
+
+	// 批次之间连接重置清空了基准：剩余批次与收尾都不能把历史基准恢复回实时会话
+	session.setBase(2)
+	box = makeContainer()
+	vmApi.rerenderLogBodies(box, 'parse')
+	session.resetBase()
+	context.sessionResetSeq++
+	runTimers()
+	assert.equal(session.baseCode, null)
+
+	// 期间没有实时活动：重放末态交给实时会话，与同步重渲的行为一致
+	session.resetBase()
+	box = makeContainer()
+	vmApi.rerenderLogBodies(box, 'parse')
+	runTimers()
+	assert.equal(session.baseCode, 1)
+	assert.ok(api.parseLogType('parse').parse)
+}
+
 async function testStatusBar() {
 	const workbench = fs.readFileSync(path.join(__dirname, '../js/workbench.js'), 'utf8')
 	function element() {
@@ -749,6 +815,7 @@ async function run() {
 	await testLineGlitchMeta()
 	await testPackGlitch()
 	await testLogRendering()
+	await testParseRerenderIsolation()
 	await testStatusBar()
 	console.log('serial read recovery: passed')
 }

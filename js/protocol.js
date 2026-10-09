@@ -38,6 +38,17 @@
 		},
 		hasBase: function () {
 			return this.baseCode != null
+		},
+		// 历史重渲要在隔离的会话里重放(见 common.js rerenderLogBodies)，用这对函数换入/换出状态
+		snapshot: function () {
+			return { deviceUid: this.deviceUid, baseCode: this.baseCode, baseLiters: this.baseLiters, baseLabel: this.baseLabel, baseSource: this.baseSource }
+		},
+		restore: function (s) {
+			this.deviceUid = s.deviceUid
+			this.baseCode = s.baseCode
+			this.baseLiters = s.baseLiters
+			this.baseLabel = s.baseLabel
+			this.baseSource = s.baseSource
 		}
 	}
 

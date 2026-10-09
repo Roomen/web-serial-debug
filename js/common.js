@@ -527,6 +527,8 @@
 	const PARSE_RERENDER_SYNC_ROWS = 150
 	const PARSE_RERENDER_SLICE_MS = 12
 	let rerenderGen = 0
+	//连接重置 SEK 会话的次数，历史重渲收尾时据此判断能否把重放末态交给实时会话
+	let sessionResetSeq = 0
 	function isValidLogType(t) {
 		return typeof t === 'string' && LOG_TYPES.indexOf(t) !== -1
 	}
@@ -3206,6 +3208,8 @@
 				window.skSession.resetBase()
 				window.skSession.deviceUid = null
 			} catch (e) { /* */ }
+			// 进行中的历史重渲收尾时不得再把重放末态交给已清空的实时会话
+			sessionResetSeq++
 		}
 		setSerialWantOpen(true, sid)
 		// 记录设备身份 keys，reload 后按身份匹配恢复（不依赖 getPorts 顺序）
@@ -4853,10 +4857,21 @@
 		if (!isRowLogType(logType)) return
 		const gen = ++rerenderGen
 		const fmt = parseLogType(logType)
-		// ansi_up 是流式渲染器,把当前前景/背景色作为实例状态跨包延续(在线收数时这是对的)。
-		// 重渲是从头重放整段历史,不先复位就会拿上一次渲染的末态当起点,把染色点之前的行也染上色。
-		// 按序重放完最后一行,实例状态恰好等于在线路径应有的末态,所以只需在开头换一个干净实例
-		if (fmt.ansi) ansi_up = new AnsiUp()
+		// ansi_up 与 SEK 会话(基准水量/设备号)都是流式状态。重渲从头重放整段历史，必须从干净状态起步，
+		// 否则会拿上一次渲染的末态当起点(把染色点之前的行也染上色)。分批重放时批次之间会有实时收数，
+		// 所以重放在隔离的状态里做：每批换入重放状态、批末换回实时状态，实时解析与重放互不覆盖。
+		// 全部重放完、期间既没来新行也没发生连接重置时，重放末态就是实时路径应有的末态，才交给实时状态
+		const session = window.skSession && typeof window.skSession.snapshot === 'function' ? window.skSession : null
+		let replayAnsi = fmt.ansi ? new AnsiUp() : null
+		let replaySession = null
+		if (session) {
+			const live = session.snapshot()
+			session.resetBase()
+			session.deviceUid = null
+			replaySession = session.snapshot()
+			session.restore(live)
+		}
+		const resetSeqAtStart = sessionResetSeq
 		const rows = []
 		for (let i = 0; i < container.children.length; i++) {
 			const row = container.children[i]
@@ -4881,8 +4896,31 @@
 			const opts = container === SerialHub.getLogContainerFor('dual') ? logOptionsDual : logOptionsSingle
 			if (opts.autoScroll) container.scrollTop = container.scrollHeight - container.clientHeight
 		}
+		const lastRowAtStart = container.lastElementChild
+		//在重放状态里渲染 rows[from, to)，渲染完换回实时状态
+		const renderSlice = function (from, to) {
+			const liveAnsi = ansi_up
+			const liveSession = session ? session.snapshot() : null
+			if (replayAnsi) ansi_up = replayAnsi
+			if (session) session.restore(replaySession)
+			try {
+				for (let i = from; i < to; i++) renderRow(rows[i])
+			} finally {
+				if (session) {
+					replaySession = session.snapshot()
+					session.restore(liveSession)
+				}
+				ansi_up = liveAnsi
+			}
+		}
+		const finish = function () {
+			if (container.lastElementChild !== lastRowAtStart) return
+			if (replayAnsi) ansi_up = replayAnsi
+			if (session && sessionResetSeq === resetSeqAtStart) session.restore(replaySession)
+		}
 		if (!fmt.parse || rows.length <= PARSE_RERENDER_SYNC_ROWS) {
-			rows.forEach(renderRow)
+			renderSlice(0, rows.length)
+			finish()
 			if (fmt.parse) pinBottom()
 			return
 		}
@@ -4890,9 +4928,15 @@
 		const step = function () {
 			if (gen !== rerenderGen) return
 			const end = Date.now() + PARSE_RERENDER_SLICE_MS
-			while (next < rows.length && Date.now() < end) renderRow(rows[next++])
+			// 按 8 行一组换入/换出状态并检查时间，别每行都拷一次会话
+			while (next < rows.length && Date.now() < end) {
+				const to = Math.min(rows.length, next + 8)
+				renderSlice(next, to)
+				next = to
+			}
 			pinBottom()
 			if (next < rows.length) setTimeout(step, 0)
+			else finish()
 		}
 		step()
 	}
