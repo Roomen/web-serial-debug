@@ -779,7 +779,7 @@ async function serialApiTests() {
 			isOpen: sid => sessions[sid].open,
 			_sess: sid => sessions[sid],
 		},
-		toolOptions: { addCRLF: true },
+		toolOptions: { addCR: true, addLF: true },
 		flushPendingRx: sid => flushes.push(sid),
 		addLog: (data, sent, time, sid) => logs.push({ sid, data: bytes(data) }),
 		addLogErr() { assert.fail('明确会话失败不应记录底层敏感错误') },
@@ -798,7 +798,8 @@ async function serialApiTests() {
 	await api.writeRawTo('B', raw, { logData: shown })
 	assert.deepEqual(writes, [{ sid: 'A', data: [0x5a, 0x5a] }, { sid: 'B', data: [0x5a, 0x5a] }])
 	assert.deepEqual(logs.map(entry => entry.data), [[0, 0], [0, 0]])
-	assert.equal(sandbox.toolOptions.addCRLF, true)
+	assert.equal(sandbox.toolOptions.addCR, true)
+	assert.equal(sandbox.toolOptions.addLF, true)
 	sessions.A.open = false
 	assert.equal(api.isSessionOpen('A'), false)
 	assert.equal(api.isSessionOpen('B'), true)
