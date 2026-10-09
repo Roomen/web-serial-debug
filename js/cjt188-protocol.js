@@ -298,6 +298,8 @@
 		if (b[total - 1] !== END_BYTE) errors.push('帧尾非 0x16')
 		const csCalc = checksum(b, total - 2)
 		const csGot = b[total - 2]
+		result.csOk = csCalc === csGot
+		result.endOk = b[total - 1] === END_BYTE
 		if (csCalc !== csGot) errors.push('校验和不符,计算=' + hexByte(csCalc) + ' 实际=' + hexByte(csGot))
 
 		const addr = b.subarray(2, 9)
@@ -313,6 +315,8 @@
 		if (cmdDef && !identMatches(cmd, id0, id1)) errors.push('数据标识与功能码不匹配')
 
 		result.dir = dataFrom ? 'up' : 'down'
+		result.ctrl = ctrl
+		result.dataLen = dataLen
 		result.fields = {
 			方向: dataFrom ? '↑ 应答(设备→平台)' : '↓ 请求(平台→设备)',
 			表号: describeAddr(addr),
@@ -416,6 +420,37 @@
 		return h
 	}
 
+	// 日志「解析」格式的视图模型（渲染与转义见 js/parse-view.js）；不是 188 帧返回 null
+	W.cjt188LogView = function (r) {
+		const PV = W.ParseView
+		const f = r && r.fields
+		if (!f || !f.功能码) return null
+		const up = r.dir === 'up'
+		const ext = f.功能码.value === '0x01' && f.数据标识 === '0x1E 0x90'
+		const m = {
+			title: ext ? '拓展读数据' : f.功能码.name,
+			code: f.功能码.value,
+			dir: r.dir,
+			subject: { label: '表号', value: f.表号.replace(/^\S+ \(BCD=(\S+)\)$/, '$1') },
+			badges: [{ text: up ? '应答' : '请求', kind: 'info' }],
+			meta: [['数据标识', f.数据标识], ['序号', f.序号], ['控制码', hexByte(r.ctrl)], ['数据长度', r.dataLen]],
+			notes: [],
+			sections: [],
+			errors: [],
+		}
+		if (up && f.通讯状态) m.badges.push({ text: '异常应答', kind: 'bad', title: '控制码 bit6 = 1（从站异常应答）' })
+		if (r.csOk && r.endOk) m.badges.push({ text: '校验 ✓', kind: 'ok', title: '校验和与帧尾正确' })
+		else m.badges.push({ text: r.csOk ? '帧尾✗' : '校验✗', kind: 'bad', title: r.csOk ? '帧尾不是 0x16' : '校验和不符' })
+		if (r.decoded) {
+			const text = r.decoded.replace(/^(.+?) BCD值=(\S+) 单位标识=(\S+)$/gm, '$1 = BCD $2（单位标识 $3）')
+			const parsed = PV.linesToPairs(text)
+			if (parsed.pairs.length) m.sections.push({ title: '数据域', pairs: parsed.pairs })
+			parsed.notes.forEach(t => m.notes.push({ text: t.replace(/^\((.*)\)$/, '$1'), kind: 'info' }))
+		}
+		m.errors = (r.errors || []).slice()
+		return m
+	}
+
 	W.cjt188ByteMap = function (r) {
 		const bytes = (r.raw instanceof Uint8Array) ? r.raw : Uint8Array.from(r.raw || [])
 		const offset = r.frameOffset || 0
@@ -447,6 +482,7 @@
 			name: '188协议',
 			parseFrame: W.cjt188ParseFrame,
 			formatFrame: W.cjt188FormatFrame,
+			logView: W.cjt188LogView,
 			findFrame: W.cjt188FindFrame,
 			byteMap: W.cjt188ByteMap,
 			buildDownFrame: W.cjt188BuildDownFrame,
@@ -456,6 +492,7 @@
 			name: '188协议（超声）',
 			parseFrame: W.cjt188ParseFrame,
 			formatFrame: W.cjt188FormatFrame,
+			logView: W.cjt188LogView,
 			findFrame: W.cjt188FindFrame,
 			byteMap: W.cjt188ByteMap,
 			buildDownFrame: W.skUltrasonicBuildDownFrame,

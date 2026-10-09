@@ -289,7 +289,7 @@
                     </div>
                     <!-- 右侧：当前协议(全局唯一的协议选择) + 命令面板入口 -->
                     <div class="connect-bar-section connect-bar-tools">
-                        <label class="connect-bar-proto" title="当前协议：决定实时解析、协议下发与测试面板使用的协议">
+                        <label class="connect-bar-proto" title="当前协议：决定日志解析、协议下发与测试面板使用的协议">
                             <span class="connect-bar-proto-label">协议</span>
                             <select class="form-select form-select-sm" id="serial-protocol-select" aria-label="当前协议">
                                 <option value="sek">SEK（默认）</option>
@@ -340,6 +340,7 @@
                                                     <button type="button" class="ctl-chip-btn" id="serial-log-fmt-hex" aria-pressed="true">HEX</button>
                                                     <button type="button" class="ctl-chip-btn" id="serial-log-fmt-text" aria-pressed="false">TEXT</button>
                                                     <button type="button" class="ctl-chip-btn" id="serial-log-ansi" aria-pressed="false">ANSI 彩色</button>
+                                                    <button type="button" class="ctl-chip-btn" id="serial-log-fmt-parse" aria-pressed="false" title="按当前协议解析每一帧，可与 HEX/TEXT 同时显示或单独显示">解析</button>
                                                 </div>
                                             </div>
                                             <div class="serial-field">
@@ -516,10 +517,6 @@
                                     <div class="protocol-basic-card mb-2">
                                         <div class="protocol-basic-row">
                                             <div class="protocol-switch-inline">
-                                                <div class="form-check form-switch ctl-switch">
-                                                    <input class="form-check-input" type="checkbox" id="serial-protocol-enable">
-                                                    <label class="form-check-label" for="serial-protocol-enable">实时解析</label>
-                                                </div>
                                                 <div class="form-check form-switch ctl-switch" title="开启后日志 HEX 视图的每个字节可悬停查看其协议字段含义,不展开文本">
                                                     <input class="form-check-input" type="checkbox" id="serial-protocol-hover">
                                                     <label class="form-check-label" for="serial-protocol-hover">悬停提示</label>
@@ -1669,6 +1666,7 @@
     <script src="js/pcp.js"></script>
     <script src="js/protocol-schema.js"></script>
     <script src="js/protocol-crypto.js"></script>
+    <script src="js/parse-view.js"></script>
     <script src="js/protocol.js"></script>
     <script src="js/protocol-presets.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>

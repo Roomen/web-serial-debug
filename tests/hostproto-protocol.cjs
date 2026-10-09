@@ -9,7 +9,7 @@ let registered = null
 const window = { registerProtocol(id, impl) { registered = { id, impl } } }
 const ctx = { window, Uint8Array, BigInt, document: { getElementById() { return null } } }
 vm.createContext(ctx)
-for (const f of ['sts-ciu-protocol', 'hostproto-protocol', 'hostproto-transaction']) {
+for (const f of ['parse-view', 'sts-ciu-protocol', 'hostproto-protocol', 'hostproto-transaction']) {
 	vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/' + f + '.js'), 'utf8'), ctx)
 }
 const H = window.hostProto
@@ -23,6 +23,42 @@ assert.equal(registered.id, 'hostproto')
 for (const k of ['parseFrame', 'formatFrame', 'findFrame', 'byteMap', 'buildDownFrame', 'presets']) assert.ok(registered.impl[k], k)
 assert.equal(registered.impl.name, 'hostProto 模组')
 assert.equal(registered.impl.presets[0].items.length, 8)
+assert.equal(typeof registered.impl.logView, 'function')
+assert.equal(H.logView, registered.impl.logView)
+
+// ---- 日志「解析」视图模型: 每帧一个模型，垃圾数据返回 null，模型文本保持原样（转义是渲染器的事）----
+{
+	const models = J(H.logView(H.parseFrame(hex('FF FF FF FF EB 90 10 07 02 11 09 00 01 00 00 00 00 00 00 00 01 05 EF'))))
+	assert.equal(models.length, 1)
+	assert.equal(models[0].title, 'WOR_WAKE')
+	assert.equal(models[0].code, '0x0207')
+	assert.equal(models[0].dir, 'down')
+	assert.deepEqual(models[0].subject, { label: '目标地址', value: '1' })
+	assert.ok(models[0].badges.some(b => b.text === 'REQ') && models[0].badges.some(b => b.text === 'CRC ✓'))
+	// 应答: 状态码徽标（成功绿，失败红）
+	const rsp = (st) => H.buildFrame({ type: H.TYPE_RSP, cmd: H.CMD.ECHO, seq: 3, payload: [st, 0x50], preamble: false })
+	const ok = J(H.logView(H.parseFrame(rsp(0))))[0]
+	assert.equal(ok.dir, 'up')
+	assert.ok(ok.badges.some(b => b.text === 'OK' && b.kind === 'ok'))
+	const fail = J(H.logView(H.parseFrame(rsp(H.STATUS.ERR_AUTH))))[0]
+	assert.ok(fail.badges.some(b => b.text === 'ERR_AUTH' && b.kind === 'bad'))
+	// 多帧各给一个模型
+	const two = new Uint8Array([...rsp(0), ...H.buildFrame({ type: H.TYPE_EVT, cmd: H.EVT.UPG_ERASED, seq: 0, payload: [0], preamble: false })])
+	const multi = J(H.logView(H.parseFrame(two)))
+	assert.deepEqual(multi.map(m => m.title), ['ECHO', 'UPG_ERASED'])
+	for (const junk of [[], [0xff, 0xff], hex('00 11 22 33 44'), hex('EB 90 10 01 00')]) assert.equal(H.logView(H.parseFrame(junk)), null)
+	// 嵌套的 STS-CIU 应用帧单独成节；来源地址提到头部
+	const app = S.buildFrame({ dir: 0, type: S.TYPE.STATUS, txn: 5, meter: '12345678', payload: [] })
+	const evt = J(H.logView(H.parseFrame(H.buildFrame({ type: 2, cmd: 0x0280, seq: 0, payload: Uint8Array.from([1, 0, 0, 0, 0, 0, 0, 0, 3, 0x2a, 0x00, app.length, ...app, 0x9c, 0xff, 0x05]) }))))[0]
+	assert.equal(evt.title, 'WOR_FRAME')
+	assert.equal(evt.dir, 'up')
+	assert.deepEqual(evt.subject, { label: '来源地址', value: '1' })
+	assert.ok(evt.sections.some(sec => /^STS-CIU 应用帧/.test(sec.title)))
+	// 设备给的字符串在模型里原样保留，渲染器负责转义
+	const html = window.ParseView.render({ title: '<script>alert(1)</script>', subject: { label: 'x', value: '"><img onerror=1>' }, sections: [{ pairs: [['<a>', '<b>']] }], errors: ['<i>'] })
+	assert.ok(!/<script|<img|<a>|<b>|<i>/.test(html), html)
+	assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'))
+}
 
 // ---- FW_INFO 定长 ASCII: 空格垫齐（规范）与 \0 垫齐（实板固件）都要解出干净的字符串 ----
 {
@@ -746,7 +782,6 @@ async function serialApiTests() {
 		toolOptions: { addCRLF: true },
 		flushPendingRx: sid => flushes.push(sid),
 		addLog: (data, sent, time, sid) => logs.push({ sid, data: bytes(data) }),
-		addParseLog: (data, sent, time, sid) => logs.push({ sid, data: bytes(data) }),
 		addLogErr() { assert.fail('明确会话失败不应记录底层敏感错误') },
 		showToast() { assert.fail('明确会话失败应抛出') },
 	}
@@ -762,7 +797,7 @@ async function serialApiTests() {
 	await api.writeRawTo('A', raw, { logData: shown })
 	await api.writeRawTo('B', raw, { logData: shown })
 	assert.deepEqual(writes, [{ sid: 'A', data: [0x5a, 0x5a] }, { sid: 'B', data: [0x5a, 0x5a] }])
-	assert.deepEqual(logs.map(entry => entry.data), [[0, 0], [0, 0], [0, 0], [0, 0]])
+	assert.deepEqual(logs.map(entry => entry.data), [[0, 0], [0, 0]])
 	assert.equal(sandbox.toolOptions.addCRLF, true)
 	sessions.A.open = false
 	assert.equal(api.isSessionOpen('A'), false)
@@ -772,7 +807,7 @@ async function serialApiTests() {
 	failure = true
 	await assert.rejects(api.writeRawTo('A', raw, { logData: shown }), error => error.message === '串口写入失败')
 	assert.equal(releases, 3)
-	assert.equal(logs.length, 4)
+	assert.equal(logs.length, 2)
 	failure = false
 	mode = 'single'
 	assert.equal(api.isSessionOpen('A'), false)
