@@ -17,6 +17,22 @@ const read = seal([...hex('68 10 12 34 56 78 90 12 34 81 16 90 1F 02'),
 const write = seal(hex('68 10 12 34 56 78 90 12 34 95 03 A0 18 03'))
 const request = window.cjt188BuildDownFrame({ cmd: 3, addr: 'AA AA AA AA AA AA AA', seq: 1 })
 
+// 写底度字段以 10L 为单位，不得悄悄舍入或截断超范围值。
+for (const build of [window.cjt188BuildDownFrame, window.skUltrasonicBuildDownFrame]) {
+	const degreeFrame = value => build({ cmd: 0x16, addr: 'AA AA AA AA AA AA AA', degreeM3: value, preamble: false })
+	for (const [value, expected] of [
+		['0', '00 00 00 00'], ['0.01', '01 00 00 00'],
+		['12.34', '34 12 00 00'], ['12.3400', '34 12 00 00'],
+		[12.34, '34 12 00 00'], ['0.29', '29 00 00 00'],
+		['999999.99', '99 99 99 99'],
+	]) {
+		assert.deepEqual(Array.from(degreeFrame(value).slice(14, 18)), Array.from(hex(expected)), String(value))
+	}
+	for (const value of ['12.345', '12.344', '0.001']) assert.throws(() => degreeFrame(value), /两位小数|0\.01/)
+	for (const value of ['', ' ', '-1', '12.34abc', 'NaN', 'Infinity', NaN, Infinity, null, undefined]) assert.throws(() => degreeFrame(value))
+	assert.throws(() => degreeFrame('1000000'), /最大|范围|999999\.99/)
+}
+
 for (const frame of [request, ack, read, write]) {
 	const expected = parse(frame)
 	assert.equal(expected.ok, true)
@@ -77,6 +93,95 @@ assert.ok(byteMap(result).slice(3).every(label => label === ''))
 const corrupted = malformed.slice()
 corrupted[17] ^= 1
 assert.doesNotMatch(parse(corrupted).errors.join(), /地址偏移/)
+
+// Fake-DOM regression: valve operation options must preserve hexadecimal values through frame building.
+{
+	class Element {
+		constructor(value = '') {
+			this.value = value
+			this.dataset = {}
+			this.style = {}
+			this.options = []
+			this.listeners = {}
+			this.checked = true
+		}
+		set innerHTML(value) { if (value === '') this.options = [] }
+		addEventListener(type, callback) { this.listeners[type] = callback }
+		appendChild(option) {
+			this.options.push(option)
+			if (this.options.length === 1) this.selectedIndex = 0
+		}
+		querySelector() { return null }
+		click() { if (this.listeners.click) this.listeners.click() }
+	}
+	const elements = new Map()
+	const ids = [
+		'cjt188-down-cmd', 'cjt188-down-addr', 'cjt188-down-addr-reset', 'cjt188-down-seq',
+		'cjt188-down-preamble', 'cjt188-down-param-group', 'cjt188-down-param-label',
+		'cjt188-down-param-val', 'cjt188-down-param-sel', 'cjt188-down-err', 'cjt188-down-build',
+		'cjt188-down-send', 'cjt188-down-preview', 'serial-protocol-select', 'cjt188-down-title',
+		'cjt188-down-card', 'sk-down-card', 'sk-rw-card', 'sk-batch-card', 'serial-protocol-advanced',
+	]
+	for (const id of ids) elements.set(id, new Element(id === 'cjt188-down-cmd' ? '0x04' : id === 'serial-protocol-select' ? 'cjt188' : ''))
+	const fakeDocument = {
+		getElementById(id) { return elements.get(id) || null },
+		createElement() { return new Element() },
+	}
+	const uiContext = vm.createContext({
+		window: { registerProtocol() {} },
+		document: fakeDocument,
+		localStorage: { getItem() { return null }, setItem() {} },
+		Uint8Array,
+	})
+	vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/cjt188-protocol.js'), 'utf8'), uiContext)
+	const paramSel = elements.get('cjt188-down-param-sel')
+	assert.deepEqual(paramSel.options.map(option => option.textContent), ['0x55 开阀', '0x77 除锈', '0x99 关阀'])
+	Object.defineProperty(paramSel, 'value', { configurable: true, get() { return this.options[this.selectedIndex].value } })
+	elements.get('cjt188-down-build').click()
+	const defaultFrame = hex(elements.get('cjt188-down-preview').value)
+	assert.equal(defaultFrame[parse(defaultFrame).frameOffset + 14], 0x55)
+	assert.equal(elements.get('cjt188-down-err').textContent, '')
+	for (const protocol of ['cjt188', 'sk-ultrasonic']) {
+		elements.get('serial-protocol-select').value = protocol
+		for (const [index, op] of [0x55, 0x77, 0x99].entries()) {
+			paramSel.selectedIndex = index
+			elements.get('cjt188-down-preview').value = ''
+			elements.get('cjt188-down-build').click()
+			const built = hex(elements.get('cjt188-down-preview').value)
+			const parsed = parse(built)
+			assert.equal(parsed.ok, true)
+			assert.equal(built[parsed.frameOffset + 14], op)
+			assert.equal(elements.get('cjt188-down-err').textContent, '')
+		}
+	}
+	const cmdSel = elements.get('cjt188-down-cmd')
+	cmdSel.value = '0x16'
+	cmdSel.listeners.change()
+	const paramVal = elements.get('cjt188-down-param-val')
+	assert.match(paramVal.placeholder, /12\.34/)
+	assert.doesNotMatch(paramVal.placeholder, /12\.345/)
+	for (const protocol of ['cjt188', 'sk-ultrasonic']) {
+		elements.get('serial-protocol-select').value = protocol
+		for (const value of ['12.345', '12.34abc', '']) {
+			paramVal.value = value
+			elements.get('cjt188-down-preview').value = ''
+			elements.get('cjt188-down-build').click()
+			assert.equal(elements.get('cjt188-down-preview').value, '')
+			assert.notEqual(elements.get('cjt188-down-err').textContent, '')
+			let sends = 0
+			const sender = new Element()
+			sender.listeners.click = () => { sends++ }
+			elements.set('serial-protocol-send', sender)
+			elements.get('cjt188-down-send').click()
+			assert.equal(sends, 0)
+		}
+		paramVal.value = '12.34'
+		elements.get('cjt188-down-build').click()
+		assert.equal(elements.get('cjt188-down-err').textContent, '')
+		const built = hex(elements.get('cjt188-down-preview').value)
+		assert.deepEqual(Array.from(built.slice(parse(built).frameOffset + 14, parse(built).frameOffset + 18)), [0x34, 0x12, 0, 0])
+	}
+}
 
 // 日志「解析」视图模型: 合法帧给带 title 的模型，垃圾数据返回 null；模型里的文本保持原样，转义是渲染器的事
 const J = x => JSON.parse(JSON.stringify(x))
