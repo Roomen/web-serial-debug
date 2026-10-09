@@ -17,6 +17,22 @@ const read = seal([...hex('68 10 12 34 56 78 90 12 34 81 16 90 1F 02'),
 const write = seal(hex('68 10 12 34 56 78 90 12 34 95 03 A0 18 03'))
 const request = window.cjt188BuildDownFrame({ cmd: 3, addr: 'AA AA AA AA AA AA AA', seq: 1 })
 
+// 写底度字段以 10L 为单位，不得悄悄舍入或截断超范围值。
+for (const build of [window.cjt188BuildDownFrame, window.skUltrasonicBuildDownFrame]) {
+	const degreeFrame = value => build({ cmd: 0x16, addr: 'AA AA AA AA AA AA AA', degreeM3: value, preamble: false })
+	for (const [value, expected] of [
+		['0', '00 00 00 00'], ['0.01', '01 00 00 00'],
+		['12.34', '34 12 00 00'], ['12.3400', '34 12 00 00'],
+		[12.34, '34 12 00 00'], ['0.29', '29 00 00 00'],
+		['999999.99', '99 99 99 99'],
+	]) {
+		assert.deepEqual(Array.from(degreeFrame(value).slice(14, 18)), Array.from(hex(expected)), String(value))
+	}
+	for (const value of ['12.345', '12.344', '0.001']) assert.throws(() => degreeFrame(value), /两位小数|0\.01/)
+	for (const value of ['', ' ', '-1', '12.34abc', 'NaN', 'Infinity', NaN, Infinity, null, undefined]) assert.throws(() => degreeFrame(value))
+	assert.throws(() => degreeFrame('1000000'), /最大|范围|999999\.99/)
+}
+
 for (const frame of [request, ack, read, write]) {
 	const expected = parse(frame)
 	assert.equal(expected.ok, true)
@@ -137,6 +153,33 @@ assert.doesNotMatch(parse(corrupted).errors.join(), /地址偏移/)
 			assert.equal(built[parsed.frameOffset + 14], op)
 			assert.equal(elements.get('cjt188-down-err').textContent, '')
 		}
+	}
+	const cmdSel = elements.get('cjt188-down-cmd')
+	cmdSel.value = '0x16'
+	cmdSel.listeners.change()
+	const paramVal = elements.get('cjt188-down-param-val')
+	assert.match(paramVal.placeholder, /12\.34/)
+	assert.doesNotMatch(paramVal.placeholder, /12\.345/)
+	for (const protocol of ['cjt188', 'sk-ultrasonic']) {
+		elements.get('serial-protocol-select').value = protocol
+		for (const value of ['12.345', '12.34abc', '']) {
+			paramVal.value = value
+			elements.get('cjt188-down-preview').value = ''
+			elements.get('cjt188-down-build').click()
+			assert.equal(elements.get('cjt188-down-preview').value, '')
+			assert.notEqual(elements.get('cjt188-down-err').textContent, '')
+			let sends = 0
+			const sender = new Element()
+			sender.listeners.click = () => { sends++ }
+			elements.set('serial-protocol-send', sender)
+			elements.get('cjt188-down-send').click()
+			assert.equal(sends, 0)
+		}
+		paramVal.value = '12.34'
+		elements.get('cjt188-down-build').click()
+		assert.equal(elements.get('cjt188-down-err').textContent, '')
+		const built = hex(elements.get('cjt188-down-preview').value)
+		assert.deepEqual(Array.from(built.slice(parse(built).frameOffset + 14, parse(built).frameOffset + 18)), [0x34, 0x12, 0, 0])
 	}
 }
 
