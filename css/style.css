@@ -10492,6 +10492,7 @@ html[data-layout='modern'] #mdn-tl-head .mdn-tl-b {
 	html[data-layout='modern'] {
 		--mdn-ax: 88px;
 	}
+}
 
 /* ===== 现代布局 v2 · 固件页 ===== */
 /* 固件页重建成四步流水线（js/modern-firmware.js 搬原节点进新结构）：下面的规则都以 :has(> #mdn-fw) 限定，
