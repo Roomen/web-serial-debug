@@ -2193,6 +2193,23 @@
 		}
 		if (html) sec.html = html
 	}
+	// 标题后缀: 查询/设置/指令类帧标明具体对象(查询哪一项、设置哪个参数), 应答 0x83 标明返回了哪些 Tag
+	const LOG_DETAIL_BY_ITEM = [0x01, 0x03, 0x11, 0x81, 0x91]
+	const LOG_DETAIL_MAX = 3
+	function logTitleDetail(fc, tlv) {
+		let names = []
+		if (LOG_DETAIL_BY_ITEM.indexOf(fc) >= 0) {
+			tlv.forEach(function (t) {
+				(t.items || []).forEach(function (it) { if (it.name) names.push(it.name) })
+			})
+		} else if (fc === 0x83) {
+			tlv.forEach(function (t) { if (t.tag !== 10 && t.tag !== 11) names.push(t.name || ('Tag' + t.tag)) })
+		}
+		names = names.filter(function (n, i) { return names.indexOf(n) === i })
+		if (!names.length) return ''
+		if (names.length <= LOG_DETAIL_MAX) return names.join('、')
+		return names.slice(0, LOG_DETAIL_MAX).join('、') + ' 等' + names.length + '项'
+	}
 	W.skLogView = function (r) {
 		if (!r || !r.fields || (r.dir !== 'up' && r.dir !== 'down')) return null
 		const errs = r.errors || []
@@ -2240,6 +2257,8 @@
 		} else if (usesBase) {
 			m.notes.push({ kind: 'warn', text: '未读到基准水量（Tag2/3 ID29），流量暂按 1L/圈 显示，建议先「查询核心数据」或「查询终端参数」' })
 		}
+		const detail = fcName ? logTitleDetail(fc & 0xff, tlv) : ''
+		if (detail) m.title += ' · ' + detail
 		tlv.forEach(function (t) {
 			const sec = { title: 'Tag' + t.tag + ' ' + (t.name || '') }
 			if (t.error) sec.errors = [t.error]

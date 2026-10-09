@@ -106,7 +106,13 @@ const tag = (t, items) => { let p = []; items.forEach(it => { p = p.concat(it) }
 	const down = window.skBuildDownFrame({ funcCode: 0x03, tlv: [{ tag: 10, items: [{ id: 2 }] }] })
 	const dm = J(window.skLogView(window.skParseFrame(down)))
 	assert.equal(dm.dir, 'down')
-	assert.equal(dm.title, '信息查询')
+	assert.equal(dm.title, '信息查询 · 核心数据')
+	// 标题后缀: 指令列出具体项, 0x83 列出返回的 Tag, 超过 3 项折叠, 上报帧不加
+	const cmd = window.skBuildDownFrame({ funcCode: 0x11, tlv: [{ tag: 93, items: [{ id: 13, value: [1] }] }] })
+	assert.ok(J(window.skLogView(window.skParseFrame(cmd))).title.startsWith('指令操作 · '))
+	assert.equal(J(window.skLogView(window.skParseFrame(sekUp(0x83, tag(2, [[10, 0x5E, 0x01]]))))).title, '信息查询应答 · 核心数据')
+	const many = window.skBuildDownFrame({ funcCode: 0x03, tlv: [{ tag: 10, items: [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }] }] })
+	assert.equal(J(window.skLogView(window.skParseFrame(many))).title, '信息查询 · 基础数据、核心数据、终端参数 等4项')
 	assert.equal(dm.subject, undefined)
 	// 不是 SEK 帧
 	for (const junk of [[], [1, 2, 3], hex('00 11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF 00 11 22 33'), [...frame.slice(1)]]) {
