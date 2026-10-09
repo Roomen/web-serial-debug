@@ -610,8 +610,9 @@
 		const logType = activeLogOptions().logType
 		const typeLabel = LOG_TYPE_LABELS[logType] || 'Hex'
 		const timeout = timeoutEl ? parseInt(timeoutEl.value, 10) : 0
+		// 按换行时超时只兜底残行，不是分包依据，摘要里不写，免得读成「换行再加超时」
 		const timeoutTxt = activeLogOptions().splitMode === 'line'
-			? (!timeout ? '换行' : '换行+' + timeout + 'ms')
+			? '按换行'
 			: (!timeout ? '不分包' : timeout + 'ms')
 		// 终端不走分包与行数裁剪,拼上去是在说假话
 		if (logType === 'term') {
