@@ -9547,7 +9547,8 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row >
 	html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) {
 		max-width: 88%;
 	}
-=======
+}
+
 /* ========== 功耗分析：串口事件道（仅现代布局） ========== */
 /* 经典布局下整条道不进布局流；TX/RX 颜色由 JS 画布按这里的变量取，图例共用 */
 .blu-serial-lane {
@@ -9668,4 +9669,218 @@ html[data-layout='modern'] .blu-serial-lane-tip-hex {
 
 html[data-layout='modern'] .blu-serial-lane-tip-hint {
 	color: var(--text-muted);
+}
+
+/* ========== 现代布局：全局连接条 / 状态栏、检查器、固件页合并 ========== */
+/* 节点由 js/workbench.js 的 mountModern 原样搬进下面这些宿主；宿主只在现代布局下存在，经典布局没有对应 DOM */
+
+/* 全局顶栏 / 底栏：#app-shell 变成网格，导航栏占满左列，右列自上而下是连接条、视图、状态栏 */
+html[data-layout='modern'] #app-shell {
+	display: grid !important;
+	grid-template-columns: auto minmax(0, 1fr);
+	grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+html[data-layout='modern'] #app-shell > #activity-rail {
+	grid-column: 1;
+	grid-row: 1 / -1;
+}
+
+html[data-layout='modern'] #app-topbar {
+	grid-column: 2;
+	grid-row: 1;
+	position: relative;
+	z-index: 30;
+	min-width: 0;
+}
+
+html[data-layout='modern'] #app-shell > #views {
+	grid-column: 2;
+	grid-row: 2;
+	height: auto;
+	min-height: 0;
+}
+
+html[data-layout='modern'] #app-statusbar {
+	grid-column: 2;
+	grid-row: 3;
+	min-width: 0;
+}
+
+/* 底栏没有任何面板(解析已在右栏检查器)时整条不占位 */
+html[data-layout='modern'] #serial-parse-panel.wb-bottom-none {
+	display: none;
+}
+
+/* ---------- 检查器(右栏第一个标签) ---------- */
+html[data-layout='modern'] .wb-inspector {
+	gap: 8px;
+	min-height: 0;
+}
+
+html[data-layout='modern'] .wb-inspector-bar {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	min-height: 26px;
+	font-size: 0.72rem;
+	color: var(--text-muted);
+}
+
+html[data-layout='modern'] .wb-inspector-hint {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .wb-inspector-tools {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+
+html[data-layout='modern'] .wb-inspector-tools .btn {
+	padding: 0 8px;
+	font-size: 0.7rem;
+	line-height: 1.6;
+	min-height: 0;
+	border-radius: var(--radius-sm);
+}
+
+html[data-layout='modern'] .wb-inspector #serial-parse-body {
+	flex: 1 1 0;
+	min-height: 0;
+	padding: 0;
+	overflow: hidden;
+	border-radius: 0;
+	background-color: transparent;
+}
+
+html[data-layout='modern'] .wb-inspector .sk-hex-dump {
+	max-height: 160px;
+}
+
+/* 解析为空(与经典布局同一判据：底栏外壳上的 is-empty，由 syncParsePanelEmpty 维护)：结果区不占位 */
+html[data-layout='modern']:has(#serial-parse-panel.is-empty) .wb-inspector #serial-protocol-output {
+	display: none;
+}
+
+html[data-layout='modern'] .wb-inspector-actions {
+	flex: 0 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	padding-top: 8px;
+	border-top: 1px solid var(--border-color);
+}
+
+html[data-layout='modern'] .wb-inspector-actions-title {
+	margin-right: auto;
+	font-size: 0.72rem;
+	font-weight: 600;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .wb-inspector-actions .btn {
+	padding: 1px 10px;
+	font-size: 0.74rem;
+}
+
+html[data-layout='modern'] .wb-inspector-actions .btn:disabled {
+	opacity: 0.45;
+}
+
+/* ---------- 固件打包页 + 固件升级 ---------- */
+html[data-layout='modern'] #view-fw-pack.active {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
+	grid-template-rows: auto minmax(0, 1fr);
+}
+
+html[data-layout='modern'] #view-fw-pack > .view-bar {
+	grid-column: 1 / -1;
+	grid-row: 1;
+}
+
+html[data-layout='modern'] #view-fw-pack > .fw-pack-wrapper {
+	grid-column: 1;
+	grid-row: 2;
+	height: auto;
+}
+
+html[data-layout='modern'] #fw-pack-upgrade {
+	grid-column: 2;
+	grid-row: 2;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	padding: 16px 16px 20px;
+	border-left: 1px solid var(--border-color);
+	background: var(--mdn-subtle);
+	overflow: hidden;
+}
+
+html[data-layout='modern'] .fw-pack-upgrade-head {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	margin-bottom: 10px;
+	color: var(--text-primary);
+	font-size: 0.9rem;
+	font-weight: 600;
+}
+
+html[data-layout='modern'] .fw-pack-upgrade-head i {
+	color: var(--accent);
+}
+
+html[data-layout='modern'] .fw-pack-upgrade-head .view-bar-sub {
+	font-weight: 400;
+}
+
+/* 面板不在 .tab-content 里，不受标签页显隐类影响，始终显示 */
+html[data-layout='modern'] #fw-pack-upgrade > #nav-firmware {
+	display: flex !important;
+	flex: 1 1 0;
+	min-height: 0;
+	overflow: auto;
+}
+
+/* 窄：打包在上、升级在下，整页纵向滚动 */
+@media (max-width: 1100px) {
+	html[data-layout='modern'] #view-fw-pack.active {
+		display: flex;
+		flex-direction: column;
+		overflow: auto;
+	}
+
+	html[data-layout='modern'] #view-fw-pack > .fw-pack-wrapper {
+		flex: 0 0 auto;
+		overflow: visible;
+	}
+
+	html[data-layout='modern'] #fw-pack-upgrade {
+		flex: 0 0 auto;
+		border-left: 0;
+		border-top: 1px solid var(--border-color);
+		overflow: visible;
+	}
+
+	html[data-layout='modern'] #fw-pack-upgrade > #nav-firmware {
+		flex: 0 0 auto;
+		overflow: visible;
+	}
+}
+
+@media (max-width: 768px) {
+	html[data-layout='modern'] #app-shell > #views {
+		height: auto;
+	}
 }

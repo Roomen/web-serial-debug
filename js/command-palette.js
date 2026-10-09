@@ -366,7 +366,8 @@
 		})
 		const parsePanel = el('serial-parse-panel')
 		const parseCollapsed = !!(parsePanel && parsePanel.classList.contains('collapsed'))
-		list.push({
+		// 现代布局的协议解析是右栏「检查器」，开合走下面工作台面板的条目
+		if (layoutNow !== 'modern') list.push({
 			group: '视图',
 			title: parseCollapsed ? '展开协议解析面板' : '折叠协议解析面板',
 			alias: 'jiexi mianban parse panel',
