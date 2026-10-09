@@ -1218,6 +1218,16 @@
                                 </div>
                             </div>
                             <canvas id="blu-canvas" class="blu-canvas"></canvas>
+                            <div id="blu-serial-lane" class="blu-serial-lane" data-rows="1">
+                                <div class="blu-serial-lane-head">
+                                    <span class="blu-serial-lane-title">串口事件</span>
+                                    <span class="blu-serial-lane-key blu-serial-lane-key--tx">TX</span>
+                                    <span class="blu-serial-lane-key blu-serial-lane-key--rx">RX</span>
+                                    <span class="blu-serial-lane-status" id="blu-serial-lane-status"></span>
+                                </div>
+                                <canvas id="blu-serial-lane-canvas" class="blu-serial-lane-canvas" aria-label="串口事件道：与电流波形同一时间轴的串口收发帧"></canvas>
+                                <div id="blu-serial-lane-tip" class="blu-serial-lane-tip" role="tooltip" hidden></div>
+                            </div>
                             <canvas id="blu-minimap" class="blu-minimap" title="总览（点击跳转）"></canvas>
                         </div>
 
@@ -1708,6 +1718,7 @@
     <script src="js/blu-protocol.js"></script>
     <script src="js/blu-storage.js"></script>
     <script src="js/blu-analysis.js"></script>
+    <script src="js/blu-serial-lane.js"></script>
     <script src="js/blu-power.js"></script>
     <script src="js/blu-cmd-sheet.js"></script>
 

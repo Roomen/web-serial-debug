@@ -125,6 +125,10 @@
 	const parser = new PROTO.SampleParser(converter)
 	let rateAdj = new PROTO.RateAdjuster(100000, PROTO.NOMINAL_BASE_HZ)
 	const minimap = new PROTO.FoldingBuffer(10000)
+	// 串口事件道的「样点下标 ↔ 墙钟」锚点：只读记录，不参与采样/存储/统计/导出
+	const serialLaneTrack = (window.BluSerialLane && typeof window.BluSerialLane.createAnchorTrack === 'function')
+		? window.BluSerialLane.createAnchorTrack()
+		: null
 
 	let targetRateHz = 100000
 	let samplePeriodSec = 1 / 100000
@@ -1431,6 +1435,7 @@
 
 	function clearAllData(log) {
 		ringReset()
+		if (serialLaneTrack) serialLaneTrack.reset()
 		clearBucketCache()
 		minimap.reset()
 		resetLongStats()
@@ -2406,6 +2411,7 @@
 			// RAM/磁盘触顶：已触发停采，本点不入库
 			return
 		}
+		if (serialLaneTrack) serialLaneTrack.note(totalCount - 1, tMs)
 		minimap.addData(iUA, tSec)
 		overallStatDirty = true
 		// 长期旁路累计（总体能量仍可用块统计；此处仅 minimap）
@@ -4324,6 +4330,7 @@
 			}
 			syncYScaleUi()
 			drawMinimapStrip()
+			drawSerialLane(null)
 			return
 		}
 
@@ -4338,6 +4345,7 @@
 			}
 			syncYScaleUi()
 			drawMinimapStrip()
+			drawSerialLane(null)
 			return
 		}
 
@@ -4992,6 +5000,16 @@
 		if (scopeTrigMode !== 'off') syncScopeTrigUi()
 
 		drawMinimapStrip()
+		drawSerialLane(plotLayout, rect)
+	}
+
+	/** 现代布局的串口事件道跟随波形同一次重绘；经典布局下 draw 立即返回 */
+	function drawSerialLane(layout, canvasRect) {
+		const lane = window.BluSerialLane
+		if (!lane || typeof lane.draw !== 'function') return
+		lane.draw(layout ? {
+			margin: layout.margin, pw: layout.pw, vr: layout.vr, toX: layout.toX, canvasRect: canvasRect,
+		} : null)
 	}
 
 	function drawMinimapStrip() {
@@ -6778,6 +6796,10 @@
 		}
 
 		window.addEventListener('resize', function () { scheduleUIUpdate() })
+
+		if (window.BluSerialLane && typeof window.BluSerialLane.attach === 'function') {
+			window.BluSerialLane.attach({ track: serialLaneTrack, requestRedraw: scheduleUIUpdate })
+		}
 
 		if (!navigator.serial) {
 			bluLog('当前浏览器不支持 Web Serial（请用 Chrome / Edge）', 'error')
