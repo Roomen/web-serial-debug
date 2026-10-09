@@ -486,8 +486,9 @@
 		splitMode: 'time',
 		//日志最大行数,超出后从顶部裁剪
 		maxLogRows: 10000,
-		//末尾加回车换行
-		addCRLF: false,
+		//末尾加回车 \r / 换行 \n，可单选或同时勾选（旧版 addCRLF 读入时拆成这两项）
+		addCR: false,
+		addLF: false,
 		//HEX发送
 		hexSend: true,
 		//循环发送
@@ -2149,6 +2150,10 @@
 			const parsed = JSON.parse(rawToolOptions)
 			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
 				toolOptions = Object.assign({}, DEFAULT_TOOL_OPTIONS, parsed)
+				if (typeof parsed.addCRLF === 'boolean' && !('addCR' in parsed) && !('addLF' in parsed)) {
+					toolOptions.addCR = toolOptions.addLF = parsed.addCRLF
+				}
+				delete toolOptions.addCRLF
 				// 就地校正 4 个日志字段的非法值, 与 pickLogOptions() 口径一致
 				const t = parseInt(toolOptions.timeOut, 10)
 				toolOptions.timeOut = !isNaN(t) && t >= 0 ? t : DEFAULT_TOOL_OPTIONS.timeOut
@@ -2193,7 +2198,8 @@
 	}
 	restoreLogsFromCache()
 	applyLogOptionsToUI()
-	document.getElementById('serial-add-crlf').checked = toolOptions.addCRLF
+	document.getElementById('serial-add-cr').checked = !!toolOptions.addCR
+	document.getElementById('serial-add-lf').checked = !!toolOptions.addLF
 	document.getElementById('serial-hex-send').checked = toolOptions.hexSend
 	document.getElementById('serial-loop-send').checked = toolOptions.loopSend
 	document.getElementById('serial-loop-send-time').value = toolOptions.loopSendTime
@@ -2508,8 +2514,12 @@
 	document.getElementById('serial-send-content').addEventListener('change', function (e) {
 		changeOption('sendContent', this.value)
 	})
-	document.getElementById('serial-add-crlf').addEventListener('change', function (e) {
-		changeOption('addCRLF', this.checked)
+	document.getElementById('serial-add-cr').addEventListener('change', function (e) {
+		changeOption('addCR', this.checked)
+		updateSendInfo()
+	})
+	document.getElementById('serial-add-lf').addEventListener('change', function (e) {
+		changeOption('addLF', this.checked)
 		updateSendInfo()
 	})
 	document.getElementById('serial-hex-send').addEventListener('change', function (e) {
@@ -2566,7 +2576,7 @@
 		sendInput.placeholder = hex ? '输入 HEX，如 41 54 0D 0A' : '输入文本，如 AT+GMR'
 		if (!sendInfo) return
 		const v = sendInput.value
-		const crlf = document.getElementById('serial-add-crlf').checked ? 2 : 0
+		const crlf = (toolOptions.addCR ? 1 : 0) + (toolOptions.addLF ? 1 : 0)
 		let text = ''
 		let bad = false
 		if (v) {
@@ -2895,7 +2905,9 @@
 			}
 			row.classList.add('selected')
 			selectedLogRows[mode] = row
-			if (typeof window.expandParsePanel === 'function') {
+			//锁定时只换解析内容，不展开面板、也不把底栏切到解析
+			const locked = window.parsePanelDock && window.parsePanelDock.isLocked()
+			if (!locked && typeof window.expandParsePanel === 'function') {
 				window.expandParsePanel()
 			}
 			applyProtocolHexInput(hex, { dir: row.getAttribute('data-dir') || '' })
@@ -3985,8 +3997,11 @@
 		let writer
 		try {
 			writer = port.writable.getWriter()
-			if (toolOptions.addCRLF && !opts.raw) {
-				data = new Uint8Array([...data, 0x0d, 0x0a])
+			if (!opts.raw && (toolOptions.addCR || toolOptions.addLF)) {
+				const eol = []
+				if (toolOptions.addCR) eol.push(0x0d)
+				if (toolOptions.addLF) eol.push(0x0a)
+				data = new Uint8Array([...data, ...eol])
 			}
 			flushPendingRx(sid)
 			const sendTime = new Date()
@@ -4656,13 +4671,18 @@
 				if (idx !== -1) self._receivers.splice(idx, 1)
 			}
 		},
+		// BLU 指令面板的 CRLF 开关：两项都勾才算开，开关时 \r、\n 一起改
 		getAddCRLF() {
-			return !!toolOptions.addCRLF
+			return !!(toolOptions.addCR && toolOptions.addLF)
 		},
 		setAddCRLF(v) {
-			changeOption('addCRLF', !!v)
-			const cb = document.getElementById('serial-add-crlf')
-			if (cb) cb.checked = !!v
+			changeOption('addCR', !!v)
+			changeOption('addLF', !!v)
+			const cr = document.getElementById('serial-add-cr')
+			if (cr) cr.checked = !!v
+			const lf = document.getElementById('serial-add-lf')
+			if (lf) lf.checked = !!v
+			if (typeof updateSendInfo === 'function') updateSendInfo()
 		},
 		getHexSend() {
 			return !!toolOptions.hexSend
@@ -5469,6 +5489,7 @@
 		const panel = document.getElementById('serial-parse-panel')
 		const header = document.getElementById('serial-parse-header')
 		const resizer = document.getElementById('serial-parse-resizer')
+		const lockBtn = document.getElementById('serial-parse-lock')
 		if (!logMain || !panel || !header) return
 		const STATE_KEY = 'parsePanelState'
 		const DEFAULT_H = 220
@@ -5498,8 +5519,23 @@
 			const v = parseInt(logMain.style.getPropertyValue('--parse-h'), 10)
 			localStorage.setItem(STATE_KEY, JSON.stringify({
 				height: isNaN(v) ? DEFAULT_H : v,
-				collapsed: isCollapsed()
+				collapsed: isCollapsed(),
+				locked: isLocked()
 			}))
+		}
+		//锁定状态只存在按钮的 aria-pressed 上
+		function isLocked() {
+			return !!lockBtn && lockBtn.getAttribute('aria-pressed') === 'true'
+		}
+		function setLocked(locked) {
+			if (!lockBtn) return
+			lockBtn.setAttribute('aria-pressed', locked ? 'true' : 'false')
+			const icon = lockBtn.querySelector('i')
+			if (icon) {
+				icon.classList.toggle('bi-lock-fill', locked)
+				icon.classList.toggle('bi-unlock', !locked)
+			}
+			lockBtn.title = locked ? '已锁定：点击日志行不再自动展开协议解析（点击解锁）' : '锁定：点击日志行时不自动展开协议解析'
 		}
 		function setCollapsed(collapsed) {
 			panel.classList.toggle('collapsed', collapsed)
@@ -5518,6 +5554,7 @@
 		//底栏同时承载其它停靠面板(js/workbench.js)，折叠状态与本面板共用
 		window.parsePanelDock = {
 			isCollapsed: isCollapsed,
+			isLocked: isLocked,
 			setCollapsed: function (v) { if (isCollapsed() !== !!v) setCollapsed(!!v) }
 		}
 
@@ -5555,6 +5592,14 @@
 			setCollapsed(!isCollapsed())
 		})
 
+		if (lockBtn) {
+			lockBtn.addEventListener('click', function (e) {
+				e.stopPropagation()
+				setLocked(!isLocked())
+				saveState()
+			})
+		}
+
 		const clearBtn = document.getElementById('serial-parse-clear')
 		if (clearBtn) {
 			clearBtn.addEventListener('click', function (e) {
@@ -5569,6 +5614,7 @@
 		let saved = {}
 		try { saved = JSON.parse(localStorage.getItem(STATE_KEY) || '{}') } catch (e) {}
 		if (saved.height) applyHeight(saved.height)
+		setLocked(saved.locked === true)
 		if (typeof saved.collapsed === 'boolean') {
 			setCollapsed(saved.collapsed)
 		} else {
