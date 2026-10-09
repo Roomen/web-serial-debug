@@ -9884,3 +9884,661 @@ html[data-layout='modern'] #fw-pack-upgrade > #nav-firmware {
 		height: auto;
 	}
 }
+
+/* ===== 现代布局 v2 · 功耗页 ===== */
+/* 结构由 js/modern-power.js 在进入现代布局时建立：原控件节点搬进 #mp-toolbar(仍在 .blu-connect-bar 里，沿用原控件尺寸规则)
+   与 .blu-wrapper 里的 #mp-body(左主区 + 右栏标签页)；经典布局下这些宿主不存在 */
+
+html[data-layout='modern'] #view-blu .blu-connect-bar {
+	margin: 0;
+	padding: 6px 12px;
+	border: 0;
+	border-bottom: 1px solid var(--border-color);
+	border-radius: 0;
+	background: var(--bg-surface);
+}
+
+/* 原工具条里的分组节点已全部搬空，只留 #mp-toolbar */
+html[data-layout='modern'] #view-blu .blu-connect-bar > :not(#mp-toolbar) {
+	display: none;
+}
+
+html[data-layout='modern'] #mp-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 8px;
+	width: 100%;
+	min-width: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-group {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: nowrap;
+	min-width: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-sep {
+	width: 1px;
+	height: 20px;
+	background: var(--border-color);
+	flex-shrink: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-flex {
+	flex: 1 1 0;
+	min-width: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-field {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] #view-blu .mp-cap {
+	font-size: 0.6875rem;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] #view-blu .blu-device-trigger {
+	height: var(--blu-control-h);
+}
+
+/* 记录 / 触发芯片与弹出层 */
+html[data-layout='modern'] #view-blu .mp-pop-wrap {
+	position: relative;
+	display: inline-flex;
+}
+
+html[data-layout='modern'] #view-blu .mp-chip {
+	gap: 6px;
+	font-weight: 500;
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] #view-blu .mp-chip-caret {
+	font-size: 0.65rem;
+	color: var(--text-muted);
+}
+
+html[data-layout='modern'] #view-blu .mp-chip[aria-expanded='true'] {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+
+html[data-layout='modern'] #view-blu .mp-chip[data-state='active'] {
+	border-color: var(--accent);
+	background: var(--accent-light);
+	color: var(--accent);
+	font-weight: 600;
+}
+
+html[data-layout='modern'] #view-blu .mp-chip[data-state='waiting'] {
+	border-color: var(--warning);
+	color: var(--text-primary);
+	font-weight: 600;
+}
+
+html[data-layout='modern'] #view-blu .mp-chip[data-state='waiting']::after {
+	content: '等待沿';
+	margin-left: 2px;
+	padding: 0 5px;
+	border-radius: 4px;
+	font-size: 0.65rem;
+	line-height: 1.5;
+	background: color-mix(in srgb, var(--warning) 22%, transparent);
+}
+
+html[data-layout='modern'] #view-blu .mp-pop {
+	position: absolute;
+	top: calc(100% + 4px);
+	left: 0;
+	z-index: 60;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	width: max-content;
+	max-width: min(360px, calc(100vw - 32px));
+	padding: 10px 12px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: 8px;
+	box-shadow: var(--shadow-lg);
+}
+
+html[data-layout='modern'] #view-blu .mp-pop[hidden] {
+	display: none;
+}
+
+html[data-layout='modern'] #view-blu .mp-pop-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+html[data-layout='modern'] #view-blu .mp-pop-k {
+	min-width: 2.5em;
+	font-size: 0.72rem;
+	font-weight: 600;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] #view-blu .mp-pop-note {
+	max-width: 320px;
+	font-size: 0.7rem;
+	line-height: 1.5;
+	color: var(--text-secondary);
+	white-space: normal;
+}
+
+html[data-layout='modern'] #view-blu .mp-pop .blu-acq-trig-group {
+	padding: 0;
+	border: 0;
+	background: transparent;
+}
+
+html[data-layout='modern'] #view-blu .mp-cmd-btn {
+	margin-left: auto;
+}
+
+/* ---------- 主体：左主区 + 右栏 ---------- */
+html[data-layout='modern'] #view-blu .blu-wrapper {
+	padding: 0;
+	overflow: hidden;
+	background: var(--bg-body);
+}
+
+html[data-layout='modern'] #view-blu .blu-wrapper > :not(#mp-body) {
+	display: none;
+}
+
+html[data-layout='modern'] #mp-body {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+	align-items: stretch;
+}
+
+html[data-layout='modern'] #mp-main {
+	flex: 1 1 auto;
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 12px 14px;
+	overflow-y: auto;
+	overflow-x: hidden;
+}
+
+html[data-layout='modern'] #mp-viewbar,
+html[data-layout='modern'] #mp-cursorbar {
+	flex: 0 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 8px;
+	min-width: 0;
+}
+
+html[data-layout='modern'] #mp-viewbar .blu-ctl-group,
+html[data-layout='modern'] #mp-cursorbar .blu-ctl-group {
+	flex-wrap: wrap;
+	row-gap: 6px;
+}
+
+/* 光标组自带的「游标」标签由 .mp-cap「光标」代替 */
+html[data-layout='modern'] #mp-cursorbar .blu-cursor-group > .blu-ctl-label {
+	display: none;
+}
+
+html[data-layout='modern'] #mp-cursorbar .blu-cursor-group {
+	margin-left: 0;
+}
+
+/* 读数行：大号等宽数字 */
+html[data-layout='modern'] #mp-readouts {
+	flex: 0 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 28px;
+}
+
+html[data-layout='modern'] #view-blu .mp-ro {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-ro-v > span {
+	display: inline;
+	font-family: var(--font-mono);
+	font-size: 1.625rem !important;
+	font-weight: 600 !important;
+	line-height: 1.25;
+	letter-spacing: 0;
+	color: var(--text-primary);
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] #view-blu .mp-ro--current .mp-ro-v > span {
+	color: #c2410c;
+}
+
+html[data-layout='modern'][data-theme='dark'] #view-blu .mp-ro--current .mp-ro-v > span {
+	color: #fb923c;
+}
+
+html[data-layout='modern'] #view-blu .mp-ro-sub,
+html[data-layout='modern'] #view-blu .mp-ro-sub > span {
+	display: inline;
+	min-height: 1.1em;
+	margin: 0;
+	font-family: var(--font-mono);
+	font-size: 0.7rem !important;
+	font-weight: 400 !important;
+	line-height: 1.5;
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+
+/* 波形面板：画布、串口事件道、总览各成一块，三者同宽，事件道与波形 x 轴对齐 */
+html[data-layout='modern'] #mp-wave {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+html[data-layout='modern'] #mp-wave .blu-waveform-area {
+	flex: 1 1 auto;
+	min-height: 300px;
+	gap: 8px;
+	overflow: visible;
+}
+
+html[data-layout='modern'] #mp-wave .blu-waveform-controls {
+	display: none;
+}
+
+html[data-layout='modern'] #mp-wave .blu-canvas {
+	min-height: 220px;
+	border: 1px solid var(--border-color);
+	border-radius: 10px;
+}
+
+html[data-layout='modern'] #mp-wave .blu-serial-lane {
+	border: 1px solid var(--border-color);
+	border-radius: 10px;
+	padding-bottom: 2px;
+}
+
+html[data-layout='modern'] #mp-wave .blu-minimap {
+	height: 40px;
+	border: 1px solid var(--border-color);
+	border-radius: 10px;
+}
+
+html[data-layout='modern'] .blu-wrapper:fullscreen,
+html[data-layout='modern'] .blu-wrapper.blu-wave-fullscreen {
+	padding: 0;
+}
+
+/* ---------- 右栏 ---------- */
+html[data-layout='modern'] #mp-aside {
+	flex: 0 0 340px;
+	width: 340px;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	background: var(--bg-surface);
+	border-left: 1px solid var(--border-color);
+}
+
+html[data-layout='modern'] #mp-tabs {
+	flex: 0 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	padding: 0 6px;
+	border-bottom: 1px solid var(--border-light);
+}
+
+html[data-layout='modern'] #mp-tabs .mp-tab {
+	flex: 1 1 auto;
+	min-width: 0;
+	height: 34px;
+	padding: 0 4px;
+	white-space: nowrap;
+	border: 0;
+	border-bottom: 2px solid transparent;
+	background: transparent;
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] #mp-tabs .mp-tab:hover {
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] #mp-tabs .mp-tab[aria-selected='true'] {
+	border-bottom-color: var(--accent);
+	color: var(--accent);
+	font-weight: 700;
+}
+
+html[data-layout='modern'] #mp-tabs .mp-tab:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+html[data-layout='modern'] #mp-an-head {
+	flex: 0 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 8px;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--border-light);
+	font-size: 0.75rem;
+}
+
+html[data-layout='modern'] #mp-aside[data-an='false'] #mp-an-head {
+	display: none;
+}
+
+html[data-layout='modern'] #mp-an-head .blu-analysis-scope-hint {
+	flex: 1 1 100%;
+	order: 5;
+	max-width: none;
+	white-space: normal;
+}
+
+html[data-layout='modern'] #view-blu .mp-pages {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	overflow-x: hidden;
+	display: flex;
+	flex-direction: column;
+}
+
+html[data-layout='modern'] #view-blu .mp-page {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 12px;
+	min-height: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-page[hidden] {
+	display: none;
+}
+
+/* 分析收起：面板不显示也不计算，只留展开入口 */
+html[data-layout='modern'] #view-blu .mp-an-collapsed {
+	display: none;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 8px;
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] #mp-aside[data-collapsed='true'] .mp-an-collapsed {
+	display: flex;
+}
+
+html[data-layout='modern'] #mp-aside[data-collapsed='true'] .mp-page .blu-analysis-panel {
+	display: none !important;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-analysis-panel:not([hidden]) {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-events-cols,
+html[data-layout='modern'] #view-blu .mp-page .blu-fft-layout {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-fft-canvas,
+html[data-layout='modern'] #view-blu .mp-page .blu-ov-canvas {
+	width: 100%;
+	height: 200px;
+	border-radius: 8px;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-events-list {
+	max-height: 260px;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-readout-grid {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+/* 测量页：三组统计卡改为键值行 */
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-card {
+	border: 1px solid var(--border-light);
+	border-radius: 8px;
+	background: transparent;
+	box-shadow: none;
+	overflow: hidden;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-card-head {
+	padding: 8px 12px 2px;
+	background: transparent;
+	border: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-card-title {
+	font-size: 0.6875rem;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-card-cursor .blu-stat-card-title {
+	color: var(--accent);
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-card-window .blu-stat-card-title {
+	color: #c2410c;
+}
+
+html[data-layout='modern'][data-theme='dark'] #view-blu .mp-page .blu-stat-card-window .blu-stat-card-title {
+	color: #fb923c;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-card-overall .blu-stat-card-title {
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-card-grid {
+	grid-template-columns: minmax(0, 1fr);
+	gap: 0;
+	padding: 4px 12px 8px;
+	background: transparent;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-cell {
+	flex-direction: row-reverse;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 8px;
+	padding: 2px 0;
+	background: transparent;
+	text-align: left;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-k {
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-v {
+	font-size: 0.8rem;
+	font-family: var(--font-mono);
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-v-max {
+	color: #b42318;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-v-min {
+	color: #15803d;
+}
+
+html[data-layout='modern'][data-theme='dark'] #view-blu .mp-page .blu-stat-v-max {
+	color: #ff8a80;
+}
+
+html[data-layout='modern'][data-theme='dark'] #view-blu .mp-page .blu-stat-v-min {
+	color: #4ade80;
+}
+
+/* 深色下强调色变亮：实心主按钮(打开)换深字 */
+html[data-layout='modern'][data-theme='dark'] #view-blu .btn-primary {
+	color: #0b1220;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-empty {
+	padding: 6px 12px 10px;
+	text-align: left;
+}
+
+/* 命令表：原「串口发送」面板停靠进右栏，不再是底部浮层 */
+html[data-layout='modern'] #view-blu .blu-cmd-backdrop {
+	display: none !important;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-cmd-sheet {
+	position: static;
+	max-height: none;
+	border: 1px solid var(--border-light);
+	border-radius: 8px;
+	box-shadow: none;
+	animation: none;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-cmd-sheet[hidden] {
+	display: none;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-cmd-preset-row,
+html[data-layout='modern'] #view-blu .mp-page .blu-cmd-custom-row {
+	flex-wrap: wrap;
+}
+
+html[data-layout='modern'] #view-blu .mp-cmd-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 8px;
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] #view-blu .blu-cmd-sheet:not([hidden]) + .mp-cmd-empty {
+	display: none;
+}
+
+/* 采集日志：右栏里常开，填满整页 */
+html[data-layout='modern'] #view-blu .mp-page .blu-log-card {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	border: 1px solid var(--border-light);
+	border-radius: 8px;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-log-body,
+html[data-layout='modern'] #view-blu .mp-page .blu-log-card:hover .blu-log-body {
+	flex: 1 1 auto;
+	max-height: none;
+	min-height: 120px;
+	padding: 6px 12px;
+	overflow-y: auto;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-log-chevron {
+	display: none;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-log-last {
+	max-width: 160px;
+}
+
+/* 窄屏：右栏落到主区下方，整页纵向滚动 */
+@media (max-width: 900px) {
+	html[data-layout='modern'] #view-blu .blu-wrapper {
+		overflow-y: auto;
+	}
+
+	html[data-layout='modern'] #mp-body {
+		flex: 0 0 auto;
+		flex-direction: column;
+	}
+
+	html[data-layout='modern'] #mp-main {
+		overflow: visible;
+		padding: 10px 16px;
+	}
+
+	html[data-layout='modern'] #mp-aside {
+		flex: 0 0 auto;
+		width: auto;
+		border-left: 0;
+		border-top: 1px solid var(--border-color);
+	}
+
+	html[data-layout='modern'] #view-blu .mp-pages {
+		overflow: visible;
+	}
+
+	html[data-layout='modern'] #view-blu .blu-connect-bar {
+		padding: 6px 16px;
+	}
+
+	html[data-layout='modern'] #view-blu .mp-group {
+		flex-wrap: wrap;
+		row-gap: 6px;
+	}
+
+	html[data-layout='modern'] #view-blu .mp-sep {
+		display: none;
+	}
+
+	html[data-layout='modern'] #view-blu .mp-pop {
+		position: fixed;
+		top: auto;
+		left: 16px;
+		right: 16px;
+		width: auto;
+		max-width: none;
+	}
+
+	html[data-layout='modern'] #mp-readouts {
+		gap: 6px 18px;
+	}
+
+	html[data-layout='modern'] #view-blu .mp-ro-v > span {
+		font-size: 1.25rem !important;
+	}
+}
