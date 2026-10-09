@@ -621,7 +621,16 @@
 		save.id = 'wb-frame-save'
 		save.append(iconEl('bi-lightning-charge'), document.createTextNode(' 存为快捷发送'))
 		actions.append(mk('span', 'wb-inspector-actions-title', '基于此帧'), resend, save)
-		pane.append(bar, actions)
+		// 结构化视图由 js/modern-inspector.js 往 view 里画；原协议解析面板(HEX 输入区 + 输出)放进可折叠的「原始输出」
+		const view = mk('div', 'wb-insp-view')
+		view.id = 'wb-insp-view'
+		view.tabIndex = -1
+		const raw = mk('details', 'wb-insp-raw')
+		raw.id = 'wb-insp-raw'
+		raw.appendChild(mk('summary', 'wb-insp-raw-sum', '原始输出 / 手动粘贴 HEX'))
+		const rawBody = mk('div', 'wb-insp-raw-body')
+		raw.appendChild(rawBody)
+		pane.append(bar, view, actions, raw)
 		resend.addEventListener('click', async function () {
 			const api = window.serialFrameActions
 			if (!api || resend.disabled) return
@@ -633,7 +642,7 @@
 			if (api && !save.disabled) api.saveQuick()
 			syncFrameActions()
 		})
-		inspector = { pane: pane, tools: tools, actions: actions, resend: resend, save: save }
+		inspector = { pane: pane, tools: tools, actions: actions, resend: resend, save: save, view: view, rawBody: rawBody }
 		return pane
 	}
 
@@ -675,10 +684,10 @@
 			park($('serial-statusbar'), bottom)
 		}
 		// S3：解析正文与锁定/清空进检查器
-		const pane = inspectorEl()
+		inspectorEl()
 		park($('serial-parse-lock'), inspector.tools)
 		park($('serial-parse-clear'), inspector.tools)
-		park($('serial-parse-body'), pane, inspector.actions)
+		park($('serial-parse-body'), inspector.rawBody)
 		// S4：固件升级面板放进固件打包页(原位置的占位由面板自己的 ph 负责)
 		const fwView = $('view-fw-pack')
 		const fw = find('firmware')
@@ -836,6 +845,8 @@
 
 	window.Workbench = {
 		refreshStatus: function () { if (ready) updateStatusBar() },
+		// 现代布局检查器里放结构化视图的节点(还没建过时为 null)
+		inspectorView: function () { return inspector ? inspector.view : null },
 		registerPanel: registerPanel,
 		open: open,
 		toggle: toggle,

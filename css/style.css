@@ -9356,199 +9356,6 @@ html[data-layout='modern'] .serial-log-headline:has(#serial-log-legend.is-dual):
 	display: inline-flex;
 }
 
-/* ---------- 现代布局：双路气泡(纯 CSS 重排现有行，不改行 DOM) ----------
-   A 路靠左、B 路靠右；TX = 实心填充气泡，RX = 面色底 + 路色描边；其余行(系统行等)居中成小号胶囊。
-   颜色全走变量：--bb-c 路色、--bb-t 路色深字、--bb-bg / --bb-bd / --bb-ring 由方向与状态改写 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual {
-	--bb-surface: var(--bg-surface);
-	--bb-a: #10b981;
-	--bb-a-t: #065f46;
-	--bb-b: #f59e0b;
-	--bb-b-t: #92400e;
-	--bb-on: #fff;
-}
-
-html[data-layout='modern'][data-theme='dark'][data-dual-view='bubble'] #serial-logs-dual {
-	--bb-a: #34d399;
-	--bb-a-t: #6ee7b7;
-	--bb-b: #fbbf24;
-	--bb-b-t: #fcd34d;
-	--bb-on: #10151c;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi) {
-	background-color: var(--mdn-subtle);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi {
-	--bb-surface: #2c2c30;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'] {
-	--bb-c: var(--bb-a);
-	--bb-t: var(--bb-a-t);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'] {
-	--bb-c: var(--bb-b);
-	--bb-t: var(--bb-b-t);
-}
-
-/* 系统行：居中小号胶囊(默认形态，A/B 气泡在下面覆盖) */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row {
-	--bb-bg: var(--bb-surface);
-	--bb-bd: var(--border-light);
-	--bb-ring: 0 0 0 0 transparent;
-	flex-wrap: wrap;
-	align-items: center;
-	justify-content: center;
-	gap: 2px 8px;
-	width: fit-content;
-	max-width: 86%;
-	margin: 6px auto;
-	padding: 1px 12px;
-	border: 1px solid var(--bb-bd);
-	border-radius: 10px;
-	background-color: var(--bb-bg);
-	box-shadow: var(--bb-ring);
-	font-size: 0.7rem;
-	line-height: 1.5;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:hover {
-	--bb-bg: var(--bg-surface-hover);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row.selected {
-	--bb-bg: color-mix(in srgb, var(--danger) 12%, var(--bb-surface));
-	--bb-ring: 0 0 0 1.5px var(--danger);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-time:empty {
-	display: none;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-body {
-	flex: 0 1 auto;
-}
-
-/* A / B 的收发行：气泡版式 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) {
-	display: block;
-	max-width: 68%;
-	margin-block: 5px;
-	padding: 6px 10px 7px;
-	border-width: 1.5px;
-	border-radius: 12px;
-	font-size: 0.75rem;
-	line-height: 1.6;
-	color: var(--bb-t);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A']:is([data-dir='tx'], [data-dir='rx']) {
-	margin-inline: 0 auto;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B']:is([data-dir='tx'], [data-dir='rx']) {
-	margin-inline: auto 0;
-}
-
-/* TX：实心填充、无边框 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] {
-	--bb-bg: color-mix(in srgb, var(--bb-c) 16%, var(--bb-surface));
-	--bb-bd: transparent;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx']:hover {
-	--bb-bg: color-mix(in srgb, var(--bb-c) 24%, var(--bb-surface));
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'].selected {
-	--bb-bg: color-mix(in srgb, var(--bb-c) 30%, var(--bb-surface));
-	--bb-ring: 0 0 0 2px var(--bb-c);
-}
-
-/* RX：面色底 + 路色实线描边 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'] {
-	--bb-bg: var(--bb-surface);
-	--bb-bd: var(--bb-c);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx']:hover {
-	--bb-bg: color-mix(in srgb, var(--bb-c) 8%, var(--bb-surface));
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'].selected {
-	--bb-bg: color-mix(in srgb, var(--bb-c) 14%, var(--bb-surface));
-	--bb-ring: 0 0 0 2px color-mix(in srgb, var(--bb-c) 45%, transparent);
-}
-
-/* 第一行：时间 + 方向标签 + 会话名 + 长度(行内排)；正文是块级、另起一行占满气泡宽。
-   气泡改成块级容器而不是 flex 换行：气泡宽度取「首行」与「正文」中较宽者，不会因为 flex 单行 max-content 把短帧也撑到上限 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > :is(.log-time, .log-dir, .log-sess, .log-len) {
-	display: inline-block;
-	margin-right: 8px;
-	vertical-align: middle;
-	color: var(--bb-t);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-time:empty {
-	display: none;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-body {
-	display: block;
-	max-width: 100%;
-	margin-top: 3px;
-	color: var(--bb-t);
-	overflow-x: auto;
-}
-
-/* 方向标签：文字清零，改由 ::before 显示「↑ 发送 / ↓ 接收」(复制日志读的是元素文本，伪元素不进剪贴板) */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-dir {
-	min-width: 0;
-	padding: 0 7px;
-	border: 1px solid var(--bb-t);
-	font-size: 0;
-	line-height: 1.45;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-dir::before {
-	font-size: 0.65rem;
-	font-weight: 700;
-	letter-spacing: 0.03em;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] > .log-dir {
-	background-color: var(--bb-t);
-	color: var(--bb-on);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'] > .log-dir {
-	background-color: transparent;
-	color: var(--bb-t);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='tx'] > .log-dir::before {
-	content: '↑ 发送';
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='rx'] > .log-dir::before {
-	content: '↓ 接收';
-}
-
-/* 正文里的解析块不得溢出气泡 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-body :is(.pv, .sk-parse, .sk-parse-block, pre, table, img, canvas, svg) {
-	max-width: 100%;
-	box-sizing: border-box;
-}
-
-@media (max-width: 768px) {
-	html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) {
-		max-width: 88%;
-	}
-}
-
 /* ========== 功耗分析：串口事件道（仅现代布局） ========== */
 /* 经典布局下整条道不进布局流；TX/RX 颜色由 JS 画布按这里的变量取，图例共用 */
 .blu-serial-lane {
@@ -9714,8 +9521,9 @@ html[data-layout='modern'] #serial-parse-panel.wb-bottom-none {
 
 /* ---------- 检查器(右栏第一个标签) ---------- */
 html[data-layout='modern'] .wb-inspector {
-	gap: 8px;
+	gap: 10px;
 	min-height: 0;
+	overflow-y: auto;
 }
 
 html[data-layout='modern'] .wb-inspector-bar {
@@ -9751,13 +9559,19 @@ html[data-layout='modern'] .wb-inspector-tools .btn {
 	border-radius: var(--radius-sm);
 }
 
+/* 原协议解析面板放在「原始输出」折叠区里：不再撑满高度，HEX 输入区与输出区按内容高度排 */
 html[data-layout='modern'] .wb-inspector #serial-parse-body {
-	flex: 1 1 0;
-	min-height: 0;
+	flex: 0 0 auto;
 	padding: 0;
-	overflow: hidden;
+	overflow: visible;
 	border-radius: 0;
 	background-color: transparent;
+}
+
+html[data-layout='modern'] .wb-inspector #serial-protocol-output {
+	flex: 0 0 auto;
+	max-height: 260px;
+	overflow: auto;
 }
 
 html[data-layout='modern'] .wb-inspector .sk-hex-dump {
@@ -9882,5 +9696,800 @@ html[data-layout='modern'] #fw-pack-upgrade > #nav-firmware {
 @media (max-width: 768px) {
 	html[data-layout='modern'] #app-shell > #views {
 		height: auto;
+	}
+}
+
+/* ===== 现代布局 v2 · 检查器与双路时间线 ===== */
+/* 两路的路色：A 蓝、B 橙(设计稿)；-t 是落在浅/深面色上的文字色，-on 是落在路色实心底上的文字色，对比度均 >= 4.5:1 */
+html[data-layout='modern'] {
+	--mdn-ax: 112px;
+	--mdn-a: #1f5fbf;
+	--mdn-a-t: #174c99;
+	--mdn-b: #c2410c;
+	--mdn-b-t: #9a3412;
+	--mdn-on: #ffffff;
+	--mdn-slow: #b42318;
+	--mdn-band: #fff3c4;
+	--mdn-sel: #d99a00;
+}
+
+html[data-layout='modern'][data-theme='dark'] {
+	--mdn-a: #6ea8ff;
+	--mdn-a-t: #9cc4ff;
+	--mdn-b: #fb923c;
+	--mdn-b-t: #fdba74;
+	--mdn-on: #0b1220;
+	--mdn-slow: #ff8a80;
+	--mdn-band: rgba(255, 209, 102, 0.14);
+	--mdn-sel: #ffd166;
+}
+
+/* ---------- 检查器：头部 ---------- */
+html[data-layout='modern'] .wb-insp-view {
+	flex: 0 0 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	outline: none;
+}
+
+html[data-layout='modern'] .mi-head {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding-bottom: 10px;
+	border-bottom: 1px solid var(--border-light);
+}
+
+html[data-layout='modern'] .mi-dir {
+	align-self: flex-start;
+	padding: 2px 8px;
+	border: 1.5px solid var(--text-secondary);
+	border-radius: 4px;
+	color: var(--text-secondary);
+	font-size: 0.68rem;
+	font-weight: 700;
+	letter-spacing: 0.02em;
+}
+
+html[data-layout='modern'] .mi-dir--tx {
+	border-color: var(--accent);
+	background: var(--accent);
+	color: var(--accent-text, #fff);
+}
+
+html[data-layout='modern'] .mi-dir--rx {
+	border-color: var(--text-secondary);
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] .mi-dir--tx.lane-a {
+	border-color: var(--mdn-a);
+	background: var(--mdn-a);
+	color: var(--mdn-on);
+}
+
+html[data-layout='modern'] .mi-dir--tx.lane-b {
+	border-color: var(--mdn-b);
+	background: var(--mdn-b);
+	color: var(--mdn-on);
+}
+
+html[data-layout='modern'] .mi-dir--rx.lane-a {
+	border-color: var(--mdn-a);
+	color: var(--mdn-a-t);
+}
+
+html[data-layout='modern'] .mi-dir--rx.lane-b {
+	border-color: var(--mdn-b);
+	color: var(--mdn-b-t);
+}
+
+html[data-layout='modern'] .mi-dir--manual {
+	border-style: dashed;
+}
+
+html[data-layout='modern'] .mi-title {
+	font-size: 0.95rem;
+	font-weight: 700;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+}
+
+html[data-layout='modern'] .mi-code {
+	margin-left: 6px;
+	font-family: var(--font-mono);
+	font-size: 0.72rem;
+	font-weight: 400;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mi-subline {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 6px;
+	font-size: 0.72rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mi-badge {
+	padding: 0 6px;
+	border: 1px solid currentColor;
+	border-radius: 999px;
+	font-size: 0.66rem;
+	font-weight: 600;
+	line-height: 1.5;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mi-badge--ok {
+	color: #1e7a3a;
+}
+
+html[data-layout='modern'] .mi-badge--bad {
+	color: var(--mdn-slow);
+}
+
+html[data-layout='modern'] .mi-badge--warn {
+	color: var(--mdn-b-t);
+}
+
+html[data-layout='modern'] .mi-badge--info {
+	color: var(--mdn-a-t);
+}
+
+html[data-layout='modern'][data-theme='dark'] .mi-badge--ok {
+	color: #7fe0a0;
+}
+
+/* ---------- 检查器：键值表 ---------- */
+html[data-layout='modern'] .mi-fields {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	padding-bottom: 10px;
+	border-bottom: 1px solid var(--border-light);
+}
+
+html[data-layout='modern'] .mi-kv {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 3px 6px;
+	border-radius: 4px;
+	font-size: 0.74rem;
+}
+
+html[data-layout='modern'] .mi-kv:hover {
+	background: var(--bg-surface-hover);
+}
+
+html[data-layout='modern'] .mi-k {
+	flex: 1 1 auto;
+	min-width: 0;
+	color: var(--text-secondary);
+	overflow-wrap: anywhere;
+}
+
+html[data-layout='modern'] .mi-v {
+	flex: 0 1 auto;
+	max-width: 62%;
+	font-family: var(--font-mono);
+	font-weight: 600;
+	text-align: right;
+	overflow-wrap: anywhere;
+}
+
+html[data-layout='modern'] .mi-v--ok {
+	color: #1e7a3a;
+}
+
+html[data-layout='modern'] .mi-v--bad {
+	color: var(--mdn-slow);
+}
+
+html[data-layout='modern'] .mi-v--warn {
+	color: var(--mdn-b-t);
+}
+
+html[data-layout='modern'][data-theme='dark'] .mi-v--ok {
+	color: #7fe0a0;
+}
+
+html[data-layout='modern'] .mi-h {
+	flex: 0 0 auto;
+	font-family: var(--font-mono);
+	font-size: 0.62rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mi-sec,
+html[data-layout='modern'] .mi-cap,
+html[data-layout='modern'] .mi-frame-title {
+	margin-top: 6px;
+	color: var(--text-secondary);
+	font-size: 0.68rem;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+}
+
+html[data-layout='modern'] .mi-cap {
+	margin-top: 0;
+	margin-bottom: 6px;
+}
+
+html[data-layout='modern'] .mi-frame-title {
+	padding: 3px 6px;
+	border-radius: 4px;
+	background: var(--mdn-subtle);
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] .mi-sub-sec {
+	margin-top: 2px;
+	padding-left: 6px;
+	color: var(--text-secondary);
+	font-size: 0.68rem;
+	font-weight: 600;
+}
+
+html[data-layout='modern'] .mi-note {
+	padding: 3px 6px;
+	font-size: 0.72rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mi-note--warn {
+	color: var(--mdn-b-t);
+}
+
+html[data-layout='modern'] .mi-err {
+	padding: 3px 6px;
+	font-size: 0.72rem;
+	color: var(--mdn-slow);
+}
+
+html[data-layout='modern'] .mi-pre {
+	margin: 2px 0;
+	padding: 6px 8px;
+	border-radius: 4px;
+	background: var(--bg-code);
+	font-size: 0.68rem;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+html[data-layout='modern'] .mi-html {
+	padding: 2px 6px;
+	font-size: 0.72rem;
+}
+
+html[data-layout='modern'] .mi-fallback {
+	padding: 10px 12px;
+	border: 1px dashed var(--border-color);
+	border-radius: var(--radius-md);
+	color: var(--text-secondary);
+	font-size: 0.74rem;
+	line-height: 1.5;
+}
+
+html[data-layout='modern'] .mi-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+	padding: 22px 12px;
+	border: 1px dashed var(--border-color);
+	border-radius: var(--radius-md);
+	text-align: center;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mi-empty .bi {
+	font-size: 1.3rem;
+}
+
+html[data-layout='modern'] .mi-empty-main {
+	color: var(--text-primary);
+	font-size: 0.82rem;
+	font-weight: 600;
+}
+
+html[data-layout='modern'] .mi-empty-sub {
+	font-size: 0.72rem;
+}
+
+html[data-layout='modern'] .mi-paste {
+	margin-top: 4px;
+	font-size: 0.74rem;
+}
+
+/* ---------- 检查器：字节视图 ---------- */
+html[data-layout='modern'] .mi-bytes {
+	padding-bottom: 10px;
+	border-bottom: 1px solid var(--border-light);
+}
+
+html[data-layout='modern'] .mi-hex {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	font-family: var(--font-mono);
+	font-size: 0.68rem;
+	line-height: 1.7;
+}
+
+html[data-layout='modern'] .mi-hex-row {
+	display: grid;
+	grid-template-columns: 2.6em repeat(16, minmax(0, 1fr));
+	gap: 1px;
+	align-items: center;
+}
+
+html[data-layout='modern'] .mi-hex-off {
+	color: var(--text-secondary);
+	user-select: none;
+}
+
+html[data-layout='modern'] .mi-byte {
+	text-align: center;
+	border-radius: 3px;
+}
+
+html[data-layout='modern'] .mi-byte.tone-0 {
+	background: color-mix(in srgb, var(--mdn-a) 16%, transparent);
+}
+
+html[data-layout='modern'] .mi-byte.tone-1 {
+	background: color-mix(in srgb, var(--mdn-b) 16%, transparent);
+}
+
+html[data-layout='modern'] .mi-byte.is-hot {
+	background: var(--mdn-sel);
+	color: #1d1d1f;
+}
+
+/* ---------- 检查器：从请求到应答 ---------- */
+html[data-layout='modern'] .mi-rel {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding-bottom: 10px;
+	border-bottom: 1px solid var(--border-light);
+}
+
+html[data-layout='modern'] .mi-rel .mi-cap {
+	margin-bottom: 0;
+}
+
+html[data-layout='modern'] .mi-rel-row {
+	display: grid;
+	grid-template-columns: 62px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 8px;
+	font-size: 0.72rem;
+}
+
+html[data-layout='modern'] .mi-rel-row.is-self .mi-rel-name {
+	font-weight: 700;
+}
+
+html[data-layout='modern'] .mi-rel-tag {
+	padding: 0 6px;
+	border: 1.5px solid var(--text-secondary);
+	border-radius: 4px;
+	color: var(--text-primary);
+	font-size: 0.64rem;
+	font-weight: 700;
+	text-align: center;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .mi-rel-tag.tx.lane-a {
+	border-color: var(--mdn-a);
+	background: var(--mdn-a);
+	color: var(--mdn-on);
+}
+
+html[data-layout='modern'] .mi-rel-tag.tx.lane-b {
+	border-color: var(--mdn-b);
+	background: var(--mdn-b);
+	color: var(--mdn-on);
+}
+
+html[data-layout='modern'] .mi-rel-tag.rx.lane-a {
+	border-color: var(--mdn-a);
+	color: var(--mdn-a-t);
+}
+
+html[data-layout='modern'] .mi-rel-tag.rx.lane-b {
+	border-color: var(--mdn-b);
+	color: var(--mdn-b-t);
+}
+
+html[data-layout='modern'] .mi-rel-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .mi-rel-d {
+	font-family: var(--font-mono);
+	color: var(--text-secondary);
+}
+
+/* ---------- 检查器：原始输出(原协议解析面板，含 HEX 粘贴输入) ---------- */
+html[data-layout='modern'] .wb-insp-raw {
+	flex: 0 0 auto;
+	border-top: 1px solid var(--border-color);
+	padding-top: 6px;
+}
+
+html[data-layout='modern'] .wb-insp-raw-sum {
+	color: var(--text-secondary);
+	font-size: 0.72rem;
+	font-weight: 600;
+	padding: 2px 0;
+}
+
+html[data-layout='modern'] .wb-insp-raw-sum:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+html[data-layout='modern'] .wb-insp-raw-body {
+	padding-top: 6px;
+}
+
+/* ---------- 双路时间线(双路视图 = 气泡) ---------- */
+/* 容器是纵向 flex：A 路气泡贴轴列左侧、B 路贴右侧；轴列 = 容器中线两侧各 --mdn-ax/2，时间/Δ/静默由行的伪元素画在轴列里。
+   轴线用容器背景(local：随内容滚动)画两条细线；行 DOM、容器子节点结构都不动 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual {
+	--bb-surface: var(--bg-surface);
+	--bb-plate: var(--bg-surface);
+	--bb-plate-fg: var(--text-primary);
+	--bb-line: var(--border-color);
+	display: flex;
+	flex-direction: column;
+	padding: 8px 12px 14px;
+	background-image: linear-gradient(var(--bb-line), var(--bb-line)), linear-gradient(var(--bb-line), var(--bb-line));
+	background-size: 1px 100%, 1px 100%;
+	background-repeat: no-repeat;
+	background-position: calc(50% - var(--mdn-ax) / 2) 0, calc(50% + var(--mdn-ax) / 2) 0;
+	background-attachment: local, local;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi) {
+	background-color: var(--mdn-subtle);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi {
+	--bb-surface: #2c2c30;
+	--bb-plate: #1c1c1e;
+	--bb-plate-fg: #f5f5f7;
+	--bb-line: #48484c;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'] {
+	--bb-c: var(--mdn-a);
+	--bb-t: var(--mdn-a-t);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'] {
+	--bb-c: var(--mdn-b);
+	--bb-t: var(--mdn-b-t);
+}
+
+/* 系统行等：居中小胶囊 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row {
+	--bb-bg: var(--bb-surface);
+	--bb-bd: var(--border-light);
+	--bb-ring: 0 0 0 0 transparent;
+	position: relative;
+	flex: 0 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
+	align-self: center;
+	gap: 2px 8px;
+	width: fit-content;
+	max-width: 86%;
+	margin: 6px 0;
+	padding: 1px 12px;
+	border: 1px solid var(--bb-bd);
+	border-radius: 10px;
+	background-color: var(--bb-bg);
+	box-shadow: var(--bb-ring);
+	font-size: 0.7rem;
+	line-height: 1.5;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:hover {
+	--bb-bg: var(--bg-surface-hover);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row.selected {
+	--bb-bg: color-mix(in srgb, var(--danger) 12%, var(--bb-surface));
+	--bb-ring: 0 0 0 2px var(--mdn-sel);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-time:empty {
+	display: none;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-body {
+	flex: 0 1 auto;
+}
+
+/* A / B 的收发行：气泡 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) {
+	display: block;
+	max-width: calc(50% - var(--mdn-ax) / 2 - 10px);
+	margin-block: 5px;
+	padding: 5px 10px 7px;
+	border-width: 1.5px;
+	border-radius: 12px;
+	font-size: 0.75rem;
+	line-height: 1.6;
+	color: var(--bb-t);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A']:is([data-dir='tx'], [data-dir='rx']) {
+	align-self: flex-end;
+	margin-right: calc(50% + var(--mdn-ax) / 2 + 10px);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B']:is([data-dir='tx'], [data-dir='rx']) {
+	align-self: flex-start;
+	margin-left: calc(50% + var(--mdn-ax) / 2 + 10px);
+}
+
+/* TX：路色实心；正文放在面色小底板里，解析块沿用主题配色 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] {
+	--bb-bg: var(--bb-c);
+	--bb-bd: var(--bb-c);
+	color: var(--mdn-on);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx']:hover {
+	--bb-bg: color-mix(in srgb, var(--bb-c) 88%, var(--text-primary));
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] > .log-body {
+	padding: 3px 8px;
+	border-radius: 8px;
+	background: var(--bb-plate);
+	color: var(--bb-plate-fg);
+}
+
+/* RX：浅底 + 路色描边 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'] {
+	--bb-bg: color-mix(in srgb, var(--bb-c) 7%, var(--bb-surface));
+	--bb-bd: var(--bb-c);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx']:hover {
+	--bb-bg: color-mix(in srgb, var(--bb-c) 13%, var(--bb-surface));
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'] > .log-body {
+	color: var(--bb-plate-fg);
+}
+
+/* 选中：黄环(设计稿)，覆盖 TX / RX 各自的状态环 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']).selected {
+	--bb-ring: 0 0 0 3px var(--mdn-sel);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'].selected {
+	--bb-bg: var(--bb-c);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'].selected {
+	--bb-bg: color-mix(in srgb, var(--bb-c) 13%, var(--bb-surface));
+}
+
+/* 气泡首行：方向 + 路名 + 长度；时间移到轴列，行首的 .log-time 清成零尺寸块，只当静默胶囊的宿主 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-time {
+	display: block;
+	width: 0;
+	height: 0;
+	margin: 0;
+	padding: 0;
+	overflow: visible;
+	font-size: 0;
+	line-height: 0;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > :is(.log-dir, .log-sess, .log-len) {
+	display: inline-block;
+	margin-right: 8px;
+	vertical-align: middle;
+	background: transparent;
+	color: var(--bb-t);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] > :is(.log-dir, .log-sess, .log-len) {
+	color: var(--mdn-on);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-body {
+	display: block;
+	max-width: 100%;
+	margin-top: 3px;
+	overflow-x: auto;
+}
+
+/* 方向标签：文字清零，改由 ::before 显示「↑ TX / ↓ RX」，路名接在后面(复制日志读元素文本，伪元素不进剪贴板) */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-dir {
+	min-width: 0;
+	margin-right: 4px;
+	padding: 0;
+	border: 0;
+	font-size: 0;
+	line-height: 1.45;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-dir::before {
+	font-size: 0.66rem;
+	font-weight: 700;
+	letter-spacing: 0.03em;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='tx'] > .log-dir::before {
+	content: '↑ TX';
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='rx'] > .log-dir::before {
+	content: '↓ RX';
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='tx'] > .log-sess::before {
+	content: '· 发给 ';
+	font-weight: 400;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='rx'] > .log-sess::before {
+	content: '· 来自 ';
+	font-weight: 400;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-len {
+	font-size: 0.64rem;
+	opacity: 0.85;
+}
+
+/* 轴列：时间(::before)、Δ 或慢应答耗时(::after)。A 路气泡在轴列左侧，伪元素从气泡右缘起排；B 路镜像 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-t]::before,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-d]::after {
+	position: absolute;
+	width: var(--mdn-ax);
+	text-align: center;
+	font-family: var(--font-mono);
+	font-size: 0.68rem;
+	line-height: 1.3;
+	white-space: nowrap;
+	pointer-events: none;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-t]::before {
+	content: attr(data-mdn-t);
+	top: 5px;
+	color: var(--text-secondary);
+	font-weight: 600;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-d]::after {
+	content: attr(data-mdn-d);
+	top: 21px;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-slow]::after {
+	color: var(--mdn-slow);
+	font-weight: 700;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'][data-mdn-t]::before,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'][data-mdn-d]::after {
+	left: calc(100% + 11.5px);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'][data-mdn-t]::before,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'][data-mdn-d]::after {
+	right: calc(100% + 11.5px);
+}
+
+/* 静默分隔：与上一条间隔超过阈值时，行上方留出空位，在轴列里画胶囊(宿主是行首的 .log-time，伪元素读它自己的 data-mdn-gap) */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:has(> .log-time[data-mdn-gap]) {
+	margin-top: 26px;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-time[data-mdn-gap]::before {
+	content: '⋮ 静默 ' attr(data-mdn-gap);
+	position: absolute;
+	top: -22px;
+	width: calc(var(--mdn-ax) - 12px);
+	padding: 1px 0;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--border-color) 55%, var(--bb-surface));
+	color: var(--text-secondary);
+	font-family: var(--font-mono);
+	font-size: 0.64rem;
+	line-height: 1.4;
+	text-align: center;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'] > .log-time[data-mdn-gap]::before {
+	left: calc(100% + 17.5px);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'] > .log-time[data-mdn-gap]::before {
+	right: calc(100% + 17.5px);
+}
+
+/* 选中帧到本路应答之间两路的所有行：整行通栏浅色底带(超大扩展阴影 + 按行高裁剪，不改行盒) */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-band] {
+	box-shadow: var(--bb-ring), 0 0 0 100vmax var(--mdn-band);
+	clip-path: inset(-5px -100vmax);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-band]:has(> .log-time[data-mdn-gap]) {
+	clip-path: inset(-26px -100vmax -5px);
+}
+
+/* 吸顶列头：在日志容器外面(js/modern-timeline.js 建的兄弟节点)，不随日志滚动，也不进日志内容 */
+#mdn-tl-head {
+	display: none;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #mdn-tl-head {
+	flex: 0 0 auto;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) var(--mdn-ax) minmax(0, 1fr);
+	align-items: center;
+	padding: 5px calc(12px + var(--mdn-sbw, 0px)) 5px 12px;
+	border-bottom: 1px solid var(--border-light);
+	background: var(--mdn-subtle);
+	font-size: 0.72rem;
+	font-weight: 700;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] .serial-log-mode:has(> #serial-logs-dual[hidden]) > #mdn-tl-head {
+	display: none;
+}
+
+html[data-layout='modern'] #mdn-tl-head > span {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] #mdn-tl-head .mdn-tl-a {
+	padding-right: 10px;
+	text-align: right;
+	color: var(--mdn-a-t);
+}
+
+html[data-layout='modern'] #mdn-tl-head .mdn-tl-m {
+	text-align: center;
+	color: var(--text-secondary);
+	font-weight: 600;
+}
+
+html[data-layout='modern'] #mdn-tl-head .mdn-tl-b {
+	padding-left: 10px;
+	color: var(--mdn-b-t);
+}
+
+@media (max-width: 768px) {
+	html[data-layout='modern'] {
+		--mdn-ax: 88px;
 	}
 }
