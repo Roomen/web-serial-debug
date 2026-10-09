@@ -557,7 +557,7 @@
 					paramSel.innerHTML = ''
 					for (const k in VALVE_OP) {
 						const o = document.createElement('option')
-						o.value = k
+						o.value = hexByte(k)
 						o.textContent = hexByte(k) + ' ' + VALVE_OP[k]
 						paramSel.appendChild(o)
 					}
