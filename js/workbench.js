@@ -448,6 +448,20 @@
 				if (input) input.focus()
 			},
 		},
+		{
+			// 只在现代布局的状态栏显示(经典布局状态栏保持原样)：STS 模拟启动键按下即运行/等待中
+			label: 'STS 模拟',
+			title: '打开 STS 模拟面板',
+			modernOnly: true,
+			running: function () {
+				return !!document.querySelector('.sts-sim-head > .ctl-toggle[aria-pressed="true"]')
+			},
+			text: function () {
+				const n = document.querySelectorAll('.sts-sim-head > .ctl-toggle[aria-pressed="true"]').length
+				return 'STS 模拟' + (n > 1 ? ' ×' + n : '') + ' 运行中'
+			},
+			open: function () { open('sts-sim') },
+		},
 	]
 
 	function fmtBytes(n) {
@@ -558,7 +572,7 @@
 			r.rebuild.setAttribute('aria-label', label + '：重建接收')
 		})
 		statusRefs.tasks.forEach(function (t) {
-			const running = t.def.running()
+			const running = (modern || !t.def.modernOnly) && t.def.running()
 			t.btn.hidden = !running
 			if (running) t.text.textContent = t.def.text()
 		})
