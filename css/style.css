@@ -9356,199 +9356,6 @@ html[data-layout='modern'] .serial-log-headline:has(#serial-log-legend.is-dual):
 	display: inline-flex;
 }
 
-/* ---------- 现代布局：双路气泡(纯 CSS 重排现有行，不改行 DOM) ----------
-   A 路靠左、B 路靠右；TX = 实心填充气泡，RX = 面色底 + 路色描边；其余行(系统行等)居中成小号胶囊。
-   颜色全走变量：--bb-c 路色、--bb-t 路色深字、--bb-bg / --bb-bd / --bb-ring 由方向与状态改写 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual {
-	--bb-surface: var(--bg-surface);
-	--bb-a: #10b981;
-	--bb-a-t: #065f46;
-	--bb-b: #f59e0b;
-	--bb-b-t: #92400e;
-	--bb-on: #fff;
-}
-
-html[data-layout='modern'][data-theme='dark'][data-dual-view='bubble'] #serial-logs-dual {
-	--bb-a: #34d399;
-	--bb-a-t: #6ee7b7;
-	--bb-b: #fbbf24;
-	--bb-b-t: #fcd34d;
-	--bb-on: #10151c;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi) {
-	background-color: var(--mdn-subtle);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi {
-	--bb-surface: #2c2c30;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'] {
-	--bb-c: var(--bb-a);
-	--bb-t: var(--bb-a-t);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'] {
-	--bb-c: var(--bb-b);
-	--bb-t: var(--bb-b-t);
-}
-
-/* 系统行：居中小号胶囊(默认形态，A/B 气泡在下面覆盖) */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row {
-	--bb-bg: var(--bb-surface);
-	--bb-bd: var(--border-light);
-	--bb-ring: 0 0 0 0 transparent;
-	flex-wrap: wrap;
-	align-items: center;
-	justify-content: center;
-	gap: 2px 8px;
-	width: fit-content;
-	max-width: 86%;
-	margin: 6px auto;
-	padding: 1px 12px;
-	border: 1px solid var(--bb-bd);
-	border-radius: 10px;
-	background-color: var(--bb-bg);
-	box-shadow: var(--bb-ring);
-	font-size: 0.7rem;
-	line-height: 1.5;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:hover {
-	--bb-bg: var(--bg-surface-hover);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row.selected {
-	--bb-bg: color-mix(in srgb, var(--danger) 12%, var(--bb-surface));
-	--bb-ring: 0 0 0 1.5px var(--danger);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-time:empty {
-	display: none;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-body {
-	flex: 0 1 auto;
-}
-
-/* A / B 的收发行：气泡版式 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) {
-	display: block;
-	max-width: 68%;
-	margin-block: 5px;
-	padding: 6px 10px 7px;
-	border-width: 1.5px;
-	border-radius: 12px;
-	font-size: 0.75rem;
-	line-height: 1.6;
-	color: var(--bb-t);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A']:is([data-dir='tx'], [data-dir='rx']) {
-	margin-inline: 0 auto;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B']:is([data-dir='tx'], [data-dir='rx']) {
-	margin-inline: auto 0;
-}
-
-/* TX：实心填充、无边框 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] {
-	--bb-bg: color-mix(in srgb, var(--bb-c) 16%, var(--bb-surface));
-	--bb-bd: transparent;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx']:hover {
-	--bb-bg: color-mix(in srgb, var(--bb-c) 24%, var(--bb-surface));
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'].selected {
-	--bb-bg: color-mix(in srgb, var(--bb-c) 30%, var(--bb-surface));
-	--bb-ring: 0 0 0 2px var(--bb-c);
-}
-
-/* RX：面色底 + 路色实线描边 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'] {
-	--bb-bg: var(--bb-surface);
-	--bb-bd: var(--bb-c);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx']:hover {
-	--bb-bg: color-mix(in srgb, var(--bb-c) 8%, var(--bb-surface));
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'].selected {
-	--bb-bg: color-mix(in srgb, var(--bb-c) 14%, var(--bb-surface));
-	--bb-ring: 0 0 0 2px color-mix(in srgb, var(--bb-c) 45%, transparent);
-}
-
-/* 第一行：时间 + 方向标签 + 会话名 + 长度(行内排)；正文是块级、另起一行占满气泡宽。
-   气泡改成块级容器而不是 flex 换行：气泡宽度取「首行」与「正文」中较宽者，不会因为 flex 单行 max-content 把短帧也撑到上限 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > :is(.log-time, .log-dir, .log-sess, .log-len) {
-	display: inline-block;
-	margin-right: 8px;
-	vertical-align: middle;
-	color: var(--bb-t);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-time:empty {
-	display: none;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-body {
-	display: block;
-	max-width: 100%;
-	margin-top: 3px;
-	color: var(--bb-t);
-	overflow-x: auto;
-}
-
-/* 方向标签：文字清零，改由 ::before 显示「↑ 发送 / ↓ 接收」(复制日志读的是元素文本，伪元素不进剪贴板) */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-dir {
-	min-width: 0;
-	padding: 0 7px;
-	border: 1px solid var(--bb-t);
-	font-size: 0;
-	line-height: 1.45;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-dir::before {
-	font-size: 0.65rem;
-	font-weight: 700;
-	letter-spacing: 0.03em;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] > .log-dir {
-	background-color: var(--bb-t);
-	color: var(--bb-on);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'] > .log-dir {
-	background-color: transparent;
-	color: var(--bb-t);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='tx'] > .log-dir::before {
-	content: '↑ 发送';
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='rx'] > .log-dir::before {
-	content: '↓ 接收';
-}
-
-/* 正文里的解析块不得溢出气泡 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-body :is(.pv, .sk-parse, .sk-parse-block, pre, table, img, canvas, svg) {
-	max-width: 100%;
-	box-sizing: border-box;
-}
-
-@media (max-width: 768px) {
-	html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) {
-		max-width: 88%;
-	}
-}
-
 /* ========== 功耗分析：串口事件道（仅现代布局） ========== */
 /* 经典布局下整条道不进布局流；TX/RX 颜色由 JS 画布按这里的变量取，图例共用 */
 .blu-serial-lane {
@@ -9714,8 +9521,9 @@ html[data-layout='modern'] #serial-parse-panel.wb-bottom-none {
 
 /* ---------- 检查器(右栏第一个标签) ---------- */
 html[data-layout='modern'] .wb-inspector {
-	gap: 8px;
+	gap: 10px;
 	min-height: 0;
+	overflow-y: auto;
 }
 
 html[data-layout='modern'] .wb-inspector-bar {
@@ -9751,13 +9559,19 @@ html[data-layout='modern'] .wb-inspector-tools .btn {
 	border-radius: var(--radius-sm);
 }
 
+/* 原协议解析面板放在「原始输出」折叠区里：不再撑满高度，HEX 输入区与输出区按内容高度排 */
 html[data-layout='modern'] .wb-inspector #serial-parse-body {
-	flex: 1 1 0;
-	min-height: 0;
+	flex: 0 0 auto;
 	padding: 0;
-	overflow: hidden;
+	overflow: visible;
 	border-radius: 0;
 	background-color: transparent;
+}
+
+html[data-layout='modern'] .wb-inspector #serial-protocol-output {
+	flex: 0 0 auto;
+	max-height: 260px;
+	overflow: auto;
 }
 
 html[data-layout='modern'] .wb-inspector .sk-hex-dump {
@@ -9882,5 +9696,2834 @@ html[data-layout='modern'] #fw-pack-upgrade > #nav-firmware {
 @media (max-width: 768px) {
 	html[data-layout='modern'] #app-shell > #views {
 		height: auto;
+	}
+}
+
+/* ===== 现代布局 v2 · 检查器与双路时间线 ===== */
+/* 两路的路色：A 蓝、B 橙(设计稿)；-t 是落在浅/深面色上的文字色，-on 是落在路色实心底上的文字色，对比度均 >= 4.5:1 */
+html[data-layout='modern'] {
+	--mdn-ax: 112px;
+	--mdn-a: #1f5fbf;
+	--mdn-a-t: #174c99;
+	--mdn-b: #c2410c;
+	--mdn-b-t: #9a3412;
+	--mdn-on: #ffffff;
+	--mdn-slow: #b42318;
+	--mdn-band: #fff3c4;
+	--mdn-sel: #d99a00;
+}
+
+html[data-layout='modern'][data-theme='dark'] {
+	--mdn-a: #6ea8ff;
+	--mdn-a-t: #9cc4ff;
+	--mdn-b: #fb923c;
+	--mdn-b-t: #fdba74;
+	--mdn-on: #0b1220;
+	--mdn-slow: #ff8a80;
+	--mdn-band: rgba(255, 209, 102, 0.14);
+	--mdn-sel: #ffd166;
+}
+
+/* ---------- 检查器：头部 ---------- */
+html[data-layout='modern'] .wb-insp-view {
+	flex: 0 0 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	outline: none;
+}
+
+html[data-layout='modern'] .mi-head {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding-bottom: 10px;
+	border-bottom: 1px solid var(--border-light);
+}
+
+html[data-layout='modern'] .mi-dir {
+	align-self: flex-start;
+	padding: 2px 8px;
+	border: 1.5px solid var(--text-secondary);
+	border-radius: 4px;
+	color: var(--text-secondary);
+	font-size: 0.68rem;
+	font-weight: 700;
+	letter-spacing: 0.02em;
+}
+
+html[data-layout='modern'] .mi-dir--tx {
+	border-color: var(--accent);
+	background: var(--accent);
+	color: var(--accent-text, #fff);
+}
+
+html[data-layout='modern'] .mi-dir--rx {
+	border-color: var(--text-secondary);
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] .mi-dir--tx.lane-a {
+	border-color: var(--mdn-a);
+	background: var(--mdn-a);
+	color: var(--mdn-on);
+}
+
+html[data-layout='modern'] .mi-dir--tx.lane-b {
+	border-color: var(--mdn-b);
+	background: var(--mdn-b);
+	color: var(--mdn-on);
+}
+
+html[data-layout='modern'] .mi-dir--rx.lane-a {
+	border-color: var(--mdn-a);
+	color: var(--mdn-a-t);
+}
+
+html[data-layout='modern'] .mi-dir--rx.lane-b {
+	border-color: var(--mdn-b);
+	color: var(--mdn-b-t);
+}
+
+html[data-layout='modern'] .mi-dir--manual {
+	border-style: dashed;
+}
+
+html[data-layout='modern'] .mi-title {
+	font-size: 0.95rem;
+	font-weight: 700;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+}
+
+html[data-layout='modern'] .mi-code {
+	margin-left: 6px;
+	font-family: var(--font-mono);
+	font-size: 0.72rem;
+	font-weight: 400;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mi-subline {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 6px;
+	font-size: 0.72rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mi-badge {
+	padding: 0 6px;
+	border: 1px solid currentColor;
+	border-radius: 999px;
+	font-size: 0.66rem;
+	font-weight: 600;
+	line-height: 1.5;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mi-badge--ok {
+	color: #1e7a3a;
+}
+
+html[data-layout='modern'] .mi-badge--bad {
+	color: var(--mdn-slow);
+}
+
+html[data-layout='modern'] .mi-badge--warn {
+	color: var(--mdn-b-t);
+}
+
+html[data-layout='modern'] .mi-badge--info {
+	color: var(--mdn-a-t);
+}
+
+html[data-layout='modern'][data-theme='dark'] .mi-badge--ok {
+	color: #7fe0a0;
+}
+
+/* ---------- 检查器：键值表 ---------- */
+html[data-layout='modern'] .mi-fields {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	padding-bottom: 10px;
+	border-bottom: 1px solid var(--border-light);
+}
+
+html[data-layout='modern'] .mi-kv {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 3px 6px;
+	border-radius: 4px;
+	font-size: 0.74rem;
+}
+
+html[data-layout='modern'] .mi-kv:hover {
+	background: var(--bg-surface-hover);
+}
+
+html[data-layout='modern'] .mi-k {
+	flex: 1 1 auto;
+	min-width: 0;
+	color: var(--text-secondary);
+	overflow-wrap: anywhere;
+}
+
+html[data-layout='modern'] .mi-v {
+	flex: 0 1 auto;
+	max-width: 62%;
+	font-family: var(--font-mono);
+	font-weight: 600;
+	text-align: right;
+	overflow-wrap: anywhere;
+}
+
+html[data-layout='modern'] .mi-v--ok {
+	color: #1e7a3a;
+}
+
+html[data-layout='modern'] .mi-v--bad {
+	color: var(--mdn-slow);
+}
+
+html[data-layout='modern'] .mi-v--warn {
+	color: var(--mdn-b-t);
+}
+
+html[data-layout='modern'][data-theme='dark'] .mi-v--ok {
+	color: #7fe0a0;
+}
+
+html[data-layout='modern'] .mi-h {
+	flex: 0 0 auto;
+	font-family: var(--font-mono);
+	font-size: 0.62rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mi-sec,
+html[data-layout='modern'] .mi-cap,
+html[data-layout='modern'] .mi-frame-title {
+	margin-top: 6px;
+	color: var(--text-secondary);
+	font-size: 0.68rem;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+}
+
+html[data-layout='modern'] .mi-cap {
+	margin-top: 0;
+	margin-bottom: 6px;
+}
+
+html[data-layout='modern'] .mi-frame-title {
+	padding: 3px 6px;
+	border-radius: 4px;
+	background: var(--mdn-subtle);
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] .mi-sub-sec {
+	margin-top: 2px;
+	padding-left: 6px;
+	color: var(--text-secondary);
+	font-size: 0.68rem;
+	font-weight: 600;
+}
+
+html[data-layout='modern'] .mi-note {
+	padding: 3px 6px;
+	font-size: 0.72rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mi-note--warn {
+	color: var(--mdn-b-t);
+}
+
+html[data-layout='modern'] .mi-err {
+	padding: 3px 6px;
+	font-size: 0.72rem;
+	color: var(--mdn-slow);
+}
+
+html[data-layout='modern'] .mi-pre {
+	margin: 2px 0;
+	padding: 6px 8px;
+	border-radius: 4px;
+	background: var(--bg-code);
+	font-size: 0.68rem;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+html[data-layout='modern'] .mi-html {
+	padding: 2px 6px;
+	font-size: 0.72rem;
+}
+
+html[data-layout='modern'] .mi-fallback {
+	padding: 10px 12px;
+	border: 1px dashed var(--border-color);
+	border-radius: var(--radius-md);
+	color: var(--text-secondary);
+	font-size: 0.74rem;
+	line-height: 1.5;
+}
+
+html[data-layout='modern'] .mi-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+	padding: 22px 12px;
+	border: 1px dashed var(--border-color);
+	border-radius: var(--radius-md);
+	text-align: center;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mi-empty .bi {
+	font-size: 1.3rem;
+}
+
+html[data-layout='modern'] .mi-empty-main {
+	color: var(--text-primary);
+	font-size: 0.82rem;
+	font-weight: 600;
+}
+
+html[data-layout='modern'] .mi-empty-sub {
+	font-size: 0.72rem;
+}
+
+html[data-layout='modern'] .mi-paste {
+	margin-top: 4px;
+	font-size: 0.74rem;
+}
+
+/* ---------- 检查器：字节视图 ---------- */
+html[data-layout='modern'] .mi-bytes {
+	padding-bottom: 10px;
+	border-bottom: 1px solid var(--border-light);
+}
+
+html[data-layout='modern'] .mi-hex {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	font-family: var(--font-mono);
+	font-size: 0.68rem;
+	line-height: 1.7;
+}
+
+html[data-layout='modern'] .mi-hex-row {
+	display: grid;
+	grid-template-columns: 2.6em repeat(16, minmax(0, 1fr));
+	gap: 1px;
+	align-items: center;
+}
+
+html[data-layout='modern'] .mi-hex-off {
+	color: var(--text-secondary);
+	user-select: none;
+}
+
+html[data-layout='modern'] .mi-byte {
+	text-align: center;
+	border-radius: 3px;
+}
+
+html[data-layout='modern'] .mi-byte.tone-0 {
+	background: color-mix(in srgb, var(--mdn-a) 16%, transparent);
+}
+
+html[data-layout='modern'] .mi-byte.tone-1 {
+	background: color-mix(in srgb, var(--mdn-b) 16%, transparent);
+}
+
+html[data-layout='modern'] .mi-byte.is-hot {
+	background: var(--mdn-sel);
+	color: #1d1d1f;
+}
+
+/* ---------- 检查器：从请求到应答 ---------- */
+html[data-layout='modern'] .mi-rel {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding-bottom: 10px;
+	border-bottom: 1px solid var(--border-light);
+}
+
+html[data-layout='modern'] .mi-rel .mi-cap {
+	margin-bottom: 0;
+}
+
+html[data-layout='modern'] .mi-rel-row {
+	display: grid;
+	grid-template-columns: 62px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 8px;
+	font-size: 0.72rem;
+}
+
+html[data-layout='modern'] .mi-rel-row.is-self .mi-rel-name {
+	font-weight: 700;
+}
+
+html[data-layout='modern'] .mi-rel-tag {
+	padding: 0 6px;
+	border: 1.5px solid var(--text-secondary);
+	border-radius: 4px;
+	color: var(--text-primary);
+	font-size: 0.64rem;
+	font-weight: 700;
+	text-align: center;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .mi-rel-tag.tx.lane-a {
+	border-color: var(--mdn-a);
+	background: var(--mdn-a);
+	color: var(--mdn-on);
+}
+
+html[data-layout='modern'] .mi-rel-tag.tx.lane-b {
+	border-color: var(--mdn-b);
+	background: var(--mdn-b);
+	color: var(--mdn-on);
+}
+
+html[data-layout='modern'] .mi-rel-tag.rx.lane-a {
+	border-color: var(--mdn-a);
+	color: var(--mdn-a-t);
+}
+
+html[data-layout='modern'] .mi-rel-tag.rx.lane-b {
+	border-color: var(--mdn-b);
+	color: var(--mdn-b-t);
+}
+
+html[data-layout='modern'] .mi-rel-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .mi-rel-d {
+	font-family: var(--font-mono);
+	color: var(--text-secondary);
+}
+
+/* ---------- 检查器：原始输出(原协议解析面板，含 HEX 粘贴输入) ---------- */
+html[data-layout='modern'] .wb-insp-raw {
+	flex: 0 0 auto;
+	border-top: 1px solid var(--border-color);
+	padding-top: 6px;
+}
+
+html[data-layout='modern'] .wb-insp-raw-sum {
+	color: var(--text-secondary);
+	font-size: 0.72rem;
+	font-weight: 600;
+	padding: 2px 0;
+}
+
+html[data-layout='modern'] .wb-insp-raw-sum:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+html[data-layout='modern'] .wb-insp-raw-body {
+	padding-top: 6px;
+}
+
+/* ---------- 双路时间线(双路视图 = 气泡) ---------- */
+/* 容器是纵向 flex：A 路气泡贴轴列左侧、B 路贴右侧；轴列 = 容器中线两侧各 --mdn-ax/2，时间/Δ/静默由行的伪元素画在轴列里。
+   轴线用容器背景(local：随内容滚动)画两条细线；行 DOM、容器子节点结构都不动 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual {
+	--bb-surface: var(--bg-surface);
+	--bb-plate: var(--bg-surface);
+	--bb-plate-fg: var(--text-primary);
+	--bb-line: var(--border-color);
+	display: flex;
+	flex-direction: column;
+	padding: 8px 12px 14px;
+	background-image: linear-gradient(var(--bb-line), var(--bb-line)), linear-gradient(var(--bb-line), var(--bb-line));
+	background-size: 1px 100%, 1px 100%;
+	background-repeat: no-repeat;
+	background-position: calc(50% - var(--mdn-ax) / 2) 0, calc(50% + var(--mdn-ax) / 2) 0;
+	background-attachment: local, local;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi) {
+	background-color: var(--mdn-subtle);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi {
+	--bb-surface: #2c2c30;
+	--bb-plate: #1c1c1e;
+	--bb-plate-fg: #f5f5f7;
+	--bb-line: #48484c;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'] {
+	--bb-c: var(--mdn-a);
+	--bb-t: var(--mdn-a-t);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'] {
+	--bb-c: var(--mdn-b);
+	--bb-t: var(--mdn-b-t);
+}
+
+/* 系统行等：居中小胶囊 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row {
+	--bb-bg: var(--bb-surface);
+	--bb-bd: var(--border-light);
+	--bb-ring: 0 0 0 0 transparent;
+	position: relative;
+	flex: 0 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
+	align-self: center;
+	gap: 2px 8px;
+	width: fit-content;
+	max-width: 86%;
+	margin: 6px 0;
+	padding: 1px 12px;
+	border: 1px solid var(--bb-bd);
+	border-radius: 10px;
+	background-color: var(--bb-bg);
+	box-shadow: var(--bb-ring);
+	font-size: 0.7rem;
+	line-height: 1.5;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:hover {
+	--bb-bg: var(--bg-surface-hover);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row.selected {
+	--bb-bg: color-mix(in srgb, var(--danger) 12%, var(--bb-surface));
+	--bb-ring: 0 0 0 2px var(--mdn-sel);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-time:empty {
+	display: none;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-body {
+	flex: 0 1 auto;
+}
+
+/* A / B 的收发行：气泡 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) {
+	display: block;
+	max-width: calc(50% - var(--mdn-ax) / 2 - 10px);
+	margin-block: 5px;
+	padding: 5px 10px 7px;
+	border-width: 1.5px;
+	border-radius: 12px;
+	font-size: 0.75rem;
+	line-height: 1.6;
+	color: var(--bb-t);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A']:is([data-dir='tx'], [data-dir='rx']) {
+	align-self: flex-end;
+	margin-right: calc(50% + var(--mdn-ax) / 2 + 10px);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B']:is([data-dir='tx'], [data-dir='rx']) {
+	align-self: flex-start;
+	margin-left: calc(50% + var(--mdn-ax) / 2 + 10px);
+}
+
+/* TX：路色实心；正文放在面色小底板里，解析块沿用主题配色 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] {
+	--bb-bg: var(--bb-c);
+	--bb-bd: var(--bb-c);
+	color: var(--mdn-on);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx']:hover {
+	--bb-bg: color-mix(in srgb, var(--bb-c) 88%, var(--text-primary));
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] > .log-body {
+	padding: 3px 8px;
+	border-radius: 8px;
+	background: var(--bb-plate);
+	color: var(--bb-plate-fg);
+}
+
+/* RX：浅底 + 路色描边 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'] {
+	--bb-bg: color-mix(in srgb, var(--bb-c) 7%, var(--bb-surface));
+	--bb-bd: var(--bb-c);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx']:hover {
+	--bb-bg: color-mix(in srgb, var(--bb-c) 13%, var(--bb-surface));
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'] > .log-body {
+	color: var(--bb-plate-fg);
+}
+
+/* 选中：黄环(设计稿)，覆盖 TX / RX 各自的状态环 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']).selected {
+	--bb-ring: 0 0 0 3px var(--mdn-sel);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'].selected {
+	--bb-bg: var(--bb-c);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'].selected {
+	--bb-bg: color-mix(in srgb, var(--bb-c) 13%, var(--bb-surface));
+}
+
+/* 气泡首行：方向 + 路名 + 长度；时间移到轴列，行首的 .log-time 清成零尺寸块，只当静默胶囊的宿主 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-time {
+	display: block;
+	width: 0;
+	height: 0;
+	margin: 0;
+	padding: 0;
+	overflow: visible;
+	font-size: 0;
+	line-height: 0;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > :is(.log-dir, .log-sess, .log-len) {
+	display: inline-block;
+	margin-right: 8px;
+	vertical-align: middle;
+	background: transparent;
+	color: var(--bb-t);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] > :is(.log-dir, .log-sess, .log-len) {
+	color: var(--mdn-on);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-body {
+	display: block;
+	max-width: 100%;
+	margin-top: 3px;
+	overflow-x: auto;
+}
+
+/* 方向标签：文字清零，改由 ::before 显示「↑ TX / ↓ RX」，路名接在后面(复制日志读元素文本，伪元素不进剪贴板) */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-dir {
+	min-width: 0;
+	margin-right: 4px;
+	padding: 0;
+	border: 0;
+	font-size: 0;
+	line-height: 1.45;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-dir::before {
+	font-size: 0.66rem;
+	font-weight: 700;
+	letter-spacing: 0.03em;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='tx'] > .log-dir::before {
+	content: '↑ TX';
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='rx'] > .log-dir::before {
+	content: '↓ RX';
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='tx'] > .log-sess::before {
+	content: '· 发给 ';
+	font-weight: 400;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='rx'] > .log-sess::before {
+	content: '· 来自 ';
+	font-weight: 400;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-len {
+	font-size: 0.64rem;
+	opacity: 0.85;
+}
+
+/* 轴列：时间(::before)、Δ 或慢应答耗时(::after)。A 路气泡在轴列左侧，伪元素从气泡右缘起排；B 路镜像 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-t]::before,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-d]::after {
+	position: absolute;
+	width: var(--mdn-ax);
+	text-align: center;
+	font-family: var(--font-mono);
+	font-size: 0.68rem;
+	line-height: 1.3;
+	white-space: nowrap;
+	pointer-events: none;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-t]::before {
+	content: attr(data-mdn-t);
+	top: 5px;
+	color: var(--text-secondary);
+	font-weight: 600;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-d]::after {
+	content: attr(data-mdn-d);
+	top: 21px;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-slow]::after {
+	color: var(--mdn-slow);
+	font-weight: 700;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'][data-mdn-t]::before,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'][data-mdn-d]::after {
+	left: calc(100% + 11.5px);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'][data-mdn-t]::before,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'][data-mdn-d]::after {
+	right: calc(100% + 11.5px);
+}
+
+/* 静默分隔：与上一条间隔超过阈值时，行上方留出空位，在轴列里画胶囊(宿主是行首的 .log-time，伪元素读它自己的 data-mdn-gap) */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:has(> .log-time[data-mdn-gap]) {
+	margin-top: 26px;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-time[data-mdn-gap]::before {
+	content: '⋮ 静默 ' attr(data-mdn-gap);
+	position: absolute;
+	top: -22px;
+	width: calc(var(--mdn-ax) - 12px);
+	padding: 1px 0;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--border-color) 55%, var(--bb-surface));
+	color: var(--text-secondary);
+	font-family: var(--font-mono);
+	font-size: 0.64rem;
+	line-height: 1.4;
+	text-align: center;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'] > .log-time[data-mdn-gap]::before {
+	left: calc(100% + 17.5px);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'] > .log-time[data-mdn-gap]::before {
+	right: calc(100% + 17.5px);
+}
+
+/* 选中帧到本路应答之间两路的所有行：整行通栏浅色底带(超大扩展阴影 + 按行高裁剪，不改行盒) */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-band] {
+	box-shadow: var(--bb-ring), 0 0 0 100vmax var(--mdn-band);
+	clip-path: inset(-5px -100vmax);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-band]:has(> .log-time[data-mdn-gap]) {
+	clip-path: inset(-26px -100vmax -5px);
+}
+
+/* 吸顶列头：在日志容器外面(js/modern-timeline.js 建的兄弟节点)，不随日志滚动，也不进日志内容 */
+#mdn-tl-head {
+	display: none;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #mdn-tl-head {
+	flex: 0 0 auto;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) var(--mdn-ax) minmax(0, 1fr);
+	align-items: center;
+	padding: 5px calc(12px + var(--mdn-sbw, 0px)) 5px 12px;
+	border-bottom: 1px solid var(--border-light);
+	background: var(--mdn-subtle);
+	font-size: 0.72rem;
+	font-weight: 700;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] .serial-log-mode:has(> #serial-logs-dual[hidden]) > #mdn-tl-head {
+	display: none;
+}
+
+html[data-layout='modern'] #mdn-tl-head > span {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] #mdn-tl-head .mdn-tl-a {
+	padding-right: 10px;
+	text-align: right;
+	color: var(--mdn-a-t);
+}
+
+html[data-layout='modern'] #mdn-tl-head .mdn-tl-m {
+	text-align: center;
+	color: var(--text-secondary);
+	font-weight: 600;
+}
+
+html[data-layout='modern'] #mdn-tl-head .mdn-tl-b {
+	padding-left: 10px;
+	color: var(--mdn-b-t);
+}
+
+@media (max-width: 768px) {
+	html[data-layout='modern'] {
+		--mdn-ax: 88px;
+	}
+}
+
+/* ===== 现代布局 v2 · 固件页 ===== */
+/* 固件页重建成四步流水线（js/modern-firmware.js 搬原节点进新结构）：下面的规则都以 :has(> #mdn-fw) 限定，
+   没挂上流水线时仍是上面 v1 的两栏。打包页原容器与 v1 的升级宿主在流水线挂上后整体隐藏，其中的控件都已搬走 */
+html[data-layout='modern'] .mdn-fw {
+	--mdn-fw-ok: #167a3d;
+	--mdn-fw-bad: #b42318;
+	--mdn-fw-warn: #8a5300;
+	--mdn-fw-idle: #aab3c0;
+	--mdn-fw-on: #ffffff;
+	--mdn-cell-pending: #cdd4de;
+	--mdn-cell-active: #1f5fbf;
+	--mdn-cell-done: #1c2330;
+	--mdn-cell-retry: #e07a1f;
+}
+
+html[data-layout='modern'][data-theme='dark'] .mdn-fw {
+	--mdn-fw-ok: #5fd98a;
+	--mdn-fw-bad: #ff8a80;
+	--mdn-fw-warn: #ffc27a;
+	--mdn-fw-idle: #5a5a5e;
+	--mdn-fw-on: #0b1220;
+	--mdn-cell-pending: #4a4a4e;
+	--mdn-cell-active: #6ea8ff;
+	--mdn-cell-done: #e5e7eb;
+	--mdn-cell-retry: #f0a060;
+}
+
+html[data-layout='modern'] #view-fw-pack.active:has(> #mdn-fw) {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+html[data-layout='modern'] #view-fw-pack:has(> #mdn-fw) > .fw-pack-wrapper,
+html[data-layout='modern'] #view-fw-pack:has(> #mdn-fw) > #fw-pack-upgrade {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-fw {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	padding: 16px;
+	overflow: auto;
+	background: var(--bg-body);
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] .mdn-fw [hidden] {
+	display: none !important;
+}
+
+/* 深色下强调色字压在强调色浅底上对比度不足 4.5，输出类型胶囊的选中字色单独提亮 */
+html[data-layout='modern'][data-theme='dark'] .mdn-fw .ctl-chip input:checked + span {
+	color: #9ec5ff;
+}
+
+/* ---- 顶部四步进度条 ---- */
+html[data-layout='modern'] .mdn-fw-steps {
+	flex: 0 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-xl);
+	overflow: hidden;
+}
+
+html[data-layout='modern'] .mdn-fw-step {
+	--c: var(--mdn-fw-idle);
+	--ct: var(--text-secondary);
+	flex: 1 1 180px;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 14px;
+	border-bottom: 3px solid var(--c);
+}
+
+html[data-layout='modern'] .mdn-fw-step[data-state='done'] {
+	--c: var(--mdn-fw-ok);
+	--ct: var(--mdn-fw-ok);
+}
+
+html[data-layout='modern'] .mdn-fw-step[data-state='active'] {
+	--c: var(--accent);
+	--ct: var(--accent);
+}
+
+html[data-layout='modern'] .mdn-fw-step[data-state='failed'] {
+	--c: var(--mdn-fw-bad);
+	--ct: var(--mdn-fw-bad);
+}
+
+html[data-layout='modern'] .mdn-fw-step-badge {
+	flex: 0 0 auto;
+	width: 24px;
+	height: 24px;
+	border-radius: 50%;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	border: 2px solid var(--c);
+	color: var(--text-secondary);
+	font-size: 0.75rem;
+	font-weight: 700;
+}
+
+html[data-layout='modern'] .mdn-fw-step:not([data-state='waiting']) .mdn-fw-step-badge {
+	background: var(--c);
+	color: var(--mdn-fw-on);
+}
+
+/* 进行中没有记号，用实心圆内一个小点，不靠颜色单独表达 */
+html[data-layout='modern'] .mdn-fw-step[data-state='active'] .mdn-fw-step-badge::after {
+	content: '';
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--mdn-fw-on);
+}
+
+html[data-layout='modern'] .mdn-fw-step-text {
+	min-width: 0;
+}
+
+html[data-layout='modern'] .mdn-fw-step-top {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+}
+
+html[data-layout='modern'] .mdn-fw-step-name {
+	font-size: 0.82rem;
+	font-weight: 700;
+}
+
+html[data-layout='modern'] .mdn-fw-step-state {
+	font-size: 0.68rem;
+	font-weight: 600;
+	color: var(--ct);
+}
+
+html[data-layout='modern'] .mdn-fw-step-sum {
+	margin-top: 1px;
+	font-size: 0.72rem;
+	color: var(--text-secondary);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* ---- 四张卡片 ---- */
+html[data-layout='modern'] .mdn-fw-cards {
+	flex: 1 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: stretch;
+	gap: 14px;
+}
+
+html[data-layout='modern'] .mdn-fw-card {
+	flex: 1 1 280px;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 14px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-xl);
+}
+
+html[data-layout='modern'] .mdn-fw-card[data-step='1'] {
+	flex-basis: 260px;
+}
+
+html[data-layout='modern'] .mdn-fw-card[data-step='3'] {
+	flex: 1.3 1 340px;
+}
+
+html[data-layout='modern'] .mdn-fw-card[data-step='4'] {
+	flex-basis: 200px;
+}
+
+html[data-layout='modern'] .mdn-fw-card-head {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+}
+
+html[data-layout='modern'] .mdn-fw-cap {
+	margin: 0;
+	font-size: 0.72rem;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-fw-cap-sub {
+	font-size: 0.7rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-fw-hint {
+	margin: 0;
+	font-size: 0.72rem;
+	line-height: 1.6;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-fw-card[data-step='1'] > .mdn-fw-hint {
+	padding-top: 8px;
+	margin-top: auto;
+	border-top: 1px solid var(--border-light);
+}
+
+html[data-layout='modern'] .mdn-fw-mono {
+	font-family: var(--font-mono);
+}
+
+html[data-layout='modern'] .mdn-fw-empty {
+	padding: 10px;
+	border: 1px dashed var(--border-color);
+	border-radius: var(--radius-lg);
+	font-size: 0.72rem;
+	color: var(--text-secondary);
+	text-align: center;
+}
+
+html[data-layout='modern'] .mdn-fw-note {
+	padding: 6px 10px;
+	border-radius: var(--radius-md);
+	font-size: 0.72rem;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+	background: var(--mdn-subtle);
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-fw-note[data-level='error'] {
+	background: var(--danger-light);
+	color: var(--mdn-fw-bad);
+}
+
+html[data-layout='modern'] .mdn-fw-note[data-level='warn'] {
+	background: rgba(255, 149, 0, 0.14);
+	color: var(--mdn-fw-warn);
+}
+
+/* ---- 卡片 1：搬进来的拖拽卡与配置项 ---- */
+html[data-layout='modern'] .mdn-fw .fw-drop-card {
+	background: var(--mdn-subtle);
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-lg);
+	overflow: visible;
+}
+
+html[data-layout='modern'] .mdn-fw #fp-drop-new {
+	border-color: var(--accent);
+}
+
+html[data-layout='modern'] .mdn-fw .fw-drop-card-header {
+	padding: 8px 12px 0;
+	background: transparent;
+	border-bottom: 0;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-drop-zone {
+	margin: 6px 10px 10px;
+	padding: 10px;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-drop-zone {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	align-items: center;
+	column-gap: 10px;
+	text-align: left;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-drop-zone-icon {
+	grid-row: 1 / span 2;
+	margin: 0;
+	font-size: 1.5rem;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-drop-zone-text {
+	margin: 0;
+	font-size: 0.78rem;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-file-info {
+	margin: 6px 10px 10px;
+	padding: 8px 10px;
+	gap: 10px;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-file-icon {
+	width: 30px;
+	height: 30px;
+	border-radius: var(--radius-md);
+	font-size: 1rem;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-file-name {
+	font-family: var(--font-mono);
+	font-size: 0.78rem;
+}
+
+html[data-layout='modern'] .mdn-fw .mdn-fw-ver {
+	font-size: 0.68rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-fw .fw-config-item {
+	gap: 6px;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-input {
+	padding: 4px 10px !important;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-blank-row {
+	gap: 8px;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-blank-name {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+/* ---- 卡片 2：生成与产物 ---- */
+html[data-layout='modern'] .mdn-fw-genrow {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px 12px;
+}
+
+html[data-layout='modern'] .mdn-fw-outs {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+html[data-layout='modern'] .mdn-fw-out {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 4px 8px;
+	width: 100%;
+	padding: 9px 10px;
+	border: 1.5px solid transparent;
+	border-radius: var(--radius-lg);
+	background: var(--mdn-subtle);
+	color: var(--text-primary);
+	font: inherit;
+	text-align: left;
+}
+
+html[data-layout='modern'] .mdn-fw-out:hover {
+	border-color: var(--border-color);
+}
+
+html[data-layout='modern'] .mdn-fw-out[aria-selected='true'] {
+	border-color: var(--accent);
+	background: var(--accent-light);
+}
+
+html[data-layout='modern'] .mdn-fw-out:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+html[data-layout='modern'] .mdn-fw-out-name {
+	font-size: 0.75rem;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+html[data-layout='modern'] .mdn-fw-out-size {
+	font-size: 0.75rem;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .mdn-fw-bar {
+	grid-column: 1 / -1;
+	height: 5px;
+	border-radius: 3px;
+	background: var(--border-color);
+	overflow: hidden;
+}
+
+html[data-layout='modern'] .mdn-fw-bar-fill {
+	display: block;
+	height: 100%;
+	border-radius: 3px;
+	background: var(--accent);
+}
+
+html[data-layout='modern'] .mdn-fw-out-desc {
+	grid-column: 1 / -1;
+	font-size: 0.7rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-fw-zipnote {
+	font-size: 0.7rem;
+	color: var(--text-secondary);
+	overflow-wrap: anywhere;
+}
+
+html[data-layout='modern'] .mdn-fw-actions {
+	display: flex;
+	gap: 8px;
+	margin-top: auto;
+}
+
+html[data-layout='modern'] .mdn-fw-actions .btn {
+	flex: 1 1 0;
+}
+
+/* ---- 折叠区（生成日志 / 升级日志） ---- */
+html[data-layout='modern'] .mdn-fw-fold {
+	border-top: 1px solid var(--border-light);
+	padding-top: 4px;
+}
+
+html[data-layout='modern'] .mdn-fw-fold-btn {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	padding: 4px 0;
+	border: 0;
+	background: transparent;
+	color: var(--text-secondary);
+	font-size: 0.74rem;
+	font-weight: 600;
+	text-align: left;
+}
+
+html[data-layout='modern'] .mdn-fw-fold-btn:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+html[data-layout='modern'] .mdn-fw-fold-title {
+	flex: 0 0 auto;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .mdn-fw-fold-caret {
+	font-size: 0.7rem;
+}
+
+html[data-layout='modern'] .mdn-fw-fold-btn[aria-expanded='true'] .mdn-fw-fold-caret {
+	transform: rotate(90deg);
+}
+
+html[data-layout='modern'] .mdn-fw-fold-last {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	text-align: right;
+	font-family: var(--font-mono);
+	font-size: 0.68rem;
+	font-weight: 400;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-fw-fold-body {
+	margin-top: 4px;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-log-card {
+	flex: none;
+	min-height: 0;
+	box-shadow: none;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-log-header {
+	justify-content: flex-end;
+	padding: 6px 10px;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-log-header > span {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-log-body,
+html[data-layout='modern'] .mdn-fw #fw-log {
+	min-height: 80px !important;
+	max-height: 240px;
+	overflow: auto;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-log-body {
+	padding: 10px 12px;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-log-upgrade-btn:hover {
+	color: var(--accent-text, #fff);
+}
+
+/* ---- 卡片 3：升级 ---- */
+html[data-layout='modern'] .mdn-fw .fw-upgrade-card {
+	margin: 0;
+	padding: 0 !important;
+	border: 0 !important;
+	border-radius: 0 !important;
+	background: transparent;
+	box-shadow: none;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-upgrade-card .pane-section-title {
+	margin: 0 0 6px;
+	font-size: 0.72rem;
+	font-weight: 600;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-fw .fw-upgrade-dropzone {
+	padding: 12px;
+}
+
+html[data-layout='modern'] .mdn-fw .fw-upgrade-drop-icon {
+	margin-bottom: 2px;
+}
+
+html[data-layout='modern'] .mdn-fw #fw-info {
+	min-height: 0 !important;
+	max-height: 160px;
+	overflow: auto;
+	font-size: 0.72rem;
+}
+
+html[data-layout='modern'] .mdn-fw #fw-info:empty {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-fw-slot--ctl > div {
+	margin-bottom: 0 !important;
+}
+
+html[data-layout='modern'] .mdn-fw-prog {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 4px 10px;
+}
+
+html[data-layout='modern'] .mdn-fw-big {
+	font-family: var(--font-mono);
+	font-size: 2.25rem;
+	font-weight: 600;
+	line-height: 1;
+	font-variant-numeric: tabular-nums;
+}
+
+html[data-layout='modern'] .mdn-fw-stats {
+	min-width: 0;
+	font-size: 0.74rem;
+	color: var(--text-secondary);
+	overflow-wrap: anywhere;
+}
+
+/* 原进度条保留作为进度的真实来源，收成细条；文字已由大数字呈现 */
+html[data-layout='modern'] .mdn-fw-slot--bar .progress {
+	height: 6px !important;
+}
+
+html[data-layout='modern'] .mdn-fw-slot--bar .progress-bar {
+	font-size: 0;
+}
+
+html[data-layout='modern'] .mdn-fw-grid {
+	min-width: 0;
+}
+
+html[data-layout='modern'] .mdn-fw-canvas {
+	display: block;
+	max-width: 100%;
+}
+
+html[data-layout='modern'] .mdn-fw-grid.is-empty .mdn-fw-canvas {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-fw-grid:not(.is-empty) .mdn-fw-empty {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-fw-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 12px;
+	font-size: 0.7rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-fw-legend-item {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .mdn-fw-swatch {
+	width: 10px;
+	height: 10px;
+	border-radius: 2px;
+	background: var(--mdn-cell-pending);
+}
+
+html[data-layout='modern'] .mdn-fw-swatch--done {
+	background: var(--mdn-cell-done);
+}
+
+html[data-layout='modern'] .mdn-fw-swatch--retried {
+	background: var(--mdn-cell-retry);
+}
+
+html[data-layout='modern'] .mdn-fw-swatch--active {
+	background: var(--mdn-cell-active);
+}
+
+/* ---- 卡片 4：校验 ---- */
+html[data-layout='modern'] .mdn-fw-rows {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 6px 10px;
+	margin: 0;
+	font-size: 0.82rem;
+}
+
+html[data-layout='modern'] .mdn-fw-rows dt {
+	font-weight: 400;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-fw-rows dd {
+	margin: 0;
+	text-align: right;
+	overflow-wrap: anywhere;
+}
+
+html[data-layout='modern'] .mdn-fw-verdict {
+	padding: 6px 10px;
+	border-radius: var(--radius-md);
+	background: var(--mdn-subtle);
+	font-size: 0.78rem;
+	font-weight: 600;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-fw-verdict[data-state='done'] {
+	color: var(--mdn-fw-ok);
+}
+
+html[data-layout='modern'] .mdn-fw-verdict[data-state='failed'] {
+	color: var(--mdn-fw-bad);
+}
+
+html[data-layout='modern'] .mdn-fw-card[data-step='4'] > .btn {
+	align-self: flex-start;
+}
+
+/* ===== 现代布局 v2 · 功耗页 ===== */
+/* 结构由 js/modern-power.js 在进入现代布局时建立：原控件节点搬进 #mp-toolbar(仍在 .blu-connect-bar 里，沿用原控件尺寸规则)
+   与 .blu-wrapper 里的 #mp-body(左主区 + 右栏标签页)；经典布局下这些宿主不存在 */
+
+html[data-layout='modern'] #view-blu .blu-connect-bar {
+	margin: 0;
+	padding: 6px 12px;
+	border: 0;
+	border-bottom: 1px solid var(--border-color);
+	border-radius: 0;
+	background: var(--bg-surface);
+}
+
+/* 原工具条里的分组节点已全部搬空，只留 #mp-toolbar */
+html[data-layout='modern'] #view-blu .blu-connect-bar > :not(#mp-toolbar) {
+	display: none;
+}
+
+html[data-layout='modern'] #mp-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 8px;
+	width: 100%;
+	min-width: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-group {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: nowrap;
+	min-width: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-sep {
+	width: 1px;
+	height: 20px;
+	background: var(--border-color);
+	flex-shrink: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-flex {
+	flex: 1 1 0;
+	min-width: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-field {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] #view-blu .mp-cap {
+	font-size: 0.6875rem;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] #view-blu .blu-device-trigger {
+	height: var(--blu-control-h);
+}
+
+/* 记录 / 触发芯片与弹出层 */
+html[data-layout='modern'] #view-blu .mp-pop-wrap {
+	position: relative;
+	display: inline-flex;
+}
+
+html[data-layout='modern'] #view-blu .mp-chip {
+	gap: 6px;
+	font-weight: 500;
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] #view-blu .mp-chip-caret {
+	font-size: 0.65rem;
+	color: var(--text-muted);
+}
+
+html[data-layout='modern'] #view-blu .mp-chip[aria-expanded='true'] {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+
+html[data-layout='modern'] #view-blu .mp-chip[data-state='active'] {
+	border-color: var(--accent);
+	background: var(--accent-light);
+	color: var(--accent);
+	font-weight: 600;
+}
+
+html[data-layout='modern'] #view-blu .mp-chip[data-state='waiting'] {
+	border-color: var(--warning);
+	color: var(--text-primary);
+	font-weight: 600;
+}
+
+html[data-layout='modern'] #view-blu .mp-chip[data-state='waiting']::after {
+	content: '等待沿';
+	margin-left: 2px;
+	padding: 0 5px;
+	border-radius: 4px;
+	font-size: 0.65rem;
+	line-height: 1.5;
+	background: color-mix(in srgb, var(--warning) 22%, transparent);
+}
+
+html[data-layout='modern'] #view-blu .mp-pop {
+	position: absolute;
+	top: calc(100% + 4px);
+	left: 0;
+	z-index: 60;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	width: max-content;
+	max-width: min(360px, calc(100vw - 32px));
+	padding: 10px 12px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: 8px;
+	box-shadow: var(--shadow-lg);
+}
+
+html[data-layout='modern'] #view-blu .mp-pop[hidden] {
+	display: none;
+}
+
+html[data-layout='modern'] #view-blu .mp-pop-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+html[data-layout='modern'] #view-blu .mp-pop-k {
+	min-width: 2.5em;
+	font-size: 0.72rem;
+	font-weight: 600;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] #view-blu .mp-pop-note {
+	max-width: 320px;
+	font-size: 0.7rem;
+	line-height: 1.5;
+	color: var(--text-secondary);
+	white-space: normal;
+}
+
+html[data-layout='modern'] #view-blu .mp-pop .blu-acq-trig-group {
+	padding: 0;
+	border: 0;
+	background: transparent;
+}
+
+html[data-layout='modern'] #view-blu .mp-cmd-btn {
+	margin-left: auto;
+}
+
+/* ---------- 主体：左主区 + 右栏 ---------- */
+html[data-layout='modern'] #view-blu .blu-wrapper {
+	padding: 0;
+	overflow: hidden;
+	background: var(--bg-body);
+}
+
+html[data-layout='modern'] #view-blu .blu-wrapper > :not(#mp-body) {
+	display: none;
+}
+
+html[data-layout='modern'] #mp-body {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+	align-items: stretch;
+}
+
+html[data-layout='modern'] #mp-main {
+	flex: 1 1 auto;
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 12px 14px;
+	overflow-y: auto;
+	overflow-x: hidden;
+}
+
+html[data-layout='modern'] #mp-viewbar,
+html[data-layout='modern'] #mp-cursorbar {
+	flex: 0 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 8px;
+	min-width: 0;
+}
+
+html[data-layout='modern'] #mp-viewbar .blu-ctl-group,
+html[data-layout='modern'] #mp-cursorbar .blu-ctl-group {
+	flex-wrap: wrap;
+	row-gap: 6px;
+}
+
+/* 光标组自带的「游标」标签由 .mp-cap「光标」代替 */
+html[data-layout='modern'] #mp-cursorbar .blu-cursor-group > .blu-ctl-label {
+	display: none;
+}
+
+html[data-layout='modern'] #mp-cursorbar .blu-cursor-group {
+	margin-left: 0;
+}
+
+/* 读数行：大号等宽数字 */
+html[data-layout='modern'] #mp-readouts {
+	flex: 0 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 28px;
+}
+
+html[data-layout='modern'] #view-blu .mp-ro {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-ro-v > span {
+	display: inline;
+	font-family: var(--font-mono);
+	font-size: 1.625rem !important;
+	font-weight: 600 !important;
+	line-height: 1.25;
+	letter-spacing: 0;
+	color: var(--text-primary);
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] #view-blu .mp-ro--current .mp-ro-v > span {
+	color: #c2410c;
+}
+
+html[data-layout='modern'][data-theme='dark'] #view-blu .mp-ro--current .mp-ro-v > span {
+	color: #fb923c;
+}
+
+html[data-layout='modern'] #view-blu .mp-ro-sub,
+html[data-layout='modern'] #view-blu .mp-ro-sub > span {
+	display: inline;
+	min-height: 1.1em;
+	margin: 0;
+	font-family: var(--font-mono);
+	font-size: 0.7rem !important;
+	font-weight: 400 !important;
+	line-height: 1.5;
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+
+/* 波形面板：画布、串口事件道、总览各成一块，三者同宽，事件道与波形 x 轴对齐 */
+html[data-layout='modern'] #mp-wave {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+html[data-layout='modern'] #mp-wave .blu-waveform-area {
+	flex: 1 1 auto;
+	min-height: 300px;
+	gap: 8px;
+	overflow: visible;
+}
+
+html[data-layout='modern'] #mp-wave .blu-waveform-controls {
+	display: none;
+}
+
+html[data-layout='modern'] #mp-wave .blu-canvas {
+	min-height: 220px;
+	border: 1px solid var(--border-color);
+	border-radius: 10px;
+}
+
+html[data-layout='modern'] #mp-wave .blu-serial-lane {
+	border: 1px solid var(--border-color);
+	border-radius: 10px;
+	padding-bottom: 2px;
+}
+
+html[data-layout='modern'] #mp-wave .blu-minimap {
+	height: 40px;
+	border: 1px solid var(--border-color);
+	border-radius: 10px;
+}
+
+html[data-layout='modern'] .blu-wrapper:fullscreen,
+html[data-layout='modern'] .blu-wrapper.blu-wave-fullscreen {
+	padding: 0;
+}
+
+/* ---------- 右栏 ---------- */
+html[data-layout='modern'] #mp-aside {
+	flex: 0 0 340px;
+	width: 340px;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	background: var(--bg-surface);
+	border-left: 1px solid var(--border-color);
+}
+
+html[data-layout='modern'] #mp-tabs {
+	flex: 0 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	padding: 0 6px;
+	border-bottom: 1px solid var(--border-light);
+}
+
+html[data-layout='modern'] #mp-tabs .mp-tab {
+	flex: 1 1 auto;
+	min-width: 0;
+	height: 34px;
+	padding: 0 4px;
+	white-space: nowrap;
+	border: 0;
+	border-bottom: 2px solid transparent;
+	background: transparent;
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] #mp-tabs .mp-tab:hover {
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] #mp-tabs .mp-tab[aria-selected='true'] {
+	border-bottom-color: var(--accent);
+	color: var(--accent);
+	font-weight: 700;
+}
+
+html[data-layout='modern'] #mp-tabs .mp-tab:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+html[data-layout='modern'] #mp-an-head {
+	flex: 0 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 8px;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--border-light);
+	font-size: 0.75rem;
+}
+
+html[data-layout='modern'] #mp-aside[data-an='false'] #mp-an-head {
+	display: none;
+}
+
+html[data-layout='modern'] #mp-an-head .blu-analysis-scope-hint {
+	flex: 1 1 100%;
+	order: 5;
+	max-width: none;
+	white-space: normal;
+}
+
+html[data-layout='modern'] #view-blu .mp-pages {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	overflow-x: hidden;
+	display: flex;
+	flex-direction: column;
+}
+
+html[data-layout='modern'] #view-blu .mp-page {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 12px;
+	min-height: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-page[hidden] {
+	display: none;
+}
+
+/* 分析收起：面板不显示也不计算，只留展开入口 */
+html[data-layout='modern'] #view-blu .mp-an-collapsed {
+	display: none;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 8px;
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] #mp-aside[data-collapsed='true'] .mp-an-collapsed {
+	display: flex;
+}
+
+html[data-layout='modern'] #mp-aside[data-collapsed='true'] .mp-page .blu-analysis-panel {
+	display: none !important;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-analysis-panel:not([hidden]) {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-events-cols,
+html[data-layout='modern'] #view-blu .mp-page .blu-fft-layout {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-fft-canvas,
+html[data-layout='modern'] #view-blu .mp-page .blu-ov-canvas {
+	width: 100%;
+	height: 200px;
+	border-radius: 8px;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-events-list {
+	max-height: 260px;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-readout-grid {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+/* 测量页：三组统计卡改为键值行 */
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-card {
+	border: 1px solid var(--border-light);
+	border-radius: 8px;
+	background: transparent;
+	box-shadow: none;
+	overflow: hidden;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-card-head {
+	padding: 8px 12px 2px;
+	background: transparent;
+	border: 0;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-card-title {
+	font-size: 0.6875rem;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-card-cursor .blu-stat-card-title {
+	color: var(--accent);
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-card-window .blu-stat-card-title {
+	color: #c2410c;
+}
+
+html[data-layout='modern'][data-theme='dark'] #view-blu .mp-page .blu-stat-card-window .blu-stat-card-title {
+	color: #fb923c;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-card-overall .blu-stat-card-title {
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-card-grid {
+	grid-template-columns: minmax(0, 1fr);
+	gap: 0;
+	padding: 4px 12px 8px;
+	background: transparent;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-cell {
+	flex-direction: row-reverse;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 8px;
+	padding: 2px 0;
+	background: transparent;
+	text-align: left;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-k {
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-v {
+	font-size: 0.8rem;
+	font-family: var(--font-mono);
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-v-max {
+	color: #b42318;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-v-min {
+	color: #15803d;
+}
+
+html[data-layout='modern'][data-theme='dark'] #view-blu .mp-page .blu-stat-v-max {
+	color: #ff8a80;
+}
+
+html[data-layout='modern'][data-theme='dark'] #view-blu .mp-page .blu-stat-v-min {
+	color: #4ade80;
+}
+
+/* 深色下强调色变亮：实心主按钮(打开)换深字 */
+html[data-layout='modern'][data-theme='dark'] #view-blu .btn-primary {
+	color: #0b1220;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-stat-empty {
+	padding: 6px 12px 10px;
+	text-align: left;
+}
+
+/* 命令表：原「串口发送」面板停靠进右栏，不再是底部浮层 */
+html[data-layout='modern'] #view-blu .blu-cmd-backdrop {
+	display: none !important;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-cmd-sheet {
+	position: static;
+	max-height: none;
+	border: 1px solid var(--border-light);
+	border-radius: 8px;
+	box-shadow: none;
+	animation: none;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-cmd-sheet[hidden] {
+	display: none;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-cmd-preset-row,
+html[data-layout='modern'] #view-blu .mp-page .blu-cmd-custom-row {
+	flex-wrap: wrap;
+}
+
+html[data-layout='modern'] #view-blu .mp-cmd-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 8px;
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] #view-blu .blu-cmd-sheet:not([hidden]) + .mp-cmd-empty {
+	display: none;
+}
+
+/* 采集日志：右栏里常开，填满整页 */
+html[data-layout='modern'] #view-blu .mp-page .blu-log-card {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	border: 1px solid var(--border-light);
+	border-radius: 8px;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-log-body,
+html[data-layout='modern'] #view-blu .mp-page .blu-log-card:hover .blu-log-body {
+	flex: 1 1 auto;
+	max-height: none;
+	min-height: 120px;
+	padding: 6px 12px;
+	overflow-y: auto;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-log-chevron {
+	display: none;
+}
+
+html[data-layout='modern'] #view-blu .mp-page .blu-log-last {
+	max-width: 160px;
+}
+
+/* 窄屏：右栏落到主区下方，整页纵向滚动 */
+@media (max-width: 900px) {
+	html[data-layout='modern'] #view-blu .blu-wrapper {
+		overflow-y: auto;
+	}
+
+	html[data-layout='modern'] #mp-body {
+		flex: 0 0 auto;
+		flex-direction: column;
+	}
+
+	html[data-layout='modern'] #mp-main {
+		overflow: visible;
+		padding: 10px 16px;
+	}
+
+	html[data-layout='modern'] #mp-aside {
+		flex: 0 0 auto;
+		width: auto;
+		border-left: 0;
+		border-top: 1px solid var(--border-color);
+	}
+
+	html[data-layout='modern'] #view-blu .mp-pages {
+		overflow: visible;
+	}
+
+	html[data-layout='modern'] #view-blu .blu-connect-bar {
+		padding: 6px 16px;
+	}
+
+	html[data-layout='modern'] #view-blu .mp-group {
+		flex-wrap: wrap;
+		row-gap: 6px;
+	}
+
+	html[data-layout='modern'] #view-blu .mp-sep {
+		display: none;
+	}
+
+	html[data-layout='modern'] #view-blu .mp-pop {
+		position: fixed;
+		top: auto;
+		left: 16px;
+		right: 16px;
+		width: auto;
+		max-width: none;
+	}
+
+	html[data-layout='modern'] #mp-readouts {
+		gap: 6px 18px;
+	}
+
+	html[data-layout='modern'] #view-blu .mp-ro-v > span {
+		font-size: 1.25rem !important;
+	}
+}
+
+/* ===== 现代布局 v2 · 外壳与串口页 ===== */
+/* js/modern-shell.js 在现代布局下新建的宿主(#mdn-connbar / #mdn-logbar / #mdn-quickrow 等)与搬进去的原控件；
+   经典布局没有这些宿主，原控件按占位放回 */
+
+/* ---------- 左栏：68px 窄栏，图标 + 短标签；主题、反馈、GitHub 收进「配置」菜单 ---------- */
+html[data-layout='modern'] #activity-rail {
+	width: 68px;
+	padding: 10px 0;
+}
+
+html[data-layout='modern'] #activity-rail .rail-brand,
+html[data-layout='modern'] #activity-rail .rail-divider,
+html[data-layout='modern'] #activity-rail #theme-switch,
+html[data-layout='modern'] #activity-rail .rail-bottom > a.rail-item {
+	display: none;
+}
+
+html[data-layout='modern'] #activity-rail .rail-top {
+	gap: 4px;
+}
+
+html[data-layout='modern'] #activity-rail .rail-bottom {
+	border-top: 0;
+	gap: 4px;
+}
+
+html[data-layout='modern'] #activity-rail .rail-item {
+	width: 56px;
+	margin: 0 auto;
+	padding: 8px 0;
+	gap: 3px;
+	font-size: 11px;
+}
+
+html[data-layout='modern'] #activity-rail .rail-item i {
+	font-size: 20px;
+}
+
+/* 短标签：原文保留为无障碍名称，视觉上换成两字(不改 DOM，切回经典无需还原) */
+html[data-layout='modern'] #activity-rail .rail-item[data-view] .rail-label {
+	font-size: 0;
+	letter-spacing: 0;
+}
+
+html[data-layout='modern'] #activity-rail .rail-item[data-view] .rail-label::after {
+	font-size: 11px;
+	line-height: 1;
+}
+
+html[data-layout='modern'] #activity-rail .rail-item[data-view='view-serial'] .rail-label::after {
+	content: '串口';
+}
+
+html[data-layout='modern'] #activity-rail .rail-item[data-view='view-fw-pack'] .rail-label::after {
+	content: '固件';
+}
+
+html[data-layout='modern'] #activity-rail .rail-item[data-view='view-blu'] .rail-label::after {
+	content: '功耗';
+}
+
+html[data-layout='modern'] #activity-rail .rail-version {
+	padding: 6px 0;
+	font-size: 10px;
+}
+
+html[data-layout='modern'] .rail-config-menu {
+	min-width: 240px;
+}
+
+html[data-layout='modern'] .mdn-cfg-theme .ctl-seg > button {
+	padding: 4px 10px;
+}
+
+/* ---------- 全局连接栏 ---------- */
+html[data-layout='modern'] #app-topbar > #serial-connect-bar {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-connbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	min-height: 46px;
+	padding: 8px 12px;
+	background: var(--bg-surface);
+	border-bottom: 1px solid var(--border-color);
+	font-size: 12px;
+}
+
+html[data-layout='modern'] .mdn-connbar[data-mode='single'] .mdn-dual-only,
+html[data-layout='modern'] .mdn-connbar[data-mode='dual'] .mdn-single-only,
+html[data-layout='modern'] .mdn-connbar[data-mode='single'] #serial-chip-a,
+html[data-layout='modern'] .mdn-connbar[data-mode='dual'] #serial-chip {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-sep {
+	width: 1px;
+	height: 22px;
+	background: var(--border-color);
+}
+
+html[data-layout='modern'] .mdn-grow {
+	flex: 1 1 auto;
+}
+
+html[data-layout='modern'] .mdn-conn {
+	position: relative;
+	min-width: 0;
+}
+
+html[data-layout='modern'] .mdn-conn-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 100%;
+	height: 30px;
+	padding: 0 10px;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	background: var(--bg-surface);
+	color: var(--text-primary);
+	font-family: var(--font-sans);
+	font-size: 12px;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .mdn-conn-btn:hover {
+	border-color: var(--text-muted);
+}
+
+html[data-layout='modern'] .mdn-conn-btn:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+html[data-layout='modern'] .mdn-conn-btn[aria-expanded='true'] {
+	border-color: var(--accent);
+}
+
+html[data-layout='modern'] .mdn-conn-btn .bi-chevron-down {
+	font-size: 10px;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-conn-add,
+html[data-layout='modern'] .mdn-conn-blu {
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-conn-letter:empty,
+html[data-layout='modern'] .mdn-conn-label:empty {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-conn[data-sid='A'] .mdn-conn-letter {
+	color: var(--accent);
+}
+
+html[data-layout='modern'] .mdn-conn[data-sid='B'] .mdn-conn-letter {
+	color: #b54708;
+}
+
+html[data-layout='modern'][data-theme='dark'] .mdn-conn[data-sid='B'] .mdn-conn-letter {
+	color: #fdb022;
+}
+
+html[data-layout='modern'] .mdn-conn[data-sid='A'] .mdn-conn-btn {
+	box-shadow: inset 3px 0 0 var(--accent);
+}
+
+html[data-layout='modern'] .mdn-conn[data-sid='B'] .mdn-conn-btn {
+	box-shadow: inset 3px 0 0 #c2410c;
+}
+
+html[data-layout='modern'] .mdn-conn-label {
+	max-width: 10em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+html[data-layout='modern'] .mdn-conn-port {
+	max-width: 16em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+html[data-layout='modern'] .mdn-conn-params {
+	font-family: var(--font-mono);
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-conn-params::before {
+	content: '· ';
+	font-family: var(--font-sans);
+}
+
+html[data-layout='modern'] .mdn-dot {
+	flex: 0 0 auto;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: #8a94a3;
+}
+
+html[data-layout='modern'] .mdn-conn[data-state='open'] .mdn-dot,
+html[data-layout='modern'] .mdn-conn-blu[data-state='open'] .mdn-dot {
+	background: #1c9c55;
+}
+
+html[data-layout='modern'] .mdn-conn[data-state='opening'] .mdn-dot {
+	background: #d97706;
+}
+
+html[data-layout='modern'] .mdn-conn-blu[data-state='open'] {
+	color: var(--text-primary);
+}
+
+/* 每路菜单：设备芯片、路标签、串口参数原样搬进来 */
+html[data-layout='modern'] .mdn-pop {
+	position: absolute;
+	top: calc(100% + 6px);
+	left: 0;
+	z-index: 1050;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	width: 320px;
+	max-width: calc(100vw - 24px);
+	max-height: calc(100vh - 80px);
+	overflow: auto;
+	padding: 12px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: 10px;
+	box-shadow: 0 8px 24px rgba(28, 35, 48, 0.16);
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] .mdn-pop[hidden] {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-pop-title {
+	font-size: 13px;
+	font-weight: 700;
+}
+
+html[data-layout='modern'] .mdn-pop-cap {
+	margin-bottom: 6px;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-pop .serial-device-chip {
+	width: 100%;
+	max-width: none;
+}
+
+html[data-layout='modern'] .mdn-pop .dual-session-label {
+	width: 100%;
+	height: 30px;
+	padding: 0 8px;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	background: var(--bg-surface);
+	color: var(--text-primary);
+	font-size: 13px;
+}
+
+html[data-layout='modern'] .mdn-pop .serial-settings-card {
+	padding: 0;
+	border: 0;
+	box-shadow: none;
+	background: transparent;
+}
+
+html[data-layout='modern'] .mdn-pop .serial-settings-title {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-pop-foot {
+	padding-top: 10px;
+	border-top: 1px solid var(--border-light);
+}
+
+html[data-layout='modern'] .mdn-conn-send {
+	display: inline-flex;
+	align-items: center;
+}
+
+html[data-layout='modern'] .mdn-conn-send .dual-active-send {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+}
+
+html[data-layout='modern'] .mdn-conn-tools .connect-bar-proto {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-conn-tools #serial-protocol-select {
+	height: 30px;
+	min-width: 140px;
+	border-radius: 6px;
+	font-size: 12px;
+}
+
+html[data-layout='modern'] .mdn-connbar #wb-palette-btn {
+	height: 30px;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	font-size: 12px;
+}
+
+/* ---------- 日志工具条：显示格式 / 分包 / 行数 / 过滤 / 视图 / 动作平铺 ---------- */
+html[data-layout='modern'] #log-main > .serial-log-header {
+	display: none !important;
+}
+
+html[data-layout='modern'] .mdn-logbar {
+	flex: 0 0 auto;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 10px;
+	padding: 8px 14px;
+	background: var(--bg-surface);
+	border-bottom: 1px solid var(--border-light);
+	font-size: 12px;
+}
+
+html[data-layout='modern'] .mdn-grp {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+html[data-layout='modern'] .mdn-grp-split,
+html[data-layout='modern'] .mdn-grp-rows,
+html[data-layout='modern'] .mdn-grp-filter {
+	padding-left: 10px;
+	border-left: 1px solid var(--border-color);
+}
+
+html[data-layout='modern'] .mdn-grp-label {
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+
+/* 双路显示方式：只在 双路 + 行日志 时出现(原规则依赖标题行，这里换成工具条) */
+html[data-layout='modern'] .mdn-logbar:has(#serial-log-legend.is-dual):has(#serial-log-view-row[aria-pressed='true']) #serial-dual-view-seg {
+	display: inline-flex;
+}
+
+/* 图例只在双路有意义(A/B 分色)；单路 TX/RX 已由行标签自己表明 */
+html[data-layout='modern'] .mdn-logbar #serial-log-legend:not(.is-dual) {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-logbar .ctl-chip-btn {
+	height: 26px;
+	font-size: 12px;
+}
+
+html[data-layout='modern'] .mdn-logbar .ctl-seg > button {
+	padding: 4px 10px;
+	font-size: 12px;
+}
+
+html[data-layout='modern'] .mdn-num {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+
+html[data-layout='modern'] .mdn-logbar #serial-timer-out {
+	width: 68px;
+}
+
+html[data-layout='modern'] .mdn-logbar #serial-max-rows {
+	width: 84px;
+}
+
+html[data-layout='modern'] .mdn-logbar #serial-timer-out,
+html[data-layout='modern'] .mdn-logbar #serial-max-rows,
+html[data-layout='modern'] .mdn-filter {
+	height: 26px;
+	min-height: 0;
+	padding: 0 8px;
+	border-radius: 6px;
+	font-size: 12px;
+}
+
+html[data-layout='modern'] .mdn-unit {
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-grp-filter {
+	flex: 1 1 220px;
+}
+
+html[data-layout='modern'] .mdn-filter {
+	flex: 1 1 auto;
+	min-width: 140px;
+}
+
+html[data-layout='modern'] .mdn-filter-count {
+	flex: 0 0 auto;
+	padding: 2px 8px;
+	border-radius: 999px;
+	background: var(--accent-light);
+	color: var(--accent);
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .mdn-filter-count[hidden] {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-logbar .serial-log-actions .btn {
+	height: 26px;
+	padding: 0 10px;
+	font-size: 12px;
+}
+
+html[data-layout='modern'] .serial-logs .log-row.mdn-flt-out {
+	display: none;
+}
+
+/* ---------- 快捷行 + 发送条 ---------- */
+html[data-layout='modern'] #serial-send-panel {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 10px 14px;
+	border-top: 1px solid var(--border-color);
+}
+
+html[data-layout='modern'] #serial-send-panel > #serial-send-header {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-quickrow {
+	display: flex;
+	flex-wrap: nowrap;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+html[data-layout='modern'] .mdn-quick-group {
+	width: auto;
+	max-width: 160px;
+	height: 26px;
+	min-height: 0;
+	padding-top: 0;
+	padding-bottom: 0;
+	border-radius: 6px;
+	font-size: 12px;
+}
+
+/* 一行放不下时按钮等比收窄(省略号)，不换行，「管理…」始终在同一行 */
+html[data-layout='modern'] .mdn-quick-list {
+	flex: 0 1 auto;
+	display: inline-flex;
+	flex-wrap: nowrap;
+	gap: 6px;
+	min-width: 0;
+	overflow: hidden;
+}
+
+html[data-layout='modern'] .mdn-quick-list > .mdn-chip {
+	flex: 0 1 auto;
+	min-width: 3.5em;
+	max-width: 10em;
+}
+
+html[data-layout='modern'] .mdn-chip {
+	display: inline-flex;
+	align-items: center;
+	max-width: 12em;
+	height: 26px;
+	padding: 0 10px;
+	overflow: hidden;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	background: var(--bg-surface);
+	color: var(--text-primary);
+	font-family: var(--font-sans);
+	font-size: 12px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .mdn-chip:hover {
+	border-color: var(--accent);
+}
+
+html[data-layout='modern'] .mdn-chip:focus-visible,
+html[data-layout='modern'] .mdn-fold:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+html[data-layout='modern'] .mdn-quick-manage {
+	flex: 0 0 auto;
+	max-width: none;
+	color: var(--accent);
+}
+
+html[data-layout='modern'] .mdn-quickrow #serial-send-target {
+	flex: 0 0 auto;
+	white-space: nowrap;
+	font-size: 12px;
+}
+
+html[data-layout='modern'] .mdn-fold {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-fold:hover {
+	background: var(--accent-light);
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] .mdn-fold[aria-expanded='false'] i::before {
+	content: '\F286';
+}
+
+/* 输入行：拆开原有两层(输入框 + 发送键 / 开关一排)，按设计稿排成一行，节点不动 */
+html[data-layout='modern'] #serial-send-panel #serial-send-body {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	padding: 0;
+}
+
+html[data-layout='modern'] #serial-send-panel.collapsed #serial-send-body {
+	display: none;
+}
+
+/* 发送键在现代布局里被搬到开关一排的末尾(js/modern-shell.js)；这里不用 order / display: contents 重排：
+   Chrome 切回经典时偶发沿用旧的网格摆放，把经典发送区的输入框和发送键排反 */
+html[data-layout='modern'] #serial-send-body > .send-compose {
+	display: block;
+	flex: 1 1 280px;
+	min-width: 0;
+}
+
+html[data-layout='modern'] #serial-send-body > .send-options {
+	display: flex;
+	flex: 0 1 auto;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin: 0;
+	padding: 0;
+}
+
+html[data-layout='modern'] #serial-send-body .mdn-send-seg > button {
+	padding: 7px 12px;
+}
+
+html[data-layout='modern'] .mdn-send-seg[hidden],
+html[data-layout='modern'] .mdn-send-seg > button[hidden] {
+	display: none;
+}
+
+/* 默认单行，拖右下角可拉高(不用 field-sizing: content，同样有切回经典后样式残留的问题) */
+html[data-layout='modern'] #serial-send-content {
+	display: block;
+	width: 100%;
+	height: 36px;
+	min-height: 36px !important;
+	max-height: 160px;
+	padding: 7px 10px !important;
+	border-radius: 6px;
+	font-size: 13px;
+	resize: vertical !important;
+}
+
+html[data-layout='modern'] #serial-send-body .send-loop-time {
+	width: 110px;
+}
+
+html[data-layout='modern'] #serial-send-body .send-info {
+	flex: 0 1 auto;
+	min-width: 0;
+	font-size: 11px;
+}
+
+html[data-layout='modern'] #serial-send-history-btn {
+	display: inline-flex;
+	align-items: center;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] #serial-send-history-btn::after {
+	content: '历史';
+	margin-left: 4px;
+	font-size: 12px;
+}
+
+html[data-layout='modern'] #serial-send-body #serial-send.serial-send-btn {
+	flex: 0 0 auto;
+	flex-direction: row;
+	min-width: 0;
+	height: 34px;
+	min-height: 0;
+	padding: 0 16px !important;
+	border-radius: 6px;
+}
+
+html[data-layout='modern'] #serial-send-body .send-btn-kbd {
+	display: none;
+}
+
+/* ---------- 状态栏：后台任务高亮胶囊，没有任务时给一句「无后台任务」 ---------- */
+html[data-layout='modern'] #serial-statusbar .sb-task {
+	border-radius: 3px;
+	padding: 1px 8px;
+	background: #1f5fbf;
+	color: #fff;
+	font-family: var(--font-mono);
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-task:hover {
+	background: #174c99;
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-task:focus-visible {
+	outline: 2px solid var(--mdn-rail-accent);
+	outline-offset: 1px;
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-task::after {
+	content: '· 点击打开';
+	opacity: 0.85;
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-tasks:not(:has(.sb-task:not([hidden])))::before {
+	content: '无后台任务';
+	color: var(--mdn-bar-dim);
+	font-size: 11px;
+}
+
+/* 窄屏：连接栏、工具条都换行；连接按钮的端口名收窄 */
+@media (max-width: 640px) {
+	html[data-layout='modern'] #activity-rail {
+		width: 56px;
+	}
+
+	html[data-layout='modern'] #activity-rail .rail-item {
+		width: 48px;
+	}
+
+	html[data-layout='modern'] .mdn-quickrow {
+		flex-wrap: wrap;
+	}
+
+	html[data-layout='modern'] .mdn-conn-port {
+		max-width: 8em;
+	}
+
+	html[data-layout='modern'] .mdn-sep {
+		display: none;
+	}
+
+	html[data-layout='modern'] .mdn-grp-split,
+	html[data-layout='modern'] .mdn-grp-rows,
+	html[data-layout='modern'] .mdn-grp-filter {
+		padding-left: 0;
+		border-left: 0;
 	}
 }

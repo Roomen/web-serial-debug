@@ -1236,7 +1236,7 @@
 			const pad = (v) => (v < 10 ? '0' : '') + v
 			name = '帧 ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds())
 		}
-		return { dir: row.getAttribute('data-dir') || '', hex: hex.trim(), name: name }
+		return { dir: row.getAttribute('data-dir') || '', hex: hex.trim(), name: name, row: row, sid: row.getAttribute('data-sid') || '', ts: parseInt(row.getAttribute('data-ts'), 10) || 0 }
 	}
 	window.serialFrameActions = {
 		selected: selectedLogFrame,
@@ -1559,20 +1559,29 @@
 		const outEmpty = !out || !out.innerHTML.trim()
 		panel.classList.toggle('is-empty', hexEmpty && outEmpty)
 	}
+	//解析结果变化通知(现代布局的检查器据此出结构化视图)；detail 为 null 表示已清空
+	function emitParseFrame(detail) {
+		document.dispatchEvent(new CustomEvent('serial-parse-frame', { detail: detail }))
+	}
 	function parseProtocolBytes(bytes, note, dir) {
 		if (!bytes || !bytes.length) {
 			renderProtocolHexDump(null)
 			document.getElementById('serial-protocol-output').innerHTML = ''
 			syncParsePanelEmpty()
+			emitParseFrame(null)
 			return
 		}
 		renderProtocolHexDump(bytes)
+		let parsed = null
+		let byteMap = null
 		try {
 			const r = skParseFrame(bytes, getProtocolParseOpts())
+			parsed = r
 			if (typeof skByteMap === 'function') {
 				try {
-					renderProtocolHexDump(bytes, skByteMap(r))
-				} catch (mapErr) { /* keep plain dump */ }
+					byteMap = skByteMap(r)
+					renderProtocolHexDump(bytes, byteMap)
+				} catch (mapErr) { byteMap = null /* keep plain dump */ }
 			}
 			let head = ''
 			if (note) head += '<div class="sk-parse-note">' + HTMLEncode(note) + '</div>'
@@ -1590,6 +1599,7 @@
 			document.getElementById('serial-protocol-output').innerHTML = '<div class="sk-parse-err">解析异常:' + HTMLEncode(String(err)) + '</div>'
 		}
 		syncParsePanelEmpty()
+		emitParseFrame({ bytes: bytes, result: parsed, byteMap: byteMap, dir: dir === 'tx' ? 'tx' : dir === 'rx' ? 'rx' : '', note: note || '' })
 	}
 	// opts.requireValid: 仅在扫到 CRC+EOF 有效帧时填充（点击剪贴板用，失败不覆盖已有内容）
 	function applyProtocolHexInput(raw, opts) {
@@ -4893,12 +4903,16 @@
 	function paneHtml(id, maxRows) {
 		const el = document.getElementById(id)
 		if (!el) return ''
-		if (maxRows == null || el.childElementCount <= maxRows) return el.innerHTML
 		let html = ''
-		for (let i = el.childElementCount - maxRows; i < el.childElementCount; i++) {
-			html += el.children[i].outerHTML
+		if (maxRows == null || el.childElementCount <= maxRows) {
+			html = el.innerHTML
+		} else {
+			for (let i = el.childElementCount - maxRows; i < el.childElementCount; i++) {
+				html += el.children[i].outerHTML
+			}
 		}
-		return html
+		//现代布局给日志行挂的派生属性(js/modern-timeline.js)只服务当前视图，不进持久化内容
+		return typeof window.serialLogPersistClean === 'function' ? window.serialLogPersistClean(html) : html
 	}
 	function collectLogCache(maxRows) {
 		const payload = {
@@ -5847,6 +5861,7 @@
 				document.getElementById('serial-protocol-output').innerHTML = ''
 				if (typeof renderProtocolHexDump === 'function') renderProtocolHexDump(null)
 				syncParsePanelEmpty()
+				emitParseFrame(null)
 			})
 		}
 
