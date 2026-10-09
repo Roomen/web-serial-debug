@@ -57,6 +57,23 @@
 		}
 		return out
 	}
+	function degreeM3To10L(value) {
+		const input = String(value == null ? '' : value).trim()
+		const match = input.match(/^(\d+)(?:\.(\d*))?$/)
+		if (!match) throw new Error('底度需为0至999999.99的非负十进制数，最多两位小数(精度0.01m³，即10L)')
+		let fraction = match[2] || ''
+		fraction = fraction.replace(/0+$/, '')
+		if (fraction.length > 2) throw new Error('底度最多两位小数，精度为0.01m³(10L)')
+		const whole = match[1].replace(/^0+(?=\d)/, '')
+		if (whole.length > 6) {
+			throw new Error('底度范围为0至999999.99m³，最多两位小数(精度0.01m³，即10L)')
+		}
+		const scaled = Number(whole) * 100 + Number((fraction + '00').slice(0, 2))
+		if (!Number.isSafeInteger(scaled) || scaled > 99999999) {
+			throw new Error('底度范围为0至999999.99m³，最多两位小数(精度0.01m³，即10L)')
+		}
+		return scaled
+	}
 
 	const HEADER = [0x68, 0x10]
 	const END_BYTE = 0x16
@@ -160,10 +177,7 @@
 				return addr
 			}
 			case 0x16: { // 写底度: 4字节小端BCD, 帧上单位为10L(见设备固件 comToLittleEndianBCDArrayToUnsignedInt(...)×10); 面板按 m³ 输入,这里转换
-				const m3 = Number(opt.degreeM3)
-				if (!Number.isFinite(m3) || m3 < 0) throw new Error('底度需为非负数字(单位m³)')
-				const literL = Math.round(m3 * 1000)
-				return intToBcdLe(Math.round(literL / 10), 4)
+				return intToBcdLe(degreeM3To10L(opt.degreeM3), 4)
 			}
 			default:
 				throw new Error('不支持的功能码 ' + hexByte(cmd))
@@ -571,7 +585,7 @@
 				case 0x16:
 					paramLabel.textContent = '底度(m³)'
 					paramVal.style.display = ''
-					paramVal.placeholder = '非负数字, 单位m³, 如 12.345'
+					paramVal.placeholder = '精度0.01m³(10L)，如 12.34'
 					paramVal.value = '0'
 					break
 				default:
@@ -595,7 +609,7 @@
 				if (isTime) opt.time = parseTimeInput(paramVal.value)
 				if (cmd === 0x04 && !isTime) opt.valveOp = parseInt(paramSel.value, 16)
 				if (cmd === 0x15) opt.newAddr = paramVal.value
-				if (cmd === 0x16) opt.degreeM3 = parseFloat(paramVal.value)
+				if (cmd === 0x16) opt.degreeM3 = paramVal.value
 				const ultrasonic = document.getElementById('serial-protocol-select').value === 'sk-ultrasonic'
 				const frame = ultrasonic ? W.skUltrasonicBuildDownFrame(opt) : W.cjt188BuildDownFrame(opt)
 				localStorage.setItem('cjt188DownAddr', addrEl.value)
