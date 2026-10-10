@@ -362,7 +362,7 @@ async function tests() {
 		await drive(t.clock, t.ciu.start())
 		const ms = t.meter.getState()
 		assert.equal(ms.running, true)
-		assert.equal(ms.drn, METER_DRN.toString()) // 以模组 DEV_ID_GET 回读值为准
+		assert.equal(ms.drn, '0101123456788') // 以模组 DEV_ID_GET 回读值为准，展示补回厂商码前导 0
 		assert.match(logText(t.logs.meter), /WOR 稳态 \[1 SENTRY\]\[1 GRID\]/)
 		const cs = t.ciu.getState()
 		assert.equal(cs.running, true)
@@ -1083,7 +1083,7 @@ async function tests() {
 		const t = setup()
 		t.world.meter.addr = 5n
 		await drive(t.clock, t.meter.start())
-		assert.match(logText(t.logs.meter), /WOR 运行地址 5 与 DRN 101123456788 不一致/)
+		assert.match(logText(t.logs.meter), /WOR 运行地址 5 与 DRN 0101123456788 不一致/)
 	}
 
 	// ---- 表端重启（清空存档）: 轮询状态 0 -> 重发令牌 -> 表端令牌去重回放终局 ----
@@ -1502,7 +1502,7 @@ async function tests() {
 		const sessBefore = t.ciu.getState().sessionCount
 		await drive(t.clock, t.ciu.setTarget(DRN2.toString()))
 		assert.ok(t.ciu.getState().sessionCount > sessBefore) // 0x18 / 0x27 对新表重读
-		assert.match(logText(t.logs.ciu), /目标表切换为 DRN 101876543214（表号 87654321）/)
+		assert.match(logText(t.logs.ciu), /目标表切换为 DRN 0101876543214（表号 87654321）/)
 		const r2 = await drive(t.clock, t.ciu.status())
 		assert.equal(r2.ok, true, r2.message)
 		assert.equal(r2.status.remaining, 4242)
@@ -1668,7 +1668,7 @@ async function tests() {
 		const t = setup()
 		await ready(t)
 		const st = t.meter.getState()
-		assert.equal(st.drn, METER_DRN.toString())
+		assert.equal(st.drn, '0101123456788')
 		assert.equal(st.meterNo, METER_NO)
 		t.meter.stop(); t.ciu.stop()
 	}
