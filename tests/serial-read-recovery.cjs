@@ -16,7 +16,7 @@ function harness() {
 	let now = 100000
 	let timerId = 0
 	const sessions = Object.fromEntries(['S', 'A', 'B'].map(sid => [sid, {
-		open: true, opening: false, manualClose: false, reader: null, port: null, packGlitch: false,
+		open: true, opening: false, manualClose: false, reader: null, port: null, packBuf: [], packGlitch: false,
 		wantOpen: true, wantPortKey: 'synthetic', openedAt: now, rxBytes: 0, txBytes: 0
 	}]))
 	const logs = []
@@ -38,6 +38,8 @@ function harness() {
 		getPort: sid => sessions[sid].port,
 		getReader: sid => sessions[sid].reader,
 		setReader: (sid, r) => { sessions[sid].reader = r },
+		getPackBuf: sid => sessions[sid].packBuf,
+		getPackStartTime: () => null,
 		getPackTimer: () => null,
 		setPackTimer: () => {}, setPackBuf: () => {}, setPackStartTime: () => {}, setSekWaitStart: () => {}
 	}
@@ -49,6 +51,7 @@ function harness() {
 		addLogErr: (msg, sid) => logs.push({ msg, sid }),
 		dataReceived: (value, sid, meta) => { received.push({ value, sid, meta: meta && { ...meta } }); rxNotes.push(sid); context.api.noteSerialRx(sid) },
 		closeSerial: async sid => { sessions[sid].open = false; closed.push(sid) },
+		flushSerialPack: () => {},
 		portHeldByOther: () => false, serialStatuChange: () => {}, updateOpenButton: () => {},
 		openSerial: async (sid, opts) => { opened.push({ sid, opts, port: sessions[sid].port }); sessions[sid].open = true; return true }
 	})
@@ -394,13 +397,13 @@ async function testPackGlitch() {
 		assert.equal(h.flushed.length, waits ? 0 : 1, type)
 	}
 
-	// releasePort 清掉分包缓冲时一并清毛刺标记：新连接的第一包不得带上旧连接的标记
+	// releasePort 输出最后的残包并清毛刺标记：新连接的第一包不得带上旧连接的标记
 	const released = packHarness(50)
 	released.api.dataReceived(Uint8Array.of(0, 0), 'S', { lineGlitch: true })
 	await released.api.releasePort('S')
 	released.api.dataReceived(Uint8Array.of(0), 'S')
 	released.fire()
-	assert.deepEqual(released.flushed, [{ bytes: [0], glitch: false }])
+	assert.deepEqual(released.flushed, [{ bytes: [0, 0], glitch: true }, { bytes: [0], glitch: false }])
 
 	// 发送前提前 flush(flushPendingRx)同样带走标记，且不残留到下一包
 	const early = packHarness(50)

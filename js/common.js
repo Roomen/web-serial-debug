@@ -160,6 +160,11 @@
 			manualClose: true,
 			opening: false,
 			reader: null,
+			writer: null,
+			writeTask: null,
+			writeSeq: 0,
+			releaseTask: null,
+			releaseFailed: false,
 			wakeLock: null,
 			packBuf: [],
 			packStartTime: null,
@@ -250,6 +255,8 @@
 			if (window.Workbench) window.Workbench.refreshStatus()
 		},
 
+		isReleaseFailed(sid) { return this._sess(sid).releaseFailed },
+
 		getReader(sid) { return this._sess(sid).reader },
 		setReader(sid, r) { this._sess(sid).reader = r },
 
@@ -305,7 +312,7 @@
 				const sid = all[i]
 				if (sid === exceptSid) continue
 				if (this.getPort(sid) !== port) continue
-				if (this.isOpen(sid) || this.isOpening(sid)) return sid
+				if (this.isOpen(sid) || this.isOpening(sid) || this.isReleaseFailed(sid) || this._sess(sid).releaseTask) return sid
 			}
 			return null
 		},
@@ -315,7 +322,7 @@
 		// Web Serial 不给序列号，同型号只能按 VID/PID 判
 		findRebindSession(port, isLost) {
 			const sids = this.mode === 'single' ? ['S'] : ['A', 'B']
-			const free = sids.filter((sid) => !this.isOpen(sid) && !this.isOpening(sid))
+			const free = sids.filter((sid) => !this.isOpen(sid) && !this.isOpening(sid) && !this.isReleaseFailed(sid) && !this._sess(sid).releaseTask)
 			const usbId = function (p) {
 				try {
 					const info = p.getInfo ? p.getInfo() : {}
@@ -3376,7 +3383,7 @@
 				}
 				// 换口前该会话是打开的：换上新口后自动重开，一步完成"换设备"；未打开时只换口不自动开
 				const wasOpen = SerialHub.isOpen(sid)
-				await closeSerial(sid)
+				if (!await closeSerial(sid)) return
 				SerialHub.setPort(sid, port)
 				// 多 CDC 槽位依赖 getPorts 全集：清缓存后重算
 				_portIdentityCache.clear()
@@ -3456,28 +3463,78 @@
 	//释放串口底层资源: 取消并释放 reader、close port(另一会话占用同一 port 对象则跳过)、清分包缓冲/定时器
 	//所有释放路径(手动关闭/读流死/打开前清理/页面销毁)统一走这里, 避免 OS 句柄泄漏导致下次 open 报 NetworkError
 	async function releasePort(sid) {
+		const SERIAL_RELEASE_TIMEOUT_MS = 1500
 		sid = sid || SerialHub.activeSendPhys()
-		++readGenBySid[sid]
-		resetRxWatch(sid)
-		const port = SerialHub.getPort(sid)
-		const r = SerialHub.getReader(sid)
-		SerialHub.setReader(sid, null)
-		// 清理该会话的分包缓冲与合并时钟：关闭后旧口残包不得迟到入日志或与新口数据合并
-		clearTimeout(SerialHub.getPackTimer(sid))
-		SerialHub.setPackTimer(sid, null)
-		SerialHub.setPackBuf(sid, [])
-		SerialHub.takePackGlitch(sid)
-		SerialHub.setPackStartTime(sid, null)
-		SerialHub.setSekWaitStart(sid, null)
-		if (r) {
-			try { await r.cancel() } catch (e) {}
-			try { r.releaseLock() } catch (e) {}
-		}
-		if (port) {
-			// 同一 port 对象可能被另一会话或 BLU 持有，跳过 close 以免关掉对方
-			if (!portHeldByOther(port, sid)) {
-				try { await port.close() } catch (e) {}
+		const session = SerialHub._sess(sid)
+		// 超时只结束界面等待，不会取消驱动操作；重试必须等同一释放任务，避免迟到的 close 关掉新连接。
+		if (!session.releaseTask) {
+			++readGenBySid[sid]
+			session.writeSeq = (session.writeSeq || 0) + 1
+			resetRxWatch(sid)
+			const port = SerialHub.getPort(sid)
+			const closePort = port && !portHeldByOther(port, sid)
+			const r = SerialHub.getReader(sid)
+			const writer = session.writer
+			const writeTask = session.writeTask
+			SerialHub.setReader(sid, null)
+			clearTimeout(SerialHub.getPackTimer(sid))
+			SerialHub.setPackTimer(sid, null)
+			// 已到达的残包在关闭边界强制输出，半帧也保留原字节，不能再等新口补齐。
+			const pack = SerialHub.getPackBuf(sid).slice()
+			const startTime = SerialHub.getPackStartTime(sid)
+			const glitch = SerialHub.takePackGlitch(sid)
+			SerialHub.setPackBuf(sid, [])
+			try {
+				if (pack.length) flushSerialPack(pack, startTime, sid, glitch)
+			} catch (e) {
+				addLogErrSafe('关闭时记录残包失败', sid)
 			}
+			SerialHub.setPackStartTime(sid, null)
+			SerialHub.setSekWaitStart(sid, null)
+			const task = (async function () {
+				// 读写同时取消，不能让卡住的写入阻止 reader 解锁。
+				const cancelRead = (async function () {
+					if (!r) return
+					let cancelled
+					try { cancelled = r.cancel() } catch (e) {}
+					try { r.releaseLock() } catch (e) {}
+					try { await cancelled } catch (e) {}
+				})()
+				// abort 可能要等在飞的 write 返回；保留任务和锁直到写入 finally 真正完成。
+				if (writer) {
+					try { await writer.abort() } catch (e) {}
+					if (writeTask) {
+						try { await writeTask } catch (e) {}
+					}
+				}
+				await cancelRead
+				if (closePort) {
+					// 已关闭的 Web Serial 口没有流，不再调用 close 触发 InvalidStateError。
+					if (port.readable !== null || port.writable !== null) await port.close()
+				}
+			})()
+			session.releaseTask = task
+			const clearTask = () => {
+				if (session.releaseTask === task) session.releaseTask = null
+			}
+			task.then(clearTask, clearTask)
+		}
+		let timer
+		try {
+			await Promise.race([
+				session.releaseTask,
+				new Promise((resolve, reject) => {
+					timer = setTimeout(() => reject(new Error('release timeout')), SERIAL_RELEASE_TIMEOUT_MS)
+				})
+			])
+			session.releaseFailed = false
+			return true
+		} catch (e) {
+			session.releaseFailed = true
+			addLogErr('串口关闭失败或超时：端口尚未确认释放，请重试关闭；仍失败时重新插拔设备', sid)
+			return false
+		} finally {
+			clearTimeout(timer)
 		}
 	}
 
@@ -3520,8 +3577,14 @@
 		sid = sid || SerialHub.activeSendPhys()
 		// 先置未打开再释放: readData 被 cancel 的异常不会当成断线噪声
 		SerialHub.setOpen(sid, false)
-		await releasePort(sid)
+		const released = await releasePort(sid)
 		releaseWakeLock(sid)
+		if (!released) {
+			SerialHub.setOpen(sid, false)
+			serialStatuChange('close-failed', sid)
+			updateOpenButton(sid)
+			return false
+		}
 		//仅手动关闭时清掉"想打开"标记；异常断开保留，刷新后仍可重连
 		if (SerialHub.isManualClose(sid)) {
 			setSerialWantOpen(false, sid)
@@ -3536,6 +3599,7 @@
 				showToast('单路串口已断开，主发口已切到 A', 2500)
 			}
 		}
+		return true
 	}
 
 	//打开串口
@@ -3550,7 +3614,7 @@
 		opts = opts || {}
 		const reason = opts.reason || 'user'
 		const port = SerialHub.getPort(sid)
-		if (SerialHub.isOpen(sid)) return true
+		if (SerialHub.isOpen(sid) && !SerialHub._sess(sid).releaseFailed) return true
 		if (!port) return false
 		if (isBluetoothSerialPort(port)) {
 			addLogErr('不支持蓝牙串口，请选择 USB 串口', sid)
@@ -3574,8 +3638,13 @@
 		} else {
 			SerialOptions = Object.assign({}, laneOptions[sid])
 		}
-		//打开前先释放本会话残留句柄(读流死/异常断开的脏状态), 忽略 close 失败
-		await releasePort(sid)
+		//打开前必须确认旧口已释放；关闭超时后不能并发 open。
+		if (!await releasePort(sid)) {
+			SerialHub.setOpen(sid, false)
+			serialStatuChange('close-failed', sid)
+			updateOpenButton(sid)
+			return false
+		}
 		serialStatuChange('connecting', sid)
 		let openError = null
 		try {
@@ -3687,7 +3756,11 @@
 		if (!hasPort) return
 		const label = SerialHub.getSessionLabel(sid)
 		const prefix = label ? label + ' · ' : ''
-		if (open) {
+		if (SerialHub.isReleaseFailed(sid)) {
+			btn.innerHTML = '<i class="bi bi-power"></i>'
+			btn.title = '重试关闭'
+			btn.setAttribute('aria-label', prefix + '重试关闭串口')
+		} else if (open) {
 			btn.innerHTML = '<i class="bi bi-power"></i>'
 			btn.title = '断开'
 			btn.setAttribute('aria-label', prefix + '断开串口')
@@ -3708,7 +3781,7 @@
 			await selectPortFor(sid, { openAfterSelect: true })
 			return
 		}
-		if (SerialHub.isOpen(sid)) {
+		if (SerialHub.isOpen(sid) || SerialHub._sess(sid).releaseFailed) {
 			SerialHub.setManualClose(sid, true)
 			SerialHub.setOpening(sid, true)
 			try {
@@ -3836,7 +3909,7 @@
 			return 'BLU'
 		}
 		// 关闭后仍保留 session.port 是有意的: 芯片继续显示上次设备, 点打开即可重连。
-		// 所以这里必须按"是否真的开着"判, 不能按归属判。
+		// 已打开或尚未确认释放的口都仍被占用，不能只按设备归属判。
 		return SerialHub.busyOwnerOfPort(port, exceptSid)
 	}
 
@@ -3852,7 +3925,7 @@
 		const all = SerialHub.allPhys()
 		for (let i = 0; i < all.length; i++) {
 			if (all[i] === exceptSid) continue
-			if (SerialHub.getPort(all[i]) === port && SerialHub.isOpen(all[i])) return true
+			if (SerialHub.getPort(all[i]) === port && (SerialHub.isOpen(all[i]) || SerialHub.isReleaseFailed(all[i]) || SerialHub._sess(all[i]).releaseTask)) return true
 		}
 		if (window.bluApi && typeof window.bluApi.ownsPort === 'function' &&
 			window.bluApi.ownsPort(port) && window.bluApi.isOpen()) {
@@ -4305,9 +4378,13 @@
 		else containerId = 'serial-status'
 		var el = document.getElementById(containerId)
 		if (!el) return
-		// 三态: true=已连接 / 'connecting'=正在连接… / false=未连接
+		if (SerialHub.isReleaseFailed(sid)) statu = 'close-failed'
+		// 连接、连接中、未连接、关闭失败四态
 		let stateClass, stateText
-		if (statu === 'connecting') {
+		if (statu === 'close-failed') {
+			stateClass = 'disconnected'
+			stateText = '关闭失败，请重试'
+		} else if (statu === 'connecting') {
 			stateClass = 'connecting'
 			stateText = '正在连接…'
 		} else if (statu) {
@@ -4378,9 +4455,17 @@
 			if (sid === 'S') showToast('单路串口未打开，请切回单路模式连接后再切回双路', 2500)
 			return
 		}
+		const session = SerialHub._sess(sid)
+		if (session.releaseFailed || session.releaseTask) {
+			if (opts.throwOnError) throw new Error('串口尚未确认释放')
+			addLogErr('串口尚未确认释放，请先重试关闭', sid)
+			return
+		}
+		const gen = session.writeSeq || 0
 		let writer
 		try {
 			writer = port.writable.getWriter()
+			session.writer = writer
 			if (!opts.raw && (toolOptions.addCR || toolOptions.addLF)) {
 				const eol = []
 				if (toolOptions.addCR) eol.push(0x0d)
@@ -4389,7 +4474,12 @@
 			}
 			flushPendingRx(sid)
 			const sendTime = new Date()
-			await writer.write(data)
+			session.writeTask = writer.write(data)
+			await session.writeTask
+			if ((session.writeSeq || 0) !== gen) {
+				if (opts.throwOnError) throw new Error('串口写入已取消')
+				return
+			}
 			SerialHub._sess(sid).txBytes += data.length
 			const shown = opts.logData ? Uint8Array.from(opts.logData) : data
 			addLog(shown, false, sendTime, sid, false, sendName)
@@ -4401,6 +4491,10 @@
 		} finally {
 			if (writer) {
 				try { writer.releaseLock() } catch (e) {}
+				if (session.writer === writer) {
+					session.writer = null
+					session.writeTask = null
+				}
 			}
 		}
 	}
@@ -4414,11 +4508,20 @@
 			if (sid === 'S') showToast('单路串口未打开，请切回单路模式连接后再切回双路', 2500)
 			return
 		}
+		const session = SerialHub._sess(sid)
+		if (session.releaseFailed || session.releaseTask) {
+			addLogErr('串口尚未确认释放，请先重试关闭', sid)
+			return
+		}
+		const gen = session.writeSeq || 0
 		let writer
 		try {
 			writer = port.writable.getWriter()
+			session.writer = writer
 			const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
-			await writer.write(u8)
+			session.writeTask = writer.write(u8)
+			await session.writeTask
+			if ((session.writeSeq || 0) !== gen) return
 			SerialHub._sess(sid).txBytes += u8.length
 		} catch (error) {
 			const errorType = error.name || 'UnknownError'
@@ -4427,6 +4530,10 @@
 		} finally {
 			if (writer) {
 				try { writer.releaseLock() } catch (e) {}
+				if (session.writer === writer) {
+					session.writer = null
+					session.writeTask = null
+				}
 			}
 		}
 	}
@@ -4513,7 +4620,11 @@
 			SerialHub.setOpen(sid, false)
 			serialStatuChange(false, sid)
 			updateOpenButton(sid)
-			await releasePort(sid)
+			if (!await releasePort(sid)) {
+				serialStatuChange('close-failed', sid)
+				updateOpenButton(sid)
+				return
+			}
 			if (reasonMsg && !SerialHub.isManualClose(sid)) addLogErr(reasonMsg, sid)
 		} finally {
 			SerialHub.setOpening(sid, false)
@@ -4581,7 +4692,11 @@
 			updateOpenButton(sid)
 			const releasing = releasePort(sid)
 			const gen = readGenBySid[sid]
-			await releasing
+			if (!await releasing) {
+				serialStatuChange('close-failed', sid)
+				updateOpenButton(sid)
+				return false
+			}
 			if (SerialHub.isManualClose(sid) || readGenBySid[sid] !== gen || SerialHub.getPort(sid) !== port) return false
 			return await openSerial(sid, { reason: 'receive-rebuild' })
 		} catch (error) {
@@ -6418,15 +6533,15 @@
 		const port = SerialHub.getPort(from)
 		if (!port) return { moved: false, wasOpen: false }
 		const wasOpen = SerialHub.isOpen(from)
-		if (SerialHub.getPort(to) && SerialHub.getPort(to) !== port && SerialHub.isOpen(to)) {
+		if (SerialHub.getPort(to) && SerialHub.getPort(to) !== port && (SerialHub.isOpen(to) || SerialHub.isReleaseFailed(to) || SerialHub._sess(to).releaseTask)) {
 			SerialHub.setManualClose(to, true)
-			await closeSerial(to)
+			if (!await closeSerial(to)) throw new Error('目标串口未释放，无法移交')
 		}
-		if (wasOpen) {
+		if (wasOpen || SerialHub.isReleaseFailed(from) || SerialHub._sess(from).releaseTask) {
 			SerialHub.setManualClose(from, true)
 			SerialHub.setOpening(from, true)
 			try {
-				await closeSerial(from)
+				if (!await closeSerial(from)) throw new Error('源串口未释放，无法移交')
 			} finally {
 				SerialHub.setOpening(from, false)
 			}
@@ -6505,11 +6620,11 @@
 		laneMoving = true
 		try {
 			// 不再留一个界面上看不到的口开着：B 关闭，仍记着设备，下次加 B 路点一下就能连上
-			if (SerialHub.isOpen('B')) {
+			if (SerialHub.isOpen('B') || SerialHub.isReleaseFailed('B') || SerialHub._sess('B').releaseTask) {
 				SerialHub.setManualClose('B', true)
 				SerialHub.setOpening('B', true)
 				try {
-					await closeSerial('B')
+					if (!await closeSerial('B')) return false
 				} finally {
 					SerialHub.setOpening('B', false)
 				}
@@ -6834,7 +6949,7 @@
 	async function forgetPort(sid) {
 		sid = SerialHub.uiSid(sid)
 		if (SerialHub.isOpen(sid) || SerialHub.isOpening(sid)) return
-		await closeSerial(sid)
+		if (!await closeSerial(sid)) return
 		SerialHub.setPort(sid, null)
 		SerialHub.setManualClose(sid, true)
 		setSerialWantOpen(false, sid)

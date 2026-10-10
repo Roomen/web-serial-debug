@@ -441,7 +441,8 @@
 			const chip = chipFor(key)
 			const open = h ? h.isOpen(sid) : !!(chip && chip.classList.contains('is-open'))
 			const opening = h ? h.isOpening(sid) : false
-			p.wrap.dataset.state = opening ? 'opening' : (open ? 'open' : 'closed')
+			const failed = !!(h && h.isReleaseFailed(sid))
+			p.wrap.dataset.state = failed ? 'close-failed' : (opening ? 'opening' : (open ? 'open' : 'closed'))
 			p.wrap.dataset.sid = sid
 			const nameEl = chip ? chip.querySelector('.serial-port-name') : null
 			const portName = nameEl ? nameEl.textContent.trim() : ''
@@ -451,7 +452,7 @@
 			p.label.textContent = lbl && lbl !== sid + '路' ? lbl : ''
 			p.port.textContent = portName || '未选择串口'
 			p.params.textContent = params
-			const st = opening ? '正在连接' : (open ? '已连接' : '未连接')
+			const st = failed ? '关闭失败，请重试' : (opening ? '正在连接' : (open ? '已连接' : '未连接'))
 			const who = sid === 'S' ? '串口' : sid + ' 路' + (p.label.textContent ? '（' + p.label.textContent + '）' : '')
 			p.btn.setAttribute('aria-label', who + ' ' + (portName || '未选择串口') + ' · ' + params + ' · ' + st + ' · 打开菜单')
 			p.btn.title = who + ' · ' + st + ' · 选择串口 / 连接断开 / 串口参数' + (sid === 'S' ? '' : ' / 路标签')

@@ -32,6 +32,7 @@ CIU 上电后只 `WOR_INIT` 一次：启动时先查 `WOR_GET_STATUS`，未初�
 - `node tests/hostproto-protocol.cjs`：hostProto 模组指令层（`js/hostproto-protocol.js`）的 CRC/组帧/找帧重同步/解析展示，以及事务层（`js/hostproto-transaction.js`，假时钟）回归，改这两个文件后必须跑。
 - `node tests/parse-view.cjs`：日志「解析」渲染器（`js/parse-view.js`）的转义、折叠、键值对拆分，以及 SEK / 工装 / W-MBUS 三个协议 `logView` 的模型回归，改渲染器或这些 `logView` 后必须跑。
 - `node tests/serial-line-split.cjs`：接收分包（`js/common.js` 里 `//单个合并包的字节上限` 到 `//对外暴露的串口接口` 之间，按锚点注释截取，别删）的按超时 / 按换行两种方式及协议帧保护（含双路两路协议不同）回归，改这段后必须跑。
+- `node tests/serial-close.cjs`：串口关闭与在飞写入的合成回归：中止写入后释放锁、关闭失败/超时与重试、迟到任务隔离、按路残包输出；改释放或发送路径后必须跑。
 - `node tests/serial-hotplug.cjs`：串口热插拔（`js/common.js` 里 `SerialHub` 对象与 `connect` / `disconnect` 监听两段，按 `function makeSerialSession(` 与 `function serialStatuChange(` 等锚点截取）的会话认领回归：关着的口不被别的设备顶替、重插的新对象接回原会话、双路按型号各回各路，改这两段后必须跑。
 - `node tests/serial-read-recovery.cjs`：读流断线恢复、分包毛刺合并、日志正文渲染（截取到 `//日志正文渲染到此为止`，别删）与历史重渲的隔离状态，含双路按路协议与按路会话的重放回归，改读流、分包或日志渲染段后必须跑。
 - `node tests/sts-sim.cjs`：STS 表端与 CIU 两个模拟引擎（`js/sts-sim.js`）经假模组对的端到端回归，含会话丢弃注入、表端重启、预算耗尽，改引擎后必须跑。
