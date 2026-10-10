@@ -143,9 +143,17 @@
 		for (let i = 0; i < 8; i++) out[i] = Number(digits[14 - i * 2]) * 16 + Number(digits[15 - i * 2])
 		return out
 	}
+	// DRN 展示：标准 DRN 为 11 或 13 位十进制，解码成 BigInt 后厂商码的前导 0 会丢
+	// （10 位 → 11 位补 0，12 位 → 13 位补 0）；台架短地址（≤8 位）与超长值原样展示
+	function drnText(v) {
+		const s = String(v)
+		if (s.length === 10) return '0' + s
+		if (s.length === 12) return '0' + s
+		return s
+	}
 	function bcdAddressText(p, o = 0) {
 		const v = bcdAddress(p, o)
-		return v == null ? '(非法 BCD: ' + hexSpaced(p.subarray(o, o + 8)) + ')' : String(v)
+		return v == null ? '(非法 BCD: ' + hexSpaced(p.subarray(o, o + 8)) + ')' : drnText(v)
 	}
 	function hexToBytes(s) {
 		const str = String(s || '').replace(/[\s:,]/g, '')
@@ -497,7 +505,7 @@
 			case CMD.PROV_DEV_ID_GET: {
 				const d = decodeDevId(r)
 				if (!d) { lines.push('DEV_ID_GET 结果应为 9 字节且 DRN 为合法 BCD'); break }
-				lines.push('devType = ' + d.devType + ' ' + (ROLE_NAME[d.devType] || '') + '  DRN = ' + d.drn)
+				lines.push('devType = ' + d.devType + ' ' + (ROLE_NAME[d.devType] || '') + '  DRN = ' + drnText(d.drn))
 				seg(0, 1, 'devType', 'devType'); seg(1, 8, 'DRN BCD LE', 'DRN')
 				break
 			}
@@ -505,7 +513,7 @@
 				const d = decodeWorStatus(r)
 				if (!d) { lines.push('WOR_GET_STATUS 结果不足 2 字节或运行地址 BCD 非法'); break }
 				lines.push('WOR 角色 = ' + d.role + ' ' + (WOR_ROLE_NAME[d.role] || '未知') + '  状态 = ' + d.state + (WOR_STATE_NAME[d.state] ? ' ' + WOR_STATE_NAME[d.state] : ''))
-				if (d.localAddr != null) lines.push('运行地址 localAddr = ' + d.localAddr)
+				if (d.localAddr != null) lines.push('运行地址 localAddr = ' + drnText(d.localAddr))
 				seg(0, 1, 'WOR 运行时角色', '角色'); seg(1, 1, 'WOR 状态', '状态'); seg(2, 8, '运行地址 BCD LE', '地址')
 				break
 			}
@@ -554,7 +562,7 @@
 		if (cmd === EVT.WOR_FRAME) {
 			const d = decodeWorFrame(p)
 			if (!d) { lines.push('WOR 帧事件载荷长度不足或来源地址 BCD 非法'); return { lines: lines, segs: segs } }
-			lines.push('来源地址 src = ' + d.src)
+			lines.push('来源地址 src = ' + drnText(d.src))
 			lines.push('kind = ' + d.kind + ' ' + (KIND_NAME[d.kind] || '未知') + '  seq = ' + d.seq + '  len = ' + d.len)
 			lines.push('data = ' + hexSpaced(d.data))
 			lines.push('rssi = ' + d.rssi + ' dBm  snr = ' + d.snr + ' dB')
@@ -808,7 +816,7 @@
 		STATUS, STATUS_NAME, STATUS_DESC, ROLE_NAME, WOR_ROLE_NAME, WOR_STATE_NAME, KIND_NAME, END_REASON_NAME, BOOT_MODE_NAME,
 		CMD, EVT, CMD_NAME, EVT_NAME, NO_RETRY, LINK_STAT_FIELDS, WOR_STATS_FIELDS, cmdName,
 		crc16, buildFrame, scan, findFrame, parseFrame, formatFrame, logView, byteMap, buildDownFrame,
-		u64, u64Bytes, bcdAddress, bcdAddressBytes, hexToBytes, hexSpaced, asciiSafe,
+		u64, u64Bytes, bcdAddress, bcdAddressBytes, drnText, hexToBytes, hexSpaced, asciiSafe,
 		woInitPayload, wakePayload, sendPayload, setUplinkPayload, devIdSetPayload,
 		decodeDevId, decodeWorStatus, decodeFwInfo, decodeWorFrame, decodeSessionEnd,
 	}

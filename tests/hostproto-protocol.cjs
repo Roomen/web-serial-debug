@@ -91,17 +91,23 @@ assert.equal(H.logView, registered.impl.logView)
 		const parse = (type, cmd, payload) => H.parseFrame(H.buildFrame({ type, cmd, seq: 1, payload }))
 		for (const cmd of [H.CMD.WOR_WAKE, H.CMD.WOR_WAKE_CIU, H.CMD.WOR_PROBE]) {
 			const r = parse(0, cmd, cmd === H.CMD.WOR_PROBE ? b : Uint8Array.of(...b, 1))
-			assert.ok(r.decoded.includes('目标地址 = ' + BigInt(digits)))
-			assert.equal(J(H.logView(r))[0].subject.value, String(BigInt(digits)))
+			assert.ok(r.decoded.includes('目标地址 = ' + digits))
+			assert.equal(J(H.logView(r))[0].subject.value, H.drnText(digits))
 			assert.ok(H.byteMap(r).some(x => x && /BCD LE/.test(x.tip)))
 		}
-		assert.ok(parse(1, H.CMD.PROV_DEV_ID_GET, Uint8Array.of(0, 1, ...b)).decoded.includes('DRN = ' + BigInt(digits)))
-		assert.ok(parse(1, H.CMD.BLE_ADV_IDENTITY, Uint8Array.of(0, ...b)).decoded.includes('DRN = ' + BigInt(digits)))
+		assert.ok(parse(1, H.CMD.PROV_DEV_ID_GET, Uint8Array.of(0, 1, ...b)).decoded.includes('DRN = ' + digits))
+		assert.ok(parse(1, H.CMD.BLE_ADV_IDENTITY, Uint8Array.of(0, ...b)).decoded.includes('DRN = ' + digits))
 		assert.equal(H.decodeWorFrame(Uint8Array.of(...b, 4, 0, 0, 0, 0, 0, 0)).src, BigInt(digits))
 	}
 	for (const v of ['10000000000000000', '-1', '1.2', '0x12', '']) assert.throws(() => H.bcdAddressBytes(v), /16 位/)
 	assert.throws(() => H.bcdAddressBytes(9999999999999999), /安全整数/)
 	assert.equal(H.bcdAddress(hex('12 34')), null)
+	// 展示按 11/13 位规则补前导 0：10 位→11 位、12 位→13 位；短地址与超长值原样
+	assert.equal(H.drnText('101123456788'), '0101123456788')
+	assert.equal(H.drnText('1234567890'), '01234567890')
+	assert.equal(H.drnText('1234567890123'), '1234567890123')
+	assert.equal(H.drnText('12345678'), '12345678')
+	assert.equal(H.drnText('9999999999999999'), '9999999999999999')
 	for (let i = 0; i < 8; i++) for (const bad of [0x1a, 0xa1, 0xff]) {
 		const b = new Uint8Array(8); b[i] = bad
 		assert.equal(H.bcdAddress(b), null)
