@@ -123,6 +123,17 @@ function harness(opts) {
 	h0.rx('p\r\nq')
 	assert.deepEqual(h0.rows, ['p\r\nq'], '旧配置没有 splitMode 时按超时处理')
 }
+// ---- 输出抛错(如 DOM 异常)时缓冲也要先清掉，后续数据不能叠在旧包上 ----
+for (const mode of ['time0', 'line']) {
+	const h = harness({ log: mode === 'line' ? { splitMode: 'line', timeOut: 200, logType: 'text' } : { splitMode: 'time', timeOut: 0, logType: 'text' } })
+	const realAddLog = h.ctx.addLog
+	h.ctx.addLog = () => { throw new Error('dom boom') }
+	assert.throws(() => h.rx('abc\n'), /dom boom/)
+	assert.equal(h.sess.packBuf.length, 0, mode + ': 输出抛错后缓冲已清空')
+	h.ctx.addLog = realAddLog
+	h.rx('x\n')
+	assert.deepEqual(h.rows, ['x\n'], mode + ': 之后的数据不带旧包')
+}
 // ---- 按换行时 SEK 帧（要按协议分包）不按 0x0A 切 ----
 {
 	const sek = [0xA9, 0x9A, 0x0A, 0x0A, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02, 0x00, 0x0A, 0x0A, 0x00, 0x00, 0x16]

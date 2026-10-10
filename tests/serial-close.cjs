@@ -38,6 +38,7 @@ function harness() {
 		hub['is' + name] = sid => sessions[sid][key]
 		hub['set' + name] = (sid, v) => { sessions[sid][key] = v }
 	}
+	const recovered = []
 	const context = vm.createContext({
 		SerialHub: hub, window: {}, Uint8Array, Date,
 		setTimeout: (fn, ms) => { const id = ++timerId; timers.set(id, { fn, due: now + ms }); return id },
@@ -57,7 +58,7 @@ function harness() {
 		laneOptions: { A: {}, B: {} }, SERIAL_OPTIONS_KEY: 'synthetic-options',
 		resetLaneParseSession: () => {}, sessionResetSeq: { S: 0, A: 0, B: 0 },
 		getPortIdentityKey: async () => null, localStorage: { setItem: () => {} }, persistLaneOptions: () => {},
-		rxWatch: () => ({}), reopenAttemptBySid: {}, readData: async () => {}
+		recoverDeadReadLoop: async sid => { recovered.push(sid) }, rxWatch: () => ({}), reopenAttemptBySid: {}, readData: async () => {}
 	})
 	vm.runInContext(
 		section('\tfunction portHeldByOther(', '\tfunction randAliasId(') +
@@ -77,7 +78,7 @@ function harness() {
 		}
 		now = end; await settle()
 	}
-	return { sessions, hub, logs, errors, statuses, wants, timers, api: context.api, advance }
+	return { recovered, sessions, hub, logs, errors, statuses, wants, timers, api: context.api, advance }
 }
 async function testFlushAndIsolation() {
 	for (const bytes of [[0x68, 0x01], [0, 0]]) {
@@ -188,6 +189,31 @@ async function testLateSuccessfulWrite() {
 	assert.equal(h.logs.filter(v => !v.rx).length, 0, 'invalidated write cannot append TX after close')
 	assert.equal(h.sessions.S.txBytes, 0)
 }
+async function testWriteNetworkErrorRecovers() {
+	// 写入遇到 NetworkError(设备拔出)要触发读循环死亡同款恢复；其它错误不触发
+	for (const [name, expect] of [['NetworkError', 1], ['AbortError', 0]]) {
+		const h = harness()
+		h.sessions.S.port = { writable: { getWriter: () => ({ write: async () => { const e = new Error('x'); e.name = name; throw e }, releaseLock: () => {} }) }, close: async () => {} }
+		await h.api.writeData(Uint8Array.of(1), 'S')
+		assert.equal(h.recovered.length, 0, name + ': 拔线时 disconnect 晚于写入失败，确认窗口内不恢复')
+		await h.advance(600)
+		assert.equal(h.recovered.length, expect, name)
+	}
+	{
+		// 确认窗口内 disconnect 已把这一路关掉：不再对拔走的口重开
+		const h = harness()
+		h.sessions.S.port = { writable: { getWriter: () => ({ write: async () => { const e = new Error('x'); e.name = 'NetworkError'; throw e }, releaseLock: () => {} }) }, close: async () => {} }
+		await h.api.writeData(Uint8Array.of(1), 'S')
+		h.sessions.S.open = false
+		await h.advance(600)
+		assert.equal(h.recovered.length, 0, 'closed before confirm')
+	}
+	const h = harness()
+	h.sessions.S.port = { writable: { getWriter: () => ({ write: async () => { const e = new Error('x'); e.name = 'NetworkError'; throw e }, releaseLock: () => {} }) }, close: async () => {} }
+	await assert.rejects(h.api.writeData(Uint8Array.of(1), 'S', null, { throwOnError: true }))
+	await h.advance(600)
+	assert.equal(h.recovered.length, 1, 'throwOnError 路径同样触发恢复')
+}
 async function testRealWritableStream() {
 	const h = harness(), gate = deferred()
 	const writable = new WritableStream({ write: () => gate.promise, abort: () => {} })
@@ -245,6 +271,7 @@ async function testSharedPortAndStuckWrite() {
 	await testHangingReader()
 	await testPendingWrite()
 	await testLateSuccessfulWrite()
+	await testWriteNetworkErrorRecovers()
 	await testRealWritableStream()
 	await testSharedPortAndStuckWrite()
 	console.log('serial-close: all synthetic close regressions passed')
