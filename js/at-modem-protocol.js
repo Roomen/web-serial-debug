@@ -1580,41 +1580,83 @@
 		return models.length ? models : null
 	}
 
-	// 格式化输出 (底栏旧面板/检查器原始输出 fallback)
-	function formatFrame(r) {
-		if (!r || !r.items || !r.items.length) return r ? (r.rawText || '') : ''
-		const out = []
-		for (let i = 0; i < r.items.length; i++) {
-			const it = r.items[i]
-			out.push('[' + it.title + '] ' + (it.code || ''))
-			if (it.pairs && it.pairs.length) {
-				for (let j = 0; j < it.pairs.length; j++) {
-					out.push('  ' + it.pairs[j][0] + ': ' + it.pairs[j][1])
-				}
-			}
-		}
-		return out.join('\n')
+	function escHtml(s) {
+		return String(s == null ? '' : s)
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
 	}
 
-	// 查找帧边界 (以 \n 为行界，或独立提示符 >)
+	// 格式化输出 (底栏旧面板/检查器原始输出 fallback，必须进行 HTML 转义)
+	function formatFrame(r) {
+		if (!r) return ''
+		if (!r.items || !r.items.length) {
+			return '<div class="sk-parse"><pre style="margin:0;white-space:pre-wrap;">' + escHtml(r.rawText || '') + '</pre></div>'
+		}
+		let h = '<div class="sk-parse">'
+		for (let i = 0; i < r.items.length; i++) {
+			const it = r.items[i]
+			h += '<div class="sk-parse-section" style="margin-bottom:8px;">'
+			h += '<div class="sk-parse-hdr" style="font-weight:600;margin-bottom:2px;">[' + escHtml(it.title) + '] ' + escHtml(it.code || '') + '</div>'
+			if (it.pairs && it.pairs.length) {
+				h += '<div class="sk-parse-items" style="padding-left:12px;">'
+				for (let j = 0; j < it.pairs.length; j++) {
+					h += '<div><span style="color:#6c757d;">' + escHtml(it.pairs[j][0]) + ':</span> ' + escHtml(it.pairs[j][1]) + '</div>'
+				}
+				h += '</div>'
+			}
+			if (it.sections && it.sections.length) {
+				for (let k = 0; k < it.sections.length; k++) {
+					const sec = it.sections[k]
+					if (sec.pre) {
+						h += '<pre style="margin:4px 0 0 12px;white-space:pre-wrap;font-size:12px;">' + escHtml(sec.pre) + '</pre>'
+					}
+				}
+			}
+			h += '</div>'
+		}
+		h += '</div>'
+		return h
+	}
+
+	// 查找帧边界 (以 \n 为行界；若无 \n，支持独立提示符 >)
 	function findFrame(bytes, opt) {
 		const b = (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes || [])
 		const empty = { found: false, offset: 0, length: b.length, frame: b, prefix: 0, suffix: 0 }
 		if (!b.length) return empty
 
-		for (let i = 0; i < b.length; i++) {
-			// 单独提示符 > (0x3E)
-			if (b[i] === 0x3e) {
-				const frame = new Uint8Array(b.subarray(i, i + 1))
-				return { found: true, offset: i, length: 1, frame: frame, prefix: i, suffix: b.length - i - 1 }
-			}
-			// 换行符 \n (0x0A)
-			if (b[i] === 0x0a) {
-				const len = i + 1
-				const frame = new Uint8Array(b.subarray(0, len))
-				return { found: true, offset: 0, length: len, frame: frame, prefix: 0, suffix: b.length - len }
-			}
+		// 1. 优先按换行符 \n (0x0A) 切割完整行，避免内容中包含的 '>' (如 +QMTRECV: ...,"a>b") 误判为提示符
+		const nlIdx = b.indexOf(0x0a)
+		if (nlIdx !== -1) {
+			const len = nlIdx + 1
+			const frame = new Uint8Array(b.subarray(0, len))
+			return { found: true, offset: 0, length: len, frame: frame, prefix: 0, suffix: b.length - len }
 		}
+
+		// 2. 没有 \n 时，检查是否为独立的提示符 > (0x3E)
+		// 必须是行首（忽略前面可能的空白/CR/LF），且后面紧跟空格或结束
+		for (let i = 0; i < b.length; i++) {
+			const c = b[i]
+			if (c === 0x20 || c === 0x0d || c === 0x09) {
+				continue
+			}
+			if (c === 0x3e) { // '>'
+				let isPrompt = true
+				for (let j = i + 1; j < b.length; j++) {
+					if (b[j] !== 0x20 && b[j] !== 0x0d && b[j] !== 0x0a && b[j] !== 0x09) {
+						isPrompt = false
+						break
+					}
+				}
+				if (isPrompt) {
+					const frame = new Uint8Array(b.subarray(i, i + 1))
+					return { found: true, offset: i, length: 1, frame: frame, prefix: i, suffix: b.length - i - 1 }
+				}
+			}
+			break
+		}
+
 		return empty
 	}
 
@@ -1648,6 +1690,15 @@
 				byteMap: byteMap,
 				presets: [],
 			})
+			const sel = typeof document !== 'undefined' ? document.getElementById('serial-protocol-select') : null
+			if (sel && root._activeProtocol === 'cellular-at') {
+				if (sel.value !== 'cellular-at') {
+					sel.value = 'cellular-at'
+					sel.dispatchEvent(new Event('change'))
+				} else {
+					applyVisibility()
+				}
+			}
 			return
 		}
 		if (typeof setTimeout === 'function' && retry < 100) {

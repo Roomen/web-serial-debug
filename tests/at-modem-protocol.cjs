@@ -338,7 +338,6 @@ function parseAndModel(text) {
 	assert.equal(f2.length, 1)
 }
 
-console.log('All cellular AT protocol regression tests passed!')
 
 // 7.1.1 扩展 SSL/TLS 指令与状态测试 (QSSLRECV, QSSLSTATE, DTLS, SNI)
 {
@@ -367,3 +366,52 @@ console.log('All cellular AT protocol regression tests passed!')
 	assert.equal(mRecvResp.title, 'SSL/TLS 读出缓存数据')
 	assert.ok(mRecvResp.badges.some(b => b.text === '读取 128 字节'))
 }
+
+
+// 9. 安全转义 (XSS 防护) 与 HTML 结构回归测试
+{
+	const xssPayload = "+QMTRECV: 0,0,\"topic\",\"<img src=x onerror=alert(1)>\"\r\n"
+	const rXss = M.parseFrame(xssPayload)
+	const fmt = M.formatFrame(rXss)
+	assert.ok(!fmt.includes("<img"), "formatFrame 输出不应包含未经转义的 HTML 标签: " + fmt)
+	assert.ok(fmt.includes("&lt;img src=x onerror=alert(1)&gt;"), "formatFrame 必须进行 HTML 实体转义")
+	assert.ok(fmt.includes("sk-parse"), "formatFrame 应包含结构化容器 sk-parse")
+
+	// 空内容或原始文本的转义
+	const rRawXss = { rawText: "<script>alert(1)</script>" }
+	const fmtRaw = M.formatFrame(rRawXss)
+	assert.ok(!fmtRaw.includes("<script>"), "rawText 必须被转义")
+	assert.ok(fmtRaw.includes("&lt;script&gt;"), "rawText 实体转义正确")
+}
+
+// 10. findFrame 边界强化 (行内存在 > 字符时不误截断，独立提示符 > 正常识别)
+{
+	const textEncoder = new (require("node:util").TextEncoder)()
+	// 行内包含 > (如 MQTT 接收报文、物模型或文本)
+	const textWithGt = '+QMTRECV: 0,0,"topic","a>b"\r\n'
+	const bytesWithGt = textEncoder.encode(textWithGt)
+	const fGt = M.findFrame(bytesWithGt)
+	assert.equal(fGt.found, true)
+	assert.equal(fGt.offset, 0, "offset 应为 0，不能把前段截掉")
+	assert.equal(fGt.prefix, 0, "prefix 应为 0")
+	assert.equal(fGt.length, bytesWithGt.length, "应取完整行长度")
+
+	// 提示符单独成帧
+	const promptBytes = textEncoder.encode("> ")
+	const fPrompt = M.findFrame(promptBytes)
+	assert.equal(fPrompt.found, true)
+	assert.equal(fPrompt.length, 1)
+
+	// 普通未换行命令 (未收齐) 不应截取
+	const incomplete = textEncoder.encode("AT+QISEND=0,10")
+	const fInc = M.findFrame(incomplete)
+	assert.equal(fInc.found, false, "未遇到 \n 时普通命令不应判定为成帧")
+}
+
+// 11. 版本号校验
+{
+	const verFile = fs.readFileSync(path.join(__dirname, "../js/version.js"), "utf8")
+	assert.ok(verFile.includes("1.67.0"), "版本号应为 1.67.0")
+}
+
+console.log("All cellular AT protocol regression tests passed!");
