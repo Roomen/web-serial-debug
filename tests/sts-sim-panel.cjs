@@ -5,6 +5,9 @@ const path = require('node:path')
 const vm = require('node:vm')
 
 const source = fs.readFileSync(path.join(__dirname, '../js/sts-sim-panel.js'), 'utf8')
+const protocolWindow = {}
+vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/sts-ciu-protocol.js'), 'utf8'), { window: protocolWindow })
+const realStsCiu = protocolWindow.stsCiu
 const flush = () => new Promise(resolve => setImmediate(resolve))
 const DRN = '101123456788'
 const PAK = '000102030405060708090a0b0c0d0e0f'
@@ -247,6 +250,7 @@ function makeWorld(options = {}) {
 			return link
 		},
 		stsCiu: {
+			...realStsCiu,
 			VALVE_POS_OPEN: 1, VALVE_POS_CLOSED: 2, VALVE_POS_MASK: 3,
 			fmtScaled: (value, dec) => (Number(value) / 10 ** dec).toFixed(dec),
 			meterStatusText: () => ' 合成状态', recordTimeStr: () => '合成时刻', RECORD_EPOCH_UNSET: 0,
@@ -342,6 +346,26 @@ test('CIU address is read-only, ignores old saved values and is never persisted'
 	assert.equal(refreshed.panel('B').root.querySelector('#sts-sim-ciu-localAddr-B').textContent, '待读取')
 	panel.start.click()
 	assert.equal(address.textContent, '待读取')
+})
+
+test('CIU generates valid local tokens for S/A/B while disconnected and stopped, without enabling send', () => {
+	for (const sid of ['S', 'A', 'B']) {
+		const world = makeWorld({ open: [] })
+		const panel = world.panel(sid)
+		panel.role('ciu')
+		const token = panel.root.querySelector('#sts-sim-ciu-token-' + sid)
+		const generate = panel.root.querySelector('#sts-sim-ciu-simgen-' + sid)
+		const send = panel.root.querySelector('#sts-sim-ciu-token-go-' + sid)
+		panel.root.querySelector('#sts-sim-ciu-simtype-' + sid).value = '01'
+		panel.root.querySelector('#sts-sim-ciu-simdata-' + sid).value = '1'
+		assert.equal(token.disabled, false, sid + ' token input')
+		assert.equal(generate.disabled, false, sid + ' generator')
+		assert.equal(send.disabled, true, sid + ' send button')
+		generate.click()
+		assert.equal(realStsCiu.simTokenDecode(token.value).valid, true, sid + ' generated token decodes')
+		assert.equal(send.disabled, true, sid + ' remains unable to send')
+		assert.equal(world.sent.length, 0, sid + ' sends no serial data')
+	}
 })
 
 test('A/B roles, configuration, logs and manual start/stop are independent', async () => {
