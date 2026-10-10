@@ -324,18 +324,32 @@ function parseAndModel(text) {
 	assert.equal(mTslReply.title, '物模型服务响应 (TSL Reply)')
 }
 
-// 8. findFrame 边界测试
+// 8. findFrame 边界测试 (多行解析与提示符识别)
 {
 	const textEncoder = new (require('node:util').TextEncoder)()
-	const bytes1 = textEncoder.encode('AT+CSQ\r\n+CSQ: 24,99\r\n')
+	// 多行 AT 文本粘贴: 包含整段交互，不提前截断
+	const multiText = 'AT+CSQ\r\n+CSQ: 24,99\r\n'
+	const bytes1 = textEncoder.encode(multiText)
 	const f1 = M.findFrame(bytes1)
 	assert.equal(f1.found, true)
-	assert.equal(f1.length, 8) // 'AT+CSQ\r\n'.length = 8
+	assert.equal(f1.length, bytes1.length, '多行 AT 文本应完整捕获')
+	const rMulti = M.parseFrame(f1.frame)
+	assert.equal(rMulti.items.length, 2, '应解析出 2 条有效记录')
 
+	// 换行在前、> 在后的提示符 (\r\n> )
+	const crlfPrompt = textEncoder.encode('\r\n> ')
+	const fCrlf = M.findFrame(crlfPrompt)
+	assert.equal(fCrlf.found, true)
+	assert.equal(fCrlf.prefix, 2, '前导 \\r\\n 视作前缀跳过')
+	const rPrompt = M.parseFrame(fCrlf.frame)
+	assert.equal(rPrompt.items.length, 1)
+	assert.equal(rPrompt.items[0].type, 'prompt')
+
+	// 单独提示符 (> )
 	const bytesPrompt = textEncoder.encode('> ')
 	const f2 = M.findFrame(bytesPrompt)
 	assert.equal(f2.found, true)
-	assert.equal(f2.length, 1)
+	assert.equal(f2.length, 2)
 }
 
 
@@ -376,6 +390,8 @@ function parseAndModel(text) {
 	assert.ok(!fmt.includes("<img"), "formatFrame 输出不应包含未经转义的 HTML 标签: " + fmt)
 	assert.ok(fmt.includes("&lt;img src=x onerror=alert(1)&gt;"), "formatFrame 必须进行 HTML 实体转义")
 	assert.ok(fmt.includes("sk-parse"), "formatFrame 应包含结构化容器 sk-parse")
+	assert.ok(fmt.includes("color:var(--text-secondary);"), "应使用主题自适应颜色变量")
+	assert.ok(!fmt.includes("#6c757d"), "不应硬编码内联颜色 #6c757d")
 
 	// 空内容或原始文本的转义
 	const rRawXss = { rawText: "<script>alert(1)</script>" }
@@ -400,12 +416,12 @@ function parseAndModel(text) {
 	const promptBytes = textEncoder.encode("> ")
 	const fPrompt = M.findFrame(promptBytes)
 	assert.equal(fPrompt.found, true)
-	assert.equal(fPrompt.length, 1)
+	assert.equal(fPrompt.length, 2)
 
-	// 普通未换行命令 (未收齐) 不应截取
-	const incomplete = textEncoder.encode("AT+QISEND=0,10")
-	const fInc = M.findFrame(incomplete)
-	assert.equal(fInc.found, false, "未遇到 \n 时普通命令不应判定为成帧")
+	// 纯换行空内容不应判定为有效帧
+	const pureCrlf = textEncoder.encode("\r\n\r\n")
+	const fEmpty = M.findFrame(pureCrlf)
+	assert.equal(fEmpty.found, false, "纯换行空内容不应判定为成帧")
 }
 
 // 11. 版本号校验

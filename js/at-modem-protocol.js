@@ -1602,7 +1602,7 @@
 			if (it.pairs && it.pairs.length) {
 				h += '<div class="sk-parse-items" style="padding-left:12px;">'
 				for (let j = 0; j < it.pairs.length; j++) {
-					h += '<div><span style="color:#6c757d;">' + escHtml(it.pairs[j][0]) + ':</span> ' + escHtml(it.pairs[j][1]) + '</div>'
+					h += '<div><span style="color:var(--text-secondary);">' + escHtml(it.pairs[j][0]) + ':</span> ' + escHtml(it.pairs[j][1]) + '</div>'
 				}
 				h += '</div>'
 			}
@@ -1620,44 +1620,48 @@
 		return h
 	}
 
-	// 查找帧边界 (以 \n 为行界；若无 \n，支持独立提示符 >)
+	// 查找帧边界 (支持多行 AT 交互全量捕获，自动跳过前导空换行/空白，支持提示符 >)
 	function findFrame(bytes, opt) {
 		const b = (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes || [])
 		const empty = { found: false, offset: 0, length: b.length, frame: b, prefix: 0, suffix: 0 }
 		if (!b.length) return empty
 
-		// 1. 优先按换行符 \n (0x0A) 切割完整行，避免内容中包含的 '>' (如 +QMTRECV: ...,"a>b") 误判为提示符
-		const nlIdx = b.indexOf(0x0a)
-		if (nlIdx !== -1) {
-			const len = nlIdx + 1
-			const frame = new Uint8Array(b.subarray(0, len))
-			return { found: true, offset: 0, length: len, frame: frame, prefix: 0, suffix: b.length - len }
-		}
-
-		// 2. 没有 \n 时，检查是否为独立的提示符 > (0x3E)
-		// 必须是行首（忽略前面可能的空白/CR/LF），且后面紧跟空格或结束
+		// 1. 跳过前导空白与空换行，定位有效内容的起始位置
+		let start = -1
 		for (let i = 0; i < b.length; i++) {
 			const c = b[i]
-			if (c === 0x20 || c === 0x0d || c === 0x09) {
+			if (c === 0x0d || c === 0x0a || c === 0x20 || c === 0x09) {
 				continue
 			}
-			if (c === 0x3e) { // '>'
-				let isPrompt = true
-				for (let j = i + 1; j < b.length; j++) {
-					if (b[j] !== 0x20 && b[j] !== 0x0d && b[j] !== 0x0a && b[j] !== 0x09) {
-						isPrompt = false
-						break
-					}
-				}
-				if (isPrompt) {
-					const frame = new Uint8Array(b.subarray(i, i + 1))
-					return { found: true, offset: i, length: 1, frame: frame, prefix: i, suffix: b.length - i - 1 }
-				}
+			// 遇到首个可打印文本或 UTF-8 字符 (如 'A', '+', '>', 'O' 等)
+			if (c >= 0x20 || c === 0x09) {
+				start = i
+				break
 			}
-			break
+		}
+		if (start === -1) return empty
+
+		// 2. 连续扫描有效文本字符（含换行/回车/制表符/UTF-8），直到遇到二进制非文本字符截断
+		let end = start
+		for (let i = start; i < b.length; i++) {
+			const c = b[i]
+			if (c >= 0x20 || c === 0x09 || c === 0x0d || c === 0x0a) {
+				end = i + 1
+			} else {
+				break
+			}
 		}
 
-		return empty
+		const len = end - start
+		const frame = new Uint8Array(b.subarray(start, end))
+		return {
+			found: true,
+			offset: start,
+			length: len,
+			frame: frame,
+			prefix: start,
+			suffix: b.length - end,
+		}
 	}
 
 	// 字节标注映射
