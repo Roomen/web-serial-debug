@@ -250,35 +250,6 @@
 			if (p) title.append(iconEl(p.icon), document.createTextNode(p.title))
 		}
 		if (moveBtn) moveBtn.hidden = !p || p.docks.indexOf('bottom') === -1
-		renderRightTabs()
-	}
-
-	// 右栏标签条：列出停靠在右栏的全部面板(不可用的置灰)。只有现代布局显示(css 控制)，经典布局仍看标题 + 停靠栏
-	function renderRightTabs() {
-		const box = $('wb-right-tabs')
-		if (!box) return
-		box.textContent = ''
-		inDock('right').forEach(function (q) {
-			const ok = isAvailable(q)
-			const b = document.createElement('button')
-			b.type = 'button'
-			b.className = 'wb-right-tab'
-			b.dataset.dockPanel = q.id
-			b.setAttribute('role', 'tab')
-			b.setAttribute('aria-selected', String(q.id === state.right))
-			b.disabled = !ok
-			b.title = ok ? q.title : (q.unavailableHint || q.title + '当前不可用')
-			b.textContent = q.label
-			box.appendChild(b)
-		})
-		// 右栏窄时标签条横向滚动，选中的标签要留在可视区内(经典布局下条本身不可见，量不出宽度就跳过)
-		const sel = box.querySelector('[aria-selected="true"]')
-		if (sel && box.clientWidth) {
-			const br = box.getBoundingClientRect()
-			const sr = sel.getBoundingClientRect()
-			if (sr.left < br.left) box.scrollLeft -= br.left - sr.left
-			else if (sr.right > br.right) box.scrollLeft += sr.right - br.right
-		}
 	}
 
 	function renderBottomHead() {
@@ -794,13 +765,6 @@
 			bar.addEventListener('click', function (e) {
 				const b = e.target.closest('.wb-dock-btn')
 				if (b) toggle(b.dataset.dockPanel)
-			})
-		}
-		const rightTabs = $('wb-right-tabs')
-		if (rightTabs) {
-			rightTabs.addEventListener('click', function (e) {
-				const b = e.target.closest('.wb-right-tab')
-				if (b) open(b.dataset.dockPanel)
 			})
 		}
 		const tabs = $('wb-bottom-tabs')

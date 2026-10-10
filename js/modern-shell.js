@@ -392,8 +392,8 @@
 			p.btn.title = who + ' · ' + st + ' · 选择串口 / 连接断开 / 串口参数' + (sid === 'S' ? '' : ' / 路标签')
 			p.head.textContent = sid === 'S' ? '单路串口' : sid + ' 路'
 		})
-		// 发送条上的「发 A / 发 B」与快捷行不在连接栏里，显隐单独跟模式
-		if (refs.sendSeg) refs.sendSeg.hidden = !dual
+		// 快捷行上的「发往」分段不在连接栏里，显隐单独跟模式
+		if (refs.sendTo) refs.sendTo.hidden = !dual
 		const b = refs.blu
 		if (b) {
 			const on = !!(window.bluApi && window.bluApi.isOpen())
@@ -590,7 +590,16 @@
 		fold.appendChild(icon('bi-chevron-down'))
 		listen(fold, 'click', function () { if (header) header.click() })
 		row.append(sel, list, manage, grow)
-		park($('serial-send-target'), row)
+		// 发往哪一路：原来只是显示「→ A路」的指示(#serial-send-target，经典布局由 workbench.js 写，原样留在被隐藏的标题行里)，
+		// 现代布局换成可选的分段，只在双路显示
+		const sendTo = hostEl(mk('span', 'mdn-send-to mdn-dual-only'), row)
+		sendTo.appendChild(mk('span', 'mdn-send-to-cap', '发往'))
+		const seg = mk('div', 'ctl-seg mdn-send-seg')
+		seg.setAttribute('role', 'group')
+		seg.setAttribute('aria-label', '发送到')
+		sendTo.appendChild(seg)
+		refs.sendTo = sendTo
+		refs.sendSeg = seg
 		row.appendChild(fold)
 		refs.quick = { sel: sel, list: list, fold: fold, more: manage }
 
@@ -620,13 +629,9 @@
 		syncFold()
 		refreshQuick()
 
-		// 双路「发 A / 发 B」：与连接栏的「主发」是同一状态，点击转给原主发按钮(钉扎提示等沿用)
+		// 发往哪一路：与连接栏的「主发」是同一状态，点击转给原主发按钮(钉扎提示等沿用)
 		// 发送键搬到开关一排末尾，输入框独占前面，排成设计稿的一行
 		park($('serial-send'), body.querySelector('.send-options'))
-		const seg = hostEl(mk('div', 'ctl-seg mdn-send-seg mdn-dual-only'), body, body.firstChild)
-		seg.setAttribute('role', 'group')
-		seg.setAttribute('aria-label', '发送到')
-		refs.sendSeg = seg
 		const group = $('serial-active-send')
 		if (group) {
 			group.querySelectorAll('.dual-send-btn').forEach(function (o) {
@@ -669,8 +674,8 @@
 			const sid = b.dataset.sid
 			b.hidden = o.hidden
 			b.setAttribute('aria-pressed', String(o.classList.contains('active')))
-			b.textContent = '发 ' + (sid === 'S' ? '单' : sid)
 			const name = sid === 'S' ? '单路串口' : (h ? (sid === 'B' ? h.getLabelB() : h.getLabelA()) : sid + '路')
+			b.textContent = name
 			b.title = '发送到 ' + name + '（与顶栏「主发」同一设置）'
 		})
 	}

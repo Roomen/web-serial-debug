@@ -9033,8 +9033,8 @@ details.sts-sim-alarm-picker {
 /* ======================================
    界面布局：经典 / 现代
    经典布局不动。现代布局的全部样式都挂在 html[data-layout='modern'] 下；
-   此段只有三处基础规则作用于经典布局：「配置」菜单里的布局选择行(可见)、
-   右栏标签条与双路视图切换这两个新元素(display:none，不占位)
+   此段只有两处基础规则作用于经典布局：「配置」菜单里的布局选择行(可见)、
+   双路视图切换这个新元素(display:none，不占位)
    ============================================= */
 
 /* 「配置」菜单顶部的布局选择行 */
@@ -9054,7 +9054,6 @@ details.sts-sim-alarm-picker {
 }
 
 /* 新增元素：经典布局下不可见、不占位，现代布局才打开 */
-.wb-right-tabs,
 #serial-dual-view-seg {
 	display: none;
 }
@@ -9293,61 +9292,16 @@ html[data-layout='modern'] .serial-logs:not(.ansi):not(.is-dual) .log-row[data-d
 	box-shadow: inset 0 0 0 1.5px var(--mdn-tx-line);
 }
 
-/* ---------- 现代布局：右栏标签条 ---------- */
-html[data-layout='modern'] #wb-right-title {
-	display: none;
-}
-
+/* ---------- 现代布局：右栏标题栏 ---------- */
+/* 面板的切换、开合只走最右侧停靠栏，标题栏显示当前面板的图标与名称，右侧仍是「移到底部」「收起」 */
 html[data-layout='modern'] .wb-dock-head {
 	min-height: 34px;
 	padding-bottom: 0;
 }
 
-html[data-layout='modern'] .wb-right-tabs {
-	flex: 1 1 auto;
-	display: flex;
-	align-items: stretch;
-	gap: 0;
-	min-width: 0;
-	overflow-x: auto;
-	scrollbar-width: none;
-}
-
-html[data-layout='modern'] .wb-right-tabs::-webkit-scrollbar {
-	display: none;
-}
-
-html[data-layout='modern'] .wb-right-tab {
-	flex: 0 0 auto;
-	height: 34px;
-	margin-bottom: -1px;
-	padding: 0 5px;
-	border: 0;
-	border-bottom: 2px solid transparent;
-	background: transparent;
-	color: var(--text-secondary);
-	font-family: var(--font-sans);
-	font-size: 0.72rem;
-	white-space: nowrap;
-}
-
-html[data-layout='modern'] .wb-right-tab:hover:not(:disabled) {
-	color: var(--text-primary);
-}
-
-html[data-layout='modern'] .wb-right-tab[aria-selected='true'] {
-	border-bottom-color: var(--accent);
-	color: var(--accent);
-	font-weight: 700;
-}
-
-html[data-layout='modern'] .wb-right-tab:focus-visible {
-	outline: 2px solid var(--accent);
-	outline-offset: -2px;
-}
-
-html[data-layout='modern'] .wb-right-tab:disabled {
-	opacity: 0.4;
+html[data-layout='modern'] #wb-right-title {
+	padding-left: 6px;
+	font-size: 0.78rem;
 }
 
 /* ---------- 现代布局：双路视图切换(列表 / 气泡) ---------- */
@@ -12093,6 +12047,57 @@ html[data-layout='modern'] .mdn-pop .serial-device-chip {
 	max-width: none;
 }
 
+/* 设备名可能很长：选口按钮在菜单里排成两行网格，设备名独占第一行(可折行，连续长串也按字符折)，
+   改名 / 清除别名 / 取消选择三枚小键落到第二行靠右，不被名字挤出芯片；全名同时在按钮 title 里。
+   接管经典布局里写给单路(#serial-connect-bar 下)与双路(.dual-port-btn)的宽度、省略号规则 */
+html[data-layout='modern'] .mdn-pop .serial-device-chip > #serial-status,
+html[data-layout='modern'] .mdn-pop .serial-device-chip > .dual-status {
+	flex: 0 0 auto;
+}
+
+html[data-layout='modern'] .mdn-pop .serial-device-chip .serial-port-btn {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+	align-items: center;
+	column-gap: 4px;
+	row-gap: 2px;
+	max-width: none;
+	min-width: 0;
+	white-space: normal;
+	line-height: 1.35;
+}
+
+html[data-layout='modern'] .mdn-pop .serial-device-chip .serial-port-btn > i {
+	grid-column: 1;
+	grid-row: 1;
+	margin: 0;
+}
+
+html[data-layout='modern'] .mdn-pop .serial-device-chip .serial-port-name {
+	grid-column: 2 / -1;
+	grid-row: 1;
+	max-width: none;
+	min-width: 0;
+	overflow: visible;
+	text-overflow: clip;
+	overflow-wrap: anywhere;
+}
+
+html[data-layout='modern'] .mdn-pop .serial-port-btn .port-rename-btn {
+	grid-column: 3;
+	grid-row: 2;
+}
+
+html[data-layout='modern'] .mdn-pop .serial-port-btn .port-alias-clear-btn {
+	grid-column: 4;
+	grid-row: 2;
+}
+
+html[data-layout='modern'] .mdn-pop .serial-port-btn .port-forget-btn {
+	grid-column: 5;
+	grid-row: 2;
+}
+
 html[data-layout='modern'] .mdn-pop .dual-session-label {
 	width: 100%;
 	height: 30px;
@@ -12352,10 +12357,71 @@ html[data-layout='modern'] .mdn-quick-manage {
 	color: var(--accent);
 }
 
-html[data-layout='modern'] .mdn-quickrow #serial-send-target {
+/* 发往哪一路(双路才显示)：靠右，紧挨折叠键；选中色与顶栏「主发」的 A 绿 / B 琥珀一致 */
+html[data-layout='modern'] .mdn-send-to {
 	flex: 0 0 auto;
-	white-space: nowrap;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+html[data-layout='modern'] .mdn-send-to[hidden] {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-send-to-cap {
+	color: var(--text-secondary);
 	font-size: 12px;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .mdn-quickrow .mdn-send-seg > button {
+	max-width: 8em;
+	height: 24px;
+	padding: 0 10px;
+	overflow: hidden;
+	font-size: 12px;
+	text-overflow: ellipsis;
+}
+
+html[data-layout='modern'] .mdn-send-seg > button[hidden] {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-send-seg > button[data-sid='A'][aria-pressed='true'] {
+	background: #10b981;
+}
+
+html[data-layout='modern'] .mdn-send-seg > button[data-sid='B'][aria-pressed='true'] {
+	background: #f59e0b;
+}
+
+html[data-layout='modern'] .mdn-send-seg > button[data-sid='A']:hover:not([aria-pressed='true']) {
+	color: #059669;
+	background: color-mix(in srgb, #10b981 16%, transparent);
+}
+
+html[data-layout='modern'] .mdn-send-seg > button[data-sid='B']:hover:not([aria-pressed='true']) {
+	color: #d97706;
+	background: color-mix(in srgb, #f59e0b 16%, transparent);
+}
+
+html[data-layout='modern'][data-theme='dark'] .mdn-send-seg > button[data-sid='A'][aria-pressed='true'] {
+	background: #34d399;
+}
+
+html[data-layout='modern'][data-theme='dark'] .mdn-send-seg > button[data-sid='B'][aria-pressed='true'] {
+	background: #fbbf24;
+}
+
+html[data-layout='modern'][data-theme='dark'] .mdn-send-seg > button[data-sid='A']:hover:not([aria-pressed='true']) {
+	color: #34d399;
+	background: color-mix(in srgb, #34d399 18%, transparent);
+}
+
+html[data-layout='modern'][data-theme='dark'] .mdn-send-seg > button[data-sid='B']:hover:not([aria-pressed='true']) {
+	color: #fbbf24;
+	background: color-mix(in srgb, #fbbf24 18%, transparent);
 }
 
 html[data-layout='modern'] .mdn-fold {
@@ -12409,15 +12475,6 @@ html[data-layout='modern'] #serial-send-body > .send-options {
 	gap: 8px;
 	margin: 0;
 	padding: 0;
-}
-
-html[data-layout='modern'] #serial-send-body .mdn-send-seg > button {
-	padding: 7px 12px;
-}
-
-html[data-layout='modern'] .mdn-send-seg[hidden],
-html[data-layout='modern'] .mdn-send-seg > button[hidden] {
-	display: none;
 }
 
 /* 默认单行，拖右下角可拉高(不用 field-sizing: content，同样有切回经典后样式残留的问题) */
