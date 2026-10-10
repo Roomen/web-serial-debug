@@ -45,6 +45,13 @@
 		log: document.getElementById('fw-log'),
 	}
 
+	// 只读事件：现代布局的升级流水线(js/modern-firmware.js)据此显示进度、分块与校验，不影响升级流程与时序
+	function emit(detail) {
+		try { document.dispatchEvent(new CustomEvent('fw-upgrade', { detail: detail })) } catch (e) { /* 事件只供界面使用 */ }
+	}
+	let lastError = ''
+	let outcomeOk = false
+
 	function fmtSize(bytes) {
 		if (bytes < 1024) return bytes + ' B'
 		if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
@@ -90,6 +97,7 @@
 		el.fileCard.classList.remove('d-none')
 		el.fileName.textContent = name
 		el.fileSize.textContent = fmtSize(size)
+		emit({ type: 'file-set', name: name, size: size })
 	}
 
 	function hideFileCard() {
@@ -97,6 +105,7 @@
 		el.fileCard.classList.add('d-none')
 		el.fileName.textContent = '未选择固件文件'
 		el.fileSize.textContent = '--'
+		emit({ type: 'file-clear' })
 	}
 
 	function loadFwFile(file) {
@@ -121,12 +130,15 @@
 		line.textContent = `[${time}] ${msg}`
 		el.log.appendChild(line)
 		el.log.scrollTop = el.log.scrollHeight
+		if (level === 'error' && running) lastError = msg
+		emit({ type: 'log', msg: msg, level: level || 'info' })
 	}
 	function setProgress(p) {
 		p = Math.max(0, Math.min(100, p))
 		el.progress.style.width = p + '%'
 		el.progress.textContent = p + '%'
 		el.progress.setAttribute('aria-valuenow', p)
+		emit({ type: 'progress', percent: p })
 	}
 	function setStatus(s) {
 		el.status.textContent = s || ''
@@ -145,6 +157,7 @@
 		el.version.value = ''
 		el.start.disabled = true
 		log('已清除固件文件', 'info')
+		emit({ type: 'parsed', ok: false, error: '' })
 	})
 
 	el.file.addEventListener('change', function (e) {
@@ -184,12 +197,14 @@
 			}
 			el.info.textContent = manualInfoText(name, fw.firmwareData.length, fw.version)
 			log('已载入固件(不解析包头), ' + fw.firmwareData.length + ' 字节', 'success')
+			emit({ type: 'parsed', ok: true, raw: true, version: fw.version, size: fw.firmwareData.length })
 			el.start.disabled = !serialApi.isOpen()
 			return
 		}
 		const r = FirmwareParser.parse(fwFileBuffer)
 		if (!r.ok) {
 			log('固件解析失败: ' + r.error, 'error')
+			emit({ type: 'parsed', ok: false, error: r.error })
 			fw = null
 			el.start.disabled = true
 			return
@@ -198,6 +213,7 @@
 		fw = r
 		el.info.textContent = FirmwareParser.diagnose(r)
 		log('固件解析成功, 版本: ' + r.version, 'success')
+		emit({ type: 'parsed', ok: true, raw: false, version: r.version, pkgType: r.pkgTypeName, size: r.firmwareData.length })
 		el.start.disabled = !serialApi.isOpen()
 	})
 
@@ -220,16 +236,20 @@
 		}
 		window.serialApi.suppressParse = true
 		serialApi.pinSession(serialApi.getActiveSendSid())
+		emit({ type: 'query-start' })
 		try {
 			const resp = await sendAndWait(PCP.buildQueryVersionRequest(), PCPMessageCode.QUERY_VERSION, 5000)
 			const res = PCP.parseQueryVersionResponse(resp)
 			if (res.resultCode !== 0) {
 				log('查询版本失败, 结果码 0x' + res.resultCode.toString(16), 'error')
+				emit({ type: 'device-version', ok: false, source: 'query', error: '结果码 0x' + res.resultCode.toString(16) })
 			} else {
 				log('设备当前版本: ' + res.version, 'success')
+				emit({ type: 'device-version', ok: true, source: 'query', version: res.version })
 			}
 		} catch (e) {
 			log('查询版本超时: ' + e.message, 'error')
+			emit({ type: 'device-version', ok: false, source: 'query', error: '超时' })
 		} finally {
 			serialApi.unpinSession()
 			window.serialApi.suppressParse = false
@@ -283,6 +303,9 @@
 			return
 		}
 		running = true
+		lastError = ''
+		outcomeOk = false
+		emit({ type: 'start', version: ver, chunkSize: parseInt(el.chunkSize.value) || 128, size: fw.firmwareData.length })
 		stopFlag = false
 		window.serialApi.suppressParse = true
 		// 升级事务钉扎主发口: 期间切主发口被拦, 下发与 RX 等待稳定在同一设备
@@ -301,6 +324,7 @@
 			el.stop.disabled = true
 			el.query.disabled = false
 			recvBuffer = []
+			emit({ type: 'end', ok: outcomeOk, stopped: stopFlag && !outcomeOk, error: lastError })
 		}
 	})
 
@@ -377,9 +401,11 @@
 		const totalChunks = Math.ceil(firmwareData.length / chunkSize)
 		const version = effectiveVersion()
 		log('开始固件升级, 版本: ' + version + ', 分片: ' + totalChunks, 'info')
+		emit({ type: 'plan', version: version, chunkSize: chunkSize, totalChunks: totalChunks, size: firmwareData.length })
 
 		// 步骤1: 查询设备版本
 		if (stopFlag) return
+		emit({ type: 'phase', name: 'query' })
 		try {
 			const resp = await sendAndWait(PCP.buildQueryVersionRequest(), PCPMessageCode.QUERY_VERSION, 5000)
 			const res = PCP.parseQueryVersionResponse(resp)
@@ -388,6 +414,7 @@
 				return
 			}
 			log('设备当前版本: ' + res.version, 'success')
+			emit({ type: 'device-version', ok: true, source: 'upgrade', version: res.version })
 			setProgress(15)
 		} catch (e) {
 			log('查询版本超时: ' + e.message, 'error')
@@ -396,6 +423,7 @@
 
 		// 步骤2: 通知新版本
 		if (stopFlag) return
+		emit({ type: 'phase', name: 'notify' })
 		try {
 			const resp = await sendAndWait(
 				PCP.buildNewVersionNotify(version, chunkSize, totalChunks),
@@ -420,6 +448,7 @@
 		if (stopFlag) return
 		const sentChunks = new Set()
 		let pendingMessage = null
+		emit({ type: 'phase', name: 'transfer' })
 		try {
 			// 设备请求哪个分片就回哪个分片; 收到下载结果(0x16)即视为传输完成
 			while (true) {
@@ -452,6 +481,7 @@
 					log('设备请求无效分片索引 ' + idx, 'warn')
 					continue
 				}
+				emit({ type: 'request', index: idx, resend: sentChunks.has(idx), total: totalChunks })
 				const start = idx * chunkSize
 				const end = Math.min(start + chunkSize, firmwareData.length)
 				let chunk = firmwareData.subarray(start, end)
@@ -470,6 +500,7 @@
 				log('发送: ' + bytesToHex(resp.slice(0, 50)) + '... (分片' + idx + ', ' + chunk.length + '字节)' + (isResend ? ' [重发]' : ''), 'info')
 				sentChunks.add(idx)
 				const done = sentChunks.size
+				emit({ type: 'chunk', index: idx, resend: isResend, sent: done, total: totalChunks, bytes: chunk.length })
 				setProgress(25 + Math.floor(done / totalChunks * 45))
 				if (done % 10 === 0 || done === totalChunks) {
 					log('已传输 ' + done + '/' + totalChunks + ' 个分片', 'info')
@@ -483,6 +514,7 @@
 
 		// 步骤4: 上报下载结果
 		if (stopFlag) return
+		emit({ type: 'phase', name: 'result' })
 		try {
 			let reportData = pendingMessage
 			if (!reportData) reportData = await waitForCode(PCPMessageCode.DOWNLOAD_RESULT, 30000)
@@ -509,12 +541,14 @@
 
 		// 步骤5: 执行升级
 		if (stopFlag) return
+		emit({ type: 'phase', name: 'execute' })
 		try {
 			await sleep(500)
 			await serialApi.writeData(PCP.buildExecuteUpgradeRequest())
 			log('已发送升级命令, 设备开始升级...', 'success')
 			setProgress(100)
 			log('升级完成!', 'success')
+			outcomeOk = true
 		} catch (e) {
 			log('执行升级异常: ' + e.message, 'error')
 		}

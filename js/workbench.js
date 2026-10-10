@@ -5,6 +5,8 @@
 	'use strict'
 
 	const STATE_KEY = 'workbenchState'
+	// 现代布局的面板分布另存，不写经典布局的 workbenchState
+	const MODERN_STATE_KEY = 'workbenchStateModern'
 	// 旧版右栏是 Bootstrap tab，记忆键 activeTab 存的是 tab 按钮 id
 	const LEGACY_TAB = {
 		'nav-quick-send-tab': 'quick-send',
@@ -15,12 +17,15 @@
 	const DOCK_NAME = { right: '右侧', bottom: '底部' }
 
 	const panels = []
-	const state = loadState()
+	// 当前生效的是哪套布局的面板配置；与 html[data-layout] 同步，由 serial-layout-move 事件切换
+	let modern = document.documentElement.dataset.layout === 'modern'
+	let state = loadState(modern)
 	let ready = false
 
 	function $(id) { return document.getElementById(id) }
 
-	function loadState() {
+	function loadState(forModern) {
+		if (forModern) return loadModernState()
 		let st = null
 		try { st = JSON.parse(localStorage.getItem(STATE_KEY) || 'null') } catch (e) { st = null }
 		if (!st || typeof st !== 'object') {
@@ -35,8 +40,26 @@
 		return st
 	}
 
+	// 现代布局没存过时从经典布局的分布起步(只读不写经典键)；解析在现代布局里固定是右栏的检查器
+	function loadModernState() {
+		let st = null
+		try { st = JSON.parse(localStorage.getItem(MODERN_STATE_KEY) || 'null') } catch (e) { st = null }
+		if (!st || typeof st !== 'object') {
+			let base = null
+			try { base = JSON.parse(localStorage.getItem(STATE_KEY) || 'null') } catch (e) { base = null }
+			st = { right: 'parse', bottom: null, docks: {} }
+			if (base && base.docks && typeof base.docks === 'object') {
+				Object.keys(base.docks).forEach(function (id) {
+					if (id !== 'parse' && id !== 'firmware') st.docks[id] = base.docks[id]
+				})
+			}
+		}
+		if (!st.docks || typeof st.docks !== 'object') st.docks = {}
+		return st
+	}
+
 	function saveState() {
-		try { localStorage.setItem(STATE_KEY, JSON.stringify(state)) } catch (e) { /* 忽略 */ }
+		try { localStorage.setItem(modern ? MODERN_STATE_KEY : STATE_KEY, JSON.stringify(state)) } catch (e) { /* 忽略 */ }
 	}
 
 	function find(id) {
@@ -50,8 +73,9 @@
 		return list.slice().sort(function (a, b) { return a.order - b.order })
 	}
 
+	// hidden: 当前布局下不进停靠区的面板(现代布局的固件升级并进了固件页)
 	function inDock(dock) {
-		return sorted(panels.filter(function (p) { return p.dock === dock }))
+		return sorted(panels.filter(function (p) { return p.dock === dock && !p.hidden }))
 	}
 
 	// 两个停靠区的开合沿用 common.js 里已有的右栏拖拽条 / 协议解析面板状态
@@ -70,7 +94,7 @@
 	}
 
 	function isAvailable(p) {
-		return !p.available || !!p.available()
+		return !p.hidden && (!p.available || !!p.available())
 	}
 
 	function isShown(p) {
@@ -80,29 +104,63 @@
 	function registerPanel(def) {
 		if (!def || !def.id || !def.el || find(def.id)) return null
 		const docks = Array.isArray(def.docks) && def.docks.length ? def.docks.filter(function (d) { return DOCKS.indexOf(d) !== -1 }) : DOCKS
-		const p = {
-			id: def.id,
+		// base 是经典布局下的面板定义；现代布局按 MODERN_PROFILE 覆盖其中几项(见 applyProfile)
+		const base = {
 			title: def.title || def.id,
 			label: def.label || def.title || def.id,
 			icon: def.icon || 'bi-grid',
 			el: def.el,
 			order: typeof def.order === 'number' ? def.order : 100 + panels.length,
 			docks: docks,
+			defDock: def.dock,
 			// fixed: 节点本身就在停靠区里(协议解析)，不搬运
 			fixed: !!def.fixed,
+			hidden: false,
+			view: '',
+		}
+		const p = {
+			id: def.id,
+			base: base,
 			// available: 返回 false 时面板不可打开(如当前协议不支持)，停靠栏按钮禁用
 			available: typeof def.available === 'function' ? def.available : null,
 			unavailableHint: def.unavailableHint || '',
+			// 进入现代布局时面板节点原位置的占位(注释节点)，切回经典时原样放回
+			ph: null,
 		}
-		const saved = state.docks[p.id]
-		if (docks.indexOf(saved) !== -1) p.dock = saved
-		else if (docks.indexOf(def.dock) !== -1) p.dock = def.dock
-		else p.dock = docks[0]
-		p.el.classList.add('wb-pane')
-		p.el.dataset.dockPanel = p.id
+		def.el.classList.add('wb-pane')
+		def.el.dataset.dockPanel = p.id
 		panels.push(p)
+		applyProfile(p)
+		// 现代布局下才注册的面板：节点若已在文档里，先在原位置留占位，切回经典时放回
+		if (modern) markOrigin(p)
 		if (ready) render()
 		return { id: p.id }
+	}
+
+	// 按当前布局把面板的生效属性(节点、标题、可停靠位置、停靠位置等)从 base / 现代覆盖项里取出来
+	function applyProfile(p) {
+		const over = modern && MODERN_PROFILE[p.id] ? MODERN_PROFILE[p.id]() : null
+		const o = over ? Object.assign({}, p.base, over) : p.base
+		p.el = o.el
+		p.title = o.title
+		p.label = o.label
+		p.icon = o.icon
+		p.order = o.order
+		p.docks = o.docks
+		p.fixed = o.fixed
+		p.hidden = o.hidden
+		p.view = o.view
+		const saved = state.docks[p.id]
+		if (p.docks.indexOf(saved) !== -1) p.dock = saved
+		else if (p.docks.indexOf(o.defDock) !== -1) p.dock = o.defDock
+		else p.dock = p.docks[0]
+	}
+
+	function markOrigin(p) {
+		const el = p.base.el
+		if (p.base.fixed || p.ph || !el.parentNode) return
+		p.ph = document.createComment('wb-origin:' + p.id)
+		el.parentNode.insertBefore(p.ph, el)
 	}
 
 	function ensureSerialView() {
@@ -112,6 +170,13 @@
 
 	function open(id) {
 		const p = find(id)
+		// 当前布局里放在别的视图上的面板(现代布局的固件升级在固件页)：切到那个视图
+		if (p && p.hidden && p.view) {
+			const rail = document.querySelector('.rail-item[data-view="' + p.view + '"]')
+			if (rail && !rail.classList.contains('active')) rail.click()
+			if (p.el.scrollIntoView) p.el.scrollIntoView({ block: 'nearest' })
+			return true
+		}
 		if (!p || !isAvailable(p)) return false
 		ensureSerialView()
 		state[p.dock] = p.id
@@ -156,7 +221,7 @@
 			if (!has) state[dock] = list.length ? list[0].id : null
 		})
 		panels.forEach(function (p) {
-			if (p.fixed) return
+			if (p.fixed || p.hidden) return
 			const host = hosts[p.dock]
 			if (host && p.el.parentElement !== host) host.appendChild(p.el)
 			const active = state[p.dock] === p.id
@@ -205,9 +270,14 @@
 			})
 		}
 		const parseActive = !p || p.id === 'parse'
-		if (panel) panel.classList.toggle('wb-alt', !parseActive)
+		if (panel) {
+			panel.classList.toggle('wb-alt', !parseActive)
+			// 现代布局解析搬去了右栏检查器：底栏没有面板时整条收掉，不留空壳
+			panel.classList.toggle('wb-bottom-none', modern && !inDock('bottom').some(isAvailable))
+		}
 		const clearBtn = $('serial-parse-clear')
-		if (clearBtn) clearBtn.hidden = !parseActive
+		// 现代布局的清空键在检查器里，始终可用
+		if (clearBtn) clearBtn.hidden = modern ? false : !parseActive
 		const moveBtn = $('wb-bottom-move')
 		if (moveBtn) moveBtn.hidden = !p || p.docks.indexOf('right') === -1
 	}
@@ -215,7 +285,8 @@
 	function renderBar() {
 		const bar = $('wb-dock-bar')
 		if (!bar) return
-		const list = sorted(panels.filter(function (p) { return !p.fixed })).concat(sorted(panels.filter(function (p) { return p.fixed })))
+		const live = panels.filter(function (p) { return !p.hidden })
+		const list = sorted(live.filter(function (p) { return !p.fixed })).concat(sorted(live.filter(function (p) { return p.fixed })))
 		const sig = list.map(function (p) { return p.id + ':' + p.dock + ':' + isAvailable(p) }).join('|')
 		if (bar.dataset.sig !== sig) {
 			bar.dataset.sig = sig
@@ -348,6 +419,20 @@
 				if (input) input.focus()
 			},
 		},
+		{
+			// 只在现代布局的状态栏显示(经典布局状态栏保持原样)：STS 模拟启动键按下即运行/等待中
+			label: 'STS 模拟',
+			title: '打开 STS 模拟面板',
+			modernOnly: true,
+			running: function () {
+				return !!document.querySelector('.sts-sim-head > .ctl-toggle[aria-pressed="true"]')
+			},
+			text: function () {
+				const n = document.querySelectorAll('.sts-sim-head > .ctl-toggle[aria-pressed="true"]').length
+				return 'STS 模拟' + (n > 1 ? ' ×' + n : '') + ' 运行中'
+			},
+			open: function () { open('sts-sim') },
+		},
 	]
 
 	function fmtBytes(n) {
@@ -458,7 +543,7 @@
 			r.rebuild.setAttribute('aria-label', label + '：重建接收')
 		})
 		statusRefs.tasks.forEach(function (t) {
-			const running = t.def.running()
+			const running = (modern || !t.def.modernOnly) && t.def.running()
 			t.btn.hidden = !running
 			if (running) t.text.textContent = t.def.text()
 		})
@@ -475,10 +560,201 @@
 		}
 	}
 
+	// ---------- 现代布局 ----------
+	// 经典布局的 DOM 是基准：现代布局只把节点原样搬到新位置(不克隆，事件绑定与控件状态跟着节点走)，
+	// 搬之前在原位置留注释占位，切回经典时按占位放回，新建的宿主节点随之删掉，经典布局的 DOM 与进入前一致
+
+	// 现代布局对面板定义的覆盖：解析变成右栏第一个标签「检查器」，固件升级并进固件打包页
+	const MODERN_PROFILE = {
+		parse: function () {
+			return { el: inspectorEl(), title: '检查器', label: '检查器', icon: 'bi-search', order: -1, docks: ['right'], defDock: 'right', fixed: false }
+		},
+		firmware: function () {
+			return { hidden: true, view: 'view-fw-pack' }
+		},
+	}
+
+	let inspector = null
+	let parked = []
+	let hosts = []
+
+	function mk(tag, cls, text) {
+		const n = document.createElement(tag)
+		if (cls) n.className = cls
+		if (text != null) n.textContent = text
+		return n
+	}
+
+	function inspectorEl() {
+		if (inspector) return inspector.pane
+		const pane = mk('div', 'tab-pane d-flex flex-column wb-pane wb-inspector')
+		pane.id = 'wb-pane-inspector'
+		pane.setAttribute('role', 'tabpanel')
+		pane.dataset.dockPanel = 'parse'
+		const bar = mk('div', 'wb-inspector-bar')
+		const tools = mk('span', 'wb-inspector-tools')
+		bar.append(mk('span', 'wb-inspector-hint', '点选日志行即解析该行'), tools)
+		const actions = mk('div', 'wb-inspector-actions')
+		actions.setAttribute('role', 'group')
+		actions.setAttribute('aria-label', '基于此帧')
+		const resend = mk('button', 'btn btn-sm btn-outline-secondary')
+		resend.type = 'button'
+		resend.id = 'wb-frame-resend'
+		resend.append(iconEl('bi-arrow-repeat'), document.createTextNode(' 重发此帧'))
+		const save = mk('button', 'btn btn-sm btn-outline-secondary')
+		save.type = 'button'
+		save.id = 'wb-frame-save'
+		save.append(iconEl('bi-lightning-charge'), document.createTextNode(' 存为快捷发送'))
+		actions.append(mk('span', 'wb-inspector-actions-title', '基于此帧'), resend, save)
+		// 结构化视图由 js/modern-inspector.js 往 view 里画；原协议解析面板(HEX 输入区 + 输出)放进可折叠的「原始输出」
+		const view = mk('div', 'wb-insp-view')
+		view.id = 'wb-insp-view'
+		view.tabIndex = -1
+		const raw = mk('details', 'wb-insp-raw')
+		raw.id = 'wb-insp-raw'
+		raw.appendChild(mk('summary', 'wb-insp-raw-sum', '原始输出 / 手动粘贴 HEX'))
+		const rawBody = mk('div', 'wb-insp-raw-body')
+		raw.appendChild(rawBody)
+		pane.append(bar, view, actions, raw)
+		resend.addEventListener('click', async function () {
+			const api = window.serialFrameActions
+			if (!api || resend.disabled) return
+			// 口没开时 writeRaw 自己记错误行/弹提示，这里只兜住异常
+			try { await api.resend() } catch (e) { /* 已由串口层提示 */ }
+		})
+		save.addEventListener('click', function () {
+			const api = window.serialFrameActions
+			if (api && !save.disabled) api.saveQuick()
+			syncFrameActions()
+		})
+		inspector = { pane: pane, tools: tools, actions: actions, resend: resend, save: save, view: view, rawBody: rawBody }
+		return pane
+	}
+
+	// 「基于此帧」按钮跟着日志选中行走：重发只认 TX 行
+	function syncFrameActions() {
+		if (!modern || !inspector) return
+		const api = window.serialFrameActions
+		const f = api ? api.selected() : null
+		inspector.resend.disabled = !f || f.dir !== 'tx'
+		inspector.save.disabled = !f
+		inspector.resend.title = !f ? '先在日志里点选一行' : (f.dir === 'tx' ? '把这一帧原样发到当前主发口（不追加 CRLF）' : '只有发送(TX)行可以重发')
+		inspector.save.title = f ? '把这一帧的 HEX 加入当前快捷发送分组' : '先在日志里点选一行'
+	}
+
+	function park(node, parent, before) {
+		if (!node || !node.parentNode || !parent) return
+		const ph = document.createComment('layout-origin:' + (node.id || node.className))
+		node.parentNode.insertBefore(ph, node)
+		parked.push([node, ph])
+		parent.insertBefore(node, before || null)
+	}
+
+	function host(tag, id, cls) {
+		const n = mk(tag, cls)
+		n.id = id
+		hosts.push(n)
+		return n
+	}
+
+	function mountModern() {
+		const views = $('views')
+		// S1/S2：连接条、状态栏挪到三个视图共用的全局顶栏/底栏(#app-shell 的网格行)
+		if (views) {
+			const top = host('div', 'app-topbar')
+			const bottom = host('div', 'app-statusbar')
+			views.before(top)
+			views.after(bottom)
+			park($('serial-connect-bar'), top)
+			park($('serial-statusbar'), bottom)
+		}
+		// S3：解析正文与锁定/清空进检查器
+		inspectorEl()
+		park($('serial-parse-lock'), inspector.tools)
+		park($('serial-parse-clear'), inspector.tools)
+		park($('serial-parse-body'), inspector.rawBody)
+		// S4：固件升级面板放进固件打包页(原位置的占位由面板自己的 ph 负责)
+		const fwView = $('view-fw-pack')
+		const fw = find('firmware')
+		if (fwView && fw) {
+			const sec = host('section', 'fw-pack-upgrade', 'fw-pack-upgrade')
+			sec.setAttribute('aria-label', '固件升级')
+			const head = mk('div', 'fw-pack-upgrade-head')
+			head.append(iconEl('bi-cpu'), mk('span', 'fw-pack-upgrade-title', '固件升级'), mk('span', 'view-bar-sub', '经顶部串口连接收发'))
+			sec.appendChild(head)
+			fwView.appendChild(sec)
+			sec.appendChild(fw.base.el)
+		}
+	}
+
+	function unmountModern() {
+		parked.reverse().forEach(function (pair) { pair[1].replaceWith(pair[0]) })
+		parked = []
+		panels.forEach(function (p) {
+			if (p.ph) {
+				p.ph.replaceWith(p.base.el)
+				p.ph = null
+			} else if (!p.base.fixed && p.base.el.parentNode) {
+				// 现代布局下才进文档的面板：拿掉，交给经典布局的 render 按注册顺序挂回，与直接以经典布局打开时一致
+				p.base.el.remove()
+			}
+		})
+		hosts.forEach(function (n) { n.remove() })
+		hosts = []
+		if (inspector) inspector.pane.remove()
+	}
+
+	// 进入现代布局前记下经典布局各节点的 class 原文：切回后若类名集合没变、只是 toggle 让顺序变了，按原文写回，
+	// 让经典布局的 DOM 与进入前逐字一致(集合变了说明是用户在现代布局里的操作结果，不动)
+	let classSnap = null
+
+	function snapClasses() {
+		const shell = $('app-shell')
+		if (!shell) return
+		classSnap = new Map()
+		classSnap.set(shell, shell.getAttribute('class'))
+		shell.querySelectorAll('*').forEach(function (n) { classSnap.set(n, n.getAttribute('class')) })
+	}
+
+	function restoreClassOrder() {
+		if (!classSnap) return
+		const tokens = function (v) { return (v || '').split(/\s+/).filter(Boolean).sort().join(' ') }
+		classSnap.forEach(function (cls, n) {
+			const now = n.getAttribute('class')
+			if (now === cls || !n.isConnected || tokens(now) !== tokens(cls)) return
+			if (cls == null) n.removeAttribute('class')
+			else n.setAttribute('class', cls)
+		})
+		classSnap = null
+	}
+
+	function setModern(next) {
+		next = !!next
+		if (next === modern) return
+		if (next) {
+			snapClasses()
+			panels.forEach(markOrigin)
+			modern = true
+			state = loadState(true)
+			panels.forEach(applyProfile)
+			mountModern()
+		} else {
+			unmountModern()
+			modern = false
+			state = loadState(false)
+			panels.forEach(applyProfile)
+		}
+		render()
+		syncFrameActions()
+		updateStatusBar()
+	}
+
 	// ---------- 初始化 ----------
 
 	function init() {
 		registerBuiltins()
+		// 以现代布局打开：面板已按现代覆盖项注册(原位置占位也已留好)，这里只搬非面板节点
+		if (modern) mountModern()
 		ready = true
 		render()
 		// 右栏没有面板时不保留空栏
@@ -525,16 +801,30 @@
 		initConnectBarTools()
 		updateStatusBar()
 		// 复用后台任务/连接状态的现有 1s 刷新，不另建接收计时器。
+		// 现代布局的状态栏是三个视图共用的，不在串口视图时也要刷新
 		setInterval(function () {
 			if (document.hidden) return
 			const view = $('view-serial')
-			if (view && !view.classList.contains('active')) return
+			if (!modern && view && !view.classList.contains('active')) return
 			updateStatusBar()
+			syncFrameActions()
 		}, 1000)
+
+		document.addEventListener('serial-layout-move', function (e) {
+			setModern(e.detail && e.detail.layout === 'modern')
+		})
+		// 停靠区开合/宽高由 common.js 在 serial-layout-change 里重放(先于这里注册)，之后再统一还原类名顺序
+		document.addEventListener('serial-layout-change', function () {
+			if (!modern) restoreClassOrder()
+		})
+		document.addEventListener('serial-log-select', syncFrameActions)
+		syncFrameActions()
 	}
 
 	window.Workbench = {
 		refreshStatus: function () { if (ready) updateStatusBar() },
+		// 现代布局检查器里放结构化视图的节点(还没建过时为 null)
+		inspectorView: function () { return inspector ? inspector.view : null },
 		registerPanel: registerPanel,
 		open: open,
 		toggle: toggle,
@@ -544,7 +834,7 @@
 			return !!(p && isShown(p))
 		},
 		list: function () {
-			return sorted(panels).map(function (p) {
+			return sorted(panels.filter(function (p) { return !p.hidden })).map(function (p) {
 				return { id: p.id, title: p.title, dock: p.dock, docks: p.docks.slice(), shown: isShown(p), available: isAvailable(p) }
 			})
 		},

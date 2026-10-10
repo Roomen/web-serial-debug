@@ -28,6 +28,15 @@
                 t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
             }
             document.documentElement.setAttribute('data-theme', t)
+            // 界面布局(经典/现代)与双路视图(列表/气泡)：同样首屏前定下；缺省即经典、列表
+            var layout = 'classic'
+            var dualView = 'list'
+            try {
+                if (localStorage.getItem('serial-debug-layout') === 'modern') layout = 'modern'
+                if (localStorage.getItem('serial-debug-dual-view') === 'bubble') dualView = 'bubble'
+            } catch (e) { /* 存储不可用时按默认 */ }
+            document.documentElement.dataset.layout = layout
+            document.documentElement.dataset.dualView = dualView
         })()
     </script>
     <script>
@@ -110,6 +119,14 @@
                         <span class="rail-label">配置</span>
                     </button>
                     <ul class="dropdown-menu rail-config-menu" aria-labelledby="rail-config-btn">
+                        <li class="rail-config-layout">
+                            <span class="rail-config-layout-title">界面布局</span>
+                            <div class="ctl-seg" id="serial-layout-seg" role="group" aria-label="界面布局">
+                                <button type="button" id="serial-layout-classic" aria-pressed="true">经典</button>
+                                <button type="button" id="serial-layout-modern" aria-pressed="false">现代</button>
+                            </div>
+                        </li>
+                        <li><hr class="dropdown-divider"></li>
                         <li><button class="dropdown-item" type="button" id="serial-import"><i class="bi bi-folder-plus"></i> 导入配置…</button></li>
                         <li><button class="dropdown-item" type="button" id="serial-export"><i class="bi bi-folder-symlink"></i> 导出配置</button></li>
                         <li><hr class="dropdown-divider"></li>
@@ -162,6 +179,20 @@
                                 <div class="serial-settings-card">
                                     <div class="serial-settings-title">
                                         <i class="bi bi-sliders2"></i> 串口参数
+                                    </div>
+                                    <!-- 仅双路：A/B 两路的参数与协议各自独立，这里选正在设置哪一路(现代布局由每路菜单决定，不显示) -->
+                                    <div class="serial-lane-head" id="serial-params-lane" hidden>
+                                        <div class="ctl-seg serial-lane-seg" id="serial-params-lane-seg" role="group" aria-label="设置哪一路">
+                                            <button type="button" data-sid="A" aria-pressed="true">A路</button>
+                                            <button type="button" data-sid="B" aria-pressed="false">B路</button>
+                                        </div>
+                                        <span class="serial-lane-hint">两路参数、协议各自独立</span>
+                                    </div>
+                                    <div class="serial-lane-proto" id="serial-lane-proto-row" hidden>
+                                        <label class="serial-field-label" for="serial-lane-protocol"><i class="bi bi-diagram-3"></i> 协议</label>
+                                        <select class="form-select serial-field-input" id="serial-lane-protocol" aria-label="本路协议">
+                                            <option value="sek">SEK（默认）</option>
+                                        </select>
                                     </div>
                                     <div class="serial-field">
                                         <label class="serial-field-label"><i class="bi bi-speedometer2"></i> 波特率</label>
@@ -277,6 +308,20 @@
                                 </button>
                             </div>
                         </div>
+                        <!-- 双路预设：两路参数 + 协议 + 路标签存成命名预设，一键套用(js/dual-config.js) -->
+                        <div class="dropdown dual-preset" id="serial-dual-preset">
+                            <button type="button" class="dual-preset-btn" id="serial-dual-preset-btn" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" title="双路预设：保存或套用两路的串口参数、协议与路标签（不含设备）">
+                                <i class="bi bi-bookmarks"></i><span>预设</span>
+                            </button>
+                            <div class="dropdown-menu dual-preset-menu" id="serial-dual-preset-menu">
+                                <div class="dual-preset-title">双路预设<span>两路参数 · 协议 · 路标签，不含设备</span></div>
+                                <div class="dual-preset-list" id="serial-dual-preset-list" role="list"></div>
+                                <form class="dual-preset-save" id="serial-dual-preset-form">
+                                    <input type="text" class="form-control form-control-sm" id="serial-dual-preset-name" maxlength="24" placeholder="给当前两路配置起个名字" aria-label="预设名称" autocomplete="off">
+                                    <button type="submit" class="btn btn-sm btn-primary">保存当前</button>
+                                </form>
+                            </div>
+                        </div>
                         <!-- 主发口（与 A/B 同行靠右） -->
                         <div class="dual-active-send">
                             <span class="dual-active-send-label">主发:</span>
@@ -318,6 +363,11 @@
                                     <span class="serial-log-legend-item" data-leg="left" id="serial-log-legend-left">TX</span>
                                     <span class="serial-log-legend-item" data-leg="right" id="serial-log-legend-right">RX</span>
                                 </span>
+                                <!-- 仅现代布局 + 双路 + 行日志时显示(见 css 末尾)：双路合流的显示方式 -->
+                                <div class="ctl-seg" id="serial-dual-view-seg" role="group" aria-label="双路显示方式">
+                                    <button type="button" id="serial-dual-view-list" aria-pressed="true">列表</button>
+                                    <button type="button" id="serial-dual-view-bubble" aria-pressed="false">时间线</button>
+                                </div>
                             </div>
 
                             <div class="btn-toolbar">
@@ -1218,6 +1268,16 @@
                                 </div>
                             </div>
                             <canvas id="blu-canvas" class="blu-canvas"></canvas>
+                            <div id="blu-serial-lane" class="blu-serial-lane" data-rows="1">
+                                <div class="blu-serial-lane-head">
+                                    <span class="blu-serial-lane-title">串口事件</span>
+                                    <span class="blu-serial-lane-key blu-serial-lane-key--tx">TX</span>
+                                    <span class="blu-serial-lane-key blu-serial-lane-key--rx">RX</span>
+                                    <span class="blu-serial-lane-status" id="blu-serial-lane-status"></span>
+                                </div>
+                                <canvas id="blu-serial-lane-canvas" class="blu-serial-lane-canvas" aria-label="串口事件道：与电流波形同一时间轴的串口收发帧"></canvas>
+                                <div id="blu-serial-lane-tip" class="blu-serial-lane-tip" role="tooltip" hidden></div>
+                            </div>
                             <canvas id="blu-minimap" class="blu-minimap" title="总览（点击跳转）"></canvas>
                         </div>
 
@@ -1683,6 +1743,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
     <script src="js/serial-term.js"></script>
+    <script src="js/dual-config.js"></script>
     <script src="js/common.js"></script>
     <script src="js/wmbus-protocol.js"></script>
     <script src="js/wmbus-transaction.js"></script>
@@ -1699,17 +1760,23 @@
     <script src="js/batch-config.js"></script>
     <script src="js/collapsible-cards.js"></script>
     <script src="js/workbench.js"></script>
+    <script src="js/modern-timeline.js"></script>
+    <script src="js/modern-inspector.js"></script>
     <script src="js/command-palette.js"></script>
+    <script src="js/modern-shell.js"></script>
     <script src="js/firmware-upgrade.js"></script>
     <script src="js/hdiffi.js"></script>
     <script src="js/hdiffi-data.js"></script>
     <script src="https://cdn.bootcdn.net/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="js/firmware-packager.js"></script>
+    <script src="js/modern-firmware.js"></script>
     <script src="js/blu-protocol.js"></script>
     <script src="js/blu-storage.js"></script>
     <script src="js/blu-analysis.js"></script>
+    <script src="js/blu-serial-lane.js"></script>
     <script src="js/blu-power.js"></script>
     <script src="js/blu-cmd-sheet.js"></script>
+    <script src="js/modern-power.js"></script>
 
 </body>
 

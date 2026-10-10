@@ -173,6 +173,11 @@
 		await w.close()
 	}
 
+	// 只读事件：现代布局的升级流水线(js/modern-firmware.js)据此显示选文件、生成结果与错误，不影响打包流程
+	function emit(detail) {
+		try { document.dispatchEvent(new CustomEvent('fw-pack', { detail: detail })) } catch (e) { /* 事件只供界面使用 */ }
+	}
+
 	function fmtSize(bytes) {
 		if (bytes < 1024) return bytes + ' B'
 		if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
@@ -240,11 +245,12 @@
 		el.log.scrollTop = el.log.scrollHeight
 	}
 
-	function navToFwUpgrade(data, name) {
+	function navToFwUpgrade(data, name, kind) {
 		var buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
 		window._fwPackOutputs.push({ name: name, buffer: buf })
 		var idx = window._fwPackOutputs.length - 1
 		logUpgradeBtn(name, data, idx)
+		emit({ type: 'output', idx: idx, name: name, size: data.length, kind: kind || '' })
 	}
 
 	if (el.log) {
@@ -280,6 +286,7 @@
 		line.textContent = '[' + time + '] ' + msg
 		el.log.appendChild(line)
 		el.log.scrollTop = el.log.scrollHeight
+		emit({ type: 'log', msg: msg, level: level || 'info' })
 	}
 
 	function showFileInfo(zoneEl, infoEl, nameEl, sizeEl, size) {
@@ -303,6 +310,7 @@
 			bufferHolder.val = new Uint8Array(reader.result)
 			fileNameHolder.val = file.name
 			showFileInfo(zoneEl, infoEl, nameEl, sizeEl, reader.result.byteLength)
+			emit({ type: 'file', which: bufferHolder === oldFw ? 'old' : (bufferHolder === newFw ? 'new' : 'blank'), name: file.name, size: reader.result.byteLength, data: bufferHolder.val })
 			log('已载入 ' + file.name + ' (' + fmtSize(reader.result.byteLength) + ')', 'info')
 		}
 		reader.readAsArrayBuffer(file)
@@ -358,6 +366,7 @@
 		hideFileInfo(el.oldZone, el.oldInfo, el.oldName, el.oldSize)
 		el.oldFile.value = ''
 		log('已清除旧固件', 'info')
+		emit({ type: 'file', which: 'old', name: '', size: 0, data: null })
 	})
 	el.newClear.addEventListener('click', function (e) {
 		e.stopPropagation()
@@ -366,6 +375,7 @@
 		hideFileInfo(el.newZone, el.newInfo, el.newName, el.newSize)
 		el.newFile.value = ''
 		log('已清除新固件', 'info')
+		emit({ type: 'file', which: 'new', name: '', size: 0, data: null })
 	})
 
 	el.oldFile.addEventListener('change', function () {
@@ -547,6 +557,7 @@
 		const useZip = el.genZip.checked
 		const zipFiles = []
 		const newFwCRC32 = crc32(newFw.val).toString(16).toUpperCase().padStart(8, '0')
+		emit({ type: 'start' })
 
 		// 在首个 await 前(点击手势有效期内)获取输出目录, 之后所有文件静默写入同一目录
 		let dirHandle = null
@@ -557,6 +568,7 @@
 			} catch (e) {
 				if (e && e.name === 'AbortError') {
 					log('未选择输出目录, 已取消生成', 'warn')
+					emit({ type: 'end', aborted: true })
 					return
 				}
 				log('输出目录不可用, 将使用浏览器下载: ' + e.message, 'warn')
@@ -594,7 +606,7 @@
 				const outName = newInfo.version + '_' + newInfo.timestamp + '_Origin.bin'
 				await outputFile(outName, full,
 					'原始包: ' + outName + ' | 大小: ' + fmtSize(full.length) + ' | 固件CRC32: ' + newFwCRC32, 'success')
-				navToFwUpgrade(full, outName)
+				navToFwUpgrade(full, outName, 'origin')
 			}
 
 			if (genCompress) {
@@ -616,7 +628,7 @@
 						const outName = newInfo.version + '_' + newInfo.timestamp + '_comp.bin'
 						await outputFile(outName, full,
 							'压缩包: ' + outName + ' | 大小: ' + fmtSize(full.length) + ' (patch: ' + fmtSize(patch.length) + ')', 'success')
-						navToFwUpgrade(full, outName)
+						navToFwUpgrade(full, outName, 'compress')
 					} catch (e) {
 						log('压缩包生成失败: ' + e.message, 'error')
 					}
@@ -644,7 +656,7 @@
 						const outA = oldInfo.version + '_' + oldInfo.timestamp + '_to_' + newInfo.version + '_' + newInfo.timestamp + '.bin'
 						await outputFile(outA, fullA,
 							'差分包(旧→新): ' + outA + ' | 大小: ' + fmtSize(fullA.length) + ' | patch: ' + fmtSize(patchA.length), 'success')
-						navToFwUpgrade(fullA, outA)
+						navToFwUpgrade(fullA, outA, 'diff-fwd')
 					} catch (e) {
 						log('差分包(旧→新)失败: ' + e.message, 'error')
 					}
@@ -664,7 +676,7 @@
 						const outB = newInfo.version + '_' + newInfo.timestamp + '_to_' + oldInfo.version + '_' + oldInfo.timestamp + '.bin'
 						await outputFile(outB, fullB,
 							'差分包(新→旧): ' + outB + ' | 大小: ' + fmtSize(fullB.length) + ' | patch: ' + fmtSize(patchB.length), 'success')
-						navToFwUpgrade(fullB, outB)
+						navToFwUpgrade(fullB, outB, 'diff-rev')
 					} catch (e) {
 						log('差分包(新→旧)失败: ' + e.message, 'error')
 					}
@@ -682,18 +694,22 @@
 					try {
 						await writeToDir(dirHandle, zipName, blob)
 						log('打包保存: ' + dirHandle.name + '/' + zipName + ' (' + fmtSize(blob.size) + ', 含 ' + zipFiles.length + ' 个文件)', 'success')
+						emit({ type: 'zip', name: zipName, size: blob.size, count: zipFiles.length })
 					} catch (e) {
 						downloadBlob(blob, zipName)
 						log('打包下载: ' + zipName + ' (目录写入失败, 已转为浏览器下载)', 'warn')
+						emit({ type: 'zip', name: zipName, size: blob.size, count: zipFiles.length })
 					}
 				} else {
 					downloadBlob(blob, zipName)
 					log('打包下载: ' + zipName + ' (' + fmtSize(blob.size) + ', 含 ' + zipFiles.length + ' 个文件)', 'success')
+					emit({ type: 'zip', name: zipName, size: blob.size, count: zipFiles.length })
 				}
 			}
 		} catch (e) {
 			log('打包异常: ' + e.message, 'error')
 		}
+		emit({ type: 'end' })
 	})
 
 	// 内置 BLANK.BIN — 优先 fetch，失败则使用内嵌默认值
