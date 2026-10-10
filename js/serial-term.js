@@ -40,9 +40,10 @@
 		link.id = 'serial-term-xterm-css'
 		link.rel = 'stylesheet'
 		link.href = CDN_CSS[0]
+		let next = 1
 		link.onerror = function () {
-			if (CDN_CSS[1] && link.href.indexOf('jsdelivr') !== -1) link.href = CDN_CSS[1]
-			else if (CDN_CSS[2]) link.href = CDN_CSS[2]
+			if (next < CDN_CSS.length) link.href = CDN_CSS[next++]
+			else link.onerror = null
 		}
 		document.head.appendChild(link)
 	}

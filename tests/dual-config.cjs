@@ -1,5 +1,5 @@
 // Run: node tests/dual-config.cjs — synthetic data only.
-// 覆盖: 双路两路参数 / 两路协议的存储迁移，双路预设的规范化、增删改、匹配与套用计划(js/dual-config.js 的纯函数)
+// 覆盖: 双路两路参数 / 两路协议的存储迁移，串口预设(单路 / 双路)的规范化、增删改、匹配与套用计划(js/dual-config.js 的纯函数)
 const assert = require('node:assert/strict')
 const D = require('../js/dual-config.js')
 
@@ -115,6 +115,36 @@ const cfg = {
 	assert.deepEqual(plan.unknownProtocols, ['hostproto'])
 	assert.equal(plan.lanes.B.label, 'RS485')
 	assert.equal(plan.lanes.B.options.parity, 'even')
+}
+
+// ---- 单路预设：只存一路参数与协议，不存标签；与双路预设混存、同名互斥，旧的双路预设格式不变 ----
+{
+	const sp = D.makeSinglePreset(' 表端 ', { options: { baudRate: 2400, parity: 'even' }, protocol: 'hostproto', label: '不存' })
+	assert.deepEqual(sp, { name: '表端', kind: 'single', S: { options: D.normalizeOptions({ baudRate: 2400, parity: 'even' }), protocol: 'hostproto', label: '' } })
+	assert.ok(D.isSinglePreset(sp))
+	assert.deepEqual(D.presetLanes(sp), ['S'])
+	const dp = D.makePreset('双', cfg)
+	assert.ok(!D.isSinglePreset(dp))
+	assert.equal('kind' in dp, false, '双路预设仍是升级前的格式')
+	assert.deepEqual(D.presetLanes(dp), ['A', 'B'])
+	assert.throws(() => D.makeSinglePreset('  ', {}), /名称/)
+
+	const list = D.normalizePresets(D.serializePresets([sp, dp, { name: '表端', A: {}, B: {} }, { name: 'x', kind: 'single', S: { protocol: '', options: { baudRate: 'bad' } } }]))
+	assert.equal(list.length, 3, '同名(不分单双路)只留先出现的')
+	assert.deepEqual(list[0], sp)
+	assert.deepEqual(list[1], dp)
+	assert.deepEqual(list[2], { name: 'x', kind: 'single', S: { options: DEF, protocol: 'sek', label: '' } }, '坏项逐项回落')
+
+	// 匹配只比参数与协议；cur 缺 S(双路快照)时不算匹配
+	assert.ok(D.presetMatches(sp, { S: { options: { baudRate: 2400, parity: 'even' }, protocol: 'hostproto', label: 'A路' } }))
+	assert.ok(!D.presetMatches(sp, { S: { options: { baudRate: 2400 }, protocol: 'hostproto' } }))
+	assert.ok(!D.presetMatches(sp, { A: {}, B: {} }))
+
+	const plan = D.planApply(sp, { S: { options: { baudRate: 2400, parity: 'even' }, protocol: 'sek' } }, id => id === 'sek')
+	assert.deepEqual(Object.keys(plan.lanes), ['S'])
+	assert.equal(plan.lanes.S.optionsChanged, false)
+	assert.equal(plan.lanes.S.protocol, 'sek', '未注册的协议保留当前')
+	assert.deepEqual(plan.unknownProtocols, ['hostproto'])
 }
 
 console.log('dual-config: ok')

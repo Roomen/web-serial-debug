@@ -306,8 +306,23 @@
 	let chunkIdSeq = 0
 	const archiveQueue = []
 	let archiveRunning = false
+	let archiveTask = Promise.resolve()
+	let storageBarrier = Promise.resolve()
+	let waveEpoch = 0 // 清空后旧写盘/回读不得改动新数据
 	const hydrateCache = new Map() // id -> Float32Array
 	const hydratePending = new Set()
+	let hydrateInFlight = 0
+	// 归档队列里还没写盘的样点数：已从热区扣掉但仍占内存，超过上限就停采(写盘跟不上采集时队列会无限长)。
+	// 上限取 RAM 预算的 1/8(至少 8 块)，容得下磁盘短暂卡顿
+	let archiveQueuedSamples = 0
+	function archiveQueueMax() {
+		return Math.max(8 * CHUNK_SIZE, Math.floor(RING_CAP_MAX / 8))
+	}
+	// 冷块归档时留一份粗包络(每 ENV_STEP 点一组 min/max/首末/和)，宽视图直接用它画，不必把每块都从磁盘读回来
+	const ENV_STEP = 1024
+	// 一帧里最多为这么多冷块发起回读：超过回读缓存容量时回读完成又把前面的挤掉、重画再回读，停采后也会一直读盘
+	const HYDRATE_FRAME_MAX = HYDRATE_CACHE_MAX - 4
+	const frameHydrateIds = new Set()
 
 	function dataCount() {
 		return totalCount
@@ -465,6 +480,50 @@
 		}
 	}
 
+	function buildChunkEnv(buf, n) {
+		const blocks = Math.ceil(n / ENV_STEP)
+		const env = {
+			min: new Float32Array(blocks), max: new Float32Array(blocks),
+			first: new Float32Array(blocks), last: new Float32Array(blocks),
+			sum: new Float64Array(blocks), sumSq: new Float64Array(blocks),
+			minPos: new Float32Array(blocks),
+		}
+		for (let k = 0; k < blocks; k++) {
+			const a = k * ENV_STEP
+			const b = Math.min(n, a + ENV_STEP)
+			let mn = Infinity, mx = -Infinity, mp = Infinity, sum = 0, sq = 0
+			for (let i = a; i < b; i++) {
+				const v = buf[i]
+				if (v < mn) mn = v
+				if (v > mx) mx = v
+				if (v > 0 && v < mp) mp = v
+				sum += v
+				sq += v * v
+			}
+			env.min[k] = mn
+			env.max[k] = mx
+			env.minPos[k] = mp
+			env.first[k] = buf[a]
+			env.last[k] = buf[b - 1]
+			env.sum[k] = sum
+			env.sumSq[k] = sq
+		}
+		return env
+	}
+
+	// 块只追加不删除，ch.base 是块首的全局下标：二分找含 li 的块，不要每个桶都从第 0 块线性扫
+	function chunkIndexAt(li) {
+		let lo = 0
+		let hi = waveChunks.length - 1
+		while (lo < hi) {
+			const mid = (lo + hi) >> 1
+			const ch = waveChunks[mid]
+			if (ch.base + ch.n <= li) lo = mid + 1
+			else hi = mid
+		}
+		return lo
+	}
+
 	function getChunkBuf(ch) {
 		if (!ch) return null
 		if (ch.buf) return ch.buf
@@ -481,32 +540,45 @@
 		}
 	}
 
+	// 画布取桶时用：一帧里只有有限个冷块能用逐点细节(已在回读缓存里的也算)，其余先用包络近似。
+	// 只数新发起的回读不够：缓存命中的块不占额度，每帧又去读另一批，把前面的挤出缓存，停采后也一直读盘
+	function claimFrameHydrate(ch) {
+		if (frameHydrateIds.has(ch.id)) return true
+		if (frameHydrateIds.size >= HYDRATE_FRAME_MAX) return false
+		frameHydrateIds.add(ch.id)
+		return true
+	}
+
 	function requestHydrate(ch) {
 		if (!ch || ch.state === 'hot' || !ch.diskBytes) return
 		if (getChunkBuf(ch) || hydratePending.has(ch.id)) return
-		if (!Store) return
+		if (!Store || hydrateInFlight >= HYDRATE_CACHE_MAX) return
+		const epoch = waveEpoch
+		hydrateInFlight++
 		hydratePending.add(ch.id)
 		Store.readChunk(ch.id, ch.n).then(function (buf) {
+			if (epoch !== waveEpoch) return
 			touchHydrateCache(ch.id, buf)
 			hydratePending.delete(ch.id)
 			// 包络缓存可能是 min/max 近似，回读后失效以便重绘细节
 			clearBucketCache()
 			scheduleUIUpdate()
 		}).catch(function (e) {
+			if (epoch !== waveEpoch) return
 			hydratePending.delete(ch.id)
 			bluLog('冷数据回读失败 ' + ch.id + '：' + (e && e.message ? e.message : e), 'warn')
+		}).finally(function () {
+			hydrateInFlight--
 		})
 	}
 
 	function findChunkAt(li) {
-		if (li < 0 || li >= totalCount) return null
-		let off = li
-		for (let i = 0; i < waveChunks.length; i++) {
-			const ch = waveChunks[i]
-			if (off < ch.n) return { ch: ch, off: off, index: i }
-			off -= ch.n
-		}
-		return null
+		if (li < 0 || li >= totalCount || !waveChunks.length) return null
+		const i = chunkIndexAt(li)
+		const ch = waveChunks[i]
+		const off = li - ch.base
+		if (off < 0 || off >= ch.n) return null
+		return { ch: ch, off: off, index: i }
 	}
 
 	/** 全局逻辑下标 → 电流 µA（冷块未回读时用 min/max 中点占位并触发回读） */
@@ -555,21 +627,24 @@
 			return false
 		}
 
-		const samples = ch.buf.subarray(0, ch.n)
-		// 拷贝后再释放热引用，避免异步压缩期间被改写
-		let copy
-		try {
-			copy = new Float32Array(samples)
-		} catch (e) {
-			growBlocked = true
-			bluLog('归档拷贝失败（内存不足）', 'warn')
+		// 写盘跟不上采集：队列里的数据仍在内存里，不能无限排队
+		if (archiveQueuedSamples + ch.n > archiveQueueMax()) {
+			triggerStorageStop('波形写盘跟不上采集速度（待写入 ' + archiveQueue.length + ' 块），已停止采样以免内存失控')
 			return false
+		}
+		// 直接交出热块的缓冲：ch.buf 置空后 ringPush 不会再写它，不必再拷一份
+		const samples = ch.buf.subarray(0, ch.n)
+		try {
+			ch.env = buildChunkEnv(samples, ch.n)
+		} catch (e) {
+			ch.env = null
 		}
 		ch.state = 'pending'
 		ch.buf = null
 		hotCount -= ch.n
 		coldCount += ch.n
-		archiveQueue.push({ ch: ch, samples: copy })
+		archiveQueuedSamples += ch.n
+		archiveQueue.push({ ch: ch, samples: samples })
 		if (!ramArchiveNoted) {
 			ramArchiveNoted = true
 			bluLog('RAM 预算已满，开始压缩归档到磁盘（不丢细节）', 'warn')
@@ -585,10 +660,15 @@
 		const job = archiveQueue.shift()
 		const ch = job.ch
 		const samples = job.samples
+		const epoch = waveEpoch
+		const barrier = storageBarrier
 		const run = async function () {
 			try {
+				await barrier
+				if (epoch !== waveEpoch) return
 				if (!Store) throw new Error('BluWaveStore 未加载')
 				await Store.init()
+				if (epoch !== waveEpoch) return
 				if (!Store.getBackend()) throw new Error('浏览器不支持 OPFS/IndexedDB 落盘')
 				// 再次检查磁盘（队列等待期间可能已占满）
 				const rawBytes = samples.length * BYTES_PER_SAMPLE
@@ -597,6 +677,7 @@
 					throw new Error('DISK_FULL')
 				}
 				const res = await Store.writeChunk(ch.id, samples)
+				if (epoch !== waveEpoch) return
 				ch.diskBytes = res.byteSize
 				ch.state = 'cold'
 				if (diskUsedBytes() > diskBudgetBytes) {
@@ -609,6 +690,7 @@
 				}
 				updateStorageUsage()
 			} catch (e) {
+				if (epoch !== waveEpoch) return
 				const msg = e && e.message ? e.message : String(e)
 				// 写失败：尽量把数据救回 RAM，避免丢细节
 				if (!ch.buf) {
@@ -629,13 +711,17 @@
 					triggerStorageStop('波形归档失败，已停止采样以防丢数据')
 				}
 			} finally {
+				// 包含正在压缩/写入的块；它的缓冲到这里才可释放
+				if (epoch === waveEpoch) archiveQueuedSamples = Math.max(0, archiveQueuedSamples - samples.length)
 				archiveRunning = false
 				if (archiveQueue.length) pumpArchiveQueue()
-				updateStorageUsage()
-				scheduleUIUpdate()
+				if (epoch === waveEpoch) {
+					updateStorageUsage()
+					scheduleUIUpdate()
+				}
 			}
 		}
-		run()
+		archiveTask = run()
 	}
 
 	function triggerStorageStop(reason) {
@@ -644,8 +730,9 @@
 		bluLog(reason, 'error')
 		if (bluSampling) {
 			// 异步停止，避免在 ingest 栈内重入
+			const epoch = waveEpoch
 			setTimeout(function () {
-				stopSampling()
+				if (epoch === waveEpoch && storageStop) stopSampling()
 			}, 0)
 		}
 	}
@@ -687,6 +774,7 @@
 					return false
 				}
 			}
+			ch.base = totalCount
 			waveChunks.push(ch)
 		}
 
@@ -710,6 +798,7 @@
 	}
 
 	function ringReset() {
+		waveEpoch++
 		// 清空会话时丢弃未落盘队列（调用方本意是丢数据）；记日志避免 silent drop
 		if (archiveQueue.length > 0) {
 			const nPend = archiveQueue.length
@@ -721,6 +810,7 @@
 			bluLog('清空数据：丢弃 ' + nPend + ' 个未落盘归档块（约 ' + pts + ' 点）', 'warn')
 			archiveQueue.length = 0
 		}
+		archiveQueuedSamples = 0
 		waveChunks.length = 0
 		totalCount = 0
 		hotCount = 0
@@ -730,11 +820,14 @@
 		growBlocked = false
 		storageStop = false
 		ramArchiveNoted = false
-		chunkIdSeq = 0
 		hydrateCache.clear()
 		hydratePending.clear()
+		frameHydrateIds.clear()
 		if (Store) {
-			Store.clearSession().catch(function () { /* 忽略 */ })
+			// Store 的块键取当前磁盘会话：先等旧写盘结束再换会话，新写盘等清理完成。
+			storageBarrier = Promise.all([storageBarrier, archiveTask]).then(function () {
+				return Store.clearSession()
+			}).catch(function () { /* 忽略 */ })
 		}
 		updateStorageUsage()
 	}
@@ -790,8 +883,9 @@
 		const n = end - start
 		if (n <= 0) return emptyStats()
 		const acc = { n: 0, sumI: 0, sumP: 0, minI: Infinity, maxI: -Infinity }
-		let base = 0
-		for (let i = 0; i < waveChunks.length; i++) {
+		const i0 = chunkIndexAt(start)
+		let base = waveChunks[i0].base
+		for (let i = i0; i < waveChunks.length; i++) {
 			const ch = waveChunks[i]
 			const ch0 = base
 			const ch1 = base + ch.n
@@ -826,8 +920,9 @@
 		let sum = 0
 		let sumSq = 0
 		let cnt = 0
-		let base = 0
-		for (let i = 0; i < waveChunks.length; i++) {
+		const i0 = waveChunks.length ? chunkIndexAt(Math.max(0, lo)) : 0
+		let base = i0 < waveChunks.length ? waveChunks[i0].base : 0
+		for (let i = i0; i < waveChunks.length; i++) {
 			const ch = waveChunks[i]
 			const ch0 = base
 			const ch1 = base + ch.n
@@ -848,7 +943,15 @@
 					// 整块无逐点：仅当 minI>0 可知 minPos；minI≤0 时无法从块级统计推断
 					if (ch.minI > 0 && ch.minI < minPos) minPos = ch.minI
 				} else {
-					const buf = getChunkBuf(ch)
+					let buf = ch.buf
+					if (!buf) {
+						// 冷块：桶比包络组细(或没有包络)才要逐点细节，且受本帧回读额度限制；额度外的先用包络近似
+						const wantDetail = !ch.env || (b - a + 1) < ENV_STEP
+						if (wantDetail && claimFrameHydrate(ch)) {
+							buf = getChunkBuf(ch)
+							if (!buf) requestHydrate(ch)
+						}
+					}
 					if (buf) {
 						for (let p = a; p <= b; p++) {
 							const v = buf[p - ch0]
@@ -862,9 +965,31 @@
 							if (v > mx) mx = v
 							if (v > 0 && v < minPos) minPos = v
 						}
+					} else if (ch.env) {
+						// 冷块未回读：用归档时留的粗包络；两端不满一组的按该组近似
+						const env = ch.env
+						const ka = Math.floor((a - ch0) / ENV_STEP)
+						const kb = Math.floor((b - ch0) / ENV_STEP)
+						for (let k = ka; k <= kb; k++) {
+							const g0 = ch0 + k * ENV_STEP
+							const g1 = Math.min(ch1 - 1, g0 + ENV_STEP - 1)
+							const pa = Math.max(a, g0)
+							const pb = Math.min(b, g1)
+							const full = pa === g0 && pb === g1
+							const gn = g1 - g0 + 1
+							const len = pb - pa + 1
+							const midV = (env.min[k] + env.max[k]) * 0.5
+							if (!got) { first = full || pa === g0 ? env.first[k] : midV; got = true }
+							last = full || pb === g1 ? env.last[k] : midV
+							sum += full ? env.sum[k] : env.sum[k] / gn * len
+							sumSq += full ? env.sumSq[k] : env.sumSq[k] / gn * len
+							cnt += len
+							if (env.min[k] < mn) mn = env.min[k]
+							if (env.max[k] > mx) mx = env.max[k]
+							if (env.minPos[k] < minPos) minPos = env.minPos[k]
+						}
 					} else {
-						// 冷块未回读：包络用块级 min/max；部分区间端点用中点，避免整块 first/last 造成假跳变
-						requestHydrate(ch)
+						// 冷块未回读且没有包络：用块级 min/max；部分区间端点用中点，避免整块 first/last 造成假跳变
 						const mid = (isFinite(ch.minI) && isFinite(ch.maxI))
 							? (ch.minI + ch.maxI) * 0.5
 							: 0
@@ -906,6 +1031,19 @@
 		bucketCache.map = null
 	}
 
+	// 只缓存视口附近的桶：固定缩放 Live 滚动时滚出视口的旧桶会一直留着，内存随采集时长增长
+	function pruneBucketCache(firstBucket, lastBucket) {
+		const map = bucketCache.map
+		if (!map) return
+		const span = lastBucket - firstBucket + 1
+		if (map.size <= span * 3 + 256) return
+		const lo = firstBucket - span
+		const hi = lastBucket + span
+		map.forEach(function (v, k) {
+			if (k < lo || k > hi) map.delete(k)
+		})
+	}
+
 	function computeBucketSize(count, pw) {
 		if (pw < 1 || count <= pw) return 1
 		let bs = Math.ceil(count / pw)
@@ -925,9 +1063,20 @@
 		const hi = Math.min(lastAbs, lo + bucketSize - 1)
 		if (hi < base || lo > lastAbs) return null
 		const complete = (hi - lo + 1) >= bucketSize
-		if (complete && bucketCache.map.has(bucketIdx)) return bucketCache.map.get(bucketIdx)
 		const aLo = Math.max(lo, base)
 		const aHi = hi
+		if (complete && bucketCache.map.has(bucketIdx)) {
+			// 缓存命中的细桶也占本帧回读额度，否则滚动时会把仍可见的冷块挤出回读缓存。
+			for (let i = chunkIndexAt(aLo); i < waveChunks.length; i++) {
+				const ch = waveChunks[i]
+				if (ch.base > aHi) break
+				const a = Math.max(aLo, ch.base)
+				const b = Math.min(aHi, ch.base + ch.n - 1)
+				if (!ch.buf && b >= a && (a !== ch.base || b !== ch.base + ch.n - 1) &&
+					(!ch.env || b - a + 1 < ENV_STEP) && claimFrameHydrate(ch)) requestHydrate(ch)
+			}
+			return bucketCache.map.get(bucketIdx)
+		}
 		const entry = bucketMinMaxGlobal(aLo, aHi)
 		// 未写满的尾桶不入缓存，否则 Live 增长时右缘会用旧 min/max 闪一下假波形
 		if (complete) bucketCache.map.set(bucketIdx, entry)
@@ -3445,9 +3594,7 @@
 		const rect = canvas.getBoundingClientRect()
 		const w = Math.max(8, rect.width)
 		const h = Math.max(8, rect.height)
-		canvas.width = Math.round(w * dpr)
-		canvas.height = Math.round(h * dpr)
-		ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+		fitCanvas(canvas, ctx, w, h, dpr)
 		const cs = getComputedStyle(document.documentElement)
 		const bg = cs.getPropertyValue('--bg-body').trim() || '#0f172a'
 		const accent = cs.getPropertyValue('--accent').trim() || '#3b82f6'
@@ -3685,9 +3832,7 @@
 		const rect = canvas.getBoundingClientRect()
 		const w = Math.max(8, rect.width)
 		const h = Math.max(8, rect.height)
-		canvas.width = Math.round(w * dpr)
-		canvas.height = Math.round(h * dpr)
-		ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+		fitCanvas(canvas, ctx, w, h, dpr)
 		const cs = getComputedStyle(document.documentElement)
 		const bg = cs.getPropertyValue('--bg-body').trim() || '#0f172a'
 		const accent = cs.getPropertyValue('--accent').trim() || '#3b82f6'
@@ -4290,9 +4435,8 @@
 		const h = rect.height
 		if (w < 8 || h < 8) return
 
-		canvas.width = Math.round(w * dpr)
-		canvas.height = Math.round(h * dpr)
-		ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+		fitCanvas(canvas, ctx, w, h, dpr)
+		frameHydrateIds.clear()
 
 		const margin = { top: 14, right: 14, bottom: 36, left: 62 }
 		const pw = w - margin.left - margin.right
@@ -4385,6 +4529,7 @@
 				}
 				cols.push({ x: (entry.loAbs + entry.hiAbs) / 2 - ringBase, entry: entry })
 			}
+			pruneBucketCache(firstBucket, lastBucket)
 		}
 		if (!isFinite(yMin) || !isFinite(yMax)) {
 			const vv = ringIAt(vr.end)
@@ -5021,9 +5166,7 @@
 		const w = rect.width
 		const h = rect.height
 		if (w < 8 || h < 4) return
-		canvas.width = Math.round(w * dpr)
-		canvas.height = Math.round(h * dpr)
-		ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+		fitCanvas(canvas, ctx, w, h, dpr)
 		const cs = getComputedStyle(document.documentElement)
 		const bg = cs.getPropertyValue('--bg-surface').trim() || '#1e293b'
 		const accent = cs.getPropertyValue('--accent').trim() || '#3b82f6'
@@ -5078,6 +5221,19 @@
 			ctx.strokeStyle = accent
 			ctx.strokeRect(px0, 0, Math.max(2, px1 - px0), h)
 		}
+	}
+
+	// 按 CSS 尺寸设定画布像素并清空、复位绘图状态。尺寸没变时用 ctx.reset()：给 width/height 赋值会重新分配画布，采样时每帧都会来一次
+	function fitCanvas(canvas, ctx, w, h, dpr) {
+		const cw = Math.round(w * dpr)
+		const chh = Math.round(h * dpr)
+		if (canvas.width !== cw || canvas.height !== chh || typeof ctx.reset !== 'function') {
+			canvas.width = cw
+			canvas.height = chh
+		} else {
+			ctx.reset()
+		}
+		ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 	}
 
 	let uiPending = false

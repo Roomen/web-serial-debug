@@ -46,7 +46,7 @@
 	}
 	// DRN（IEC 62055-41）: 13 位 = 4 位厂商码 + 8 位表号 + 1 位校验，11 位 = 2 位厂商码 + 8 位表号 + 1 位校验。
 	// 模组唤醒地址用完整 DRN，应用层帧里的 8 位 BCD 表号取 DRN 中间那 8 位。
-	// 模组里 DRN 是 u64 整数，厂商码的前导 0 会丢（0101…存进去只剩 12 位），所以不能按位数切：
+	// 模组外层 DRN 用小端 BCD，解码为 BigInt 后厂商码的前导 0 会丢（0101…只剩 12 位），所以不能按位数切：
 	// 表号 = (DRN / 10) mod 10^8，11 位和 13 位格式都适用。8 位以内按台架短地址，直接补零当表号；
 	// 正好 9 位分不清是哪种，报错，不截断，截断会把帧悄悄发给另一只表
 	function drnToMeterNo(v) {
@@ -268,7 +268,7 @@
 				if (!pak) {
 					const why = []
 					if (needRole) why.push('模组角色为 ' + (H.ROLE_NAME[role] || role) + '，需要 ' + wantName)
-					if (needDrn) why.push('模组 DRN 为 ' + dev.drn + '，与配置的 ' + wantDrn + ' 不一致')
+					if (needDrn) why.push('模组 DRN 为 ' + H.drnText(dev.drn) + '，与配置的 ' + H.drnText(wantDrn) + ' 不一致')
 					throw new Error(why.join('；') + '。填写 PAK（32 位十六进制）后由模拟器写入，或用 keytool 置备' + (needDrn ? '，也可以把 DRN 留空以模组为准' : ''))
 				}
 				if (!pakBytes || pakBytes.length !== 16) throw new Error('PAK 需为 32 位十六进制（16 字节）')
@@ -277,7 +277,7 @@
 				need(a, 'PROV_AUTH')
 				if (needDrn) {
 					need(await link.request(C.PROV_DEV_ID_SET, H.devIdSetPayload(devType, wantDrn)), 'DEV_ID_SET')
-					log('info', 'DRN 已写入模组: ' + dev.drn + ' -> ' + wantDrn)
+					log('info', 'DRN 已写入模组: ' + H.drnText(dev.drn) + ' -> ' + H.drnText(wantDrn))
 				}
 				if (needRole) {
 					need(await link.request(C.PROV_ROLE_SET, [wantRole], { noRetry: true, timeoutMs: 2000 }), 'ROLE_SET')
@@ -300,8 +300,8 @@
 				const again = await this.roleGet()
 				if (again !== wantRole) throw new Error('复位后角色仍为 ' + again + '，期望 ' + wantRole)
 				const dev2 = wantDrn == null ? null : await this.devIdGet()
-				if (dev2 && dev2.drn !== wantDrn) throw new Error('复位后 DRN 为 ' + dev2.drn + '，期望 ' + wantDrn)
-				log('info', '模组已定形: 角色 ' + wantName + (dev2 ? '，DRN ' + dev2.drn : ''))
+				if (dev2 && dev2.drn !== wantDrn) throw new Error('复位后 DRN 为 ' + H.drnText(dev2.drn) + '，期望 ' + H.drnText(wantDrn))
+				log('info', '模组已定形: 角色 ' + wantName + (dev2 ? '，DRN ' + H.drnText(dev2.drn) : ''))
 				return { role: again, drn: dev2 ? dev2.drn : null }
 			},
 		}
@@ -942,7 +942,7 @@
 			}
 			sess = { at: clock.now(), src: d.src, kind3: 0, queued: 0, ended: false }
 			info.sessions++
-			log('info', '被唤醒（kind=2 通知）src=' + d.src + '，上行队列已由模组清空')
+			log('info', '被唤醒（kind=2 通知）src=' + H.drnText(d.src) + '，上行队列已由模组清空')
 			pushState()
 		}
 		function onSessionEnd(e) {
@@ -1017,7 +1017,7 @@
 			else if (d.kind === 3) {
 				onDownlink(d).catch(function (e) { log('error', 'kind=3 处理异常: ' + (e && e.message ? e.message : e)) })
 			} else if (d.kind !== 5) { // kind=5 信标忽略
-				log('info', 'EVT 0x0280 kind=' + d.kind + ' ' + (H.KIND_NAME[d.kind] || '') + ' src=' + d.src + ' ' + d.len + 'B')
+				log('info', 'EVT 0x0280 kind=' + d.kind + ' ' + (H.KIND_NAME[d.kind] || '') + ' src=' + H.drnText(d.src) + ' ' + d.len + 'B')
 			}
 		}
 
@@ -1030,14 +1030,14 @@
 			// 面板不指定 DRN，始终回读模组；显式引擎配置仍供台架置备使用
 			const dev0 = await mod.devIdGet()
 			const want = cfg.drn ? BigInt(cfg.drn) : dev0.drn
-			if (!cfg.drn) log('info', '从模组读取 DRN: ' + dev0.drn)
+			if (!cfg.drn) log('info', '从模组读取 DRN: ' + H.drnText(dev0.drn))
 			if (want === 0n) throw new Error('DRN 未设置：已从模组读取 DRN，结果为 0（模组还没置备 DRN）。请先用 keytool 置备 DRN')
 			drnToMeterNo(want)
-			if (!drnCheckOk(want)) log('warn', 'DRN ' + want + ' 的校验位不符合 Luhn 规则，仍按此地址继续')
+			if (!drnCheckOk(want)) log('warn', 'DRN ' + H.drnText(want) + ' 的校验位不符合 Luhn 规则，仍按此地址继续')
 			const pv = await mod.provision(1, want, cfg.pak, 1)
 			const dev = { drn: pv.drn }
 			info.role = pv.role
-			info.drn = dev.drn.toString()
+			info.drn = H.drnText(dev.drn)
 			if (!policy || meterNo !== drnToMeterNo(dev.drn)) {
 				meterNo = drnToMeterNo(dev.drn)
 				policy = createMeterPolicy(meterNo)
@@ -1060,7 +1060,7 @@
 			if (wst && wst.role === 1 && wst.state === 1) log('info', 'WOR 稳态 [1 SENTRY][1 GRID]')
 			else log('warn', 'WOR 状态不是 [1 SENTRY][1 GRID]: ' + (wst ? '[' + wst.role + '][' + wst.state + ' ' + (H.WOR_STATE_NAME[wst.state] || '') + ']' : '结果异常'))
 			// 10B 版本附带运行地址: 它才是模组实际值守的唤醒地址，DRN 改了但没复位时两者会不一致
-			if (wst && wst.localAddr != null && wst.localAddr !== dev.drn) log('warn', 'WOR 运行地址 ' + wst.localAddr + ' 与 DRN ' + dev.drn + ' 不一致，CIU 按 DRN 唤醒会唤不到；复位模组后重试')
+			if (wst && wst.localAddr != null && wst.localAddr !== dev.drn) log('warn', 'WOR 运行地址 ' + H.drnText(wst.localAddr) + ' 与 DRN ' + H.drnText(dev.drn) + ' 不一致，CIU 按 DRN 唤醒会唤不到；复位模组后重试')
 			// 不预置上行: 上行队列在每次被唤醒时由模组清空，只能在收到本会话请求后入队
 			if (gen !== runGen || stopped) throw abortErr()
 			unsubEvt = link.onEvt(onEvt)
@@ -1411,7 +1411,7 @@
 				const d = await mod.devIdGet()
 				if (d.drn === 0n) throw new Error('CIU 模组 DRN 未置备（DEV_ID_GET 为 0），请先用 keytool 置备 DRN')
 				localDrn = d.drn
-				st.localAddr = d.drn.toString()
+				st.localAddr = H.drnText(d.drn)
 			}
 			return localDrn
 		}
@@ -1443,7 +1443,7 @@
 				if (!d) return
 				// 会话帧不带地址（隐式取自当前事务），实板固件上报捎带上行(kind=4)时 src 填 0；
 				// 所以 kind=4 不按 src 过滤，靠下面的应用层接收判定（表号 + TXN）认领，只有 ACK 等其余事件要求来源是目标表
-				if (d.kind !== 4 && d.src !== tgt) { log('info', '忽略其他来源的 EVT src=' + d.src + ' kind=' + d.kind); return }
+				if (d.kind !== 4 && d.src !== tgt) { log('info', '忽略其他来源的 EVT src=' + H.drnText(d.src) + ' kind=' + d.kind); return }
 				if (!sess.open) { log('info', '本轮 WAKE 尚未受理时收到 kind=' + d.kind + '，属于上一会话，不占本轮接收槽'); return }
 				if (d.kind === 2 && !sess.ack) {
 					sess.ack = { at: clock.now() }
@@ -1885,12 +1885,12 @@
 				const wst = H.decodeWorStatus(ws.payload)
 				if (wst) log('info', 'WOR 已初始化 [' + wst.role + ' ' + (H.WOR_ROLE_NAME[wst.role] || '未知') + '][' + wst.state + ' ' + (H.WOR_STATE_NAME[wst.state] || '') + ']，不再 WOR_INIT')
 				if (wst && wst.role !== 2) log('warn', 'WOR 角色不是 INITIATOR（' + wst.role + '），唤醒可能被拒；复位模组后重试')
-				if (wst && wst.localAddr != null && wst.localAddr !== drn) log('warn', 'WOR 运行地址 ' + wst.localAddr + ' 与 DRN ' + drn + ' 不一致；复位模组后重试')
+				if (wst && wst.localAddr != null && wst.localAddr !== drn) log('warn', 'WOR 运行地址 ' + H.drnText(wst.localAddr) + ' 与 DRN ' + H.drnText(drn) + ' 不一致；复位模组后重试')
 			}
 			if (gen !== runGen || stopped) throw abortErr()
 			running = true
-			log('info', 'CIU 模拟就绪：本机地址 ' + st.localAddr + '，目标 DRN ' + cfg.targetDrn + '，应用层表号 ' + cfg.meterNo)
-			if (!drnCheckOk(cfg.targetDrn)) log('warn', '目标 DRN ' + cfg.targetDrn + ' 的校验位不符合 Luhn 规则，仍按此地址唤醒')
+			log('info', 'CIU 模拟就绪：本机地址 ' + st.localAddr + '，目标 DRN ' + H.drnText(cfg.targetDrn) + '，应用层表号 ' + cfg.meterNo)
+			if (!drnCheckOk(cfg.targetDrn)) log('warn', '目标 DRN ' + H.drnText(cfg.targetDrn) + ' 的校验位不符合 Luhn 规则，仍按此地址唤醒')
 			setPhase('idle')
 			// 连接后读一次 0x18 计价模式与 0x27 协议版本（每次读都是一次唤醒会话，需要几秒到几十秒）
 			try {
@@ -1990,7 +1990,7 @@
 				st.tariff = null
 				st.protoVersion = null
 				st.pollAllowed = true
-				log('info', '目标表切换为 DRN ' + n.targetDrn + '（表号 ' + n.meterNo + '）')
+				log('info', '目标表切换为 DRN ' + H.drnText(n.targetDrn) + '（表号 ' + n.meterNo + '）')
 				setPhase('idle')
 				const mine = gen
 				const r = await refreshBasics()

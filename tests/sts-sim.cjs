@@ -106,7 +106,7 @@ function makeWorld(clock, opts) {
 	function evtFrame(src, kind, seq, data, rssi, snr) {
 		const d = Uint8Array.from(data || [])
 		const p = new Uint8Array(12 + d.length + 3)
-		p.set(H.u64Bytes(src), 0)
+		p.set(H.bcdAddressBytes(src), 0)
 		p[8] = kind
 		p[9] = seq & 0xff; p[10] = seq >> 8
 		p[11] = d.length
@@ -150,11 +150,11 @@ function makeWorld(clock, opts) {
 					resetRuntime(mod)
 				} }
 			}
-			case 0x0301: return { status: 0, data: [mod.role === 2 ? 2 : 1, ...H.u64Bytes(mod.drn)] }
+			case 0x0301: return { status: 0, data: [mod.role === 2 ? 2 : 1, ...H.bcdAddressBytes(mod.drn)] }
 			case 0x0302:
 				if (p.length !== 9) return { status: 1 }
 				if (!mod.authed) return { status: 3 }
-				mod.drn = H.u64(p, 1)
+				mod.drn = H.bcdAddress(p, 1)
 				mod.devIdSets = (mod.devIdSets || 0) + 1
 				return OK
 			case 0x0004: return { status: 0, after: () => {
@@ -165,13 +165,13 @@ function makeWorld(clock, opts) {
 			} }
 			case 0x0200:
 				if (p.length !== 9) return { status: 1 }
-				log.inits.push({ at: clock.now(), role: mod.name, payloadRole: p[0], addr: H.u64(p, 1) })
+				log.inits.push({ at: clock.now(), role: mod.name, payloadRole: p[0], addr: H.bcdAddress(p, 1) })
 				if (faults.initStatus != null && mod === ciu) return { status: faults.initStatus }
 				if (mod.worInit) return { status: 2 } // 已初始化: ERR_BUSY
 				mod.worInit = true
-				mod.addr = H.u64(p, 1)
+				mod.addr = H.bcdAddress(p, 1)
 				return OK
-			case 0x0201: return mod.worInit ? { status: 0, data: [mod.role === 1 ? 1 : 2, mod.role === 1 ? (mod.sentry ? 1 : 0) : (mod.session ? 9 : 0), ...H.u64Bytes(mod.addr)] } : { status: o.notInitStatus }
+			case 0x0201: return mod.worInit ? { status: 0, data: [mod.role === 1 ? 1 : 2, mod.role === 1 ? (mod.sentry ? 1 : 0) : (mod.session ? 9 : 0), ...H.bcdAddressBytes(mod.addr)] } : { status: o.notInitStatus }
 			case 0x020f: { // 53×u32，只填假模组维护的几个计数
 				const out = [212, 0]
 				H.WOR_STATS_FIELDS.forEach(f => { const v = mod.stats[f] || 0; out.push(v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >>> 24) & 0xff) })
@@ -195,7 +195,7 @@ function makeWorld(clock, opts) {
 				if (faults.wakeStatus != null) return { status: faults.wakeStatus }
 				if (mod.session) return { status: 2 }
 				log.wakes++
-				startSession(mod, H.u64(p, 0))
+				startSession(mod, H.bcdAddress(p, 0))
 				return OK
 			}
 			case 0x020a: {
@@ -362,7 +362,7 @@ async function tests() {
 		await drive(t.clock, t.ciu.start())
 		const ms = t.meter.getState()
 		assert.equal(ms.running, true)
-		assert.equal(ms.drn, METER_DRN.toString()) // 以模组 DEV_ID_GET 回读值为准
+		assert.equal(ms.drn, '0101123456788') // 以模组 DEV_ID_GET 回读值为准，展示补回厂商码前导 0
 		assert.match(logText(t.logs.meter), /WOR 稳态 \[1 SENTRY\]\[1 GRID\]/)
 		const cs = t.ciu.getState()
 		assert.equal(cs.running, true)
@@ -1083,7 +1083,7 @@ async function tests() {
 		const t = setup()
 		t.world.meter.addr = 5n
 		await drive(t.clock, t.meter.start())
-		assert.match(logText(t.logs.meter), /WOR 运行地址 5 与 DRN 101123456788 不一致/)
+		assert.match(logText(t.logs.meter), /WOR 运行地址 5 与 DRN 0101123456788 不一致/)
 	}
 
 	// ---- 表端重启（清空存档）: 轮询状态 0 -> 重发令牌 -> 表端令牌去重回放终局 ----
@@ -1502,7 +1502,7 @@ async function tests() {
 		const sessBefore = t.ciu.getState().sessionCount
 		await drive(t.clock, t.ciu.setTarget(DRN2.toString()))
 		assert.ok(t.ciu.getState().sessionCount > sessBefore) // 0x18 / 0x27 对新表重读
-		assert.match(logText(t.logs.ciu), /目标表切换为 DRN 101876543214（表号 87654321）/)
+		assert.match(logText(t.logs.ciu), /目标表切换为 DRN 0101876543214（表号 87654321）/)
 		const r2 = await drive(t.clock, t.ciu.status())
 		assert.equal(r2.ok, true, r2.message)
 		assert.equal(r2.status.remaining, 4242)
@@ -1668,7 +1668,7 @@ async function tests() {
 		const t = setup()
 		await ready(t)
 		const st = t.meter.getState()
-		assert.equal(st.drn, METER_DRN.toString())
+		assert.equal(st.drn, '0101123456788')
 		assert.equal(st.meterNo, METER_NO)
 		t.meter.stop(); t.ciu.stop()
 	}
@@ -1725,13 +1725,13 @@ async function tests() {
 		const fresh = S.buildFrame({ dir: 1, type: S.TYPE.STATUS, txn: 2, meter: METER_NO, payload: new Uint8Array(8) })
 		const event = data => {
 			const payload = new Uint8Array(15 + data.length)
-			payload.set(H.u64Bytes(METER_DRN)); payload[8] = 4; payload[11] = data.length; payload.set(data, 12)
+			payload.set(H.bcdAddressBytes(METER_DRN)); payload[8] = 4; payload[11] = data.length; payload.set(data, 12)
 			handlers.slice().forEach(cb => cb({ cmd: H.EVT.WOR_FRAME, payload }))
 		}
 		const link = {
 			onEvt(cb) { handlers.push(cb); return () => handlers.splice(handlers.indexOf(cb), 1) },
 			request(cmd) {
-				if (cmd === H.CMD.PROV_DEV_ID_GET) return Promise.resolve({ status: 0, payload: Uint8Array.of(2, ...H.u64Bytes(CIU_ADDR)) })
+				if (cmd === H.CMD.PROV_DEV_ID_GET) return Promise.resolve({ status: 0, payload: Uint8Array.of(2, ...H.bcdAddressBytes(CIU_ADDR)) })
 				if (cmd === H.CMD.WOR_INIT) return Promise.resolve({ status: 0 })
 				if (cmd === H.CMD.WOR_WAKE_CIU) return new Promise(resolve => {
 					clock.setTimeout(() => event(old), 50)

@@ -16,7 +16,7 @@ function harness() {
 	let now = 100000
 	let timerId = 0
 	const sessions = Object.fromEntries(['S', 'A', 'B'].map(sid => [sid, {
-		open: true, opening: false, manualClose: false, reader: null, port: null, packGlitch: false,
+		open: true, opening: false, manualClose: false, reader: null, port: null, packBuf: [], packGlitch: false,
 		wantOpen: true, wantPortKey: 'synthetic', openedAt: now, rxBytes: 0, txBytes: 0
 	}]))
 	const logs = []
@@ -38,6 +38,8 @@ function harness() {
 		getPort: sid => sessions[sid].port,
 		getReader: sid => sessions[sid].reader,
 		setReader: (sid, r) => { sessions[sid].reader = r },
+		getPackBuf: sid => sessions[sid].packBuf,
+		getPackStartTime: () => null,
 		getPackTimer: () => null,
 		setPackTimer: () => {}, setPackBuf: () => {}, setPackStartTime: () => {}, setSekWaitStart: () => {}
 	}
@@ -49,6 +51,7 @@ function harness() {
 		addLogErr: (msg, sid) => logs.push({ msg, sid }),
 		dataReceived: (value, sid, meta) => { received.push({ value, sid, meta: meta && { ...meta } }); rxNotes.push(sid); context.api.noteSerialRx(sid) },
 		closeSerial: async sid => { sessions[sid].open = false; closed.push(sid) },
+		flushSerialPack: () => {},
 		portHeldByOther: () => false, serialStatuChange: () => {}, updateOpenButton: () => {},
 		openSerial: async (sid, opts) => { opened.push({ sid, opts, port: sessions[sid].port }); sessions[sid].open = true; return true }
 	})
@@ -394,13 +397,13 @@ async function testPackGlitch() {
 		assert.equal(h.flushed.length, waits ? 0 : 1, type)
 	}
 
-	// releasePort 清掉分包缓冲时一并清毛刺标记：新连接的第一包不得带上旧连接的标记
+	// releasePort 输出最后的残包并清毛刺标记：新连接的第一包不得带上旧连接的标记
 	const released = packHarness(50)
 	released.api.dataReceived(Uint8Array.of(0, 0), 'S', { lineGlitch: true })
 	await released.api.releasePort('S')
 	released.api.dataReceived(Uint8Array.of(0), 'S')
 	released.fire()
-	assert.deepEqual(released.flushed, [{ bytes: [0], glitch: false }])
+	assert.deepEqual(released.flushed, [{ bytes: [0, 0], glitch: true }, { bytes: [0], glitch: false }])
 
 	// 发送前提前 flush(flushPendingRx)同样带走标记，且不残留到下一包
 	const early = packHarness(50)
@@ -666,6 +669,33 @@ async function testParseRerenderIsolation() {
 	runTimers()
 	assert.equal(session.baseCode, 1)
 	assert.ok(api.parseLogType('parse').parse)
+
+	// ANSI-only histories must also yield and keep streaming state isolated across slices/reset.
+	context.AnsiUp = function () {
+		this.n = 0
+		this.ansi_to_html = function (t) { clock += 5; return 'ansi' + (++this.n) + ':' + t }
+	}
+	const liveAnsi = new context.AnsiUp()
+	context.ansi_up = liveAnsi
+	box = makeContainer()
+	vmApi.rerenderLogBodies(box, 'ansi')
+	assert.ok(timers.length, 'ANSI-only history must yield instead of blocking for all rows')
+	assert.equal(context.ansi_up, liveAnsi)
+	const newConnectionAnsi = new context.AnsiUp()
+	context.ansi_up = newConnectionAnsi
+	context.sessionResetSeq.S++
+	runTimers()
+	assert.equal(context.ansi_up, newConnectionAnsi, 'old ANSI history must not restore state across reconnect')
+	assert.ok(box.children[159].body.innerHTML.includes('ansi160:'), 'ANSI replay remains in row order')
+
+	box = makeContainer()
+	vmApi.rerenderLogBodies(box, 'ansi')
+	const beforeSwitch = box.children[159].body.innerHTML
+	context.isRowLogType = t => t !== 'term'
+	vmApi.rerenderLogBodies(box, 'term')
+	runTimers()
+	assert.equal(box.children[159].body.innerHTML, beforeSwitch, 'switching to terminal cancels stale row replay')
+
 }
 
 // 双路两路协议各自独立：每行按所属那一路(data-sid)的协议与会话状态重放，A 路读到的基准不会套到 B 路；

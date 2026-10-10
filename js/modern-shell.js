@@ -1,4 +1,4 @@
-// 现代布局 v2 外壳：左栏「配置」菜单、全局连接栏(每路一个连接按钮)、日志工具条、快捷行 + 发送条、日志过滤。
+// 现代布局 v2 外壳：左栏「配置」菜单、全局连接栏(每路一个连接按钮)、日志工具条、快捷行 + 发送条、日志过滤与缩放。
 // 只在现代布局下挂载；经典布局的 DOM 是基准：要用的原控件一律原样搬过来(原位置留注释占位，切回时放回)，
 // 新控件只驱动原控件(派发 click/change)或调用现有全局 API，状态以原控件为准、经 MutationObserver 跟随。
 // 过滤的纯函数在文件顶部，node 测试(tests/modern-shell.cjs)直接 require
@@ -64,7 +64,20 @@
 		return m ? m[1] + ' ' + m[2] + m[3] + m[4] : String(s || '').trim()
 	}
 
-	const api = { parseLogFilter: parseLogFilter, matchLogFilter: matchLogFilter, compactParams: compactParams }
+	// 日志缩放：70%–200%，每档 10%；存取都过一遍，坏值回落 100%
+	const ZOOM_MIN = 0.7
+	const ZOOM_MAX = 2
+	const ZOOM_STEP = 0.1
+	function clampZoom(v) {
+		const n = Number(v)
+		if (!isFinite(n) || n <= 0) return 1
+		return Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, n)) * 10) / 10
+	}
+	function stepZoom(v, dir) {
+		return clampZoom(clampZoom(v) + (dir > 0 ? ZOOM_STEP : -ZOOM_STEP))
+	}
+
+	const api = { parseLogFilter: parseLogFilter, matchLogFilter: matchLogFilter, compactParams: compactParams, clampZoom: clampZoom, stepZoom: stepZoom }
 	if (typeof module !== 'undefined' && module.exports) {
 		module.exports = api
 		return
@@ -236,23 +249,36 @@
 		// 文案随模式：双路两路的参数与协议各自独立(refreshConn 里改)
 		const parCap = mk('div', 'mdn-pop-cap', '串口参数')
 		par.appendChild(parCap)
-		const foot = mk('div', 'mdn-pop-foot mdn-dual-only')
-		const back = btn('btn btn-sm btn-outline-secondary', '回到单路', '切回单路模式：双路的口在后台保持连接')
-		back.prepend(icon('bi-arrow-return-left'), document.createTextNode(' '))
-		foot.appendChild(back)
-		listen(back, 'click', function () {
-			closePops()
-			const m = $('serial-mode-single')
-			if (m) m.click()
+		pop.append(head, dev, lab, par)
+		// 只有 B 路能移除：B 关闭(仍记着设备)，A 路的口、参数、协议原样交回单路(common.js 的 removeLaneB)
+		if (key === 'B') {
+			const foot = mk('div', 'mdn-pop-foot')
+			const rm = btn('btn btn-sm btn-outline-secondary', '移除 B 路', '断开 B 路并回到单路：A 路的串口交回单路继续使用，B 路记着设备，下次加回来点一下就能连')
+			rm.prepend(icon('bi-x-lg'), document.createTextNode(' '))
+			foot.appendChild(rm)
+			listen(rm, 'click', function () {
+				closePops()
+				const m = $('serial-mode-single')
+				if (m) m.click()
+			})
+			pop.appendChild(foot)
+		}
+		// 本路协议：常改，所以紧贴在连接按钮右侧一键直选，不进菜单。选项抄顶栏(协议注册时只往顶栏加)，改值经 serialLanes.setProtocol，
+		// 改的正好是顶栏那一路(单路、双路主发路)时由它转给顶栏派发 change
+		const proto = mk('select', 'form-select form-select-sm mdn-conn-proto')
+		proto.setAttribute('aria-label', key === 'B' ? 'B 路协议' : '协议')
+		listen(proto, 'change', function () {
+			const lanes = window.serialLanes
+			if (lanes) lanes.setProtocol(sidFor(key), proto.value)
+			if (refs.refreshConn) refs.refreshConn()
 		})
-		pop.append(head, dev, lab, par, foot)
-		wrap.append(b, pop)
+		wrap.append(b, proto, pop)
 		listen(b, 'click', function () {
 			const open = pop.hidden
 			closePops()
 			if (open) openPop(key)
 		})
-		return { wrap: wrap, btn: b, dot: dot, letter: letter, label: label, port: port, params: params, pop: pop, head: head, dev: dev, lab: lab, par: par, parCap: parCap }
+		return { wrap: wrap, btn: b, proto: proto, dot: dot, letter: letter, label: label, port: port, params: params, pop: pop, head: head, dev: dev, lab: lab, par: par, parCap: parCap }
 	}
 
 	function openPop(key) {
@@ -316,9 +342,9 @@
 		})
 		refs.blu = { btn: blu, dot: bluDot, text: bluText }
 		const tools = mk('span', 'mdn-conn-tools')
-		// 双路预设(经典布局在双路控件区)原样搬到 B 路按钮后面
-		const presetSlot = mk('span', 'mdn-conn-preset mdn-dual-only')
-		cb.append(main.wrap, b.wrap, presetSlot, addB, sendSlot, sep(), blu, sep(), tools)
+		// 串口预设(单路 / 双路都有)原样搬到「+ B 路」后面：单路下也能直接套双路预设进入双路
+		const presetSlot = mk('span', 'mdn-conn-preset')
+		cb.append(main.wrap, b.wrap, addB, presetSlot, sendSlot, sep(), blu, tools)
 		b.wrap.classList.add('mdn-dual-only')
 		park($('serial-dual-preset'), presetSlot)
 		if (send) park(send, sendSlot)
@@ -354,10 +380,16 @@
 			if (baud) baud.focus()
 		})
 		const refresh = batched(refreshConn)
+		// 每路协议键的选项抄顶栏：协议脚本晚于本文件注册时往顶栏补选项
+		const topProto = $('serial-protocol-select')
+		observe(topProto, { childList: true }, refresh)
+		listen(topProto, 'change', refresh)
 		;['serial-chip', 'serial-chip-a', 'serial-chip-b', 'serial-status', 'serial-status-a', 'serial-status-b', 'serial-params-summary-text'].forEach(function (id) {
 			observe($(id), { attributes: true, childList: true, subtree: true, characterData: true }, refresh)
 		})
 		observe($('serial-mode-dual'), { attributes: true, attributeFilter: ['class'] }, refresh)
+		// 主发切换：协议键的提示跟着说明哪一路决定协议下发
+		observe($('serial-active-send'), { attributes: true, subtree: true, attributeFilter: ['class'] }, refresh)
 		// 两路参数 / 协议 / 预设套用
 		listen(document, 'serial-lane-config', refresh)
 		;['serial-session-a-label', 'serial-session-b-label'].forEach(function (id) {
@@ -371,6 +403,27 @@
 		refreshConn()
 	}
 
+	function syncProtoSelect(sel, sid) {
+		const top = $('serial-protocol-select')
+		const lanes = window.serialLanes
+		if (!sel || !top) return
+		const opts = Array.prototype.map.call(top.options, function (o) { return [o.value, o.textContent] })
+		const have = Array.prototype.map.call(sel.options, function (o) { return [o.value, o.textContent] })
+		if (JSON.stringify(opts) !== JSON.stringify(have)) {
+			sel.textContent = ''
+			opts.forEach(function (o) {
+				const n = mk('option', '', o[1])
+				n.value = o[0]
+				sel.appendChild(n)
+			})
+		}
+		const want = lanes ? lanes.protocolOf(sid) : top.value
+		if (want && sel.value !== want) sel.value = want
+		const h = hub()
+		const main = !isDual() || (h && h.activeSendId === sid)
+		sel.title = (sid === 'S' ? '协议' : sid + ' 路协议') + '：决定这一路日志的解析' + (main ? '；也是协议下发与测试面板使用的协议' + (isDual() ? '（主发路）' : '') : '')
+	}
+
 	function refreshConn() {
 		const cb = refs.connbar
 		if (!cb) return
@@ -382,13 +435,14 @@
 			const p = refs.paths[key]
 			const sid = sidFor(key)
 			// 每路自己的参数；双路两路协议可以不同，按钮上一并写出
-			let params = compactParams(lanes ? lanes.summary(sid) : ($('serial-params-summary-text') || {}).textContent)
-			if (dual && lanes) params += ' · ' + lanes.protocolName(lanes.protocolOf(sid))
-			p.parCap.textContent = dual ? '本路串口参数与协议' : '串口参数'
+			const params = compactParams(lanes ? lanes.summary(sid) : ($('serial-params-summary-text') || {}).textContent)
+			p.parCap.textContent = dual ? '本路串口参数' : '串口参数'
+			syncProtoSelect(p.proto, sid)
 			const chip = chipFor(key)
 			const open = h ? h.isOpen(sid) : !!(chip && chip.classList.contains('is-open'))
 			const opening = h ? h.isOpening(sid) : false
-			p.wrap.dataset.state = opening ? 'opening' : (open ? 'open' : 'closed')
+			const failed = !!(h && h.isReleaseFailed(sid))
+			p.wrap.dataset.state = failed ? 'close-failed' : (opening ? 'opening' : (open ? 'open' : 'closed'))
 			p.wrap.dataset.sid = sid
 			const nameEl = chip ? chip.querySelector('.serial-port-name') : null
 			const portName = nameEl ? nameEl.textContent.trim() : ''
@@ -398,7 +452,7 @@
 			p.label.textContent = lbl && lbl !== sid + '路' ? lbl : ''
 			p.port.textContent = portName || '未选择串口'
 			p.params.textContent = params
-			const st = opening ? '正在连接' : (open ? '已连接' : '未连接')
+			const st = failed ? '关闭失败，请重试' : (opening ? '正在连接' : (open ? '已连接' : '未连接'))
 			const who = sid === 'S' ? '串口' : sid + ' 路' + (p.label.textContent ? '（' + p.label.textContent + '）' : '')
 			p.btn.setAttribute('aria-label', who + ' ' + (portName || '未选择串口') + ' · ' + params + ' · ' + st + ' · 打开菜单')
 			p.btn.title = who + ' · ' + st + ' · 选择串口 / 连接断开 / 串口参数' + (sid === 'S' ? '' : ' / 路标签')
@@ -544,8 +598,18 @@
 			}
 			pending.forEach(function (row) { if (row.isConnected) applyRow(row, f) })
 			pending.clear()
-			updateFilterCount()
+			countLater()
 		})
+		// 计数要数一遍全部历史行：持续收数据时每批都数一遍太贵，最多每 500ms 数一次
+		let countTimer = 0
+		const countLater = function () {
+			if (r.f.empty || countTimer) return
+			countTimer = setTimeout(function () {
+				countTimer = 0
+				if (mounted) updateFilterCount()
+			}, 500)
+		}
+		cleanups.push(function () { clearTimeout(countTimer); countTimer = 0 })
 		logBoxes().forEach(function (box) {
 			observe(box, { childList: true, subtree: true, characterData: true }, function (muts) {
 				for (let i = 0; i < muts.length; i++) {
@@ -734,6 +798,56 @@
 	}
 
 	// ========== 挂载 / 卸载 ==========
+	// ========== 6. 日志缩放(列表与时间线共用) ==========
+	// 控件半透明浮在日志窗右下角，指针移上去或键盘聚焦时才显实，不挡日志；Ctrl/⌘ + 滚轮(触控板双指捏合)也能缩放。
+	// 缩放是给日志容器设 CSS zoom(经 #serial-log-panes 上的变量)，不改行内容，复制、导出、持久化都不受影响
+	const ZOOM_KEY = 'serialLogZoomModern'
+	function mountLogZoom() {
+		const panes = $('serial-log-panes')
+		if (!panes) return
+		const box = hostEl(mk('div', 'mdn-zoom'), panes)
+		box.id = 'mdn-log-zoom'
+		box.setAttribute('role', 'group')
+		box.setAttribute('aria-label', '日志缩放')
+		const out = btn('mdn-zoom-btn', '', '缩小日志')
+		out.appendChild(icon('bi-dash'))
+		out.setAttribute('aria-label', '缩小日志')
+		const val = btn('mdn-zoom-val', '100%', '恢复 100%（也可 Ctrl/⌘ + 滚轮缩放）')
+		const inn = btn('mdn-zoom-btn', '', '放大日志')
+		inn.appendChild(icon('bi-plus'))
+		inn.setAttribute('aria-label', '放大日志')
+		box.append(out, val, inn)
+		let zoom = 1
+		try { zoom = clampZoom(localStorage.getItem(ZOOM_KEY) || 1) } catch (e) {}
+		const apply = function (z) {
+			zoom = clampZoom(z)
+			panes.style.setProperty('--mdn-log-zoom', String(zoom))
+			val.textContent = Math.round(zoom * 100) + '%'
+			val.setAttribute('aria-label', '日志缩放 ' + val.textContent + '，点击恢复 100%')
+			out.disabled = zoom <= ZOOM_MIN
+			inn.disabled = zoom >= ZOOM_MAX
+			try { localStorage.setItem(ZOOM_KEY, String(zoom)) } catch (e) {}
+		}
+		apply(zoom)
+		listen(out, 'click', function () { apply(stepZoom(zoom, -1)) })
+		listen(inn, 'click', function () { apply(stepZoom(zoom, 1)) })
+		listen(val, 'click', function () { apply(1) })
+		// 触控板捏合是一串很小的 deltaY，攒够一格再走一档；鼠标滚轮一格(约 100)直接一档
+		let acc = 0
+		listen(panes, 'wheel', function (e) {
+			if (!(e.ctrlKey || e.metaKey) || !e.deltaY) return
+			e.preventDefault()
+			acc += e.deltaY
+			if (Math.abs(acc) < 40) return
+			apply(stepZoom(zoom, acc < 0 ? 1 : -1))
+			acc = 0
+		}, { passive: false })
+		cleanups.push(function () {
+			panes.style.removeProperty('--mdn-log-zoom')
+			if (!panes.getAttribute('style')) panes.removeAttribute('style')
+		})
+	}
+
 	function mount() {
 		if (mounted) return
 		mounted = true
@@ -741,6 +855,7 @@
 		mountRail()
 		mountConnBar()
 		mountLogBar()
+		mountLogZoom()
 		mountSendBar()
 		if (refs.connbar) refreshConn()
 		restyleTextareas()

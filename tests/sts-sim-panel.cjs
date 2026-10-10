@@ -156,6 +156,8 @@ function makeWorld(options = {}) {
 	let mode = options.mode || 'dual'
 	const labels = { A: '', B: '', ...(options.labels || {}) }
 	let shown = !!options.shown
+	const laneProtos = options.lanes ? { ...options.lanes } : null
+	const laneCalls = []
 	const protocol = {
 		value: options.protocol || 'sek', changes: [],
 		options: ['sek', 'cjt188', 'hostproto'].map(value => ({ value })),
@@ -229,6 +231,10 @@ function makeWorld(options = {}) {
 			isShown: id => id === 'sts-sim' && shown,
 		},
 		SerialHub: { getLabelA: () => labels.A, getLabelB: () => labels.B },
+		serialLanes: laneProtos ? {
+			protocolOf: sid => laneProtos[sid],
+			setProtocol(sid, id) { laneProtos[sid] = id; laneCalls.push(sid + ':' + id) },
+		} : undefined,
 		serialApi: { getMode: () => mode, isSessionOpen: sid => sessions.has(sid) },
 		hostProtoSerialLink(args) {
 			assert.ok(['A', 'B', 'S'].includes(args.sid))
@@ -289,7 +295,7 @@ function makeWorld(options = {}) {
 			status: element.querySelector('.sts-sim-status'),
 		}
 	}
-	return { root, panel, labels, protocol, setShown(value) { shown = value }, storage, writes, clock, engines, factoryCalls, failingSids, startFailures, startAttempts, targetCalls, links, sent, sessions, setMode(value) { mode = value }, saved: key => JSON.parse(storage.get(key) || 'null') }
+	return { root, panel, labels, protocol, laneProtos, laneCalls, setShown(value) { shown = value }, storage, writes, clock, engines, factoryCalls, failingSids, startFailures, startAttempts, targetCalls, links, sent, sessions, setMode(value) { mode = value }, saved: key => JSON.parse(storage.get(key) || 'null') }
 }
 
 function change(input, value) {
@@ -922,6 +928,44 @@ test('opening the panel switches the top protocol to hostproto and closing resto
 	await manual.clock.advance(500)
 	assert.equal(manual.protocol.value, 'cjt188')
 	assert.deepEqual(manual.protocol.changes, ['hostproto'])
+})
+
+test('with per-lane protocols, opening the panel switches every visible lane to hostproto and closing restores each lane', async () => {
+	const world = makeWorld({ mode: 'dual', lanes: { S: 'sek', A: 'cjt188', B: 'sek' } })
+	world.setShown(true)
+	await world.clock.advance(500)
+	assert.deepEqual(world.laneProtos, { S: 'sek', A: 'hostproto', B: 'hostproto' }, 'both dual lanes are parsed as hostproto, single lane untouched')
+	assert.deepEqual(world.protocol.changes, [], 'top select is driven through serialLanes, not directly')
+	await world.clock.advance(1000)
+	assert.equal(world.laneCalls.length, 2, 'no repeated switching while shown')
+	// 面板开着回到单路：新出现的单路也切过去
+	world.setMode('single')
+	await world.clock.advance(500)
+	assert.equal(world.laneProtos.S, 'hostproto')
+	// 用户手动把 B 改走：关闭时不覆盖
+	world.laneProtos.B = 'cjt188'
+	world.setShown(false)
+	await world.clock.advance(500)
+	assert.deepEqual(world.laneProtos, { S: 'sek', A: 'cjt188', B: 'cjt188' })
+	assert.equal(world.storage.has('stsSim.prevProtocol'), false)
+
+	// 面板开着刷新：每路打开前的协议从 localStorage 取回
+	world.setMode('dual')
+	world.setShown(true)
+	await world.clock.advance(500)
+	const refreshed = makeWorld({ mode: 'dual', storage: new Map(world.storage), lanes: { ...world.laneProtos }, shown: true })
+	await refreshed.clock.advance(500)
+	assert.deepEqual(refreshed.laneCalls, [])
+	refreshed.setShown(false)
+	await refreshed.clock.advance(500)
+	assert.deepEqual(refreshed.laneProtos, { S: 'sek', A: 'cjt188', B: 'cjt188' })
+
+	// 升级前存下的单个值按单路恢复
+	const legacy = makeWorld({ mode: 'single', storage: new Map([['stsSim.prevProtocol', JSON.stringify('cjt188')]]), lanes: { S: 'hostproto', A: 'sek', B: 'sek' }, shown: true })
+	await legacy.clock.advance(500)
+	legacy.setShown(false)
+	await legacy.clock.advance(500)
+	assert.equal(legacy.laneProtos.S, 'cjt188')
 })
 
 test('per-session collapse state persists; summary strip expands and scrolls to a panel', async () => {

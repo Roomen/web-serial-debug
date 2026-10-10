@@ -160,6 +160,11 @@
 			manualClose: true,
 			opening: false,
 			reader: null,
+			writer: null,
+			writeTask: null,
+			writeSeq: 0,
+			releaseTask: null,
+			releaseFailed: false,
 			wakeLock: null,
 			packBuf: [],
 			packStartTime: null,
@@ -250,6 +255,8 @@
 			if (window.Workbench) window.Workbench.refreshStatus()
 		},
 
+		isReleaseFailed(sid) { return this._sess(sid).releaseFailed },
+
 		getReader(sid) { return this._sess(sid).reader },
 		setReader(sid, r) { this._sess(sid).reader = r },
 
@@ -305,7 +312,7 @@
 				const sid = all[i]
 				if (sid === exceptSid) continue
 				if (this.getPort(sid) !== port) continue
-				if (this.isOpen(sid) || this.isOpening(sid)) return sid
+				if (this.isOpen(sid) || this.isOpening(sid) || this.isReleaseFailed(sid) || this._sess(sid).releaseTask) return sid
 			}
 			return null
 		},
@@ -315,7 +322,7 @@
 		// Web Serial 不给序列号，同型号只能按 VID/PID 判
 		findRebindSession(port, isLost) {
 			const sids = this.mode === 'single' ? ['S'] : ['A', 'B']
-			const free = sids.filter((sid) => !this.isOpen(sid) && !this.isOpening(sid))
+			const free = sids.filter((sid) => !this.isOpen(sid) && !this.isOpening(sid) && !this.isReleaseFailed(sid) && !this._sess(sid).releaseTask)
 			const usbId = function (p) {
 				try {
 					const info = p.getInfo ? p.getInfo() : {}
@@ -538,6 +545,9 @@
 	// 它要调 switchToDualUI，而 serialLogs 等 const 在后面才初始化，这里同步执行会踩 TDZ
 	//串口循环发送时钟
 	let serialloopSendTimer = null
+	let loopSendBusy = false
+	//循环发送间隔下限：0 或空值会变成浏览器约 4ms 一次的定时器，不能交给 setInterval
+	const LOOP_SEND_MIN_MS = 10
 	//文本解码
 	let textdecoder = new TextDecoder()
 	let currQuickSend = []
@@ -724,6 +734,12 @@
 	const LOG_CACHE_VER = 2
 	let pendingTermRestore = null
 	let persistLogsTimer = 0
+	const LOG_HEX_CHARS_MAX = 12 * 1024 * 1024
+	const logHexStats = new WeakMap() // 日志容器 -> { rows, chars }；行数对不上(清空、恢复缓存)就整段重数
+	const LOG_PERSIST_LEVELS = [null, 4000, 1500, 400]
+	let logPersistLevel = 0
+	const LOG_PERSIST_INTERVAL_MS = 2000
+	const logLayoutPending = new Map() // 日志容器 -> 该容器的日志选项
 	function activeLogOptions() {
 		return SerialHub.mode === 'dual' ? logOptionsDual : logOptionsSingle
 	}
@@ -975,10 +991,19 @@
 		}
 	}
 
+	function disposeSeriesCharts(root) {
+		if (root && typeof window.skDisposeSeriesCharts === 'function') window.skDisposeSeriesCharts(root)
+	}
+
 	function clearCurrentLogs() {
 		const mode = logModeKey()
 		const container = SerialHub.getLogContainer()
-		if (container) container.innerHTML = ''
+		if (container) {
+			rerenderGen++
+			disposeSeriesCharts(container)
+			container.innerHTML = ''
+			logHexStats.delete(container)
+		}
 		if (window.SerialTerm) window.SerialTerm.clear(mode)
 		if (selectedLogRows[mode]) {
 			try { selectedLogRows[mode].classList.remove('selected') } catch (e) {}
@@ -1033,10 +1058,11 @@
 		try { localStorage.setItem('toolOptions', JSON.stringify(toolOptions)) } catch (e) {}
 		return true
 	}
-	// 改某一路的协议：双路下改的正是主发路时走顶栏(各协议模块只在顶栏的 change 里切面板)，否则只改该路并重渲它的解析段
+	// 改某一路的协议：改的正是顶栏代表的那一路(单路的 S、双路的主发路)时走顶栏(各协议模块只在顶栏的 change 里切面板)，否则只改该路并重渲它的解析段
 	function setLaneProtocol(sid, id) {
 		const top = document.getElementById('serial-protocol-select')
-		if (SerialHub.mode === 'dual' && sid === SerialHub.activeSendId && protocolExists(top, id)) {
+		const viaTop = SerialHub.mode === 'dual' ? sid === SerialHub.activeSendId : sid === 'S'
+		if (viaTop && protocolExists(top, id)) {
 			if (top.value !== id) {
 				top.value = id
 				top.dispatchEvent(new Event('change'))
@@ -1742,6 +1768,7 @@
 	function parseProtocolBytes(bytes, note, dir) {
 		if (!bytes || !bytes.length) {
 			renderProtocolHexDump(null)
+			disposeSeriesCharts(document.getElementById('serial-protocol-output'))
 			document.getElementById('serial-protocol-output').innerHTML = ''
 			syncParsePanelEmpty()
 			emitParseFrame(null)
@@ -1767,11 +1794,13 @@
 			const dirCls = dirNorm === 'tx' ? 'sk-parse-down' : dirNorm === 'rx' ? 'sk-parse-up' : ''
 			const wrapOpen = dirCls ? '<div class="sk-parse-block ' + dirCls + '" data-dir="' + dirNorm + '">' : ''
 			const wrapClose = dirCls ? '</div>' : ''
+			disposeSeriesCharts(outEl)
 			outEl.innerHTML = wrapOpen + head + skFormatFrame(r) + wrapClose
 			if (typeof skBindSeriesCharts === 'function') {
 				try { skBindSeriesCharts(outEl) } catch (e) { /* ignore chart bind */ }
 			}
 		} catch (err) {
+			disposeSeriesCharts(document.getElementById('serial-protocol-output'))
 			document.getElementById('serial-protocol-output').innerHTML = '<div class="sk-parse-err">解析异常:' + HTMLEncode(String(err)) + '</div>'
 		}
 		syncParsePanelEmpty()
@@ -2541,6 +2570,7 @@
 	document.getElementById('serial-add-lf').checked = !!toolOptions.addLF
 	document.getElementById('serial-hex-send').checked = toolOptions.hexSend
 	document.getElementById('serial-loop-send').checked = toolOptions.loopSend
+	toolOptions.loopSendTime = normalizeLoopSendTime(toolOptions.loopSendTime)
 	document.getElementById('serial-loop-send-time').value = toolOptions.loopSendTime
 	document.getElementById('serial-send-content').value = toolOptions.sendContent
 	document.getElementById('serial-protocol-hover').checked = toolOptions.skHoverEnable
@@ -3043,7 +3073,9 @@
 		resetLoopSend()
 	})
 	document.getElementById('serial-loop-send-time').addEventListener('change', function (e) {
-		changeOption('loopSendTime', parseInt(this.value))
+		const ms = normalizeLoopSendTime(this.value)
+		this.value = ms
+		changeOption('loopSendTime', ms)
 		resetLoopSend()
 	})
 	document.getElementById('serial-protocol-hover').addEventListener('change', function (e) {
@@ -3128,20 +3160,29 @@
 	}
 
 	//重制发送循环时钟
+	function normalizeLoopSendTime(v) {
+		const ms = parseInt(v, 10)
+		if (isNaN(ms)) return DEFAULT_TOOL_OPTIONS.loopSendTime
+		return Math.min(2147483647, Math.max(LOOP_SEND_MIN_MS, ms))
+	}
 	function resetLoopSend() {
 		clearInterval(serialloopSendTimer)
 		if (toolOptions.loopSend) {
 			//串口没打开时跳过本次，只提示一次，免得每个间隔刷一条错误；连上后自动开始发
 			let warned = false
+			//上一笔还没写完就跳过这一拍：写入器被占着，硬发只会每拍刷一条写入失败
 			serialloopSendTimer = setInterval(() => {
+				const port = SerialHub.getPort(SerialHub.activeSendPhys())
+				if (loopSendBusy || (port && port.writable && port.writable.locked)) return
 				if (!SerialHub.isOpen(SerialHub.activeSendPhys())) {
 					if (!warned) addLogErr('串口未打开，循环发送等待连接中')
 					warned = true
 					return
 				}
 				warned = false
-				send()
-			}, toolOptions.loopSendTime)
+				loopSendBusy = true
+				send({ loop: true }).catch(function (e) { addLogErr('循环发送失败: ' + e.message) }).finally(() => { loopSendBusy = false })
+			}, normalizeLoopSendTime(toolOptions.loopSendTime))
 		}
 	}
 
@@ -3375,7 +3416,7 @@
 				}
 				// 换口前该会话是打开的：换上新口后自动重开，一步完成"换设备"；未打开时只换口不自动开
 				const wasOpen = SerialHub.isOpen(sid)
-				await closeSerial(sid)
+				if (!await closeSerial(sid)) return
 				SerialHub.setPort(sid, port)
 				// 多 CDC 槽位依赖 getPorts 全集：清缓存后重算
 				_portIdentityCache.clear()
@@ -3455,28 +3496,78 @@
 	//释放串口底层资源: 取消并释放 reader、close port(另一会话占用同一 port 对象则跳过)、清分包缓冲/定时器
 	//所有释放路径(手动关闭/读流死/打开前清理/页面销毁)统一走这里, 避免 OS 句柄泄漏导致下次 open 报 NetworkError
 	async function releasePort(sid) {
+		const SERIAL_RELEASE_TIMEOUT_MS = 1500
 		sid = sid || SerialHub.activeSendPhys()
-		++readGenBySid[sid]
-		resetRxWatch(sid)
-		const port = SerialHub.getPort(sid)
-		const r = SerialHub.getReader(sid)
-		SerialHub.setReader(sid, null)
-		// 清理该会话的分包缓冲与合并时钟：关闭后旧口残包不得迟到入日志或与新口数据合并
-		clearTimeout(SerialHub.getPackTimer(sid))
-		SerialHub.setPackTimer(sid, null)
-		SerialHub.setPackBuf(sid, [])
-		SerialHub.takePackGlitch(sid)
-		SerialHub.setPackStartTime(sid, null)
-		SerialHub.setSekWaitStart(sid, null)
-		if (r) {
-			try { await r.cancel() } catch (e) {}
-			try { r.releaseLock() } catch (e) {}
-		}
-		if (port) {
-			// 同一 port 对象可能被另一会话或 BLU 持有，跳过 close 以免关掉对方
-			if (!portHeldByOther(port, sid)) {
-				try { await port.close() } catch (e) {}
+		const session = SerialHub._sess(sid)
+		// 超时只结束界面等待，不会取消驱动操作；重试必须等同一释放任务，避免迟到的 close 关掉新连接。
+		if (!session.releaseTask) {
+			++readGenBySid[sid]
+			session.writeSeq = (session.writeSeq || 0) + 1
+			resetRxWatch(sid)
+			const port = SerialHub.getPort(sid)
+			const closePort = port && !portHeldByOther(port, sid)
+			const r = SerialHub.getReader(sid)
+			const writer = session.writer
+			const writeTask = session.writeTask
+			SerialHub.setReader(sid, null)
+			clearTimeout(SerialHub.getPackTimer(sid))
+			SerialHub.setPackTimer(sid, null)
+			// 已到达的残包在关闭边界强制输出，半帧也保留原字节，不能再等新口补齐。
+			const pack = SerialHub.getPackBuf(sid).slice()
+			const startTime = SerialHub.getPackStartTime(sid)
+			const glitch = SerialHub.takePackGlitch(sid)
+			SerialHub.setPackBuf(sid, [])
+			try {
+				if (pack.length) flushSerialPack(pack, startTime, sid, glitch)
+			} catch (e) {
+				addLogErrSafe('关闭时记录残包失败', sid)
 			}
+			SerialHub.setPackStartTime(sid, null)
+			SerialHub.setSekWaitStart(sid, null)
+			const task = (async function () {
+				// 读写同时取消，不能让卡住的写入阻止 reader 解锁。
+				const cancelRead = (async function () {
+					if (!r) return
+					let cancelled
+					try { cancelled = r.cancel() } catch (e) {}
+					try { r.releaseLock() } catch (e) {}
+					try { await cancelled } catch (e) {}
+				})()
+				// abort 可能要等在飞的 write 返回；保留任务和锁直到写入 finally 真正完成。
+				if (writer) {
+					try { await writer.abort() } catch (e) {}
+					if (writeTask) {
+						try { await writeTask } catch (e) {}
+					}
+				}
+				await cancelRead
+				if (closePort) {
+					// 已关闭的 Web Serial 口没有流，不再调用 close 触发 InvalidStateError。
+					if (port.readable !== null || port.writable !== null) await port.close()
+				}
+			})()
+			session.releaseTask = task
+			const clearTask = () => {
+				if (session.releaseTask === task) session.releaseTask = null
+			}
+			task.then(clearTask, clearTask)
+		}
+		let timer
+		try {
+			await Promise.race([
+				session.releaseTask,
+				new Promise((resolve, reject) => {
+					timer = setTimeout(() => reject(new Error('release timeout')), SERIAL_RELEASE_TIMEOUT_MS)
+				})
+			])
+			session.releaseFailed = false
+			return true
+		} catch (e) {
+			session.releaseFailed = true
+			addLogErr('串口关闭失败或超时：端口尚未确认释放，请重试关闭；仍失败时重新插拔设备', sid)
+			return false
+		} finally {
+			clearTimeout(timer)
 		}
 	}
 
@@ -3519,8 +3610,14 @@
 		sid = sid || SerialHub.activeSendPhys()
 		// 先置未打开再释放: readData 被 cancel 的异常不会当成断线噪声
 		SerialHub.setOpen(sid, false)
-		await releasePort(sid)
+		const released = await releasePort(sid)
 		releaseWakeLock(sid)
+		if (!released) {
+			SerialHub.setOpen(sid, false)
+			serialStatuChange('close-failed', sid)
+			updateOpenButton(sid)
+			return false
+		}
 		//仅手动关闭时清掉"想打开"标记；异常断开保留，刷新后仍可重连
 		if (SerialHub.isManualClose(sid)) {
 			setSerialWantOpen(false, sid)
@@ -3535,6 +3632,7 @@
 				showToast('单路串口已断开，主发口已切到 A', 2500)
 			}
 		}
+		return true
 	}
 
 	//打开串口
@@ -3549,7 +3647,7 @@
 		opts = opts || {}
 		const reason = opts.reason || 'user'
 		const port = SerialHub.getPort(sid)
-		if (SerialHub.isOpen(sid)) return true
+		if (SerialHub.isOpen(sid) && !SerialHub._sess(sid).releaseFailed) return true
 		if (!port) return false
 		if (isBluetoothSerialPort(port)) {
 			addLogErr('不支持蓝牙串口，请选择 USB 串口', sid)
@@ -3573,8 +3671,13 @@
 		} else {
 			SerialOptions = Object.assign({}, laneOptions[sid])
 		}
-		//打开前先释放本会话残留句柄(读流死/异常断开的脏状态), 忽略 close 失败
-		await releasePort(sid)
+		//打开前必须确认旧口已释放；关闭超时后不能并发 open。
+		if (!await releasePort(sid)) {
+			SerialHub.setOpen(sid, false)
+			serialStatuChange('close-failed', sid)
+			updateOpenButton(sid)
+			return false
+		}
 		serialStatuChange('connecting', sid)
 		let openError = null
 		try {
@@ -3686,7 +3789,11 @@
 		if (!hasPort) return
 		const label = SerialHub.getSessionLabel(sid)
 		const prefix = label ? label + ' · ' : ''
-		if (open) {
+		if (SerialHub.isReleaseFailed(sid)) {
+			btn.innerHTML = '<i class="bi bi-power"></i>'
+			btn.title = '重试关闭'
+			btn.setAttribute('aria-label', prefix + '重试关闭串口')
+		} else if (open) {
 			btn.innerHTML = '<i class="bi bi-power"></i>'
 			btn.title = '断开'
 			btn.setAttribute('aria-label', prefix + '断开串口')
@@ -3707,7 +3814,7 @@
 			await selectPortFor(sid, { openAfterSelect: true })
 			return
 		}
-		if (SerialHub.isOpen(sid)) {
+		if (SerialHub.isOpen(sid) || SerialHub._sess(sid).releaseFailed) {
 			SerialHub.setManualClose(sid, true)
 			SerialHub.setOpening(sid, true)
 			try {
@@ -3835,7 +3942,7 @@
 			return 'BLU'
 		}
 		// 关闭后仍保留 session.port 是有意的: 芯片继续显示上次设备, 点打开即可重连。
-		// 所以这里必须按"是否真的开着"判, 不能按归属判。
+		// 已打开或尚未确认释放的口都仍被占用，不能只按设备归属判。
 		return SerialHub.busyOwnerOfPort(port, exceptSid)
 	}
 
@@ -3851,7 +3958,7 @@
 		const all = SerialHub.allPhys()
 		for (let i = 0; i < all.length; i++) {
 			if (all[i] === exceptSid) continue
-			if (SerialHub.getPort(all[i]) === port && SerialHub.isOpen(all[i])) return true
+			if (SerialHub.getPort(all[i]) === port && (SerialHub.isOpen(all[i]) || SerialHub.isReleaseFailed(all[i]) || SerialHub._sess(all[i]).releaseTask)) return true
 		}
 		if (window.bluApi && typeof window.bluApi.ownsPort === 'function' &&
 			window.bluApi.ownsPort(port) && window.bluApi.isOpen()) {
@@ -4304,9 +4411,13 @@
 		else containerId = 'serial-status'
 		var el = document.getElementById(containerId)
 		if (!el) return
-		// 三态: true=已连接 / 'connecting'=正在连接… / false=未连接
+		if (SerialHub.isReleaseFailed(sid)) statu = 'close-failed'
+		// 连接、连接中、未连接、关闭失败四态
 		let stateClass, stateText
-		if (statu === 'connecting') {
+		if (statu === 'close-failed') {
+			stateClass = 'disconnected'
+			stateText = '关闭失败，请重试'
+		} else if (statu === 'connecting') {
 			stateClass = 'connecting'
 			stateText = '正在连接…'
 		} else if (statu) {
@@ -4323,14 +4434,19 @@
 		}
 	}
 	//串口数据收发
-	async function send() {
+	//opts.loop: 循环发送的一拍。内容为空只提示一次；发送历史只在内容变了时记，不每拍读写 localStorage
+	let loopSendLast = null
+	async function send(opts) {
+		const loop = !!(opts && opts.loop)
 		let content = document.getElementById('serial-send-content').value
 		if (!content) {
-			addLogErr('发送内容为空')
+			if (!loop || loopSendLast !== '') addLogErr('发送内容为空')
+			if (loop) loopSendLast = ''
 			return
 		}
 		const sendName = lookupQuickSendName(content)
-		pushSendHistory(content)
+		if (!loop || loopSendLast !== content) pushSendHistory(content)
+		loopSendLast = loop ? content : null
 		if (toolOptions.hexSend) {
 			await sendHex(content, sendName)
 		} else {
@@ -4377,9 +4493,17 @@
 			if (sid === 'S') showToast('单路串口未打开，请切回单路模式连接后再切回双路', 2500)
 			return
 		}
+		const session = SerialHub._sess(sid)
+		if (session.releaseFailed || session.releaseTask) {
+			if (opts.throwOnError) throw new Error('串口尚未确认释放')
+			addLogErr('串口尚未确认释放，请先重试关闭', sid)
+			return
+		}
+		const gen = session.writeSeq || 0
 		let writer
 		try {
 			writer = port.writable.getWriter()
+			session.writer = writer
 			if (!opts.raw && (toolOptions.addCR || toolOptions.addLF)) {
 				const eol = []
 				if (toolOptions.addCR) eol.push(0x0d)
@@ -4388,7 +4512,12 @@
 			}
 			flushPendingRx(sid)
 			const sendTime = new Date()
-			await writer.write(data)
+			session.writeTask = writer.write(data)
+			await session.writeTask
+			if ((session.writeSeq || 0) !== gen) {
+				if (opts.throwOnError) throw new Error('串口写入已取消')
+				return
+			}
 			SerialHub._sess(sid).txBytes += data.length
 			const shown = opts.logData ? Uint8Array.from(opts.logData) : data
 			addLog(shown, false, sendTime, sid, false, sendName)
@@ -4400,6 +4529,10 @@
 		} finally {
 			if (writer) {
 				try { writer.releaseLock() } catch (e) {}
+				if (session.writer === writer) {
+					session.writer = null
+					session.writeTask = null
+				}
 			}
 		}
 	}
@@ -4413,11 +4546,20 @@
 			if (sid === 'S') showToast('单路串口未打开，请切回单路模式连接后再切回双路', 2500)
 			return
 		}
+		const session = SerialHub._sess(sid)
+		if (session.releaseFailed || session.releaseTask) {
+			addLogErr('串口尚未确认释放，请先重试关闭', sid)
+			return
+		}
+		const gen = session.writeSeq || 0
 		let writer
 		try {
 			writer = port.writable.getWriter()
+			session.writer = writer
 			const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
-			await writer.write(u8)
+			session.writeTask = writer.write(u8)
+			await session.writeTask
+			if ((session.writeSeq || 0) !== gen) return
 			SerialHub._sess(sid).txBytes += u8.length
 		} catch (error) {
 			const errorType = error.name || 'UnknownError'
@@ -4426,6 +4568,10 @@
 		} finally {
 			if (writer) {
 				try { writer.releaseLock() } catch (e) {}
+				if (session.writer === writer) {
+					session.writer = null
+					session.writeTask = null
+				}
 			}
 		}
 	}
@@ -4512,7 +4658,11 @@
 			SerialHub.setOpen(sid, false)
 			serialStatuChange(false, sid)
 			updateOpenButton(sid)
-			await releasePort(sid)
+			if (!await releasePort(sid)) {
+				serialStatuChange('close-failed', sid)
+				updateOpenButton(sid)
+				return
+			}
 			if (reasonMsg && !SerialHub.isManualClose(sid)) addLogErr(reasonMsg, sid)
 		} finally {
 			SerialHub.setOpening(sid, false)
@@ -4580,7 +4730,11 @@
 			updateOpenButton(sid)
 			const releasing = releasePort(sid)
 			const gen = readGenBySid[sid]
-			await releasing
+			if (!await releasing) {
+				serialStatuChange('close-failed', sid)
+				updateOpenButton(sid)
+				return false
+			}
 			if (SerialHub.isManualClose(sid) || readGenBySid[sid] !== gen || SerialHub.getPort(sid) !== port) return false
 			return await openSerial(sid, { reason: 'receive-rebuild' })
 		} catch (error) {
@@ -5087,18 +5241,39 @@
 		},
 	}
 	var ansi_up = new AnsiUp()
-	//日志行裁剪:超过 maxLogRows 时从顶部批量删除,并保持非自动滚动时的视觉位置不跳
+	//行数之外再按数据量裁剪：单行可以是最多 64KB 的合并包，正文 HEX 与 data-hex 属性各存一份，只限行数时 DOM 能涨到几个 GB。
+	//按 data-hex 的字符数计(约 3 个字符一个字节)，上限约 4 MiB 原始数据，日常的短帧、文本行远到不了
+	function rowHexChars(row) {
+		const h = row.getAttribute && row.getAttribute('data-hex')
+		return h ? h.length : 0
+	}
+	function logHexStat(container) {
+		let st = logHexStats.get(container)
+		if (!st || st.rows !== container.childElementCount) {
+			st = { rows: container.childElementCount, chars: 0 }
+			for (let n = container.firstElementChild; n; n = n.nextElementSibling) st.chars += rowHexChars(n)
+			logHexStats.set(container, st)
+		}
+		return st
+	}
+	//日志行裁剪:超过 maxLogRows 或数据量上限时从顶部批量删除(至少留一行),并保持非自动滚动时的视觉位置不跳
 	function trimLogRows(container, maxRows, autoScroll) {
 		container = container || SerialHub.getLogContainer()
 		if (!container) return
 		const max = parseInt(maxRows != null ? maxRows : toolOptions.maxLogRows, 10)
 		if (!max || max < 1) return
+		const st = logHexStat(container)
 		let over = container.childElementCount - max
-		if (over <= 0) return
+		if (over <= 0 && st.chars <= LOG_HEX_CHARS_MAX) return
 		const beforeTop = container.scrollTop
 		const beforeHeight = container.scrollHeight
-		while (over-- > 0 && container.firstElementChild) {
-			container.removeChild(container.firstElementChild)
+		while (container.childElementCount > 1 && (over > 0 || st.chars > LOG_HEX_CHARS_MAX)) {
+			const n = container.firstElementChild
+			st.chars -= rowHexChars(n)
+			st.rows--
+			disposeSeriesCharts(n)
+			container.removeChild(n)
+			over--
 		}
 		const stick = autoScroll != null ? autoScroll : toolOptions.autoScroll
 		if (stick) return
@@ -5144,24 +5319,35 @@
 		}
 		return payload
 	}
+	// 超限时逐档降级,别一步掉到几百行: 默认上限提到 10000 后整份快照经常刚好压线。
+	// 记住上次写成功的那一档，下次从它开始，免得每次都先把整份序列化一遍再被配额拒绝；行数回落到上一档以内再从头试
+	function logRowsTotal() {
+		let n = 0
+		;['serial-logs-single', 'serial-logs-dual'].forEach(function (id) {
+			const el = document.getElementById(id)
+			if (el) n = Math.max(n, el.childElementCount)
+		})
+		return n
+	}
 	function persistLogsNow() {
-		try {
-			sessionStorage.setItem(LOG_CACHE_KEY, JSON.stringify(collectLogCache()))
-			return
-		} catch (e) {}
-		// 超限时逐档降级,别一步掉到几百行: 默认上限提到 10000 后整份快照经常刚好压线
-		const fallbacks = [4000, 1500, 400]
-		for (let i = 0; i < fallbacks.length; i++) {
+		clearTimeout(persistLogsTimer)
+		persistLogsTimer = 0
+		if (logPersistLevel > 0 && logRowsTotal() <= LOG_PERSIST_LEVELS[logPersistLevel]) logPersistLevel = 0
+		for (let i = logPersistLevel; i < LOG_PERSIST_LEVELS.length; i++) {
 			try {
-				sessionStorage.setItem(LOG_CACHE_KEY, JSON.stringify(collectLogCache(fallbacks[i])))
+				const max = LOG_PERSIST_LEVELS[i]
+				sessionStorage.setItem(LOG_CACHE_KEY, JSON.stringify(max == null ? collectLogCache() : collectLogCache(max)))
+				logPersistLevel = i
 				return
-			} catch (e2) {}
+			} catch (e) {}
 		}
 		try { sessionStorage.removeItem(LOG_CACHE_KEY) } catch (e3) {}
 	}
+	// 节流而不是防抖：整份快照要序列化上万行，设备每隔几百毫秒发一行时防抖等于每行都写一次；
+	// 刷新页面靠 pagehide 里的 persistLogsNow 补最后一段
 	function schedulePersistLogs() {
-		clearTimeout(persistLogsTimer)
-		persistLogsTimer = setTimeout(persistLogsNow, 250)
+		if (persistLogsTimer) return
+		persistLogsTimer = setTimeout(persistLogsNow, LOG_PERSIST_INTERVAL_MS)
 	}
 	function applyPendingTerm(mode) {
 		if (!pendingTermRestore || !window.SerialTerm) return
@@ -5246,11 +5432,24 @@
 		} else {
 			container.appendChild(node)
 		}
-		trimLogRows(container, opts.maxLogRows, opts.autoScroll)
-		if (opts.autoScroll) {
-			container.scrollTop = container.scrollHeight - container.clientHeight
+		const st = logHexStats.get(container)
+		if (st && st.rows === container.childElementCount - 1) {
+			st.rows++
+			st.chars += rowHexChars(node)
 		}
+		if (!logLayoutPending.size) queueMicrotask(flushLogLayout)
+		logLayoutPending.set(container, opts)
 		schedulePersistLogs()
+	}
+	//同一批数据切出的多行只做一次裁剪和滚到底：逐行读写 scrollTop/scrollHeight 每一行都要强制同步布局
+	function flushLogLayout() {
+		logLayoutPending.forEach(function (opts, container) {
+			trimLogRows(container, opts.maxLogRows, opts.autoScroll)
+			if (opts.autoScroll) {
+				container.scrollTop = container.scrollHeight - container.clientHeight
+			}
+		})
+		logLayoutPending.clear()
 	}
 	//字节数组转16进制字符串数组(补0),行日志正文渲染和 data-hex 属性共用
 	function bytesToHexArr(data) {
@@ -5432,8 +5631,8 @@
 	function rerenderLogBodies(container, logType) {
 		if (!container) return
 		// term 不是行日志格式,渲染出来会是空正文,会把历史行洗白,必须挡在这里
-		if (!isRowLogType(logType)) return
 		const gen = ++rerenderGen
+		if (!isRowLogType(logType)) return
 		const fmt = parseLogType(logType)
 		// ansi_up 与 SEK 会话(基准水量/设备号)都是流式状态。重渲从头重放整段历史，必须从干净状态起步，
 		// 否则会拿上一次渲染的末态当起点(把染色点之前的行也染上色)。分批重放时批次之间会有实时收数，
@@ -5462,6 +5661,7 @@
 			if (!bytes.length) return
 			const body = row.querySelector('.log-body')
 			if (!body) return
+			if (typeof window.skDisposeSeriesCharts === 'function') window.skDisposeSeriesCharts(body)
 			body.innerHTML = renderLogBody(bytes, logType, {
 				isReceive: row.getAttribute('data-dir') === 'rx',
 				noParse: row.getAttribute('data-noparse') === '1',
@@ -5497,16 +5697,16 @@
 				const st = replayOf(sid)
 				const sessOk = sessionResetSeq[sid] === resetSeqAtStart[sid]
 				if (sid === 'S') {
-					if (fmt.ansi) ansi_up = st.ansi
+					if (fmt.ansi && sessOk) ansi_up = st.ansi
 					if (g && sessOk) g.restore(st.sess || freshSessSnap(g))
 					return
 				}
 				const live = laneLiveState(sid)
-				if (fmt.ansi) live.ansi = st.ansi
+				if (fmt.ansi && sessOk) live.ansi = st.ansi
 				if (sessOk) live.sess = st.sess
 			})
 		}
-		if (!fmt.parse || rows.length <= PARSE_RERENDER_SYNC_ROWS) {
+		if (rows.length <= PARSE_RERENDER_SYNC_ROWS) {
 			renderSlice(0, rows.length)
 			finish()
 			if (fmt.parse) pinBottom()
@@ -6173,7 +6373,8 @@
 		if (clearBtn) {
 			clearBtn.addEventListener('click', function (e) {
 				e.stopPropagation()
-				document.getElementById('serial-protocol-output').innerHTML = ''
+				disposeSeriesCharts(document.getElementById('serial-protocol-output'))
+			document.getElementById('serial-protocol-output').innerHTML = ''
 				if (typeof renderProtocolHexDump === 'function') renderProtocolHexDump(null)
 				syncParsePanelEmpty()
 				emitParseFrame(null)
@@ -6393,7 +6594,8 @@
 			showToast('事务进行中，暂不能切换串口模式', 2000)
 			return
 		}
-		switchToSingleUI().catch(function () {})
+		if (isModernLayout()) removeLaneB().catch(function () {})
+		else switchToSingleUI().catch(function () {})
 	})
 	document.getElementById('serial-mode-dual').addEventListener('click', function () {
 		if (SerialHub.mode === 'dual') return
@@ -6401,8 +6603,136 @@
 			showToast('事务进行中，暂不能切换串口模式', 2000)
 			return
 		}
-		switchToDualUI()
+		if (isModernLayout()) addLaneB().catch(function () {})
+		else switchToDualUI()
 	})
+
+	// 现代布局的连接栏是「在第一路旁边再加一路」：进双路时单路(S)的口、参数、协议、连接状态整体交给 A，
+	// 移除 B 路时 A 原样交回单路、B 关闭(仍记着口)。经典布局仍是单/双两套会话切换、隐藏的一套在后台开着
+	function isModernLayout() {
+		return document.documentElement.getAttribute('data-layout') === 'modern'
+	}
+	let laneMoving = false
+	// 把 from 这一路的口交给 to：from 开着就先关，再清空 from 的口与重连意图，免得两路记着同一台设备。返回 from 原来是否开着
+	async function handOverPort(from, to) {
+		const port = SerialHub.getPort(from)
+		if (!port) return { moved: false, wasOpen: false }
+		const wasOpen = SerialHub.isOpen(from)
+		if (SerialHub.getPort(to) && SerialHub.getPort(to) !== port && (SerialHub.isOpen(to) || SerialHub.isReleaseFailed(to) || SerialHub._sess(to).releaseTask)) {
+			SerialHub.setManualClose(to, true)
+			if (!await closeSerial(to)) throw new Error('目标串口未释放，无法移交')
+		}
+		if (wasOpen || SerialHub.isReleaseFailed(from) || SerialHub._sess(from).releaseTask) {
+			SerialHub.setManualClose(from, true)
+			SerialHub.setOpening(from, true)
+			try {
+				if (!await closeSerial(from)) throw new Error('源串口未释放，无法移交')
+			} finally {
+				SerialHub.setOpening(from, false)
+			}
+		}
+		SerialHub.setPort(from, null)
+		setSerialWantOpen(false, from)
+		setSerialWantPortKey(from, null)
+		SerialHub.setPort(to, port)
+		return { moved: true, wasOpen: wasOpen }
+	}
+	async function reopenHandedOver(sid) {
+		await new Promise(function (resolve) { setTimeout(resolve, 100) })
+		SerialHub.setOpening(sid, true)
+		try {
+			await openSerial(sid)
+		} finally {
+			SerialHub.setOpening(sid, false)
+		}
+	}
+	function laneBusyMsg() {
+		if (laneMoving) return '正在切换串口，请稍候'
+		if (window.serialApi && window.serialApi.isPinned()) return '事务进行中，暂不能增减串口'
+		if (['S', 'A', 'B'].some(function (sid) { return SerialHub.isOpening(sid) })) return '串口正在连接，请稍后再试'
+		return ''
+	}
+	// opts.beforeOpen：A 重新打开之前调用(套用双路预设用，让 A 直接按预设参数打开，不必再重连一次)
+	async function addLaneB(opts) {
+		opts = opts || {}
+		if (SerialHub.mode === 'dual') return false
+		const busy = laneBusyMsg()
+		if (busy) {
+			showToast(busy, 2000)
+			return false
+		}
+		laneMoving = true
+		try {
+			const sOpts = DualCfg.normalizeOptions(collectSerialParamsFromUI())
+			const sProto = window._activeProtocol
+			const hadA = !!SerialHub.getPort('A')
+			const hand = await handOverPort('S', 'A')
+			// 配置跟着口走；单路没选口而 A 还记着设备时不动 A，免得设备与参数对不上
+			const carry = hand.moved || !hadA
+			if (carry) {
+				laneOptions.A = sOpts
+				persistLaneOptions()
+			}
+			if (!laneProtocols) laneProtocols = DualCfg.migrateLaneProtocols(lsGet(LANE_PROTOCOLS_KEY), sProto)
+			const before = laneProtocols.A + '|' + laneProtocols.B
+			// 新加的 B 路默认用第一路的协议：同一场景下两路通常是同类设备，不同时由每路的协议键或预设改
+			if (carry) laneProtocols.A = sProto
+			laneProtocols.B = laneProtocols.A
+			persistLaneProtocols()
+			SerialHub.activeSendId = 'A'
+			setActiveSendUI('A')
+			try { sessionStorage.setItem('serialActiveSendId', 'A') } catch (e) {}
+			paramsTarget = 'A'
+			switchToDualUI()
+			if (laneProtocols.A + '|' + laneProtocols.B !== before) rerenderParseRows()
+			if (opts.beforeOpen) await opts.beforeOpen()
+			if (hand.wasOpen) await reopenHandedOver('A')
+			else updateOpenButton('A')
+			notifyLaneConfig()
+			if (hand.moved) showToast('已加 B 路：原串口作为 A 路继续使用', 2200)
+			return true
+		} finally {
+			laneMoving = false
+		}
+	}
+	async function removeLaneB() {
+		if (SerialHub.mode !== 'dual') return false
+		const busy = laneBusyMsg()
+		if (busy) {
+			showToast(busy, 2000)
+			return false
+		}
+		laneMoving = true
+		try {
+			// 不再留一个界面上看不到的口开着：B 关闭，仍记着设备，下次加 B 路点一下就能连上
+			if (SerialHub.isOpen('B') || SerialHub.isReleaseFailed('B') || SerialHub._sess('B').releaseTask) {
+				SerialHub.setManualClose('B', true)
+				SerialHub.setOpening('B', true)
+				try {
+					if (!await closeSerial('B')) return false
+				} finally {
+					SerialHub.setOpening('B', false)
+				}
+			}
+			const aOpts = DualCfg.normalizeOptions(laneOptions.A)
+			const aProto = protocolIdForSid('A')
+			const hadS = !!SerialHub.getPort('S')
+			const hand = await handOverPort('A', 'S')
+			updatePortButtonDisplay('A', null)
+			updateOpenButton('A')
+			if (hand.moved || !hadS) {
+				try { localStorage.setItem(SERIAL_OPTIONS_KEY, JSON.stringify(aOpts)) } catch (e) {}
+				writeLaneProtocol('S', aProto)
+			}
+			// 回到单路后顶栏还给单路协议(syncTopProtocol 读 singleProtocolId)
+			await switchToSingleUI()
+			if (hand.wasOpen) await reopenHandedOver('S')
+			else updateOpenButton('S')
+			return true
+		} finally {
+			laneMoving = false
+		}
+	}
 
 	// 双路：会话 A 端口选择
 	const dualSelectPortA = document.getElementById('serial-select-port-a')
@@ -6603,7 +6933,74 @@
 			applyingPreset = false
 		}
 	}
+	// 某一路当前的参数与协议(单路预设的保存、匹配与套用用)。单路下参数以下拉框为准，打开串口读的也是它
+	function laneSnapshot(sid) {
+		if (sid === 'A' || sid === 'B') return dualSnapshot()[sid]
+		return {
+			options: DualCfg.normalizeOptions(SerialHub.mode === 'single' ? collectSerialParamsFromUI() : readSerialOptions(SERIAL_OPTIONS_KEY)),
+			protocol: protocolIdForSid('S'),
+			label: '',
+		}
+	}
+	// 单路预设套给哪一路：单路是 S，双路是主发路
+	function singlePresetTarget() {
+		return SerialHub.mode === 'dual' ? SerialHub.activeSendId : 'S'
+	}
+	async function applySingleConfig(preset) {
+		if (applyingPreset) return { ok: false }
+		if (window.serialApi && window.serialApi.isPinned()) {
+			showToast('事务进行中，暂不能套用预设', 2000)
+			return { ok: false }
+		}
+		const sid = singlePresetTarget()
+		const plan = DualCfg.planApply(preset, { S: laneSnapshot(sid) }, function (id) { return !!window._protocols[id] })
+		const p = plan.lanes.S
+		applyingPreset = true
+		try {
+			const opts = DualCfg.normalizeOptions(p.options)
+			if (sid === 'S') {
+				try { localStorage.setItem(SERIAL_OPTIONS_KEY, JSON.stringify(opts)) } catch (e) {}
+			} else {
+				laneOptions[sid] = opts
+				persistLaneOptions()
+			}
+			setLaneProtocol(sid, p.protocol)
+			applySerialParamsToUI()
+			notifyLaneConfig()
+			const reopen = p.optionsChanged && SerialHub.isOpen(sid) && !SerialHub.isOpening(sid)
+			let msg = '已套用预设「' + (preset && preset.name ? preset.name : '') + '」' + (SerialHub.mode === 'dual' ? '到' + sidName(sid) : '')
+			if (reopen) msg += '：按新参数重新连接'
+			if (plan.unknownProtocols.length) msg += '；未识别的协议 ' + plan.unknownProtocols.join('、') + ' 保留原协议'
+			showToast(msg, 2600)
+			if (reopen) await reopenWithNewParams(sid)
+			return { ok: true, reopened: reopen ? [sid] : [], unknownProtocols: plan.unknownProtocols }
+		} finally {
+			applyingPreset = false
+		}
+	}
+	// 套用预设：单路预设套给单路(双路下套给主发路)；双路预设在单路下先进入双路再套用，
+	// 现代布局按「加 B 路」交接，A 在重新打开前就换成预设参数，不必连两次
+	async function applySerialPreset(preset) {
+		if (DualCfg.isSinglePreset(preset)) return applySingleConfig(preset)
+		if (SerialHub.mode === 'dual') return applyDualConfig(preset)
+		if (window.serialApi && window.serialApi.isPinned()) {
+			showToast('事务进行中，暂不能套用预设', 2000)
+			return { ok: false }
+		}
+		if (!isModernLayout()) {
+			switchToDualUI()
+			return applyDualConfig(preset)
+		}
+		let res = { ok: false }
+		await addLaneB({ beforeOpen: async function () { res = await applyDualConfig(preset) } })
+		return res
+	}
 	window.serialLanes = {
+		mode: function () { return SerialHub.mode },
+		singleTarget: singlePresetTarget,
+		laneSnapshot: laneSnapshot,
+		addLaneB: addLaneB,
+		removeLaneB: removeLaneB,
 		protocolOf: protocolIdForSid,
 		protocolName: protocolName,
 		setProtocol: setLaneProtocol,
@@ -6614,7 +7011,7 @@
 		getParamsTarget: function () { return paramsTarget },
 		setParamsTarget: setParamsTarget,
 		snapshot: dualSnapshot,
-		apply: applyDualConfig,
+		apply: applySerialPreset,
 		toast: function (msg, kind) { showToast(msg, null, kind) },
 	}
 
@@ -6637,7 +7034,7 @@
 	async function forgetPort(sid) {
 		sid = SerialHub.uiSid(sid)
 		if (SerialHub.isOpen(sid) || SerialHub.isOpening(sid)) return
-		await closeSerial(sid)
+		if (!await closeSerial(sid)) return
 		SerialHub.setPort(sid, null)
 		SerialHub.setManualClose(sid, true)
 		setSerialWantOpen(false, sid)

@@ -480,9 +480,16 @@
 		hits = []
 		if (w < 8 || h < 8) return
 		const dpr = window.devicePixelRatio || 1
-		canvas.width = Math.round(w * dpr)
-		canvas.height = Math.round(h * dpr)
+		const cw = Math.round(w * dpr)
+		const chh = Math.round(h * dpr)
 		const ctx = canvas.getContext('2d')
+		// 尺寸没变时用 reset() 清空复位，不重新分配画布(随波形每帧重画)
+		if (canvas.width !== cw || canvas.height !== chh || typeof ctx.reset !== 'function') {
+			canvas.width = cw
+			canvas.height = chh
+		} else {
+			ctx.reset()
+		}
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
 		const bg = cssVar(wrap, '--bg-surface', '#ffffff')

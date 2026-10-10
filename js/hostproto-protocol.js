@@ -122,6 +122,39 @@
 		for (let i = 0; i < 8; i++) { out[i] = Number(x & 0xffn); x >>= 8n }
 		return out
 	}
+	// 外层地址固定 8B 小端 BCD，容纳 16 位十进制；每字节高半字节在前。
+	// 解码为 BigInt，前导零不参与位数判断；应用层表号仍由 DRN 算术提取。
+	function bcdAddress(p, o = 0) {
+		if (o < 0 || p.length < o + 8) return null
+		let digits = ''
+		for (let i = 7; i >= 0; i--) {
+			const b = p[o + i]
+			if ((b >> 4) > 9 || (b & 15) > 9) return null
+			digits += String(b >> 4) + String(b & 15)
+		}
+		return BigInt(digits)
+	}
+	function bcdAddressBytes(v) {
+		if (typeof v === 'number' && !Number.isSafeInteger(v)) throw new Error('地址超出安全整数范围，请使用十进制字符串或 BigInt')
+		const s = String(v)
+		if (!/^\d{1,16}$/.test(s)) throw new Error('地址需为 16 位以内十进制（8 字节小端 BCD）')
+		const digits = s.padStart(16, '0')
+		const out = new Uint8Array(8)
+		for (let i = 0; i < 8; i++) out[i] = Number(digits[14 - i * 2]) * 16 + Number(digits[15 - i * 2])
+		return out
+	}
+	// DRN 展示：标准 DRN 为 11 或 13 位十进制，解码成 BigInt 后厂商码的前导 0 会丢
+	// （10 位 → 11 位补 0，12 位 → 13 位补 0）；台架短地址（≤8 位）与超长值原样展示
+	function drnText(v) {
+		const s = String(v)
+		if (s.length === 10) return '0' + s
+		if (s.length === 12) return '0' + s
+		return s
+	}
+	function bcdAddressText(p, o = 0) {
+		const v = bcdAddress(p, o)
+		return v == null ? '(非法 BCD: ' + hexSpaced(p.subarray(o, o + 8)) + ')' : drnText(v)
+	}
 	function hexToBytes(s) {
 		const str = String(s || '').replace(/[\s:,]/g, '')
 		if (str.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(str)) return null
@@ -221,7 +254,7 @@
 
 	// ===== 载荷构造 / 解码 =====
 	function woInitPayload(role, addr) {
-		const a = u64Bytes(addr)
+		const a = bcdAddressBytes(addr)
 		const p = new Uint8Array(9)
 		p[0] = role
 		p.set(a, 1)
@@ -229,7 +262,7 @@
 	}
 	function wakePayload(dst, reason) {
 		const p = new Uint8Array(9)
-		p.set(u64Bytes(dst), 0)
+		p.set(bcdAddressBytes(dst), 0)
 		p[8] = reason
 		return p
 	}
@@ -254,17 +287,20 @@
 	function devIdSetPayload(devType, drn) {
 		const p = new Uint8Array(9)
 		p[0] = devType
-		p.set(u64Bytes(drn), 1)
+		p.set(bcdAddressBytes(drn), 1)
 		return p
 	}
 	function decodeDevId(p) {
 		if (p.length !== 9) return null
-		return { devType: p[0], drn: u64(p, 1) }
+		const drn = bcdAddress(p, 1)
+		return drn == null ? null : { devType: p[0], drn: drn }
 	}
-	// 2B [role][state]，标准出货固件 10B 再附 localAddr u64（WOR_INIT 生效的运行地址），按长度兼容
+	// 2B [role][state]，标准出货固件 10B 再附 localAddr BCD LE（WOR_INIT 生效的运行地址），按长度兼容
 	function decodeWorStatus(p) {
 		if (p.length < 2) return null
-		return { role: p[0], state: p[1], localAddr: p.length >= 10 ? u64(p, 2) : null }
+		const localAddr = p.length >= 10 ? bcdAddress(p, 2) : null
+		if (p.length >= 10 && localAddr == null) return null
+		return { role: p[0], state: p[1], localAddr: localAddr }
 	}
 	// EVT 0x0281: [reason u8][dlDelivered u16 LE][upDelivered u8]
 	function decodeSessionEnd(p) {
@@ -288,14 +324,16 @@
 			buildTime: fixedAscii(p.subarray(35, 55)),
 		}
 	}
-	// EVT 0x0280: [src u64][kind u8][seq u16][len u8][data][rssi i16][snr i8]
+	// EVT 0x0280: [src BCD LE 8B][kind u8][seq u16][len u8][data][rssi i16][snr i8]
 	function decodeWorFrame(p) {
 		if (p.length < 12) return null
 		const len = p[11]
 		if (p.length < 12 + len + 3) return null
+		const src = bcdAddress(p, 0)
+		if (src == null) return null
 		const rssi = u16(p, 12 + len)
 		return {
-			src: u64(p, 0), kind: p[8], seq: u16(p, 9), len: len,
+			src: src, kind: p[8], seq: u16(p, 9), len: len,
 			data: p.slice(12, 12 + len),
 			rssi: rssi >= 0x8000 ? rssi - 0x10000 : rssi,
 			snr: p[14 + len] >= 0x80 ? p[14 + len] - 0x100 : p[14 + len],
@@ -329,20 +367,20 @@
 			case CMD.WOR_INIT:
 				if (need(9, 'WOR_INIT')) {
 					lines.push('WOR 角色 = ' + p[0] + ' ' + (WOR_ROLE_NAME[p[0]] || '未知') + '（建议值）')
-					lines.push('本机地址 = ' + u64(p, 1))
-					seg(0, 1, 'WOR 角色', '角色'); seg(1, 8, '本机地址 u64 LE', '地址')
+					lines.push('本机地址 = ' + bcdAddressText(p, 1))
+					seg(0, 1, 'WOR 角色', '角色'); seg(1, 8, '本机地址 BCD LE', '地址')
 				}
 				break
 			case CMD.WOR_WAKE:
 			case CMD.WOR_WAKE_CIU:
 				if (need(9, 'WOR_WAKE')) {
-					lines.push('目标地址 = ' + u64(p, 0))
+					lines.push('目标地址 = ' + bcdAddressText(p, 0))
 					lines.push('reason = ' + p[8] + '（台架惯例 1=读表 2=参数）')
-					seg(0, 8, '目标地址 u64 LE', '地址'); seg(8, 1, 'reason', 'reason')
+					seg(0, 8, '目标地址 BCD LE', '地址'); seg(8, 1, 'reason', 'reason')
 				}
 				break
 			case CMD.WOR_PROBE:
-				if (need(8, 'WOR_PROBE')) { lines.push('目标地址 = ' + u64(p, 0)); seg(0, 8, '目标地址 u64 LE', '地址') }
+				if (need(8, 'WOR_PROBE')) { lines.push('目标地址 = ' + bcdAddressText(p, 0)); seg(0, 8, '目标地址 BCD LE', '地址') }
 				break
 			case CMD.WOR_SEND: {
 				if (p.length < 2) { lines.push('WOR_SEND 载荷不足'); break }
@@ -393,8 +431,8 @@
 			case CMD.PROV_DEV_ID_SET:
 				if (need(9, 'DEV_ID_SET')) {
 					lines.push('devType = ' + p[0] + ' ' + (ROLE_NAME[p[0]] || ''))
-					lines.push('DRN = ' + u64(p, 1))
-					seg(0, 1, 'devType', 'devType'); seg(1, 8, 'DRN u64 LE', 'DRN')
+					lines.push('DRN = ' + bcdAddressText(p, 1))
+					seg(0, 1, 'devType', 'devType'); seg(1, 8, 'DRN BCD LE', 'DRN')
 				}
 				break
 			case CMD.PROV_ROLE_SET:
@@ -466,17 +504,17 @@
 				break
 			case CMD.PROV_DEV_ID_GET: {
 				const d = decodeDevId(r)
-				if (!d) { lines.push('DEV_ID_GET 结果应为 9 字节'); break }
-				lines.push('devType = ' + d.devType + ' ' + (ROLE_NAME[d.devType] || '') + '  DRN = ' + d.drn)
-				seg(0, 1, 'devType', 'devType'); seg(1, 8, 'DRN u64 LE', 'DRN')
+				if (!d) { lines.push('DEV_ID_GET 结果应为 9 字节且 DRN 为合法 BCD'); break }
+				lines.push('devType = ' + d.devType + ' ' + (ROLE_NAME[d.devType] || '') + '  DRN = ' + drnText(d.drn))
+				seg(0, 1, 'devType', 'devType'); seg(1, 8, 'DRN BCD LE', 'DRN')
 				break
 			}
 			case CMD.WOR_GET_STATUS: {
 				const d = decodeWorStatus(r)
-				if (!d) { lines.push('WOR_GET_STATUS 结果不足 2 字节'); break }
+				if (!d) { lines.push('WOR_GET_STATUS 结果不足 2 字节或运行地址 BCD 非法'); break }
 				lines.push('WOR 角色 = ' + d.role + ' ' + (WOR_ROLE_NAME[d.role] || '未知') + '  状态 = ' + d.state + (WOR_STATE_NAME[d.state] ? ' ' + WOR_STATE_NAME[d.state] : ''))
-				if (d.localAddr != null) lines.push('运行地址 localAddr = ' + d.localAddr)
-				seg(0, 1, 'WOR 运行时角色', '角色'); seg(1, 1, 'WOR 状态', '状态'); seg(2, 8, '运行地址 u64 LE', '地址')
+				if (d.localAddr != null) lines.push('运行地址 localAddr = ' + drnText(d.localAddr))
+				seg(0, 1, 'WOR 运行时角色', '角色'); seg(1, 1, 'WOR 状态', '状态'); seg(2, 8, '运行地址 BCD LE', '地址')
 				break
 			}
 			case CMD.BLE_GET_STATUS:
@@ -486,7 +524,7 @@
 				if (r.length >= 2) lines.push('MTU = ' + u16(r, 0))
 				break
 			case CMD.BLE_ADV_IDENTITY:
-				if (r.length >= 8) lines.push('注入身份 DRN = ' + u64(r, 0))
+				if (r.length >= 8) lines.push('注入身份 DRN = ' + bcdAddressText(r, 0))
 				break
 			case CMD.BOOT_MODE_GET:
 				if (r.length >= 1) lines.push('启动模式 = ' + r[0] + ' ' + (BOOT_MODE_NAME[r[0]] || '未注册'))
@@ -523,12 +561,12 @@
 		const seg = (off, len, tip, grp) => { if (len > 0 && off < p.length) segs.push({ off: off, len: Math.min(len, p.length - off), tip: tip, grp: grp }) }
 		if (cmd === EVT.WOR_FRAME) {
 			const d = decodeWorFrame(p)
-			if (!d) { lines.push('WOR 帧事件载荷长度不足'); return { lines: lines, segs: segs } }
-			lines.push('来源地址 src = ' + d.src)
+			if (!d) { lines.push('WOR 帧事件载荷长度不足或来源地址 BCD 非法'); return { lines: lines, segs: segs } }
+			lines.push('来源地址 src = ' + drnText(d.src))
 			lines.push('kind = ' + d.kind + ' ' + (KIND_NAME[d.kind] || '未知') + '  seq = ' + d.seq + '  len = ' + d.len)
 			lines.push('data = ' + hexSpaced(d.data))
 			lines.push('rssi = ' + d.rssi + ' dBm  snr = ' + d.snr + ' dB')
-			seg(0, 8, '来源地址 u64 LE', '地址'); seg(8, 1, 'kind ' + (KIND_NAME[d.kind] || ''), 'kind'); seg(9, 2, 'seq', 'seq'); seg(11, 1, 'data 长度', '长度')
+			seg(0, 8, '来源地址 BCD LE', '地址'); seg(8, 1, 'kind ' + (KIND_NAME[d.kind] || ''), 'kind'); seg(9, 2, 'seq', 'seq'); seg(11, 1, 'data 长度', '长度')
 			seg(12, d.len, 'data', '数据'); seg(12 + d.len, 2, 'rssi i16', 'rssi'); seg(14 + d.len, 1, 'snr i8', 'snr')
 			const n = nestedSts(d.data, '  ')
 			if (n) {
@@ -763,7 +801,7 @@
 		['固件信息 FW_INFO', CMD.FW_INFO, '', '读固件信息'],
 		['链路统计 LINK_STAT', CMD.LINK_STAT, '', '11×u32 计数'],
 		['读角色 ROLE_GET', CMD.PROV_ROLE_GET, '', '0=TEST 1=METER 2=CIU 3=WALKBY'],
-		['读身份 DEV_ID_GET', CMD.PROV_DEV_ID_GET, '', '[devType][DRN u64 LE]'],
+		['读身份 DEV_ID_GET', CMD.PROV_DEV_ID_GET, '', '[devType][DRN BCD LE]'],
 		['WOR 状态 WOR_GET_STATUS', CMD.WOR_GET_STATUS, '', '[role][state][localAddr]'],
 		['WOR 统计 WOR_STATS_GET', CMD.WOR_STATS_GET, '', '53×u32'],
 		['启动模式 BOOT_MODE_GET', CMD.BOOT_MODE_GET, '', '0=NORMAL 1=BOOTLOADER 2=BLE_CONFIG'],
@@ -778,7 +816,7 @@
 		STATUS, STATUS_NAME, STATUS_DESC, ROLE_NAME, WOR_ROLE_NAME, WOR_STATE_NAME, KIND_NAME, END_REASON_NAME, BOOT_MODE_NAME,
 		CMD, EVT, CMD_NAME, EVT_NAME, NO_RETRY, LINK_STAT_FIELDS, WOR_STATS_FIELDS, cmdName,
 		crc16, buildFrame, scan, findFrame, parseFrame, formatFrame, logView, byteMap, buildDownFrame,
-		u64, u64Bytes, hexToBytes, hexSpaced, asciiSafe,
+		u64, u64Bytes, bcdAddress, bcdAddressBytes, drnText, hexToBytes, hexSpaced, asciiSafe,
 		woInitPayload, wakePayload, sendPayload, setUplinkPayload, devIdSetPayload,
 		decodeDevId, decodeWorStatus, decodeFwInfo, decodeWorFrame, decodeSessionEnd,
 	}

@@ -2607,6 +2607,19 @@
 		}
 	}
 
+	// 替换输出、清空或裁剪日志之前释放图表。常见的无图表日志行不查后代。
+	W.skDisposeSeriesCharts = function (root) {
+		if (!root) return
+		if (typeof root._skChartCleanup === 'function') root._skChartCleanup()
+		if (root._skHasSeriesCharts && root.querySelectorAll) {
+			const canvases = root.querySelectorAll('canvas.sk-series-canvas[data-sk-series]')
+			for (let i = 0; i < canvases.length; i++) {
+				if (typeof canvases[i]._skChartCleanup === 'function') canvases[i]._skChartCleanup()
+			}
+			delete root._skHasSeriesCharts
+		}
+	}
+
 	function bindOneChart(canvas) {
 		if (!canvas || canvas._skBound) return
 		let data
@@ -2614,9 +2627,12 @@
 		const rows = (data.rows || []).filter(function (r) { return r.v != null && isFinite(r.v) })
 		if (rows.length < 2) return
 		canvas._skBound = true
+		for (let n = canvas.parentElement; n; n = n.parentElement) n._skHasSeriesCharts = true
 		const box = canvas.parentElement
 		const tip = box ? box.querySelector('.sk-series-tip') : null
 		const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1
+		let ro = null
+		let disposed = false
 
 		function layout() {
 			const w = Math.max(280, (box && box.clientWidth) || canvas.clientWidth || 560)
@@ -2629,6 +2645,7 @@
 		}
 
 		function draw(hi) {
+			if (disposed) return
 			const sz = layout()
 			const ctx = canvas.getContext('2d')
 			if (!ctx) return
@@ -2775,8 +2792,18 @@
 		canvas.addEventListener('mousemove', onMove)
 		canvas.addEventListener('mouseleave', onLeave)
 		if (typeof ResizeObserver !== 'undefined') {
-			const ro = new ResizeObserver(function () { draw(null) })
+			ro = new ResizeObserver(function () { draw(null) })
 			ro.observe(box || canvas)
+		}
+		canvas._skChartCleanup = function () {
+			if (disposed) return
+			disposed = true
+			if (ro) { ro.disconnect(); ro = null }
+			canvas.removeEventListener('mousemove', onMove)
+			canvas.removeEventListener('mouseleave', onLeave)
+			if (tip) tip.hidden = true
+			delete canvas._skBound
+			delete canvas._skChartCleanup
 		}
 		draw(null)
 	}

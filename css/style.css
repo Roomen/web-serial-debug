@@ -6855,7 +6855,7 @@ body.blu-wave-fullscreen-open {
   background: color-mix(in srgb, #fbbf24 18%, transparent);
 }
 
-/* 双路预设：双路控件区里的一个下拉(js/dual-config.js)，现代布局搬进连接栏 */
+/* 串口预设：连接条上单独一节，单路 / 双路都显示(js/dual-config.js)，现代布局搬进连接栏 */
 .dual-preset {
   flex-shrink: 0;
 }
@@ -6917,6 +6917,15 @@ body.blu-wave-fullscreen-open {
   gap: 2px;
   max-height: 260px;
   overflow: auto;
+}
+
+.dual-preset-group {
+  padding: 8px 4px 2px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border-light);
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: var(--text-muted);
 }
 
 .dual-preset-empty {
@@ -10381,12 +10390,13 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row >
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) {
 	display: block;
 	max-width: calc(50% - var(--mdn-ax) / 2 - 10px);
-	margin-block: 5px;
-	padding: 5px 10px 7px;
+	min-height: 34px;
+	margin-block: 3px;
+	padding: 3px 9px 4px;
 	border-width: 1.5px;
-	border-radius: 12px;
+	border-radius: 10px;
 	font-size: 0.75rem;
-	line-height: 1.6;
+	line-height: 1.5;
 	color: var(--bb-t);
 }
 
@@ -10412,8 +10422,8 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:i
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] > .log-body {
-	padding: 3px 8px;
-	border-radius: 8px;
+	padding: 1px 7px;
+	border-radius: 6px;
 	background: var(--bb-plate);
 	color: var(--bb-plate-fg);
 }
@@ -10470,9 +10480,10 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:i
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-body {
-	display: block;
+	display: inline-block;
 	max-width: 100%;
-	margin-top: 3px;
+	margin-block: 1px;
+	vertical-align: middle;
 	overflow-x: auto;
 }
 
@@ -10530,14 +10541,14 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[d
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-t]::before {
 	content: attr(data-mdn-t);
-	top: 5px;
+	top: 3px;
 	color: var(--text-secondary);
 	font-weight: 600;
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-d]::after {
 	content: attr(data-mdn-d);
-	top: 21px;
+	top: 17px;
 	color: var(--text-secondary);
 }
 
@@ -10558,13 +10569,13 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[d
 
 /* 静默分隔：与上一条间隔超过阈值时，行上方留出空位，在轴列里画胶囊(宿主是行首的 .log-time，伪元素读它自己的 data-mdn-gap) */
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:has(> .log-time[data-mdn-gap]) {
-	margin-top: 26px;
+	margin-top: 22px;
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-time[data-mdn-gap]::before {
 	content: '⋮ 静默 ' attr(data-mdn-gap);
 	position: absolute;
-	top: -22px;
+	top: -19px;
 	width: calc(var(--mdn-ax) - 12px);
 	padding: 1px 0;
 	border-radius: 999px;
@@ -10588,11 +10599,11 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[d
 /* 选中帧到本路应答之间两路的所有行：整行通栏浅色底带(超大扩展阴影 + 按行高裁剪，不改行盒) */
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-band] {
 	box-shadow: var(--bb-ring), 0 0 0 100vmax var(--mdn-band);
-	clip-path: inset(-5px -100vmax);
+	clip-path: inset(-3px -100vmax);
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-band]:has(> .log-time[data-mdn-gap]) {
-	clip-path: inset(-26px -100vmax -5px);
+	clip-path: inset(-22px -100vmax -3px);
 }
 
 /* 吸顶列头：在日志容器外面(js/modern-timeline.js 建的兄弟节点)，不随日志滚动，也不进日志内容 */
@@ -12092,7 +12103,50 @@ html[data-layout='modern'] .mdn-grow {
 
 html[data-layout='modern'] .mdn-conn {
 	position: relative;
+	display: inline-flex;
+	align-items: center;
 	min-width: 0;
+}
+
+/* 连接按钮 + 本路协议拼成一枚分体按钮：左半打开设备/参数菜单，右半直接选协议 */
+html[data-layout='modern'] .mdn-conn > .mdn-conn-btn {
+	border-top-right-radius: 0;
+	border-bottom-right-radius: 0;
+}
+
+html[data-layout='modern'] .mdn-conn-proto {
+	width: auto;
+	max-width: 11em;
+	height: 30px;
+	padding: 0 24px 0 8px;
+	margin-left: -1px;
+	border: 1px solid var(--border-color);
+	border-radius: 0 6px 6px 0;
+	background-color: var(--bg-surface);
+	background-position: right 6px center;
+	color: var(--text-secondary);
+	font-size: 12px;
+	font-weight: 600;
+}
+
+/* 双路两枚分体按钮并排：端口名与协议名收窄，连接栏在常见宽度下保持一行 */
+html[data-layout='modern'] .mdn-connbar[data-mode='dual'] .mdn-conn-port {
+	max-width: 11em;
+}
+
+html[data-layout='modern'] .mdn-connbar[data-mode='dual'] .mdn-conn-proto {
+	max-width: 8.5em;
+}
+
+html[data-layout='modern'] .mdn-conn-proto:hover {
+	border-color: var(--text-muted);
+	color: var(--text-primary);
+}
+
+/* 协议已在每路的协议键上，顶栏那枚(各协议模块仍只听它的 change)与参数卡里的「本路协议」不再显示 */
+html[data-layout='modern'] .mdn-conn-tools .connect-bar-proto,
+html[data-layout='modern'] .mdn-pop #serial-lane-proto-row {
+	display: none !important;
 }
 
 html[data-layout='modern'] .mdn-conn-btn {
@@ -12776,6 +12830,69 @@ html[data-layout='modern'] #serial-statusbar .sb-tasks:not(:has(.sb-task:not([hi
 	content: '无后台任务';
 	color: var(--mdn-bar-dim);
 	font-size: 11px;
+}
+
+/* 日志缩放：给日志容器设 zoom(列表与时间线共用)；控件半透明浮在日志窗右下角(让出滚动条)，指针移上去或聚焦时显实 */
+html[data-layout='modern'] #serial-log-panes {
+	position: relative;
+}
+
+html[data-layout='modern'] #serial-log-panes .serial-logs {
+	zoom: var(--mdn-log-zoom, 1);
+}
+
+html[data-layout='modern'] .mdn-zoom {
+	position: absolute;
+	right: 22px;
+	bottom: 10px;
+	z-index: 5;
+	display: inline-flex;
+	align-items: center;
+	padding: 2px;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	background: var(--bg-surface);
+	box-shadow: var(--shadow-sm);
+	opacity: 0.35;
+	transition: opacity var(--transition-fast, 0.15s);
+}
+
+html[data-layout='modern'] .mdn-zoom:hover,
+html[data-layout='modern'] .mdn-zoom:focus-within {
+	opacity: 1;
+	border-color: var(--accent);
+}
+
+html[data-layout='modern'] .mdn-zoom button {
+	height: 22px;
+	min-width: 22px;
+	padding: 0 4px;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text-secondary);
+	font-size: 11px;
+	line-height: 1;
+}
+
+html[data-layout='modern'] .mdn-zoom button:hover:not(:disabled) {
+	background: var(--accent-light);
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] .mdn-zoom button:disabled {
+	opacity: 0.4;
+}
+
+html[data-layout='modern'] .mdn-zoom .mdn-zoom-val {
+	min-width: 40px;
+	font-family: var(--font-mono);
+	font-variant-numeric: tabular-nums;
+}
+
+/* 终端视图是 xterm，不走这套缩放 */
+html[data-layout='modern'] #serial-log-panes:has(.serial-log-mode:not([hidden]) > .serial-term-host:not([hidden])) .mdn-zoom {
+	display: none;
 }
 
 /* 窄屏：连接栏、工具条都换行；连接按钮的端口名收窄 */

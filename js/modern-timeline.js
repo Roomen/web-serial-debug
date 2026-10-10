@@ -121,8 +121,18 @@
 		return { start: idx, end: idx }
 	}
 
+	/** 只有本路最后一条收发是选中的 TX 时，后续 RX 才会延长它的交互区间。 */
+	function awaitingReply(items, idx) {
+		const it = items[idx]
+		if (!isLane(it, ['A', 'B']) || it.dir !== 'tx') return false
+		for (let j = idx + 1; j < items.length; j++) {
+			if (items[j].sid === it.sid && isLane(items[j], ['A', 'B'])) return false
+		}
+		return true
+	}
+
 	const api = {
-		SLOW_MS, GAP_MS, fmtClock, fmtDelta, fmtGap, newState, compute, exchange,
+		SLOW_MS, GAP_MS, fmtClock, fmtDelta, fmtGap, newState, compute, exchange, awaitingReply,
 	}
 	root.ModernTimeline = api
 
@@ -144,8 +154,10 @@
 	// 增量计算的进度：处理到哪一行、当时的跨行状态
 	let tailRow = null
 	let tailState = null
-	let bandRows = []
+	let bandRows = new Set()
 	let bandOpen = false // 选中的是还在等应答的 TX：新行到达时要重算区间
+	let bandSelectedRow = null
+	let bandSid = ''
 	let raf = 0
 
 	function isModern() {
@@ -195,7 +207,9 @@
 		for (let i = 0; i < container.children.length; i++) clearRow(container.children[i])
 		tailRow = null
 		tailState = null
-		bandRows = []
+		bandRows.clear()
+		bandSelectedRow = null
+		bandOpen = false
 	}
 
 	function fullCompute() {
@@ -240,7 +254,17 @@
 			const tm = first.firstElementChild
 			if (tm) tm.removeAttribute('data-mdn-gap')
 		}
-		if (full || bandOpen) scheduleBand()
+		let bandChanged = full
+		for (let i = 0; i < records.length; i++) {
+			records[i].removedNodes.forEach(function (n) {
+				bandRows.delete(n)
+				if (n === bandSelectedRow) bandChanged = true
+			})
+			if (bandOpen) records[i].addedNodes.forEach(function (n) {
+				if (n.nodeType === 1 && n.getAttribute('data-sid') === bandSid && /^(tx|rx)$/.test(n.getAttribute('data-dir'))) bandChanged = true
+			})
+		}
+		if (bandChanged) scheduleBand()
 	}
 
 	// ---- 选中帧的底带 ----
@@ -248,11 +272,13 @@
 	function applyBand() {
 		raf = 0
 		bandRows.forEach(function (r) { r.removeAttribute('data-mdn-band') })
-		bandRows = []
+		bandRows.clear()
 		bandOpen = false
+		bandSelectedRow = null
 		if (!active || !container) return
 		const sel = container.querySelector('.log-row.selected')
 		if (!sel) return
+		bandSelectedRow = sel
 		const rows = laneRows()
 		const items = rows.map(itemOf)
 		const res = compute(items)
@@ -261,9 +287,10 @@
 		if (!ex) return
 		for (let i = ex.start; i <= ex.end; i++) {
 			rows[i].setAttribute('data-mdn-band', '1')
-			bandRows.push(rows[i])
+			bandRows.add(rows[i])
 		}
-		bandOpen = items[idx].dir === 'tx' && ex.end === ex.start
+		bandOpen = awaitingReply(items, idx)
+		bandSid = items[idx].sid
 	}
 
 	function scheduleBand() {
@@ -301,7 +328,10 @@
 		head.append(a, m, b)
 		container.parentNode.insertBefore(head, container)
 		syncHead()
-		headTimer = setInterval(syncHead, 1000)
+		// 路标签改名没有事件可挂，每秒对一次；不在串口视图(日志区量不出宽度)或标签页在后台时不读布局
+		headTimer = setInterval(function () {
+			if (!document.hidden && container && container.offsetParent) syncHead()
+		}, 1000)
 		if (typeof ResizeObserver !== 'undefined') {
 			sizeObserver = new ResizeObserver(syncHead)
 			sizeObserver.observe(container)

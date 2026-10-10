@@ -10,8 +10,10 @@
 	const serialApi = window.serialApi
 	let recvBuf = []
 	const waiters = []
-	const MAX_BUF = 65536
 	const MIN_FRAME = 39 // HDR(15) + 最小加密区(16) + MACLEN(8)
+	const MAX_FRAME = 279 // HDR(15) + 最大加密区(256) + MACLEN(8)
+	// 没有事务在等时只留这么长的尾巴，不扫描：找帧要对每个候选算 CMAC，常驻扫描普通文本流会占满主线程
+	const IDLE_TAIL = MAX_FRAME * 2
 
 	function dispatchFrame(parsed, rawFrame) {
 		if (!parsed || parsed.dir !== 'up' || !parsed.macOk) return
@@ -29,29 +31,26 @@
 
 	// wmbusFindFrame 返回: { found, offset, length, frame, parse, prefix, suffix }
 	function pump() {
-		for (;;) {
-			if (recvBuf.length < MIN_FRAME) {
-				if (recvBuf.length > MAX_BUF) recvBuf.splice(0, recvBuf.length - 4096)
-				break
-			}
+		if (!waiters.length) {
+			if (recvBuf.length > IDLE_TAIL * 2) recvBuf.splice(0, recvBuf.length - IDLE_TAIL)
+			return
+		}
+		while (waiters.length) {
+			if (recvBuf.length < MIN_FRAME) break
 			const u8 = new Uint8Array(recvBuf)
 			let found = null
 			try { found = window.wmbusFindFrame(u8, {}) } catch (e) { found = null }
-			if (found && found.found && found.length > 0) {
-				const consume = found.offset + found.length
-				const raw = found.frame
-				let parsed = found.parse || null
-				if (!parsed) {
-					try { parsed = window.wmbusParseFrame(raw, {}) } catch (e) { parsed = null }
-				}
-				recvBuf.splice(0, Math.min(consume, recvBuf.length))
-				if (parsed) dispatchFrame(parsed, raw)
+			// 只有 MAC 校验通过的帧才会派发；结构像帧但 MAC 不过的候选不能逐个吃掉再整段重扫，否则每块数据都是平方级的 CMAC
+			if (found && found.found && found.parse && found.parse.macOk) {
+				recvBuf.splice(0, Math.min(found.offset + found.length, recvBuf.length))
+				dispatchFrame(found.parse, found.frame)
 				continue
 			}
-			// 缓冲里暂时找不到完整帧(可能还在流式接收, 也可能全是噪声): 等更多数据, 但防止噪声把缓冲撑爆
-			if (recvBuf.length > MAX_BUF) recvBuf.splice(0, recvBuf.length - 4096)
+			// 能完整装下的候选都已验过：只留可能还没收全的尾部
+			if (recvBuf.length >= MAX_FRAME) recvBuf.splice(0, recvBuf.length - (MAX_FRAME - 1))
 			break
 		}
+		if (!waiters.length && recvBuf.length > IDLE_TAIL * 2) recvBuf.splice(0, recvBuf.length - IDLE_TAIL)
 	}
 
 	let lastRxAt = 0
@@ -78,7 +77,7 @@
 		})
 	}
 
-	function waitFor(matchFn, timeoutMs) {
+	function waitFor(matchFn, timeoutMs, onWaiter) {
 		return new Promise(function (resolve, reject) {
 			const w = {
 				match: matchFn,
@@ -91,6 +90,7 @@
 				}, timeoutMs)
 			}
 			waiters.push(w)
+			if (onWaiter) onWaiter(w)
 			pump()
 		})
 	}
@@ -102,11 +102,21 @@
 		if (!serialApi.isOpen()) throw new Error('串口未打开')
 		// 事务等待周期钉扎主发口: 请求与应答落在同一设备
 		serialApi.pinSession(serialApi.getActiveSendSid())
+		let pendingWaiter = null
 		try {
-			const p = waitFor(opts.match, timeoutMs)
+			// 新请求不能由上一事务/闲置期留下的应答完成；被动 waitFor 仍可读取已有缓冲。
+			if (!waiters.length) clearBuffer()
+			const p = waitFor(opts.match, timeoutMs, function (w) { pendingWaiter = w })
+			// 写入尚未结束时等待也可能超时/取消，先挂拒绝处理避免未处理的 Promise。
+			p.catch(function () {})
 			await serialApi.writeData(opts.frame)
 			return await p
 		} finally {
+			if (pendingWaiter) {
+				const idx = waiters.indexOf(pendingWaiter)
+				if (idx !== -1) waiters.splice(idx, 1)
+				clearTimeout(pendingWaiter.timer)
+			}
 			serialApi.unpinSession()
 		}
 	}
