@@ -10390,12 +10390,13 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row >
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) {
 	display: block;
 	max-width: calc(50% - var(--mdn-ax) / 2 - 10px);
-	margin-block: 5px;
-	padding: 5px 10px 7px;
+	min-height: 34px;
+	margin-block: 3px;
+	padding: 3px 9px 4px;
 	border-width: 1.5px;
-	border-radius: 12px;
+	border-radius: 10px;
 	font-size: 0.75rem;
-	line-height: 1.6;
+	line-height: 1.5;
 	color: var(--bb-t);
 }
 
@@ -10421,8 +10422,8 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:i
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] > .log-body {
-	padding: 3px 8px;
-	border-radius: 8px;
+	padding: 1px 7px;
+	border-radius: 6px;
 	background: var(--bb-plate);
 	color: var(--bb-plate-fg);
 }
@@ -10479,9 +10480,10 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:i
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-body {
-	display: block;
+	display: inline-block;
 	max-width: 100%;
-	margin-top: 3px;
+	margin-block: 1px;
+	vertical-align: middle;
 	overflow-x: auto;
 }
 
@@ -10539,14 +10541,14 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[d
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-t]::before {
 	content: attr(data-mdn-t);
-	top: 5px;
+	top: 3px;
 	color: var(--text-secondary);
 	font-weight: 600;
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-d]::after {
 	content: attr(data-mdn-d);
-	top: 21px;
+	top: 17px;
 	color: var(--text-secondary);
 }
 
@@ -10567,13 +10569,13 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[d
 
 /* 静默分隔：与上一条间隔超过阈值时，行上方留出空位，在轴列里画胶囊(宿主是行首的 .log-time，伪元素读它自己的 data-mdn-gap) */
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:has(> .log-time[data-mdn-gap]) {
-	margin-top: 26px;
+	margin-top: 22px;
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-time[data-mdn-gap]::before {
 	content: '⋮ 静默 ' attr(data-mdn-gap);
 	position: absolute;
-	top: -22px;
+	top: -19px;
 	width: calc(var(--mdn-ax) - 12px);
 	padding: 1px 0;
 	border-radius: 999px;
@@ -10597,11 +10599,11 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[d
 /* 选中帧到本路应答之间两路的所有行：整行通栏浅色底带(超大扩展阴影 + 按行高裁剪，不改行盒) */
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-band] {
 	box-shadow: var(--bb-ring), 0 0 0 100vmax var(--mdn-band);
-	clip-path: inset(-5px -100vmax);
+	clip-path: inset(-3px -100vmax);
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-band]:has(> .log-time[data-mdn-gap]) {
-	clip-path: inset(-26px -100vmax -5px);
+	clip-path: inset(-22px -100vmax -3px);
 }
 
 /* 吸顶列头：在日志容器外面(js/modern-timeline.js 建的兄弟节点)，不随日志滚动，也不进日志内容 */
