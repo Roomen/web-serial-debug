@@ -1,6 +1,7 @@
-// 双路按路配置：A / B 各自的串口参数与协议的存储迁移、双路预设的增删改与套用计划，以及预设菜单的界面。
+// 双路按路配置：A / B 各自的串口参数与协议的存储迁移、串口预设(单路 / 双路)的增删改与套用计划，以及预设菜单的界面。
 // 纯函数在文件顶部，node 测试(tests/dual-config.cjs)直接 require；界面部分只经 common.js 暴露的 window.serialLanes 读写状态。
-// 预设只存两路的参数、协议与路标签，不存端口身份：套到另一台电脑、另一组设备上也成立
+// 预设只存参数、协议与路标签，不存端口身份：套到另一台电脑、另一组设备上也成立。
+// 单路预设是 { name, kind: 'single', S: lane }，双路预设是 { name, A, B }(没有 kind，与升级前存下的预设同一格式)
 ;(function (root) {
 	'use strict'
 
@@ -97,12 +98,31 @@
 		}
 	}
 
+	function isSinglePreset(p) {
+		return isObj(p) && p.kind === 'single'
+	}
+	// 预设里有哪几路：单路预设只有 S
+	function presetLanes(p) {
+		return isSinglePreset(p) ? ['S'] : LANES
+	}
+	// 单路只有一路，不存路标签
+	function normalizeSingleLane(raw) {
+		const l = normalizeLane(raw)
+		l.label = ''
+		return l
+	}
 	// cfg: { A: { options, protocol, label }, B: {...} }
 	function makePreset(name, cfg) {
 		const n = cleanName(name)
 		if (!n) throw new Error('预设名称不能为空')
 		const c = isObj(cfg) ? cfg : {}
 		return { name: n, A: normalizeLane(c.A), B: normalizeLane(c.B) }
+	}
+	// lane: { options, protocol }
+	function makeSinglePreset(name, lane) {
+		const n = cleanName(name)
+		if (!n) throw new Error('预设名称不能为空')
+		return { name: n, kind: 'single', S: normalizeSingleLane(lane) }
 	}
 
 	// 存储格式 { v: 1, list: [...] }；坏项、空名、重名(保留先出现的)都丢掉
@@ -116,7 +136,8 @@
 			const n = cleanName(p.name)
 			if (!n || seen[n]) return
 			seen[n] = true
-			out.push({ name: n, A: normalizeLane(p.A), B: normalizeLane(p.B) })
+			if (isSinglePreset(p)) out.push({ name: n, kind: 'single', S: normalizeSingleLane(p.S) })
+			else out.push({ name: n, A: normalizeLane(p.A), B: normalizeLane(p.B) })
 		})
 		return out.slice(0, PRESET_MAX)
 	}
@@ -163,23 +184,27 @@
 		return next
 	}
 
-	// 当前两路配置是否与预设一致(菜单里标出正在用的那个)。标签空与默认「A路」「B路」视为相同
+	// 当前配置是否与预设一致(菜单里标出正在用的那个)。标签空与默认「A路」「B路」视为相同；
+	// 单路预设比 cur.S(单路，或双路下的主发路)，不比标签
 	function presetMatches(preset, cur) {
 		if (!preset || !cur) return false
-		return LANES.every(function (sid) {
+		const single = isSinglePreset(preset)
+		return presetLanes(preset).every(function (sid) {
+			if (!isObj(cur[sid])) return false
 			const p = normalizeLane(preset[sid])
 			const c = normalizeLane(cur[sid])
-			const lp = p.label || sid + '路'
-			const lc = c.label || sid + '路'
+			const lp = single ? '' : p.label || sid + '路'
+			const lc = single ? '' : c.label || sid + '路'
 			return sameOptions(p.options, c.options) && p.protocol === c.protocol && lp === lc
 		})
 	}
 
-	// 套用计划：协议未注册(比如预设来自更新的版本)时保留该路当前协议并记下来；参数变了的路标出来，由调用方决定是否重连
+	// 套用计划：协议未注册(比如预设来自更新的版本)时保留该路当前协议并记下来；参数变了的路标出来，由调用方决定是否重连。
+	// 单路预设只算 lanes.S，cur.S 是要套上的那一路的当前配置
 	function planApply(preset, cur, isKnownProtocol) {
 		const known = typeof isKnownProtocol === 'function' ? isKnownProtocol : function () { return true }
 		const out = { lanes: {}, unknownProtocols: [] }
-		LANES.forEach(function (sid) {
+		presetLanes(preset).forEach(function (sid) {
 			const p = normalizeLane(preset && preset[sid])
 			const c = normalizeLane(cur && cur[sid])
 			let protocol = p.protocol
@@ -208,6 +233,9 @@
 		migrateLaneProtocols: migrateLaneProtocols,
 		paramsSummary: paramsSummary,
 		makePreset: makePreset,
+		makeSinglePreset: makeSinglePreset,
+		isSinglePreset: isSinglePreset,
+		presetLanes: presetLanes,
 		normalizePresets: normalizePresets,
 		serializePresets: serializePresets,
 		upsertPreset: upsertPreset,
@@ -257,54 +285,79 @@
 		const l = lanes()
 		const name = l ? l.protocolName(lane.protocol) : lane.protocol
 		const label = lane.label && lane.label !== sid + '路' ? lane.label + ' ' : ''
-		return sid + ' ' + label + paramsSummary(lane.options) + ' · ' + name
+		return (sid === 'S' ? '' : sid + ' ') + label + paramsSummary(lane.options) + ' · ' + name
+	}
+	function curMode() {
+		const l = lanes()
+		return l && typeof l.mode === 'function' ? l.mode() : 'dual'
+	}
+	// 单路预设比的是它会套上的那一路(单路，或双路下的主发路)
+	function curFor(p) {
+		const l = lanes()
+		if (!l) return null
+		if (!isSinglePreset(p)) return curMode() === 'dual' ? l.snapshot() : null
+		return { S: l.laneSnapshot(l.singleTarget()) }
+	}
+	function sidLabel(sid) {
+		return sid === 'S' ? '单路' : sid + ' 路'
 	}
 
+	function presetRow(p, i) {
+		const row = mk('div', 'dual-preset-row')
+		row.setAttribute('role', 'listitem')
+		const on = presetMatches(p, curFor(p))
+		const apply = mk('button', 'dual-preset-apply')
+		apply.type = 'button'
+		apply.dataset.idx = String(i)
+		apply.dataset.act = 'apply'
+		apply.title = '套用「' + p.name + '」' + (on ? '（当前配置与它一致）' : '')
+		if (on) apply.setAttribute('aria-current', 'true')
+		const head = mk('span', 'dual-preset-name')
+		if (on) head.appendChild(icon('bi-check2'))
+		head.appendChild(document.createTextNode(p.name))
+		const sum = mk('span', 'dual-preset-sum')
+		presetLanes(p).forEach(function (sid) { sum.appendChild(mk('span', 'dual-preset-lane', laneLine(sid, p[sid]))) })
+		apply.append(head, sum)
+		const ren = mk('button', 'dual-preset-act')
+		ren.type = 'button'
+		ren.dataset.idx = String(i)
+		ren.dataset.act = 'rename'
+		ren.title = '重命名'
+		ren.setAttribute('aria-label', '重命名预设 ' + p.name)
+		ren.appendChild(icon('bi-pencil'))
+		const del = mk('button', 'dual-preset-act')
+		del.type = 'button'
+		del.dataset.idx = String(i)
+		del.dataset.act = 'delete'
+		del.title = '删除'
+		del.setAttribute('aria-label', '删除预设 ' + p.name)
+		del.appendChild(icon('bi-trash'))
+		row.append(apply, ren, del)
+		return row
+	}
+
+	// 当前模式的预设排前面；另一种放在下面单列一组，写明套用后会发生什么
 	function render() {
 		const box = document.getElementById('serial-dual-preset-list')
 		if (!box) return
 		const list = loadPresets()
+		const dual = curMode() === 'dual'
 		const l = lanes()
-		const cur = l ? l.snapshot() : null
+		const sub = document.getElementById('serial-dual-preset-sub')
+		if (sub) sub.textContent = dual ? '两路参数 · 协议 · 路标签，不含设备' : '参数 · 协议，不含设备'
+		const input = document.getElementById('serial-dual-preset-name')
+		if (input) input.placeholder = dual ? '给当前两路配置起个名字' : '给当前串口配置起个名字'
 		box.textContent = ''
-		if (!list.length) {
-			box.appendChild(mk('div', 'dual-preset-empty', '还没有预设。设好两路的参数、协议与标签后，在下面起个名字保存。'))
-			return
+		const mine = []
+		const other = []
+		list.forEach(function (p, i) { (isSinglePreset(p) === !dual ? mine : other).push(i) })
+		if (!mine.length) box.appendChild(mk('div', 'dual-preset-empty', dual ? '还没有双路预设。设好两路的参数、协议与标签后，在下面起个名字保存。' : '还没有单路预设。设好参数与协议后，在下面起个名字保存。'))
+		mine.forEach(function (i) { box.appendChild(presetRow(list[i], i)) })
+		if (other.length) {
+			const target = dual && l ? sidLabel(l.singleTarget()) : ''
+			box.appendChild(mk('div', 'dual-preset-group', dual ? '单路预设 · 套用到主发路（' + target + '）' : '双路预设 · 套用后进入双路'))
+			other.forEach(function (i) { box.appendChild(presetRow(list[i], i)) })
 		}
-		list.forEach(function (p, i) {
-			const row = mk('div', 'dual-preset-row')
-			row.setAttribute('role', 'listitem')
-			const on = presetMatches(p, cur)
-			const apply = mk('button', 'dual-preset-apply')
-			apply.type = 'button'
-			apply.dataset.idx = String(i)
-			apply.dataset.act = 'apply'
-			apply.title = '套用「' + p.name + '」' + (on ? '（当前两路配置与它一致）' : '')
-			if (on) apply.setAttribute('aria-current', 'true')
-			const head = mk('span', 'dual-preset-name')
-			if (on) head.appendChild(icon('bi-check2'))
-			head.appendChild(document.createTextNode(p.name))
-			const sum = mk('span', 'dual-preset-sum')
-			sum.appendChild(mk('span', 'dual-preset-lane', laneLine('A', p.A)))
-			sum.appendChild(mk('span', 'dual-preset-lane', laneLine('B', p.B)))
-			apply.append(head, sum)
-			const ren = mk('button', 'dual-preset-act')
-			ren.type = 'button'
-			ren.dataset.idx = String(i)
-			ren.dataset.act = 'rename'
-			ren.title = '重命名'
-			ren.setAttribute('aria-label', '重命名预设 ' + p.name)
-			ren.appendChild(icon('bi-pencil'))
-			const del = mk('button', 'dual-preset-act')
-			del.type = 'button'
-			del.dataset.idx = String(i)
-			del.dataset.act = 'delete'
-			del.title = '删除'
-			del.setAttribute('aria-label', '删除预设 ' + p.name)
-			del.appendChild(icon('bi-trash'))
-			row.append(apply, ren, del)
-			box.appendChild(row)
-		})
 	}
 
 	async function onListClick(e) {
@@ -343,16 +396,17 @@
 		const input = document.getElementById('serial-dual-preset-name')
 		const l = lanes()
 		if (!input || !l) return
+		const dual = curMode() === 'dual'
 		let preset
 		try {
-			preset = makePreset(input.value, l.snapshot())
+			preset = dual ? makePreset(input.value, l.snapshot()) : makeSinglePreset(input.value, l.laneSnapshot('S'))
 		} catch (err) {
 			toast(err.message, 'error')
 			input.focus()
 			return
 		}
 		const list = loadPresets()
-		if (indexOfName(list, preset.name) !== -1 && !window.confirm('已有预设「' + preset.name + '」，用当前两路配置覆盖它？')) return
+		if (indexOfName(list, preset.name) !== -1 && !window.confirm('已有预设「' + preset.name + '」，用当前' + (dual ? '两路' : '串口') + '配置覆盖它？')) return
 		let res
 		try {
 			res = upsertPreset(list, preset)

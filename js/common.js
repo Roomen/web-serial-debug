@@ -1033,10 +1033,11 @@
 		try { localStorage.setItem('toolOptions', JSON.stringify(toolOptions)) } catch (e) {}
 		return true
 	}
-	// 改某一路的协议：双路下改的正是主发路时走顶栏(各协议模块只在顶栏的 change 里切面板)，否则只改该路并重渲它的解析段
+	// 改某一路的协议：改的正是顶栏代表的那一路(单路的 S、双路的主发路)时走顶栏(各协议模块只在顶栏的 change 里切面板)，否则只改该路并重渲它的解析段
 	function setLaneProtocol(sid, id) {
 		const top = document.getElementById('serial-protocol-select')
-		if (SerialHub.mode === 'dual' && sid === SerialHub.activeSendId && protocolExists(top, id)) {
+		const viaTop = SerialHub.mode === 'dual' ? sid === SerialHub.activeSendId : sid === 'S'
+		if (viaTop && protocolExists(top, id)) {
 			if (top.value !== id) {
 				top.value = id
 				top.dispatchEvent(new Event('change'))
@@ -6393,7 +6394,8 @@
 			showToast('事务进行中，暂不能切换串口模式', 2000)
 			return
 		}
-		switchToSingleUI().catch(function () {})
+		if (isModernLayout()) removeLaneB().catch(function () {})
+		else switchToSingleUI().catch(function () {})
 	})
 	document.getElementById('serial-mode-dual').addEventListener('click', function () {
 		if (SerialHub.mode === 'dual') return
@@ -6401,8 +6403,136 @@
 			showToast('事务进行中，暂不能切换串口模式', 2000)
 			return
 		}
-		switchToDualUI()
+		if (isModernLayout()) addLaneB().catch(function () {})
+		else switchToDualUI()
 	})
+
+	// 现代布局的连接栏是「在第一路旁边再加一路」：进双路时单路(S)的口、参数、协议、连接状态整体交给 A，
+	// 移除 B 路时 A 原样交回单路、B 关闭(仍记着口)。经典布局仍是单/双两套会话切换、隐藏的一套在后台开着
+	function isModernLayout() {
+		return document.documentElement.getAttribute('data-layout') === 'modern'
+	}
+	let laneMoving = false
+	// 把 from 这一路的口交给 to：from 开着就先关，再清空 from 的口与重连意图，免得两路记着同一台设备。返回 from 原来是否开着
+	async function handOverPort(from, to) {
+		const port = SerialHub.getPort(from)
+		if (!port) return { moved: false, wasOpen: false }
+		const wasOpen = SerialHub.isOpen(from)
+		if (SerialHub.getPort(to) && SerialHub.getPort(to) !== port && SerialHub.isOpen(to)) {
+			SerialHub.setManualClose(to, true)
+			await closeSerial(to)
+		}
+		if (wasOpen) {
+			SerialHub.setManualClose(from, true)
+			SerialHub.setOpening(from, true)
+			try {
+				await closeSerial(from)
+			} finally {
+				SerialHub.setOpening(from, false)
+			}
+		}
+		SerialHub.setPort(from, null)
+		setSerialWantOpen(false, from)
+		setSerialWantPortKey(from, null)
+		SerialHub.setPort(to, port)
+		return { moved: true, wasOpen: wasOpen }
+	}
+	async function reopenHandedOver(sid) {
+		await new Promise(function (resolve) { setTimeout(resolve, 100) })
+		SerialHub.setOpening(sid, true)
+		try {
+			await openSerial(sid)
+		} finally {
+			SerialHub.setOpening(sid, false)
+		}
+	}
+	function laneBusyMsg() {
+		if (laneMoving) return '正在切换串口，请稍候'
+		if (window.serialApi && window.serialApi.isPinned()) return '事务进行中，暂不能增减串口'
+		if (['S', 'A', 'B'].some(function (sid) { return SerialHub.isOpening(sid) })) return '串口正在连接，请稍后再试'
+		return ''
+	}
+	// opts.beforeOpen：A 重新打开之前调用(套用双路预设用，让 A 直接按预设参数打开，不必再重连一次)
+	async function addLaneB(opts) {
+		opts = opts || {}
+		if (SerialHub.mode === 'dual') return false
+		const busy = laneBusyMsg()
+		if (busy) {
+			showToast(busy, 2000)
+			return false
+		}
+		laneMoving = true
+		try {
+			const sOpts = DualCfg.normalizeOptions(collectSerialParamsFromUI())
+			const sProto = window._activeProtocol
+			const hadA = !!SerialHub.getPort('A')
+			const hand = await handOverPort('S', 'A')
+			// 配置跟着口走；单路没选口而 A 还记着设备时不动 A，免得设备与参数对不上
+			const carry = hand.moved || !hadA
+			if (carry) {
+				laneOptions.A = sOpts
+				persistLaneOptions()
+			}
+			if (!laneProtocols) laneProtocols = DualCfg.migrateLaneProtocols(lsGet(LANE_PROTOCOLS_KEY), sProto)
+			const before = laneProtocols.A + '|' + laneProtocols.B
+			// 新加的 B 路默认用第一路的协议：同一场景下两路通常是同类设备，不同时由每路的协议键或预设改
+			if (carry) laneProtocols.A = sProto
+			laneProtocols.B = laneProtocols.A
+			persistLaneProtocols()
+			SerialHub.activeSendId = 'A'
+			setActiveSendUI('A')
+			try { sessionStorage.setItem('serialActiveSendId', 'A') } catch (e) {}
+			paramsTarget = 'A'
+			switchToDualUI()
+			if (laneProtocols.A + '|' + laneProtocols.B !== before) rerenderParseRows()
+			if (opts.beforeOpen) await opts.beforeOpen()
+			if (hand.wasOpen) await reopenHandedOver('A')
+			else updateOpenButton('A')
+			notifyLaneConfig()
+			if (hand.moved) showToast('已加 B 路：原串口作为 A 路继续使用', 2200)
+			return true
+		} finally {
+			laneMoving = false
+		}
+	}
+	async function removeLaneB() {
+		if (SerialHub.mode !== 'dual') return false
+		const busy = laneBusyMsg()
+		if (busy) {
+			showToast(busy, 2000)
+			return false
+		}
+		laneMoving = true
+		try {
+			// 不再留一个界面上看不到的口开着：B 关闭，仍记着设备，下次加 B 路点一下就能连上
+			if (SerialHub.isOpen('B')) {
+				SerialHub.setManualClose('B', true)
+				SerialHub.setOpening('B', true)
+				try {
+					await closeSerial('B')
+				} finally {
+					SerialHub.setOpening('B', false)
+				}
+			}
+			const aOpts = DualCfg.normalizeOptions(laneOptions.A)
+			const aProto = protocolIdForSid('A')
+			const hadS = !!SerialHub.getPort('S')
+			const hand = await handOverPort('A', 'S')
+			updatePortButtonDisplay('A', null)
+			updateOpenButton('A')
+			if (hand.moved || !hadS) {
+				try { localStorage.setItem(SERIAL_OPTIONS_KEY, JSON.stringify(aOpts)) } catch (e) {}
+				writeLaneProtocol('S', aProto)
+			}
+			// 回到单路后顶栏还给单路协议(syncTopProtocol 读 singleProtocolId)
+			await switchToSingleUI()
+			if (hand.wasOpen) await reopenHandedOver('S')
+			else updateOpenButton('S')
+			return true
+		} finally {
+			laneMoving = false
+		}
+	}
 
 	// 双路：会话 A 端口选择
 	const dualSelectPortA = document.getElementById('serial-select-port-a')
@@ -6603,7 +6733,74 @@
 			applyingPreset = false
 		}
 	}
+	// 某一路当前的参数与协议(单路预设的保存、匹配与套用用)。单路下参数以下拉框为准，打开串口读的也是它
+	function laneSnapshot(sid) {
+		if (sid === 'A' || sid === 'B') return dualSnapshot()[sid]
+		return {
+			options: DualCfg.normalizeOptions(SerialHub.mode === 'single' ? collectSerialParamsFromUI() : readSerialOptions(SERIAL_OPTIONS_KEY)),
+			protocol: protocolIdForSid('S'),
+			label: '',
+		}
+	}
+	// 单路预设套给哪一路：单路是 S，双路是主发路
+	function singlePresetTarget() {
+		return SerialHub.mode === 'dual' ? SerialHub.activeSendId : 'S'
+	}
+	async function applySingleConfig(preset) {
+		if (applyingPreset) return { ok: false }
+		if (window.serialApi && window.serialApi.isPinned()) {
+			showToast('事务进行中，暂不能套用预设', 2000)
+			return { ok: false }
+		}
+		const sid = singlePresetTarget()
+		const plan = DualCfg.planApply(preset, { S: laneSnapshot(sid) }, function (id) { return !!window._protocols[id] })
+		const p = plan.lanes.S
+		applyingPreset = true
+		try {
+			const opts = DualCfg.normalizeOptions(p.options)
+			if (sid === 'S') {
+				try { localStorage.setItem(SERIAL_OPTIONS_KEY, JSON.stringify(opts)) } catch (e) {}
+			} else {
+				laneOptions[sid] = opts
+				persistLaneOptions()
+			}
+			setLaneProtocol(sid, p.protocol)
+			applySerialParamsToUI()
+			notifyLaneConfig()
+			const reopen = p.optionsChanged && SerialHub.isOpen(sid) && !SerialHub.isOpening(sid)
+			let msg = '已套用预设「' + (preset && preset.name ? preset.name : '') + '」' + (SerialHub.mode === 'dual' ? '到' + sidName(sid) : '')
+			if (reopen) msg += '：按新参数重新连接'
+			if (plan.unknownProtocols.length) msg += '；未识别的协议 ' + plan.unknownProtocols.join('、') + ' 保留原协议'
+			showToast(msg, 2600)
+			if (reopen) await reopenWithNewParams(sid)
+			return { ok: true, reopened: reopen ? [sid] : [], unknownProtocols: plan.unknownProtocols }
+		} finally {
+			applyingPreset = false
+		}
+	}
+	// 套用预设：单路预设套给单路(双路下套给主发路)；双路预设在单路下先进入双路再套用，
+	// 现代布局按「加 B 路」交接，A 在重新打开前就换成预设参数，不必连两次
+	async function applySerialPreset(preset) {
+		if (DualCfg.isSinglePreset(preset)) return applySingleConfig(preset)
+		if (SerialHub.mode === 'dual') return applyDualConfig(preset)
+		if (window.serialApi && window.serialApi.isPinned()) {
+			showToast('事务进行中，暂不能套用预设', 2000)
+			return { ok: false }
+		}
+		if (!isModernLayout()) {
+			switchToDualUI()
+			return applyDualConfig(preset)
+		}
+		let res = { ok: false }
+		await addLaneB({ beforeOpen: async function () { res = await applyDualConfig(preset) } })
+		return res
+	}
 	window.serialLanes = {
+		mode: function () { return SerialHub.mode },
+		singleTarget: singlePresetTarget,
+		laneSnapshot: laneSnapshot,
+		addLaneB: addLaneB,
+		removeLaneB: removeLaneB,
 		protocolOf: protocolIdForSid,
 		protocolName: protocolName,
 		setProtocol: setLaneProtocol,
@@ -6614,7 +6811,7 @@
 		getParamsTarget: function () { return paramsTarget },
 		setParamsTarget: setParamsTarget,
 		snapshot: dualSnapshot,
-		apply: applyDualConfig,
+		apply: applySerialPreset,
 		toast: function (msg, kind) { showToast(msg, null, kind) },
 	}
 
