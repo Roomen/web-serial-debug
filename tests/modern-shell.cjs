@@ -1,5 +1,5 @@
 // Run: node tests/modern-shell.cjs — synthetic data only.
-// 覆盖: 现代布局外壳 js/modern-shell.js 的纯函数（日志过滤的解析与匹配、连接按钮的参数摘要）
+// 覆盖: 现代布局外壳 js/modern-shell.js 的纯函数（日志过滤的解析与匹配、连接按钮的参数摘要、日志缩放档位）
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const vm = require('node:vm')
@@ -59,6 +59,24 @@ const sys = { dir: '', text: '10:00:01.000 ! 未选择串口设备', hex: '' }
 	assert.equal(M.compactParams('- 8-N-1'), '- 8N1')
 	assert.equal(M.compactParams('奇怪的文案'), '奇怪的文案', '格式不认识就原样')
 	assert.equal(M.compactParams(undefined), '')
+}
+
+// 日志缩放：70%–200%，每档 10%，坏值回落 100%，浮点不漂
+{
+	assert.equal(M.clampZoom(1), 1)
+	assert.equal(M.clampZoom('1.3'), 1.3)
+	assert.equal(M.clampZoom(5), 2)
+	assert.equal(M.clampZoom(0.1), 0.7)
+	assert.equal(M.clampZoom('abc'), 1)
+	assert.equal(M.clampZoom(null), 1)
+	assert.equal(M.clampZoom(-1), 1)
+	assert.equal(M.stepZoom(1, 1), 1.1)
+	assert.equal(M.stepZoom(1.1, 1), 1.2, '0.1 累加不出 1.2000000000000002')
+	assert.equal(M.stepZoom(0.7, -1), 0.7)
+	assert.equal(M.stepZoom(2, 1), 2)
+	let z = 1
+	for (let i = 0; i < 20; i++) z = M.stepZoom(z, 1)
+	assert.equal(z, 2)
 }
 
 console.log('modern-shell ok')

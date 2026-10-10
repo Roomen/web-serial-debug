@@ -308,20 +308,6 @@
                                 </button>
                             </div>
                         </div>
-                        <!-- 双路预设：两路参数 + 协议 + 路标签存成命名预设，一键套用(js/dual-config.js) -->
-                        <div class="dropdown dual-preset" id="serial-dual-preset">
-                            <button type="button" class="dual-preset-btn" id="serial-dual-preset-btn" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" title="双路预设：保存或套用两路的串口参数、协议与路标签（不含设备）">
-                                <i class="bi bi-bookmarks"></i><span>预设</span>
-                            </button>
-                            <div class="dropdown-menu dual-preset-menu" id="serial-dual-preset-menu">
-                                <div class="dual-preset-title">双路预设<span>两路参数 · 协议 · 路标签，不含设备</span></div>
-                                <div class="dual-preset-list" id="serial-dual-preset-list" role="list"></div>
-                                <form class="dual-preset-save" id="serial-dual-preset-form">
-                                    <input type="text" class="form-control form-control-sm" id="serial-dual-preset-name" maxlength="24" placeholder="给当前两路配置起个名字" aria-label="预设名称" autocomplete="off">
-                                    <button type="submit" class="btn btn-sm btn-primary">保存当前</button>
-                                </form>
-                            </div>
-                        </div>
                         <!-- 主发口（与 A/B 同行靠右） -->
                         <div class="dual-active-send">
                             <span class="dual-active-send-label">主发:</span>
@@ -329,6 +315,23 @@
                                 <button type="button" class="dual-send-btn active" data-sid="S" aria-label="单路串口">单</button>
                                 <button type="button" class="dual-send-btn" data-sid="A" aria-label="A路">A</button>
                                 <button type="button" class="dual-send-btn" data-sid="B" aria-label="B路">B</button>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- 串口预设：单路 / 双路都显示 -->
+                    <div class="connect-bar-section connect-bar-preset">
+                        <!-- 串口预设：单路存参数 + 协议，双路存两路参数 + 协议 + 路标签，一键套用(js/dual-config.js) -->
+                        <div class="dropdown dual-preset" id="serial-dual-preset">
+                            <button type="button" class="dual-preset-btn" id="serial-dual-preset-btn" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" title="串口预设：保存或套用串口参数与协议（双路含两路与路标签，不含设备）">
+                                <i class="bi bi-bookmarks"></i><span>预设</span>
+                            </button>
+                            <div class="dropdown-menu dual-preset-menu" id="serial-dual-preset-menu">
+                                <div class="dual-preset-title">串口预设<span id="serial-dual-preset-sub">参数 · 协议，不含设备</span></div>
+                                <div class="dual-preset-list" id="serial-dual-preset-list" role="list"></div>
+                                <form class="dual-preset-save" id="serial-dual-preset-form">
+                                    <input type="text" class="form-control form-control-sm" id="serial-dual-preset-name" maxlength="24" placeholder="给当前串口配置起个名字" aria-label="预设名称" autocomplete="off">
+                                    <button type="submit" class="btn btn-sm btn-primary">保存当前</button>
+                                </form>
                             </div>
                         </div>
                     </div>

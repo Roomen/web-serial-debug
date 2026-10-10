@@ -1113,21 +1113,69 @@
 		syncProtocol()
 	}
 
-	// 打开面板时顶栏协议切到 hostproto，关闭后恢复打开前的协议。打开前的协议存 localStorage，
-	// 面板开着刷新页面后关闭仍能恢复；期间用户手动换过协议就尊重用户选择，不再恢复。
-	// 改值后必须派发 change：common.js 与各协议模块都只在 change 里切换解析器和持久化。
+	// 打开面板时把当前模式下每一路(单路 S，双路 A 与 B)的协议都切到 hostproto，关闭后按路恢复打开前的协议：
+	// 只切顶栏的话双路里非主发那一路仍按原协议解析。打开前的协议按路存 localStorage({ S | A | B: id })，
+	// 面板开着刷新页面后关闭仍能恢复；面板开着时进入双路，新出现的路也切过去；期间用户手动换过某一路就尊重用户选择，不再恢复。
+	// 没有 serialLanes(按路协议接口)时退回只切顶栏。改顶栏后必须派发 change：common.js 与各协议模块都只在 change 里切换解析器和持久化。
 	const KEY_PREV_PROTO = 'stsSim.prevProtocol'
 	let panelShown = false
+	let laneApplied = {}
 	function setProtocol(sel, value) {
 		if (sel.value === value || !Array.prototype.some.call(sel.options, function (o) { return o.value === value })) return
 		sel.value = value
 		sel.dispatchEvent(new Event('change', { bubbles: true }))
+	}
+	function readPrevLanes() {
+		const v = JSON.parse(localStorage.getItem(KEY_PREV_PROTO) || 'null')
+		if (typeof v === 'string') return { S: v } // 升级前只记顶栏一个值
+		return v && typeof v === 'object' ? v : {}
+	}
+	function syncLaneProtocols(sel, shown) {
+		const lanes = W.serialLanes
+		const has = Array.prototype.some.call(sel.options, function (o) { return o.value === 'hostproto' })
+		if (shown) {
+			panelShown = true
+			if (!has) return
+			const api = W.serialApi
+			const visible = api && api.getMode() === 'dual' ? ['A', 'B'] : ['S']
+			let prev = {}
+			try { prev = readPrevLanes() } catch (e) { /* 存储不可用时只做切换，不记忆 */ }
+			let changed = false
+			visible.forEach(function (sid) {
+				if (laneApplied[sid]) return
+				laneApplied[sid] = true
+				const cur = lanes.protocolOf(sid)
+				if (!cur || cur === 'hostproto') return
+				if (!Object.prototype.hasOwnProperty.call(prev, sid)) prev[sid] = cur
+				changed = true
+				lanes.setProtocol(sid, 'hostproto')
+			})
+			if (changed) {
+				try { localStorage.setItem(KEY_PREV_PROTO, JSON.stringify(prev)) } catch (e) { /* 同上 */ }
+			}
+			return
+		}
+		if (!panelShown) return
+		panelShown = false
+		laneApplied = {}
+		let prev = {}
+		try {
+			prev = readPrevLanes()
+			localStorage.removeItem(KEY_PREV_PROTO)
+		} catch (e) { /* 同上 */ }
+		Object.keys(prev).forEach(function (sid) {
+			if (prev[sid] && lanes.protocolOf(sid) === 'hostproto') lanes.setProtocol(sid, prev[sid])
+		})
 	}
 	function syncProtocol() {
 		const wb = W.Workbench
 		const sel = document.getElementById('serial-protocol-select')
 		if (!wb || typeof wb.isShown !== 'function' || !sel) return
 		const shown = wb.isShown('sts-sim')
+		if (W.serialLanes && typeof W.serialLanes.setProtocol === 'function') {
+			syncLaneProtocols(sel, shown)
+			return
+		}
 		if (shown === panelShown) return
 		panelShown = shown
 		try {
