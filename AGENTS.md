@@ -42,6 +42,11 @@ CIU 上电后只 `WOR_INIT` 一次：启动时先查 `WOR_GET_STATUS`，未初�
 - `node tests/blu-serial-lane.cjs`：功耗分析串口事件道（`js/blu-serial-lane.js`，仅现代布局显示）的纯函数回归：样点下标与墙钟的锚点映射（含停采续采间隙、墙钟回拨）、可见范围二分、密集合并、日志行分道，改该文件后必须跑。
 - `node tests/dual-config.cjs`：双路按路配置（`js/dual-config.js`）的纯函数回归：两路参数 / 两路协议的存储迁移、参数逐项校验、串口预设（单路 / 双路）的规范化与增删改、与当前配置的匹配、套用计划（未注册协议保留、参数变化标记），改该文件后必须跑。
 - `node tests/modern-shell.cjs`：现代布局外壳（`js/modern-shell.js`）的纯函数回归：日志过滤的语法解析（方向词、连续两位十六进制合成字节序列、关键字）与行匹配、连接按钮参数摘要、日志缩放档位，改该文件的这几个函数后必须跑。
+- `node tests/blu-wave-store.cjs`：功耗波形冷存储、归档队列预算、清空与异步任务隔离、包络统计与缓存淘汰回归，改波形存储段后必须跑。
+- `node tests/protocol-transactions.cjs` 与 `node tests/firmware-receive.cjs`：闲置接收不扫描、事务边界、写失败清理、坏帧重同步与大块接收回归，改相应事务层或固件接收路径后必须跑。
+- `node tests/serial-resources.cjs`：循环发送背压、间隔校验与日志字节预算/批量裁剪回归，改这些路径后必须跑。
+- `node tests/firmware-diff-worker.cjs`：真实内嵌 WASM 的双向差分与逐字节产物一致性回归，改差分 Worker 后必须跑；`js/firmware-diff-worker.js` 仅在生成差分/压缩包时加载，生成结束即释放，不要退回页面启动时初始化。
+- `node tests/ui-resource-lifecycle.cjs`：历史图表观察器释放和终端 CDN 重试终止回归，改这两个生命周期后必须跑。
 - 其余没有自动化测试，涉及 UI 或串口逻辑的修改要在浏览器里连接真实或虚拟串口手动验证：日志相关检查 HEX、TEXT、ANSI、解析四种显示模式；发送路径检查 HEX/TEXT 输入、循环发送、CRLF 追加和快捷发送按钮；配置相关刷新页面，确认 localStorage 中的设置能正确恢复。
 
 ## 编码风格

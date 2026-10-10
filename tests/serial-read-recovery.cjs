@@ -669,6 +669,33 @@ async function testParseRerenderIsolation() {
 	runTimers()
 	assert.equal(session.baseCode, 1)
 	assert.ok(api.parseLogType('parse').parse)
+
+	// ANSI-only histories must also yield and keep streaming state isolated across slices/reset.
+	context.AnsiUp = function () {
+		this.n = 0
+		this.ansi_to_html = function (t) { clock += 5; return 'ansi' + (++this.n) + ':' + t }
+	}
+	const liveAnsi = new context.AnsiUp()
+	context.ansi_up = liveAnsi
+	box = makeContainer()
+	vmApi.rerenderLogBodies(box, 'ansi')
+	assert.ok(timers.length, 'ANSI-only history must yield instead of blocking for all rows')
+	assert.equal(context.ansi_up, liveAnsi)
+	const newConnectionAnsi = new context.AnsiUp()
+	context.ansi_up = newConnectionAnsi
+	context.sessionResetSeq.S++
+	runTimers()
+	assert.equal(context.ansi_up, newConnectionAnsi, 'old ANSI history must not restore state across reconnect')
+	assert.ok(box.children[159].body.innerHTML.includes('ansi160:'), 'ANSI replay remains in row order')
+
+	box = makeContainer()
+	vmApi.rerenderLogBodies(box, 'ansi')
+	const beforeSwitch = box.children[159].body.innerHTML
+	context.isRowLogType = t => t !== 'term'
+	vmApi.rerenderLogBodies(box, 'term')
+	runTimers()
+	assert.equal(box.children[159].body.innerHTML, beforeSwitch, 'switching to terminal cancels stale row replay')
+
 }
 
 // 双路两路协议各自独立：每行按所属那一路(data-sid)的协议与会话状态重放，A 路读到的基准不会套到 B 路；

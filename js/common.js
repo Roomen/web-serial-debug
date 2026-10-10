@@ -545,6 +545,9 @@
 	// 它要调 switchToDualUI，而 serialLogs 等 const 在后面才初始化，这里同步执行会踩 TDZ
 	//串口循环发送时钟
 	let serialloopSendTimer = null
+	let loopSendBusy = false
+	//循环发送间隔下限：0 或空值会变成浏览器约 4ms 一次的定时器，不能交给 setInterval
+	const LOOP_SEND_MIN_MS = 10
 	//文本解码
 	let textdecoder = new TextDecoder()
 	let currQuickSend = []
@@ -731,6 +734,12 @@
 	const LOG_CACHE_VER = 2
 	let pendingTermRestore = null
 	let persistLogsTimer = 0
+	const LOG_HEX_CHARS_MAX = 12 * 1024 * 1024
+	const logHexStats = new WeakMap() // 日志容器 -> { rows, chars }；行数对不上(清空、恢复缓存)就整段重数
+	const LOG_PERSIST_LEVELS = [null, 4000, 1500, 400]
+	let logPersistLevel = 0
+	const LOG_PERSIST_INTERVAL_MS = 2000
+	const logLayoutPending = new Map() // 日志容器 -> 该容器的日志选项
 	function activeLogOptions() {
 		return SerialHub.mode === 'dual' ? logOptionsDual : logOptionsSingle
 	}
@@ -982,10 +991,19 @@
 		}
 	}
 
+	function disposeSeriesCharts(root) {
+		if (root && typeof window.skDisposeSeriesCharts === 'function') window.skDisposeSeriesCharts(root)
+	}
+
 	function clearCurrentLogs() {
 		const mode = logModeKey()
 		const container = SerialHub.getLogContainer()
-		if (container) container.innerHTML = ''
+		if (container) {
+			rerenderGen++
+			disposeSeriesCharts(container)
+			container.innerHTML = ''
+			logHexStats.delete(container)
+		}
 		if (window.SerialTerm) window.SerialTerm.clear(mode)
 		if (selectedLogRows[mode]) {
 			try { selectedLogRows[mode].classList.remove('selected') } catch (e) {}
@@ -1750,6 +1768,7 @@
 	function parseProtocolBytes(bytes, note, dir) {
 		if (!bytes || !bytes.length) {
 			renderProtocolHexDump(null)
+			disposeSeriesCharts(document.getElementById('serial-protocol-output'))
 			document.getElementById('serial-protocol-output').innerHTML = ''
 			syncParsePanelEmpty()
 			emitParseFrame(null)
@@ -1775,11 +1794,13 @@
 			const dirCls = dirNorm === 'tx' ? 'sk-parse-down' : dirNorm === 'rx' ? 'sk-parse-up' : ''
 			const wrapOpen = dirCls ? '<div class="sk-parse-block ' + dirCls + '" data-dir="' + dirNorm + '">' : ''
 			const wrapClose = dirCls ? '</div>' : ''
+			disposeSeriesCharts(outEl)
 			outEl.innerHTML = wrapOpen + head + skFormatFrame(r) + wrapClose
 			if (typeof skBindSeriesCharts === 'function') {
 				try { skBindSeriesCharts(outEl) } catch (e) { /* ignore chart bind */ }
 			}
 		} catch (err) {
+			disposeSeriesCharts(document.getElementById('serial-protocol-output'))
 			document.getElementById('serial-protocol-output').innerHTML = '<div class="sk-parse-err">解析异常:' + HTMLEncode(String(err)) + '</div>'
 		}
 		syncParsePanelEmpty()
@@ -2549,6 +2570,7 @@
 	document.getElementById('serial-add-lf').checked = !!toolOptions.addLF
 	document.getElementById('serial-hex-send').checked = toolOptions.hexSend
 	document.getElementById('serial-loop-send').checked = toolOptions.loopSend
+	toolOptions.loopSendTime = normalizeLoopSendTime(toolOptions.loopSendTime)
 	document.getElementById('serial-loop-send-time').value = toolOptions.loopSendTime
 	document.getElementById('serial-send-content').value = toolOptions.sendContent
 	document.getElementById('serial-protocol-hover').checked = toolOptions.skHoverEnable
@@ -3051,7 +3073,9 @@
 		resetLoopSend()
 	})
 	document.getElementById('serial-loop-send-time').addEventListener('change', function (e) {
-		changeOption('loopSendTime', parseInt(this.value))
+		const ms = normalizeLoopSendTime(this.value)
+		this.value = ms
+		changeOption('loopSendTime', ms)
 		resetLoopSend()
 	})
 	document.getElementById('serial-protocol-hover').addEventListener('change', function (e) {
@@ -3136,20 +3160,29 @@
 	}
 
 	//重制发送循环时钟
+	function normalizeLoopSendTime(v) {
+		const ms = parseInt(v, 10)
+		if (isNaN(ms)) return DEFAULT_TOOL_OPTIONS.loopSendTime
+		return Math.min(2147483647, Math.max(LOOP_SEND_MIN_MS, ms))
+	}
 	function resetLoopSend() {
 		clearInterval(serialloopSendTimer)
 		if (toolOptions.loopSend) {
 			//串口没打开时跳过本次，只提示一次，免得每个间隔刷一条错误；连上后自动开始发
 			let warned = false
+			//上一笔还没写完就跳过这一拍：写入器被占着，硬发只会每拍刷一条写入失败
 			serialloopSendTimer = setInterval(() => {
+				const port = SerialHub.getPort(SerialHub.activeSendPhys())
+				if (loopSendBusy || (port && port.writable && port.writable.locked)) return
 				if (!SerialHub.isOpen(SerialHub.activeSendPhys())) {
 					if (!warned) addLogErr('串口未打开，循环发送等待连接中')
 					warned = true
 					return
 				}
 				warned = false
-				send()
-			}, toolOptions.loopSendTime)
+				loopSendBusy = true
+				send({ loop: true }).catch(function (e) { addLogErr('循环发送失败: ' + e.message) }).finally(() => { loopSendBusy = false })
+			}, normalizeLoopSendTime(toolOptions.loopSendTime))
 		}
 	}
 
@@ -4401,14 +4434,19 @@
 		}
 	}
 	//串口数据收发
-	async function send() {
+	//opts.loop: 循环发送的一拍。内容为空只提示一次；发送历史只在内容变了时记，不每拍读写 localStorage
+	let loopSendLast = null
+	async function send(opts) {
+		const loop = !!(opts && opts.loop)
 		let content = document.getElementById('serial-send-content').value
 		if (!content) {
-			addLogErr('发送内容为空')
+			if (!loop || loopSendLast !== '') addLogErr('发送内容为空')
+			if (loop) loopSendLast = ''
 			return
 		}
 		const sendName = lookupQuickSendName(content)
-		pushSendHistory(content)
+		if (!loop || loopSendLast !== content) pushSendHistory(content)
+		loopSendLast = loop ? content : null
 		if (toolOptions.hexSend) {
 			await sendHex(content, sendName)
 		} else {
@@ -5203,18 +5241,39 @@
 		},
 	}
 	var ansi_up = new AnsiUp()
-	//日志行裁剪:超过 maxLogRows 时从顶部批量删除,并保持非自动滚动时的视觉位置不跳
+	//行数之外再按数据量裁剪：单行可以是最多 64KB 的合并包，正文 HEX 与 data-hex 属性各存一份，只限行数时 DOM 能涨到几个 GB。
+	//按 data-hex 的字符数计(约 3 个字符一个字节)，上限约 4 MiB 原始数据，日常的短帧、文本行远到不了
+	function rowHexChars(row) {
+		const h = row.getAttribute && row.getAttribute('data-hex')
+		return h ? h.length : 0
+	}
+	function logHexStat(container) {
+		let st = logHexStats.get(container)
+		if (!st || st.rows !== container.childElementCount) {
+			st = { rows: container.childElementCount, chars: 0 }
+			for (let n = container.firstElementChild; n; n = n.nextElementSibling) st.chars += rowHexChars(n)
+			logHexStats.set(container, st)
+		}
+		return st
+	}
+	//日志行裁剪:超过 maxLogRows 或数据量上限时从顶部批量删除(至少留一行),并保持非自动滚动时的视觉位置不跳
 	function trimLogRows(container, maxRows, autoScroll) {
 		container = container || SerialHub.getLogContainer()
 		if (!container) return
 		const max = parseInt(maxRows != null ? maxRows : toolOptions.maxLogRows, 10)
 		if (!max || max < 1) return
+		const st = logHexStat(container)
 		let over = container.childElementCount - max
-		if (over <= 0) return
+		if (over <= 0 && st.chars <= LOG_HEX_CHARS_MAX) return
 		const beforeTop = container.scrollTop
 		const beforeHeight = container.scrollHeight
-		while (over-- > 0 && container.firstElementChild) {
-			container.removeChild(container.firstElementChild)
+		while (container.childElementCount > 1 && (over > 0 || st.chars > LOG_HEX_CHARS_MAX)) {
+			const n = container.firstElementChild
+			st.chars -= rowHexChars(n)
+			st.rows--
+			disposeSeriesCharts(n)
+			container.removeChild(n)
+			over--
 		}
 		const stick = autoScroll != null ? autoScroll : toolOptions.autoScroll
 		if (stick) return
@@ -5260,24 +5319,35 @@
 		}
 		return payload
 	}
+	// 超限时逐档降级,别一步掉到几百行: 默认上限提到 10000 后整份快照经常刚好压线。
+	// 记住上次写成功的那一档，下次从它开始，免得每次都先把整份序列化一遍再被配额拒绝；行数回落到上一档以内再从头试
+	function logRowsTotal() {
+		let n = 0
+		;['serial-logs-single', 'serial-logs-dual'].forEach(function (id) {
+			const el = document.getElementById(id)
+			if (el) n = Math.max(n, el.childElementCount)
+		})
+		return n
+	}
 	function persistLogsNow() {
-		try {
-			sessionStorage.setItem(LOG_CACHE_KEY, JSON.stringify(collectLogCache()))
-			return
-		} catch (e) {}
-		// 超限时逐档降级,别一步掉到几百行: 默认上限提到 10000 后整份快照经常刚好压线
-		const fallbacks = [4000, 1500, 400]
-		for (let i = 0; i < fallbacks.length; i++) {
+		clearTimeout(persistLogsTimer)
+		persistLogsTimer = 0
+		if (logPersistLevel > 0 && logRowsTotal() <= LOG_PERSIST_LEVELS[logPersistLevel]) logPersistLevel = 0
+		for (let i = logPersistLevel; i < LOG_PERSIST_LEVELS.length; i++) {
 			try {
-				sessionStorage.setItem(LOG_CACHE_KEY, JSON.stringify(collectLogCache(fallbacks[i])))
+				const max = LOG_PERSIST_LEVELS[i]
+				sessionStorage.setItem(LOG_CACHE_KEY, JSON.stringify(max == null ? collectLogCache() : collectLogCache(max)))
+				logPersistLevel = i
 				return
-			} catch (e2) {}
+			} catch (e) {}
 		}
 		try { sessionStorage.removeItem(LOG_CACHE_KEY) } catch (e3) {}
 	}
+	// 节流而不是防抖：整份快照要序列化上万行，设备每隔几百毫秒发一行时防抖等于每行都写一次；
+	// 刷新页面靠 pagehide 里的 persistLogsNow 补最后一段
 	function schedulePersistLogs() {
-		clearTimeout(persistLogsTimer)
-		persistLogsTimer = setTimeout(persistLogsNow, 250)
+		if (persistLogsTimer) return
+		persistLogsTimer = setTimeout(persistLogsNow, LOG_PERSIST_INTERVAL_MS)
 	}
 	function applyPendingTerm(mode) {
 		if (!pendingTermRestore || !window.SerialTerm) return
@@ -5362,11 +5432,24 @@
 		} else {
 			container.appendChild(node)
 		}
-		trimLogRows(container, opts.maxLogRows, opts.autoScroll)
-		if (opts.autoScroll) {
-			container.scrollTop = container.scrollHeight - container.clientHeight
+		const st = logHexStats.get(container)
+		if (st && st.rows === container.childElementCount - 1) {
+			st.rows++
+			st.chars += rowHexChars(node)
 		}
+		if (!logLayoutPending.size) queueMicrotask(flushLogLayout)
+		logLayoutPending.set(container, opts)
 		schedulePersistLogs()
+	}
+	//同一批数据切出的多行只做一次裁剪和滚到底：逐行读写 scrollTop/scrollHeight 每一行都要强制同步布局
+	function flushLogLayout() {
+		logLayoutPending.forEach(function (opts, container) {
+			trimLogRows(container, opts.maxLogRows, opts.autoScroll)
+			if (opts.autoScroll) {
+				container.scrollTop = container.scrollHeight - container.clientHeight
+			}
+		})
+		logLayoutPending.clear()
 	}
 	//字节数组转16进制字符串数组(补0),行日志正文渲染和 data-hex 属性共用
 	function bytesToHexArr(data) {
@@ -5548,8 +5631,8 @@
 	function rerenderLogBodies(container, logType) {
 		if (!container) return
 		// term 不是行日志格式,渲染出来会是空正文,会把历史行洗白,必须挡在这里
-		if (!isRowLogType(logType)) return
 		const gen = ++rerenderGen
+		if (!isRowLogType(logType)) return
 		const fmt = parseLogType(logType)
 		// ansi_up 与 SEK 会话(基准水量/设备号)都是流式状态。重渲从头重放整段历史，必须从干净状态起步，
 		// 否则会拿上一次渲染的末态当起点(把染色点之前的行也染上色)。分批重放时批次之间会有实时收数，
@@ -5578,6 +5661,7 @@
 			if (!bytes.length) return
 			const body = row.querySelector('.log-body')
 			if (!body) return
+			if (typeof window.skDisposeSeriesCharts === 'function') window.skDisposeSeriesCharts(body)
 			body.innerHTML = renderLogBody(bytes, logType, {
 				isReceive: row.getAttribute('data-dir') === 'rx',
 				noParse: row.getAttribute('data-noparse') === '1',
@@ -5613,16 +5697,16 @@
 				const st = replayOf(sid)
 				const sessOk = sessionResetSeq[sid] === resetSeqAtStart[sid]
 				if (sid === 'S') {
-					if (fmt.ansi) ansi_up = st.ansi
+					if (fmt.ansi && sessOk) ansi_up = st.ansi
 					if (g && sessOk) g.restore(st.sess || freshSessSnap(g))
 					return
 				}
 				const live = laneLiveState(sid)
-				if (fmt.ansi) live.ansi = st.ansi
+				if (fmt.ansi && sessOk) live.ansi = st.ansi
 				if (sessOk) live.sess = st.sess
 			})
 		}
-		if (!fmt.parse || rows.length <= PARSE_RERENDER_SYNC_ROWS) {
+		if (rows.length <= PARSE_RERENDER_SYNC_ROWS) {
 			renderSlice(0, rows.length)
 			finish()
 			if (fmt.parse) pinBottom()
@@ -6289,7 +6373,8 @@
 		if (clearBtn) {
 			clearBtn.addEventListener('click', function (e) {
 				e.stopPropagation()
-				document.getElementById('serial-protocol-output').innerHTML = ''
+				disposeSeriesCharts(document.getElementById('serial-protocol-output'))
+			document.getElementById('serial-protocol-output').innerHTML = ''
 				if (typeof renderProtocolHexDump === 'function') renderProtocolHexDump(null)
 				syncParsePanelEmpty()
 				emitParseFrame(null)

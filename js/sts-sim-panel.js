@@ -1105,11 +1105,15 @@
 		Object.keys(panels).forEach(function (sid) {
 			const text = panels[sid].poll()
 			if (summaryItems[sid] && summaryItems[sid].textContent !== text) summaryItems[sid].textContent = text
-			panels[sid].root.hidden = sid === 'S' ? dual : !dual
+			const hide = sid === 'S' ? dual : !dual
+			if (panels[sid].root.hidden !== hide) panels[sid].root.hidden = hide
 		})
-		dualbar.hidden = !dual
-		grid.classList.remove('is-dual', 'is-single')
-		grid.classList.add(dual ? 'is-dual' : 'is-single')
+		// 每 500ms 跑一次：值没变就不写 DOM，免得反复触发样式重算和属性观察器
+		if (dualbar.hidden !== !dual) dualbar.hidden = !dual
+		if (!grid.classList.contains(dual ? 'is-dual' : 'is-single')) {
+			grid.classList.remove('is-dual', 'is-single')
+			grid.classList.add(dual ? 'is-dual' : 'is-single')
+		}
 		syncProtocol()
 	}
 
