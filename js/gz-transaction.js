@@ -10,8 +10,10 @@
 	const serialApi = window.serialApi
 	let recvBuf = []
 	const waiters = []
-	const MAX_BUF = 65536
+	const MAX_FRAME = 257
 	const MIN_FRAME = 5
+	// 没有事务在等时只留这么长的尾巴(帧最长 257 字节)，不扫描：解析器常驻订阅全部接收，不能让普通流量也走一遍找帧
+	const IDLE_TAIL = 1024
 
 	function dispatchFrame(parsed, rawFrame) {
 		if (!parsed || parsed.dir !== 'up' || !parsed.xorOk) return
@@ -28,11 +30,12 @@
 	}
 
 	function pump() {
-		for (;;) {
-			if (recvBuf.length < MIN_FRAME) {
-				if (recvBuf.length > MAX_BUF) recvBuf.splice(0, recvBuf.length - 4096)
-				break
-			}
+		if (!waiters.length) {
+			if (recvBuf.length > IDLE_TAIL * 2) recvBuf.splice(0, recvBuf.length - IDLE_TAIL)
+			return
+		}
+		while (waiters.length) {
+			if (recvBuf.length < MIN_FRAME) break
 			const u8 = new Uint8Array(recvBuf)
 			let found = null
 			try { found = window.gzFindFrame(u8) } catch (e) { found = null }
@@ -47,35 +50,14 @@
 				if (parsed) dispatchFrame(parsed, raw)
 				continue
 			}
-			// 找不到合法帧: 丢弃噪声, 防止卡死
-			if (recvBuf[0] !== 0xA5) {
-				const idx = recvBuf.indexOf(0xA5)
-				if (idx < 0) {
-					if (recvBuf.length > MAX_BUF) recvBuf.splice(0, recvBuf.length - 4096)
-					break
-				}
-				recvBuf.splice(0, idx)
-				continue
-			}
-			// 以 A5 开头
-			if (recvBuf.length > 1) {
-				const len = recvBuf[1] & 0xff
-				const total = 2 + len
-				// Len 过短/过长不可能合法(最小帧 Len=3 → total=5, 最大 total=257)
-				if (total < 5 || total > 257) {
-					recvBuf.shift()
-					continue
-				}
-				if (recvBuf.length >= total) {
-					// 长度已齐但 findFrame 未命中(多为 XOR 失败) → 跳过该 A5
-					recvBuf.shift()
-					continue
-				}
-			}
-			// 帧尚不完整: 等更多数据
-			if (recvBuf.length > MAX_BUF) recvBuf.splice(0, recvBuf.length - 4096)
+			// 找帧器已检查所有完整候选，只保留可能没收齐的帧头，避免逐个跳过坏帧后重扫。
+			const tailStart = Math.max(0, recvBuf.length - (MAX_FRAME - 1))
+			const idx = recvBuf.indexOf(0xA5, tailStart)
+			if (idx < 0) recvBuf.length = 0
+			else if (idx > 0) recvBuf.splice(0, idx)
 			break
 		}
+		if (!waiters.length && recvBuf.length > IDLE_TAIL * 2) recvBuf.splice(0, recvBuf.length - IDLE_TAIL)
 	}
 
 	let lastRxAt = 0
@@ -99,7 +81,7 @@
 		})
 	}
 
-	function waitFor(matchFn, timeoutMs) {
+	function waitFor(matchFn, timeoutMs, onWaiter) {
 		return new Promise(function (resolve, reject) {
 			const w = {
 				match: matchFn,
@@ -112,6 +94,7 @@
 				}, timeoutMs),
 			}
 			waiters.push(w)
+			if (onWaiter) onWaiter(w)
 			pump()
 		})
 	}
@@ -123,11 +106,21 @@
 		if (!serialApi.isOpen()) throw new Error('串口未打开')
 		// 事务等待周期钉扎主发口: 请求与应答落在同一设备
 		serialApi.pinSession(serialApi.getActiveSendSid())
+		let pendingWaiter = null
 		try {
-			const p = waitFor(opts.match, timeoutMs)
+			// 新请求不能由上一事务/闲置期留下的应答完成；被动 waitFor 仍可读取已有缓冲。
+			if (!waiters.length) clearBuffer()
+			const p = waitFor(opts.match, timeoutMs, function (w) { pendingWaiter = w })
+			// 写入尚未结束时等待也可能超时/取消，先挂拒绝处理避免未处理的 Promise。
+			p.catch(function () {})
 			await serialApi.writeData(opts.frame)
 			return await p
 		} finally {
+			if (pendingWaiter) {
+				const idx = waiters.indexOf(pendingWaiter)
+				if (idx !== -1) waiters.splice(idx, 1)
+				clearTimeout(pendingWaiter.timer)
+			}
 			serialApi.unpinSession()
 		}
 	}

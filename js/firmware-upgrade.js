@@ -20,6 +20,7 @@
 	let running = false
 	let stopFlag = false
 	let recvBuffer = []
+	let recvOffset = 0
 
 	const el = {
 		file: document.getElementById('fw-file'),
@@ -122,6 +123,7 @@
 		reader.readAsArrayBuffer(file)
 	}
 
+	const LOG_MAX_LINES = 3000
 	function log(msg, level) {
 		const cls = { info: '', success: 'text-success', error: 'text-danger', warn: 'text-warning' }[level || 'info']
 		const time = new Date().toLocaleTimeString()
@@ -129,6 +131,8 @@
 		line.className = cls
 		line.textContent = `[${time}] ${msg}`
 		el.log.appendChild(line)
+		// 每个分片都记一行，连续升级、设备反复重请求时没有上限就一直涨
+		while (el.log.childElementCount > LOG_MAX_LINES) el.log.removeChild(el.log.firstElementChild)
 		el.log.scrollTop = el.log.scrollHeight
 		if (level === 'error' && running) lastError = msg
 		emit({ type: 'log', msg: msg, level: level || 'info' })
@@ -324,6 +328,7 @@
 			el.stop.disabled = true
 			el.query.disabled = false
 			recvBuffer = []
+			recvOffset = 0
 			emit({ type: 'end', ok: outcomeOk, stopped: stopFlag && !outcomeOk, error: lastError })
 		}
 	})
@@ -336,16 +341,18 @@
 
 	// 累积接收字节, 提取一个完整的 PCP 帧(起始 0xFFFE + 8字节头 + dataLength)
 	function tryReadFrame() {
-		while (recvBuffer.length >= 8) {
-			if (recvBuffer[0] !== 0xFF || recvBuffer[1] !== 0xFE) {
-				recvBuffer.shift()
+		// 只移动读游标，整批处理完再回收前缀，避免多帧粘包时反复搬移整个数组。
+		while (recvBuffer.length - recvOffset >= 8) {
+			if (recvBuffer[recvOffset] !== 0xFF || recvBuffer[recvOffset + 1] !== 0xFE) {
+				recvOffset++
 				continue
 			}
-			const dataLength = (recvBuffer[6] << 8) | recvBuffer[7]
+			const dataLength = (recvBuffer[recvOffset + 6] << 8) | recvBuffer[recvOffset + 7]
 			const total = 8 + dataLength
-			if (recvBuffer.length < total) break
-			const frame = recvBuffer.splice(0, total)
-			return Uint8Array.from(frame)
+			if (recvBuffer.length - recvOffset < total) break
+			const frame = Uint8Array.from(recvBuffer.slice(recvOffset, recvOffset + total))
+			recvOffset += total
+			return frame
 		}
 		return null
 	}
@@ -354,9 +361,10 @@
 	let waiters = []
 	serialApi.onReceive((data) => {
 		if (!data || !data.length) return
-		recvBuffer.push(...data)
-		// 防止非 PCP 流量无限堆积
-		if (recvBuffer.length > 65536) recvBuffer.splice(0, recvBuffer.length - 65536)
+		// 未升级也未查询时，不让普通串口流量进入固件帧解析器。
+		if (!running && !waiters.length) { recvBuffer = []; recvOffset = 0; return }
+		// 不能用 push(...data)：单次读回可能上万字节，展开成实参会超出调用栈上限抛 RangeError，这块数据就被静默丢掉
+		for (let i = 0; i < data.length; i++) recvBuffer.push(data[i])
 		let frame
 		while ((frame = tryReadFrame())) {
 			const parsed = PCP.parseMessage(frame)
@@ -370,6 +378,9 @@
 				}
 			}
 		}
+		if (recvOffset) { recvBuffer.splice(0, recvOffset); recvOffset = 0 }
+		// PCP 最大帧为 8 + 65535 字节，保留尚未收全的最大帧。
+		if (recvBuffer.length > 65543) recvBuffer.splice(0, recvBuffer.length - 65543)
 	})
 
 	// 发送数据并等待指定消息码的响应(可同时等待多个消息码), 带超时
@@ -386,7 +397,20 @@
 				}, timeout),
 			}
 			waiters.push(w)
-			serialApi.writeData(reqBytes)
+			const failWrite = (error) => {
+				// 只撤掉这笔等待；若应答/超时已经结束它，迟到的写失败也不影响别的事务。
+				const idx = waiters.indexOf(w)
+				if (idx === -1) return
+				waiters.splice(idx, 1)
+				clearTimeout(w.timer)
+				reject(error)
+			}
+			try {
+				Promise.resolve(serialApi.writeData(reqBytes)).catch(failWrite)
+			} catch (error) {
+				failWrite(error)
+				return
+			}
 			log('发送: ' + bytesToHex(reqBytes), 'info')
 		})
 	}

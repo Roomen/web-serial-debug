@@ -133,8 +133,8 @@
 			return new Promise(function (resolve, reject) {
 				const tx = db.transaction('kv', 'readwrite')
 				tx.objectStore('kv').put(val, key)
-				tx.oncomplete = function () { resolve() }
-				tx.onerror = function () { reject(tx.error) }
+				tx.oncomplete = function () { db.close(); resolve() }
+				tx.onerror = function () { db.close(); reject(tx.error) }
 			})
 		})
 	}
@@ -143,8 +143,8 @@
 		return idbOpen().then(function (db) {
 			return new Promise(function (resolve, reject) {
 				const req = db.transaction('kv', 'readonly').objectStore('kv').get(key)
-				req.onsuccess = function () { resolve(req.result) }
-				req.onerror = function () { reject(req.error) }
+				req.onsuccess = function () { db.close(); resolve(req.result) }
+				req.onerror = function () { db.close(); reject(req.error) }
 			})
 		})
 	}
@@ -223,6 +223,11 @@
 
 	window._fwPackOutputs = []
 
+	const PACK_LOG_MAX_LINES = 2000
+	function trimPackLog() {
+		while (el.log.childElementCount > PACK_LOG_MAX_LINES) el.log.removeChild(el.log.firstElementChild)
+	}
+
 	function logUpgradeBtn(name, data, index) {
 		const line = document.createElement('div')
 		line.className = 'fw-log-upgrade-row'
@@ -242,7 +247,20 @@
 		fileName.textContent = name
 		line.append(button, fileName)
 		el.log.appendChild(line)
+		trimPackLog()
 		el.log.scrollTop = el.log.scrollHeight
+	}
+
+	// 新一轮生成开始时释放上一轮的产物：每份都是整包拷贝，一直留着内存会随生成次数增长。
+	// 旧按钮置灰并去掉下标，新一轮 start 事件同步重置现代产物列表；已交给升级面板的那份由升级面板自己持有
+	function releaseOutputs() {
+		const list = window._fwPackOutputs
+		list.length = 0
+		el.log.querySelectorAll('.fw-log-upgrade-btn').forEach(function (b) {
+			b.disabled = true
+			delete b.dataset.fwIdx
+			b.title = '已开始新一轮生成，这份产物已释放'
+		})
 	}
 
 	function navToFwUpgrade(data, name, kind) {
@@ -256,7 +274,7 @@
 	if (el.log) {
 		el.log.addEventListener('click', function (e) {
 			var btn = e.target.closest('.fw-log-upgrade-btn')
-			if (!btn) return
+			if (!btn || btn.disabled) return
 			var idx = parseInt(btn.getAttribute('data-fw-idx'), 10)
 			var item = window._fwPackOutputs[idx]
 			if (!item || !item.buffer) return
@@ -274,9 +292,10 @@
 	const blank = { val: null }
 	const blankNameVal = { val: '' }
 
-	let hdiffiModule = null
-	let hdiffiReady = false
-	let hdiffiLoading = false
+	let diffWorker = null
+	let diffJob = null
+	let packRunning = false
+	const diffWorkerUrl = new URL('firmware-diff-worker.js', document.currentScript.src).href
 
 	function log(msg, level) {
 		const cls = { info: '', success: 'text-success', error: 'text-danger', warn: 'text-warning' }[level || 'info']
@@ -285,6 +304,7 @@
 		line.className = cls
 		line.textContent = '[' + time + '] ' + msg
 		el.log.appendChild(line)
+		trimPackLog()
 		el.log.scrollTop = el.log.scrollHeight
 		emit({ type: 'log', msg: msg, level: level || 'info' })
 	}
@@ -428,116 +448,55 @@
 		el.log.innerHTML = ''
 	})
 
-	// 提前解码 WASM 二进制，供 instantiateWasm 使用
-	;(function () {
-		if (!window.__hdiffiWasmBase64) return
-		try {
-			var binStr = atob(window.__hdiffiWasmBase64)
-			window.__hdiffiWasmBuf = new Uint8Array(binStr.length)
-			for (var i = 0; i < binStr.length; i++) window.__hdiffiWasmBuf[i] = binStr.charCodeAt(i)
-		} catch (e) {}
-	})()
-
-	// 提前静默加载 hdiffi，避免用户点击"开始生成"后再等待
-	;(function () {
-		if (typeof createHpatchLiteModule === 'undefined') return
-		if (!window.__hdiffiWasmBuf) return
-		hdiffiLoading = true
-		try {
-			createHpatchLiteModule({
-				instantiateWasm: function (imports, successCallback) {
-					WebAssembly.instantiate(window.__hdiffiWasmBuf, imports).then(function (result) {
-						successCallback(result.instance)
-					})
-				}
-			}).then(function (mod) {
-				hdiffiModule = mod
-				hdiffiReady = true
-			}).catch(function () {})
-			.finally(function () { hdiffiLoading = false })
-		} catch (e) { hdiffiLoading = false }
-	})()
-
-	function ensureHdiffi() {
-		return new Promise(function (resolve, reject) {
-			if (hdiffiReady) return resolve(hdiffiModule)
-			if (hdiffiLoading) {
-				const check = setInterval(function () {
-					if (hdiffiReady) { clearInterval(check); resolve(hdiffiModule) }
-					if (!hdiffiLoading && !hdiffiReady) { clearInterval(check); reject(new Error('hdiffi 加载失败')) }
-				}, 100)
-				return
-			}
-			hdiffiLoading = true
-			log('正在加载 hdiffi (HPatchLite) WASM ...', 'info')
-			if (typeof createHpatchLiteModule === 'undefined') {
-				hdiffiLoading = false
-				reject(new Error('hdiffi WASM 模块未找到, 请确认 hdiffi.js 已加载'))
-				return
-			}
-
-			function onLoad(mod) {
-				hdiffiModule = mod
-				hdiffiReady = true
-				hdiffiLoading = false
-				log('hdiffi WASM 就绪', 'success')
-				resolve(mod)
-			}
-			function onError(err) {
-				hdiffiLoading = false
-				log('hdiffi WASM 初始化失败: ' + err.message, 'error')
-				reject(err)
-			}
-
-			if (window.__hdiffiWasmBuf) {
-				createHpatchLiteModule({
-					instantiateWasm: function (imports, successCallback) {
-						WebAssembly.instantiate(window.__hdiffiWasmBuf, imports).then(function (result) {
-							successCallback(result.instance)
-						})
-					}
-				}).then(onLoad).catch(onError)
-			} else {
-				createHpatchLiteModule().then(onLoad).catch(onError)
-			}
-		})
+	// 按需创建差分 Worker，整轮生成结束即释放其 WASM 内存；不在串口页预载。
+	function disposeDiffWorker(error) {
+		if (diffWorker) diffWorker.terminate()
+		diffWorker = null
+		if (diffJob) {
+			clearTimeout(diffJob.timer)
+			const job = diffJob
+			diffJob = null
+			job.reject(error || new Error('差分任务已结束'))
+		}
 	}
 
 	function wasmCreatePatch(oldData, newData) {
-		return ensureHdiffi().then(function (mod) {
-			const t0 = performance.now()
-			const oldPtr = mod._malloc(oldData.length)
-			const newPtr = mod._malloc(newData.length)
-			const outPtrPtr = mod._malloc(4)
-
-			for (let i = 0; i < oldData.length; i++) mod.setValue(oldPtr + i, oldData[i], 'i8')
-			for (let i = 0; i < newData.length; i++) mod.setValue(newPtr + i, newData[i], 'i8')
-
-			const patchSize = mod._hdiffi_create_patch(oldPtr, oldData.length, newPtr, newData.length, outPtrPtr)
-
-			if (patchSize <= 0) {
-				mod._free(oldPtr)
-				mod._free(newPtr)
-				mod._free(outPtrPtr)
-				throw new Error('hdiffi 差分失败, 返回 ' + patchSize)
+		return new Promise(function (resolve, reject) {
+			if (diffJob) { reject(new Error('差分任务正在执行')); return }
+			try {
+				if (!diffWorker) {
+					diffWorker = new Worker(diffWorkerUrl)
+					diffWorker.onmessage = function (e) {
+						const job = diffJob
+						if (!job) return
+						clearTimeout(job.timer)
+						diffJob = null
+						if (e.data.error) job.reject(new Error(e.data.error))
+						else {
+							const patch = new Uint8Array(e.data.patch)
+							log('hdiffi 差分耗时: ' + Math.round(e.data.ms) + 'ms, patch: ' + fmtSize(patch.length), 'info')
+							job.resolve(patch)
+						}
+					}
+					diffWorker.onerror = function () { disposeDiffWorker(new Error('差分 Worker 加载或执行失败')) }
+					diffWorker.onmessageerror = function () { disposeDiffWorker(new Error('差分 Worker 数据传输失败')) }
+				}
+				// 输入保留给组包 CRC 和反向差分；只转移本任务的副本。
+				const oldCopy = oldData.slice()
+				const newCopy = newData.slice()
+				diffJob = { resolve: resolve, reject: reject, timer: setTimeout(function () {
+					disposeDiffWorker(new Error('差分生成超时'))
+				}, 5 * 60 * 1000) }
+				diffWorker.postMessage({ old: oldCopy.buffer, nw: newCopy.buffer }, [oldCopy.buffer, newCopy.buffer])
+			} catch (e) {
+				if (diffJob) disposeDiffWorker(e)
+				else reject(e)
 			}
-
-			const outPtr = mod.getValue(outPtrPtr, 'i32')
-			const patch = new Uint8Array(patchSize)
-			for (let i = 0; i < patchSize; i++) patch[i] = mod.getValue(outPtr + i, 'i8')
-
-			mod._free(outPtr)
-			mod._free(oldPtr)
-			mod._free(newPtr)
-			mod._free(outPtrPtr)
-
-			const t1 = performance.now()
-			log('hdiffi 差分耗时: ' + (t1 - t0).toFixed(0) + 'ms, patch: ' + fmtSize(patchSize), 'info')
-			return patch
 		})
 	}
 
 	el.start.addEventListener('click', async function () {
+		if (packRunning) return
 		if (!newFw.val) {
 			log('请先选择新固件', 'error')
 			return
@@ -552,164 +511,178 @@
 			return
 		}
 
-		const newInfo = parseFirmwareName(newFwName.val)
-		const userDefine = el.userDefine.value || ''
-		const useZip = el.genZip.checked
-		const zipFiles = []
-		const newFwCRC32 = crc32(newFw.val).toString(16).toUpperCase().padStart(8, '0')
-		emit({ type: 'start' })
-
-		// 在首个 await 前(点击手势有效期内)获取输出目录, 之后所有文件静默写入同一目录
-		let dirHandle = null
-		if (fsSaveSupported) {
-			try {
-				dirHandle = await ensureDirHandle()
-				log('输出目录: ' + dirHandle.name + '/', 'info')
-			} catch (e) {
-				if (e && e.name === 'AbortError') {
-					log('未选择输出目录, 已取消生成', 'warn')
-					emit({ type: 'end', aborted: true })
-					return
-				}
-				log('输出目录不可用, 将使用浏览器下载: ' + e.message, 'warn')
-			}
-		}
-
-		async function outputFile(name, data, logMsg, level) {
-			if (useZip) {
-				zipFiles.push({ name: name, data: data })
-			} else if (dirHandle) {
-				try {
-					await writeToDir(dirHandle, name, data)
-					logMsg += ' | 已保存到 ' + dirHandle.name + '/'
-				} catch (e) {
-					downloadBlob(data, name)
-					logMsg += ' | 目录写入失败, 已转为浏览器下载'
-					level = 'warn'
-				}
-			} else {
-				downloadBlob(data, name)
-			}
-			log(logMsg, level)
-		}
-
+		packRunning = true
+		el.start.disabled = true
 		try {
-			if (genOrigin) {
-				const header = packFirmware({
-					firmwareData: newFw.val,
-					pkgType: 1,
-					userDefine: userDefine,
-				})
-				const full = new Uint8Array(header.length + newFw.val.length)
-				full.set(header)
-				full.set(newFw.val, header.length)
-				const outName = newInfo.version + '_' + newInfo.timestamp + '_Origin.bin'
-				await outputFile(outName, full,
-					'原始包: ' + outName + ' | 大小: ' + fmtSize(full.length) + ' | 固件CRC32: ' + newFwCRC32, 'success')
-				navToFwUpgrade(full, outName, 'origin')
+			// 固件选择可以在 await 期间变化，整轮使用同一份快照。
+			const newData = newFw.val
+			const oldData = oldFw.val
+			const blankData = blank.val
+			const oldName = oldFwName.val
+			const newInfo = parseFirmwareName(newFwName.val)
+			const userDefine = el.userDefine.value || ''
+			const useZip = el.genZip.checked
+			const zipFiles = []
+			const newFwCRC32 = crc32(newData).toString(16).toUpperCase().padStart(8, '0')
+			releaseOutputs()
+			emit({ type: 'start' })
+
+			// 在首个 await 前(点击手势有效期内)获取输出目录, 之后所有文件静默写入同一目录
+			let dirHandle = null
+			if (fsSaveSupported) {
+				try {
+					dirHandle = await ensureDirHandle()
+					log('输出目录: ' + dirHandle.name + '/', 'info')
+				} catch (e) {
+					if (e && e.name === 'AbortError') {
+						log('未选择输出目录, 已取消生成', 'warn')
+						emit({ type: 'end', aborted: true })
+						return
+					}
+					log('输出目录不可用, 将使用浏览器下载: ' + e.message, 'warn')
+				}
 			}
 
-			if (genCompress) {
-				if (!blank.val) {
-					log('压缩包需要 BLANK.bin, 请选择 BLANK 文件', 'error')
+			async function outputFile(name, data, logMsg, level) {
+				if (useZip) {
+					zipFiles.push({ name: name, data: data })
+				} else if (dirHandle) {
+					try {
+						await writeToDir(dirHandle, name, data)
+						logMsg += ' | 已保存到 ' + dirHandle.name + '/'
+					} catch (e) {
+						downloadBlob(data, name)
+						logMsg += ' | 目录写入失败, 已转为浏览器下载'
+						level = 'warn'
+					}
 				} else {
-					try {
-						const patch = await wasmCreatePatch(blank.val, newFw.val)
-						const header = packFirmware({
-							firmwareData: patch,
-							pkgType: 2,
-							userDefine: userDefine,
-							oldFileData: blank.val,
-							newFileData: newFw.val,
-						})
-						const full = new Uint8Array(header.length + patch.length)
-						full.set(header)
-						full.set(patch, header.length)
-						const outName = newInfo.version + '_' + newInfo.timestamp + '_comp.bin'
-						await outputFile(outName, full,
-							'压缩包: ' + outName + ' | 大小: ' + fmtSize(full.length) + ' (patch: ' + fmtSize(patch.length) + ')', 'success')
-						navToFwUpgrade(full, outName, 'compress')
-					} catch (e) {
-						log('压缩包生成失败: ' + e.message, 'error')
-					}
+					downloadBlob(data, name)
 				}
+				log(logMsg, level)
 			}
 
-			if (genDiff) {
-				if (!oldFw.val) {
-					log('差分包需要旧固件, 请先选择旧固件', 'error')
-				} else {
-					const oldInfo = parseFirmwareName(oldFwName.val)
+			try {
+				if (genOrigin) {
+					const header = packFirmware({
+						firmwareData: newData,
+						pkgType: 1,
+						userDefine: userDefine,
+					})
+					const full = new Uint8Array(header.length + newData.length)
+					full.set(header)
+					full.set(newData, header.length)
+					const outName = newInfo.version + '_' + newInfo.timestamp + '_Origin.bin'
+					await outputFile(outName, full,
+						'原始包: ' + outName + ' | 大小: ' + fmtSize(full.length) + ' | 固件CRC32: ' + newFwCRC32, 'success')
+					navToFwUpgrade(full, outName, 'origin')
+				}
 
-					try {
-						const patchA = await wasmCreatePatch(oldFw.val, newFw.val)
-						const headerA = packFirmware({
-							firmwareData: patchA,
-							pkgType: 3,
-							userDefine: userDefine,
-							oldFileData: oldFw.val,
-							newFileData: newFw.val,
-						})
-						const fullA = new Uint8Array(headerA.length + patchA.length)
-						fullA.set(headerA)
-						fullA.set(patchA, headerA.length)
-						const outA = oldInfo.version + '_' + oldInfo.timestamp + '_to_' + newInfo.version + '_' + newInfo.timestamp + '.bin'
-						await outputFile(outA, fullA,
-							'差分包(旧→新): ' + outA + ' | 大小: ' + fmtSize(fullA.length) + ' | patch: ' + fmtSize(patchA.length), 'success')
-						navToFwUpgrade(fullA, outA, 'diff-fwd')
-					} catch (e) {
-						log('差分包(旧→新)失败: ' + e.message, 'error')
-					}
-
-					try {
-						const patchB = await wasmCreatePatch(newFw.val, oldFw.val)
-						const headerB = packFirmware({
-							firmwareData: patchB,
-							pkgType: 3,
-							userDefine: userDefine,
-							oldFileData: newFw.val,
-							newFileData: oldFw.val,
-						})
-						const fullB = new Uint8Array(headerB.length + patchB.length)
-						fullB.set(headerB)
-						fullB.set(patchB, headerB.length)
-						const outB = newInfo.version + '_' + newInfo.timestamp + '_to_' + oldInfo.version + '_' + oldInfo.timestamp + '.bin'
-						await outputFile(outB, fullB,
-							'差分包(新→旧): ' + outB + ' | 大小: ' + fmtSize(fullB.length) + ' | patch: ' + fmtSize(patchB.length), 'success')
-						navToFwUpgrade(fullB, outB, 'diff-rev')
-					} catch (e) {
-						log('差分包(新→旧)失败: ' + e.message, 'error')
+				if (genCompress) {
+					if (!blankData) {
+						log('压缩包需要 BLANK.bin, 请选择 BLANK 文件', 'error')
+					} else {
+						try {
+							const patch = await wasmCreatePatch(blankData, newData)
+							const header = packFirmware({
+								firmwareData: patch,
+								pkgType: 2,
+								userDefine: userDefine,
+								oldFileData: blankData,
+								newFileData: newData,
+							})
+							const full = new Uint8Array(header.length + patch.length)
+							full.set(header)
+							full.set(patch, header.length)
+							const outName = newInfo.version + '_' + newInfo.timestamp + '_comp.bin'
+							await outputFile(outName, full,
+								'压缩包: ' + outName + ' | 大小: ' + fmtSize(full.length) + ' (patch: ' + fmtSize(patch.length) + ')', 'success')
+							navToFwUpgrade(full, outName, 'compress')
+						} catch (e) {
+							log('压缩包生成失败: ' + e.message, 'error')
+						}
 					}
 				}
-			}
 
-			if (useZip && zipFiles.length > 0) {
-				const zip = new JSZip()
-				for (const f of zipFiles) {
-					zip.file(f.name, f.data)
+				if (genDiff) {
+					if (!oldData) {
+						log('差分包需要旧固件, 请先选择旧固件', 'error')
+					} else {
+						const oldInfo = parseFirmwareName(oldName)
+
+						try {
+							const patchA = await wasmCreatePatch(oldData, newData)
+							const headerA = packFirmware({
+								firmwareData: patchA,
+								pkgType: 3,
+								userDefine: userDefine,
+								oldFileData: oldData,
+								newFileData: newData,
+							})
+							const fullA = new Uint8Array(headerA.length + patchA.length)
+							fullA.set(headerA)
+							fullA.set(patchA, headerA.length)
+							const outA = oldInfo.version + '_' + oldInfo.timestamp + '_to_' + newInfo.version + '_' + newInfo.timestamp + '.bin'
+							await outputFile(outA, fullA,
+								'差分包(旧→新): ' + outA + ' | 大小: ' + fmtSize(fullA.length) + ' | patch: ' + fmtSize(patchA.length), 'success')
+							navToFwUpgrade(fullA, outA, 'diff-fwd')
+						} catch (e) {
+							log('差分包(旧→新)失败: ' + e.message, 'error')
+						}
+
+						try {
+							const patchB = await wasmCreatePatch(newData, oldData)
+							const headerB = packFirmware({
+								firmwareData: patchB,
+								pkgType: 3,
+								userDefine: userDefine,
+								oldFileData: newData,
+								newFileData: oldData,
+							})
+							const fullB = new Uint8Array(headerB.length + patchB.length)
+							fullB.set(headerB)
+							fullB.set(patchB, headerB.length)
+							const outB = newInfo.version + '_' + newInfo.timestamp + '_to_' + oldInfo.version + '_' + oldInfo.timestamp + '.bin'
+							await outputFile(outB, fullB,
+								'差分包(新→旧): ' + outB + ' | 大小: ' + fmtSize(fullB.length) + ' | patch: ' + fmtSize(patchB.length), 'success')
+							navToFwUpgrade(fullB, outB, 'diff-rev')
+						} catch (e) {
+							log('差分包(新→旧)失败: ' + e.message, 'error')
+						}
+					}
 				}
-				const blob = await zip.generateAsync({ type: 'blob' })
-				const zipName = newInfo.version + '_' + newInfo.timestamp + '_pack.zip'
-				if (dirHandle) {
-					try {
-						await writeToDir(dirHandle, zipName, blob)
-						log('打包保存: ' + dirHandle.name + '/' + zipName + ' (' + fmtSize(blob.size) + ', 含 ' + zipFiles.length + ' 个文件)', 'success')
-						emit({ type: 'zip', name: zipName, size: blob.size, count: zipFiles.length })
-					} catch (e) {
+
+				if (useZip && zipFiles.length > 0) {
+					const zip = new JSZip()
+					for (const f of zipFiles) {
+						zip.file(f.name, f.data)
+					}
+					const blob = await zip.generateAsync({ type: 'blob' })
+					const zipName = newInfo.version + '_' + newInfo.timestamp + '_pack.zip'
+					if (dirHandle) {
+						try {
+							await writeToDir(dirHandle, zipName, blob)
+							log('打包保存: ' + dirHandle.name + '/' + zipName + ' (' + fmtSize(blob.size) + ', 含 ' + zipFiles.length + ' 个文件)', 'success')
+							emit({ type: 'zip', name: zipName, size: blob.size, count: zipFiles.length })
+						} catch (e) {
+							downloadBlob(blob, zipName)
+							log('打包下载: ' + zipName + ' (目录写入失败, 已转为浏览器下载)', 'warn')
+							emit({ type: 'zip', name: zipName, size: blob.size, count: zipFiles.length })
+						}
+					} else {
 						downloadBlob(blob, zipName)
-						log('打包下载: ' + zipName + ' (目录写入失败, 已转为浏览器下载)', 'warn')
+						log('打包下载: ' + zipName + ' (' + fmtSize(blob.size) + ', 含 ' + zipFiles.length + ' 个文件)', 'success')
 						emit({ type: 'zip', name: zipName, size: blob.size, count: zipFiles.length })
 					}
-				} else {
-					downloadBlob(blob, zipName)
-					log('打包下载: ' + zipName + ' (' + fmtSize(blob.size) + ', 含 ' + zipFiles.length + ' 个文件)', 'success')
-					emit({ type: 'zip', name: zipName, size: blob.size, count: zipFiles.length })
 				}
+			} catch (e) {
+				log('打包异常: ' + e.message, 'error')
 			}
-		} catch (e) {
-			log('打包异常: ' + e.message, 'error')
+			emit({ type: 'end' })
+		} finally {
+			disposeDiffWorker()
+			packRunning = false
+			el.start.disabled = false
 		}
-		emit({ type: 'end' })
 	})
 
 	// 内置 BLANK.BIN — 优先 fetch，失败则使用内嵌默认值

@@ -815,13 +815,18 @@
 	}
 
 	function render() {
-		if (!ui) return
+		if (!viewVisible()) return
 		if (raf) return
 		raf = requestAnimationFrame(function () {
 			raf = 0
-			if (!ui) return
+			if (!viewVisible()) return
 			renderAll(Date.now())
 		})
+	}
+
+	function viewVisible() {
+		const view = $('view-fw-pack')
+		return !!(ui && !document.hidden && view && view.classList.contains('active'))
 	}
 
 	function renderAll(now) {
@@ -940,22 +945,29 @@
 		build()
 		const view = $('view-fw-pack')
 		previewPlan(model, chunkInputValue())
-		renderAll(Date.now())
+		if (viewVisible()) renderAll(Date.now())
+		// 事件始终归约到 model；页面再次显示时补一次完整视图(含产物列表)。
+		document.addEventListener('visibilitychange', render)
+		ui_cleanup.push(function () { document.removeEventListener('visibilitychange', render) })
 		// 速率、剩余时间与端口标签随时间变；产物列表只在事件到来时重建，免得键盘焦点被每秒重绘打掉
 		timer = setInterval(function () {
-			if (document.hidden || !ui) return
+			// 固件页没显示时不刷新：分块格子每秒都要整段统计；切回固件页后下一拍(1 秒内)补上
+			if (!viewVisible()) return
 			const now = Date.now()
 			renderSteps()
 			renderUpgrade(now)
 			renderVerify()
 		}, 1000)
 		if (typeof ResizeObserver === 'function') {
-			ro = new ResizeObserver(function () { if (ui) drawGrid() })
+			ro = new ResizeObserver(function () { if (viewVisible()) drawGrid() })
 			ro.observe(ui.gridWrap)
 		}
 		if (typeof MutationObserver === 'function') {
-			themeMo = new MutationObserver(function () { if (ui) drawGrid() })
+			themeMo = new MutationObserver(function () { if (viewVisible()) drawGrid() })
 			themeMo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+			const viewMo = new MutationObserver(render)
+			viewMo.observe(view, { attributes: true, attributeFilter: ['class'] })
+			ui_cleanup.push(function () { viewMo.disconnect() })
 		}
 	}
 

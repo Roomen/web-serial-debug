@@ -597,8 +597,18 @@
 			}
 			pending.forEach(function (row) { if (row.isConnected) applyRow(row, f) })
 			pending.clear()
-			updateFilterCount()
+			countLater()
 		})
+		// 计数要数一遍全部历史行：持续收数据时每批都数一遍太贵，最多每 500ms 数一次
+		let countTimer = 0
+		const countLater = function () {
+			if (r.f.empty || countTimer) return
+			countTimer = setTimeout(function () {
+				countTimer = 0
+				if (mounted) updateFilterCount()
+			}, 500)
+		}
+		cleanups.push(function () { clearTimeout(countTimer); countTimer = 0 })
 		logBoxes().forEach(function (box) {
 			observe(box, { childList: true, subtree: true, characterData: true }, function (muts) {
 				for (let i = 0; i < muts.length; i++) {

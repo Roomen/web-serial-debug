@@ -127,6 +127,10 @@ const mk = (sid, dir, ts) => ({ sid, dir, ts })
 	deepEqual(T.exchange(items, r, 7), { start: 7, end: 8 })
 	deepEqual(T.exchange(items, r, 9), { start: 9, end: 9 }, 'TX 后的第二条 RX 只有自己')
 	assert.equal(T.exchange(items, r, 2), null, '系统行没有交互区间')
+	assert.equal(T.awaitingReply(items, 0), false, '已收到应答的 TX 不再等待')
+	assert.equal(T.awaitingReply(items, 5), true, '另一条路收发不终结等待')
+	assert.equal(T.awaitingReply(items, 6), false, '同路新请求取代旧请求，不再扫描旧请求的区间')
+	assert.equal(T.awaitingReply(items, 9), false, 'RX 不等待应答')
 }
 
 // ---- 持久化清理 ----

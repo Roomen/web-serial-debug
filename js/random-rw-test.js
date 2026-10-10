@@ -533,7 +533,9 @@
 			el.stop.disabled = false
 			setStatus('测试中…', 'run')
 	
-			const stepsN = Math.max(5, parseInt(el.steps.value, 10) || 40)
+			const requestedSteps = parseInt(el.steps.value, 10)
+			const stepsN = Number.isFinite(requestedSteps) ? Math.min(500, Math.max(5, requestedSteps)) : 40
+			el.steps.value = String(stepsN)
 			const gapMs = Math.max(0, parseInt(el.gap.value, 10) || DEFAULT_GAP_MS)
 			const timeoutMs = Math.max(1000, parseInt(el.timeout.value, 10) || DEFAULT_STEP_TIMEOUT)
 			let seed = parseInt(el.seed.value, 10)

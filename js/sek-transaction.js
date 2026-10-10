@@ -12,6 +12,8 @@
 	let recvBuf = []
 	const waiters = []
 	const MAX_BUF = 65536
+	// 没有事务在等时只留这么长的尾巴，不扫描：找帧走顶栏协议的 findFrame(W-MBUS 要逐个候选算 CMAC)，常驻扫描普通流量很贵
+	const IDLE_TAIL = 4096
 
 	function nextSeq() {
 		const s = _seq & 0xffff
@@ -156,8 +158,12 @@
 
 	// skFindFrame 返回: { found, offset, length, frame, parse, prefix, suffix }
 	function pump() {
+		if (!waiters.length) {
+			if (recvBuf.length > IDLE_TAIL * 2) recvBuf.splice(0, recvBuf.length - IDLE_TAIL)
+			return
+		}
 		const opts = getParseOpts()
-		for (;;) {
+		while (waiters.length) {
 			if (recvBuf.length < 19) break
 			const u8 = new Uint8Array(recvBuf)
 			let found = null
@@ -203,7 +209,7 @@
 		pump()
 	})
 
-	function waitFor(matchFn, timeoutMs) {
+	function waitFor(matchFn, timeoutMs, onWaiter) {
 		return new Promise(function (resolve, reject) {
 			const w = {
 				match: matchFn,
@@ -216,6 +222,7 @@
 				}, timeoutMs)
 			}
 			waiters.push(w)
+			if (onWaiter) onWaiter(w)
 			pump()
 		})
 	}
@@ -244,6 +251,7 @@
 		const timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 5000
 		// 事务等待周期钉扎主发口: 请求与应答落在同一设备
 		serialApi.pinSession(serialApi.getActiveSendSid())
+		let pendingWaiter = null
 		try {
 			const built = buildDown(opts.buildOpts || {})
 			const expectFunc = opts.expectFunc
@@ -267,7 +275,11 @@
 				return true
 			}
 
-			const p = waitFor(matchFn, timeoutMs)
+			// 新请求不能由上一事务/闲置期留下的应答完成；被动 waitFor 仍可读取已有缓冲。
+			if (!waiters.length) clearBuffer()
+			const p = waitFor(matchFn, timeoutMs, function (w) { pendingWaiter = w })
+			// 写入尚未结束时等待也可能超时/取消，先挂拒绝处理避免未处理的 Promise。
+			p.catch(function () {})
 			await serialApi.writeData(built.frame)
 			const res = await p
 			return {
@@ -279,6 +291,11 @@
 				func: funcValue(res.frame)
 			}
 		} finally {
+			if (pendingWaiter) {
+				const idx = waiters.indexOf(pendingWaiter)
+				if (idx !== -1) waiters.splice(idx, 1)
+				clearTimeout(pendingWaiter.timer)
+			}
 			serialApi.unpinSession()
 		}
 	}
