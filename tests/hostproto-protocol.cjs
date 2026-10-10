@@ -56,7 +56,7 @@ assert.equal(H.logView, registered.impl.logView)
 	assert.ok(evt.sections.some(sec => /^STS-CIU 应用帧/.test(sec.title)))
 	// 设备给的字符串在模型里原样保留，渲染器负责转义
 	const html = window.ParseView.render({ title: '<script>alert(1)</script>', subject: { label: 'x', value: '"><img onerror=1>' }, sections: [{ pairs: [['<a>', '<b>']] }], errors: ['<i>'] })
-	assert.ok(!/<script|<img|<a>|<b>|<i>/.test(html), html)
+	assert.ok(!/<script|<img|<a>|<b>|<i>/i.test(html), html)
 	assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'))
 }
 
@@ -833,6 +833,7 @@ async function serialApiTests() {
 		},
 		toolOptions: { addCR: true, addLF: true },
 		flushPendingRx: sid => flushes.push(sid),
+		recoverIfWriteDead() {},
 		addLog: (data, sent, time, sid) => logs.push({ sid, data: bytes(data) }),
 		addLogErr() { assert.fail('明确会话失败不应记录底层敏感错误') },
 		showToast() { assert.fail('明确会话失败应抛出') },
