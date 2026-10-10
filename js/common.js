@@ -310,14 +310,28 @@
 			return null
 		},
 
-		// 只在当前可见模式里找未打开会话（热插拔不要误绑到隐藏模式）
-		findClosedSession() {
-			if (this.mode === 'single') {
-				if (!sessionSingle.open && !sessionSingle.opening) return 'S'
-				return null
+		// 热插拔认领新插入的口：只在当前可见模式里找（不要误绑到隐藏模式），
+		// 先接回同型号的已拔出口，再找空会话；用户选着但关着的口(isLost 为假)不顶替。
+		// Web Serial 不给序列号，同型号只能按 VID/PID 判
+		findRebindSession(port, isLost) {
+			const sids = this.mode === 'single' ? ['S'] : ['A', 'B']
+			const free = sids.filter((sid) => !this.isOpen(sid) && !this.isOpening(sid))
+			const usbId = function (p) {
+				try {
+					const info = p.getInfo ? p.getInfo() : {}
+					return info.usbVendorId + ':' + info.usbProductId
+				} catch (e) {
+					return ''
+				}
 			}
-			if (!sessionA.open && !sessionA.opening) return 'A'
-			if (!sessionB.open && !sessionB.opening) return 'B'
+			const want = usbId(port)
+			for (let i = 0; i < free.length; i++) {
+				const old = this.getPort(free[i])
+				if (old && isLost(old) && usbId(old) === want) return free[i]
+			}
+			for (let i = 0; i < free.length; i++) {
+				if (!this.getPort(free[i])) return free[i]
+			}
 			return null
 		},
 
@@ -4036,6 +4050,9 @@
 			updatePortButtonDisplay('S', SerialHub.getPort('S'))
 		}
 	}
+	// 收到过 disconnect 的口。重插后 Chromium 给的是新的 SerialPort 对象，旧对象已作废，
+	// 热插拔只能拿新对象顶替这类口；仍插着、只是关着的口是用户选定的设备，不能被别的设备顶掉
+	const lostPorts = new WeakSet()
 	navigator.serial.addEventListener('connect', (e) => {
 		const port = serialEventPort(e)
 		if (isBluetoothSerialPort(port)) {
@@ -4044,12 +4061,15 @@
 		}
 		if (isBluAnalyzerPort(port)) return
 		if (!port || typeof port.open !== 'function') return
-		// 按 port 匹配任一模式已有会话；若都不匹配则只分配给当前模式的空会话
+		lostPorts.delete(port)
+		// 按 port 匹配任一模式已有会话；若都不匹配，只接回当前模式里同型号的已拔出口或分配给空会话
 		let sid = SerialHub.findSessionByPort(port)
 		if (!sid) {
-			sid = SerialHub.findClosedSession()
+			sid = SerialHub.findRebindSession(port, function (p) { return lostPorts.has(p) })
 			if (sid) {
 				SerialHub.setPort(sid, port)
+				// 空会话认领后才有口：开关键要随之显示，否则只能点芯片走一遍选口
+				updateOpenButton(sid)
 				getPortIdentityKey(port).then(function () {
 					refreshPortDisplayNames()
 				})
@@ -4069,6 +4089,7 @@
 	navigator.serial.addEventListener('disconnect', async (e) => {
 		const port = serialEventPort(e)
 		if (isBluAnalyzerPort(port)) return
+		if (port) lostPorts.add(port)
 		const sid = SerialHub.findSessionByPort(port)
 		if (!sid) return
 		addLogErr('设备断开连接 (' + getPortDisplayName(port) + ')', sid)
