@@ -69,6 +69,52 @@ assert.equal(H.logView, registered.impl.logView)
 	}
 }
 
+// ---- 外层地址小端 BCD：独立字节向量，不能用编解码互相掩盖错误 ----
+{
+	const vectors = [
+		['0', '00 00 00 00 00 00 00 00'],
+		['12345678', '78 56 34 12 00 00 00 00'],
+		['12123456789', '89 67 45 23 21 01 00 00'],
+		['0101123456788', '88 67 45 23 11 10 00 00'],
+		['1234567890123', '23 01 89 67 45 23 01 00'],
+		['9999999999999999', '99 99 99 99 99 99 99 99'],
+	]
+	for (const [digits, wire] of vectors) {
+		const b = hex(wire)
+		assert.deepEqual(bytes(H.bcdAddressBytes(digits)), bytes(b))
+		assert.equal(H.bcdAddress(b), BigInt(digits))
+		assert.equal(H.decodeDevId(Uint8Array.of(1, ...b)).drn, BigInt(digits))
+		assert.equal(H.decodeWorStatus(Uint8Array.of(2, 0, ...b)).localAddr, BigInt(digits))
+		assert.deepEqual(bytes(H.wakePayload(digits, 1)), [...bytes(b), 1])
+		assert.deepEqual(bytes(H.woInitPayload(2, digits)), [2, ...bytes(b)])
+		assert.deepEqual(bytes(H.devIdSetPayload(1, digits)), [1, ...bytes(b)])
+		const parse = (type, cmd, payload) => H.parseFrame(H.buildFrame({ type, cmd, seq: 1, payload }))
+		for (const cmd of [H.CMD.WOR_WAKE, H.CMD.WOR_WAKE_CIU, H.CMD.WOR_PROBE]) {
+			const r = parse(0, cmd, cmd === H.CMD.WOR_PROBE ? b : Uint8Array.of(...b, 1))
+			assert.ok(r.decoded.includes('目标地址 = ' + BigInt(digits)))
+			assert.equal(J(H.logView(r))[0].subject.value, String(BigInt(digits)))
+			assert.ok(H.byteMap(r).some(x => x && /BCD LE/.test(x.tip)))
+		}
+		assert.ok(parse(1, H.CMD.PROV_DEV_ID_GET, Uint8Array.of(0, 1, ...b)).decoded.includes('DRN = ' + BigInt(digits)))
+		assert.ok(parse(1, H.CMD.BLE_ADV_IDENTITY, Uint8Array.of(0, ...b)).decoded.includes('DRN = ' + BigInt(digits)))
+		assert.equal(H.decodeWorFrame(Uint8Array.of(...b, 4, 0, 0, 0, 0, 0, 0)).src, BigInt(digits))
+	}
+	for (const v of ['10000000000000000', '-1', '1.2', '0x12', '']) assert.throws(() => H.bcdAddressBytes(v), /16 位/)
+	assert.throws(() => H.bcdAddressBytes(9999999999999999), /安全整数/)
+	assert.equal(H.bcdAddress(hex('12 34')), null)
+	for (let i = 0; i < 8; i++) for (const bad of [0x1a, 0xa1, 0xff]) {
+		const b = new Uint8Array(8); b[i] = bad
+		assert.equal(H.bcdAddress(b), null)
+		assert.equal(H.decodeDevId(Uint8Array.of(1, ...b)), null)
+		assert.equal(H.decodeWorStatus(Uint8Array.of(2, 0, ...b)), null)
+		assert.equal(H.decodeWorFrame(Uint8Array.of(...b, 4, 0, 0, 0, 0, 0, 0)), null)
+		const r = H.parseFrame(H.buildFrame({ cmd: H.CMD.WOR_WAKE, seq: 1, payload: Uint8Array.of(...b, 1) }))
+		assert.match(r.decoded, /非法 BCD/)
+	}
+	// 内嵌 STS-CIU 表号维持原来的字节顺序。
+	assert.deepEqual(bytes(S.meterBcd('12345678')), [0x12, 0x34, 0x56, 0x78])
+}
+
 // ---- CRC16/CCITT-FALSE ----
 assert.equal(H.crc16(Buffer.from('123456789')), 0x29b1)
 assert.equal(H.crc16(hex('EB 90 10 01 00 5A 04 00 50 49 4E 47')), 0xdf32)
@@ -244,7 +290,7 @@ assert.deepEqual(bytes(H.buildFrame({ cmd: 0x0001, seq: 0x5a, payload: Buffer.fr
 	assert.equal(p.ok, true)
 	assert.match(p.decoded, /board = "TEST-BOARD"/)
 	assert.match(p.decoded, /sdkGit = def5678 \(dirty\)/)
-	p = H.parseFrame(rsp(0x0301, 1, [0, 1, 0x39, 0x30, 0, 0, 0, 0, 0, 0]))
+	p = H.parseFrame(rsp(0x0301, 1, [0, 1, 0x45, 0x23, 0x01, 0, 0, 0, 0, 0]))
 	assert.match(p.decoded, /DRN = 12345/)
 	p = H.parseFrame(rsp(0x0201, 1, [0, 1, 1]))
 	assert.match(p.decoded, /1 SENTRY/)
@@ -262,12 +308,12 @@ assert.deepEqual(bytes(H.buildFrame({ cmd: 0x0001, seq: 0x5a, payload: Buffer.fr
 	p = H.parseFrame(rsp(0x0201, 1, [9]))
 	assert.match(p.fields.状态.name, /^ERR_NOT_INIT/)
 	// WOR_GET_STATUS 10B 版本带运行地址；瞬态 state 有名字
-	p = H.parseFrame(rsp(0x0201, 1, [0, 2, 10, 0x39, 0x30, 0, 0, 0, 0, 0, 0]))
+	p = H.parseFrame(rsp(0x0201, 1, [0, 2, 10, 0x45, 0x23, 0x01, 0, 0, 0, 0, 0]))
 	assert.match(p.decoded, /2 INITIATOR/)
 	assert.match(p.decoded, /状态 = 10 WAIT_DACK/)
 	assert.match(p.decoded, /localAddr = 12345/)
 	assert.deepEqual(J(H.decodeWorStatus(Uint8Array.from([1, 1]))), { role: 1, state: 1, localAddr: null })
-	assert.equal(H.decodeWorStatus(Uint8Array.from([1, 1, 0x39, 0x30, 0, 0, 0, 0, 0, 0])).localAddr, 12345n)
+	assert.equal(H.decodeWorStatus(Uint8Array.from([1, 1, 0x45, 0x23, 0x01, 0, 0, 0, 0, 0])).localAddr, 12345n)
 	// WOR_STATS_GET: 53×u32，ARQ 新字段按线序
 	assert.equal(H.WOR_STATS_FIELDS.length, 53)
 	{
