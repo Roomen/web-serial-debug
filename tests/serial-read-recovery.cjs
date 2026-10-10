@@ -327,6 +327,8 @@ function packHarness(timeOut, protocol) {
 	}
 	const context = vm.createContext({
 		SerialHub: hub, window: { _activeProtocol: protocol }, toolOptions: {}, logType: 'hex',
+		// 分包帧保护按该路协议；这里各路都跟随 window._activeProtocol(单路就是顶栏协议)
+		protocolIdForSid: () => context.window._activeProtocol,
 		Uint8Array, Date: class extends Date { constructor(...args) { super(...(args.length ? args : [now])) } static now() { return now } },
 		SEK_INCOMPLETE_WAIT_MAX_MS: 3000,
 		setTimeout: (fn, ms) => { const id = ++timerId; timers.set(id, fn); return id },
@@ -491,6 +493,10 @@ function renderHarness() {
 		textdecoder: new TextDecoder(), toolOptions: { showTime: false },
 		HTMLEncode: t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
 		attrEscape: t => t, ansi_up: { ansi_to_html: t => t }, logSeq: 0, formatDate: () => '',
+		AnsiUp: function () { this.ansi_to_html = t => t },
+		// 按路解析状态：各路协议由用例指定(缺省都跟随顶栏)
+		laneLive: { A: null, B: null }, sessionResetSeq: { S: 0, A: 0, B: 0 },
+		protocolIdForSid: sid => (context.laneProto && context.laneProto[sid]) || context.window._activeProtocol,
 		document: { createElement: element }, window: {}, getProtocolParseOpts: () => ({}),
 		skParseFrame: data => ({ raw: Array.from(data) }),
 		SerialHub: { activeSendPhys: () => 'A', logModeOf: () => 'dual', getSessionLabel: () => 'A路',
@@ -501,7 +507,7 @@ function renderHarness() {
 	const a = source.indexOf('\tfunction bytesToHexArr(')
 	const b = source.indexOf('\t//日志正文渲染到此为止', a)
 	vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/parse-view.js'), 'utf8'), context)
-	context.window.getActiveProtocol = () => context.proto
+	context.window.getActiveProtocol = () => (context.protoById && context.protoById[context.window._activeProtocol]) || context.proto
 	vm.runInContext(source.slice(a, b) + '\nglobalThis.api = { renderLogBody, addLog, parseLogType }', context)
 	return { context, rows, api: context.api }
 }
@@ -611,7 +617,7 @@ async function testParseRerenderIsolation() {
 	}
 	Object.assign(context, {
 		Date: FakeDate, setTimeout: fn => timers.push(fn), AnsiUp: function () {},
-		PARSE_RERENDER_SYNC_ROWS: 150, PARSE_RERENDER_SLICE_MS: 12, rerenderGen: 0, sessionResetSeq: 0,
+		PARSE_RERENDER_SYNC_ROWS: 150, PARSE_RERENDER_SLICE_MS: 12, rerenderGen: 0,
 		logOptionsSingle: { autoScroll: false }, logOptionsDual: { autoScroll: false },
 		// B0 xx 帧在解析时设置会话基准，其余帧只是读出当前基准，与 SEK 的 Tag2/3-ID29 行为一致
 		skParseFrame: data => { clock += 5; if (data[0] === 0xB0) session.setBase(data[1]); return {} },
@@ -649,7 +655,7 @@ async function testParseRerenderIsolation() {
 	box = makeContainer()
 	vmApi.rerenderLogBodies(box, 'parse')
 	session.resetBase()
-	context.sessionResetSeq++
+	context.sessionResetSeq.S++
 	runTimers()
 	assert.equal(session.baseCode, null)
 
@@ -660,6 +666,70 @@ async function testParseRerenderIsolation() {
 	runTimers()
 	assert.equal(session.baseCode, 1)
 	assert.ok(api.parseLogType('parse').parse)
+}
+
+// 双路两路协议各自独立：每行按所属那一路(data-sid)的协议与会话状态重放，A 路读到的基准不会套到 B 路；
+// 收尾把各路重放末态交给各自的实时状态，单路(全局)会话不受影响；实时新行同样按路取协议与 ansi 状态
+async function testDualLaneParseIsolation() {
+	const { context, rows, api } = renderHarness()
+	const session = {
+		deviceUid: null, baseCode: null,
+		resetBase() { this.baseCode = null },
+		setBase(code) { this.baseCode = code },
+		snapshot() { return { deviceUid: this.deviceUid, baseCode: this.baseCode } },
+		restore(s) { this.deviceUid = s.deviceUid; this.baseCode = s.baseCode },
+	}
+	let ansiSeq = 0
+	Object.assign(context, {
+		setTimeout: fn => fn(), PARSE_RERENDER_SYNC_ROWS: 150, PARSE_RERENDER_SLICE_MS: 12, rerenderGen: 0,
+		logOptionsSingle: { autoScroll: false }, logOptionsDual: { autoScroll: false },
+		AnsiUp: function () { const id = ++ansiSeq; this.ansi_to_html = t => 'ansi' + id + ':' + t },
+		skParseFrame: data => { if (data[0] === 0xB0) session.setBase(data[1]); return {} },
+		laneProto: { A: 'pa', B: 'pb' },
+		protoById: {
+			pa: { logView: () => ({ title: 'PA base' + session.baseCode }) },
+			pb: { logView: () => ({ title: 'PB base' + session.baseCode }) },
+		},
+	})
+	context.window._activeProtocol = 'top'
+	context.window.skSession = session
+	session.setBase(9)
+	function makeRow(sid, hex) {
+		const body = { innerHTML: '' }
+		return { attrs: { 'data-hex': hex, 'data-dir': 'rx', 'data-sid': sid }, classList: { contains: c => c === 'log-row' },
+			getAttribute(k) { return k in this.attrs ? this.attrs[k] : null }, querySelector: () => body, body }
+	}
+	const children = [makeRow('A', 'B0 01'), makeRow('B', '01 02'), makeRow('A', '01 02'), makeRow('B', 'B0 02'), makeRow('B', '01 02'), makeRow('A', '01 02')]
+	const box = { children, get lastElementChild() { return children[children.length - 1] } }
+	context.SerialHub.getLogContainerFor = m => (m === 'dual' ? box : null)
+	const vmApi = vm.runInContext('({ rerenderLogBodies })', context)
+	vmApi.rerenderLogBodies(box, 'parse')
+	const titles = children.map(r => (/PA base\w+|PB base\w+/.exec(r.body.innerHTML) || [''])[0])
+	assert.deepEqual(titles, ['PA base1', 'PB basenull', 'PA base1', 'PB base2', 'PB base2', 'PA base1'])
+	assert.equal(session.baseCode, 9, '单路(全局)会话不被双路重放改动')
+	assert.equal(context.window._activeProtocol, 'top', '重放结束顶栏协议还原')
+	assert.equal(context.laneLive.A.sess.baseCode, 1)
+	assert.equal(context.laneLive.B.sess.baseCode, 2)
+
+	// 实时新行：B 路用 B 的协议与基准，ansi 状态两路各一份
+	rows.length = 0
+	context.logType = 'ansi&parse'
+	api.addLog(Uint8Array.of(0x41), true, new Date(1), 'B')
+	api.addLog(Uint8Array.of(0x42), true, new Date(2), 'A')
+	api.addLog(Uint8Array.of(0x43), true, new Date(3), 'B')
+	assert.ok(rows[0].innerHTML.includes('PB base2'), rows[0].innerHTML)
+	assert.ok(rows[1].innerHTML.includes('PA base1'), rows[1].innerHTML)
+	const ansiId = html => /ansi(\d+):/.exec(html)[1]
+	assert.notEqual(ansiId(rows[0].innerHTML), ansiId(rows[1].innerHTML))
+	assert.equal(ansiId(rows[0].innerHTML), ansiId(rows[2].innerHTML))
+	assert.equal(session.baseCode, 9)
+
+	// B 路重新连接清空 B 的基准，A 不受影响
+	vm.runInContext('resetLaneParseSession("B")', context)
+	api.addLog(Uint8Array.of(0x44), true, new Date(4), 'B')
+	api.addLog(Uint8Array.of(0x45), true, new Date(5), 'A')
+	assert.ok(rows[3].innerHTML.includes('PB basenull'), rows[3].innerHTML)
+	assert.ok(rows[4].innerHTML.includes('PA base1'), rows[4].innerHTML)
 }
 
 async function testStatusBar() {
@@ -896,6 +966,7 @@ async function run() {
 	testHostProtoPack()
 	await testLogRendering()
 	await testParseRerenderIsolation()
+	await testDualLaneParseIsolation()
 	await testStatusBar()
 	console.log('serial read recovery: passed')
 }

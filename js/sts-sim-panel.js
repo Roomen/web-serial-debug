@@ -808,7 +808,9 @@
 			lsSet(KEY_RUNNING, true)
 			setStatus(ui.role === 'meter' ? '启动中：探活与核对模组…' : '启动中：探活、核对模组并读取计价模式与协议版本（每次读取是一次唤醒会话，需数十秒）…')
 			applyRunning()
-			if (W._activeProtocol !== 'hostproto') plog('info', '切到顶栏「hostProto 模组」协议可在日志里看到逐帧解析')
+			// 日志解析按每一路自己的协议(双路两路可以不同)，提示看这一路的
+			const laneProto = typeof W.protocolIdForSid === 'function' ? W.protocolIdForSid(channel) : W._activeProtocol
+			if (laneProto !== 'hostproto') plog('info', channel === 'S' ? '切到顶栏「hostProto 模组」协议可在日志里看到逐帧解析' : '把' + ui.name + '的协议设为「hostProto 模组」可在日志里看到逐帧解析')
 			try {
 				await engine.start()
 				if (ui.engine !== engine) return // 启动期间被手动停止

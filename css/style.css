@@ -3303,6 +3303,40 @@ hr {
   box-shadow: 0 0 0 3px var(--accent-light) !important;
 }
 
+/* 参数卡里只属于双路的两项(js/common.js 按模式切 hidden)：正在设置哪一路 + 本路协议 */
+.serial-lane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.serial-lane-head[hidden],
+.serial-lane-proto[hidden] {
+  display: none;
+}
+
+.serial-lane-seg > button {
+  padding: 3px 12px;
+  font-size: 0.72rem;
+}
+
+.serial-lane-hint {
+  min-width: 0;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.serial-lane-proto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 /* 分包方式与超时同一行，分段组压小一号给输入框留位置 */
 .serial-split-seg > button {
   padding: 4px 8px;
@@ -6819,6 +6853,170 @@ body.blu-wave-fullscreen-open {
 [data-theme='dark'] .dual-send-btn[data-sid="B"]:hover:not(.active) {
   color: #fbbf24;
   background: color-mix(in srgb, #fbbf24 18%, transparent);
+}
+
+/* 双路预设：双路控件区里的一个下拉(js/dual-config.js)，现代布局搬进连接栏 */
+.dual-preset {
+  flex-shrink: 0;
+}
+
+.dual-preset-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dual-preset-btn:hover,
+.dual-preset-btn[aria-expanded='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dual-preset-menu.dropdown-menu {
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  padding: 10px;
+  margin-top: 6px;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 60;
+}
+
+.dual-preset-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.dual-preset-title > span {
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.dual-preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.dual-preset-empty {
+  padding: 8px 4px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.dual-preset-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.dual-preset-apply {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.dual-preset-apply:hover {
+  background: var(--accent-light);
+}
+
+.dual-preset-apply[aria-current='true'] {
+  border-color: var(--accent);
+}
+
+.dual-preset-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  font-size: 0.78rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dual-preset-name > i {
+  color: var(--accent);
+}
+
+.dual-preset-sum {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+}
+
+.dual-preset-lane {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dual-preset-act {
+  flex-shrink: 0;
+  width: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.dual-preset-act:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
+}
+
+.dual-preset-save {
+  display: flex;
+  gap: 6px;
+  padding-top: 8px;
+  margin-top: 6px;
+  border-top: 1px solid var(--border-light);
+}
+
+.dual-preset-save .form-control {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.75rem;
+}
+
+.dual-preset-save .btn {
+  flex-shrink: 0;
+  font-size: 0.72rem;
 }
 
 /* Dual Log Panels */
@@ -12157,6 +12355,31 @@ html[data-layout='modern'] .mdn-connbar #wb-palette-btn {
 	border: 1px solid var(--border-color);
 	border-radius: 6px;
 	font-size: 12px;
+}
+
+/* 双路：参数卡由打开的那一路菜单决定设置哪一路，卡内的 A/B 分段不显示 */
+html[data-layout='modern'] .mdn-pop #serial-params-lane {
+	display: none;
+}
+
+/* 双路预设(从经典双路控件区原样搬来)：与每路连接按钮同高同款 */
+html[data-layout='modern'] .mdn-conn-preset {
+	display: inline-flex;
+	align-items: center;
+}
+
+html[data-layout='modern'] .mdn-conn-preset .dual-preset-btn {
+	height: 30px;
+	padding: 0 10px;
+	border-radius: 6px;
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] .mdn-conn-preset .dual-preset-btn:hover {
+	border-color: var(--text-muted);
+	color: var(--text-primary);
 }
 
 /* ---------- 日志工具条：显示格式 / 分包 / 行数 / 过滤 / 视图 / 动作平铺 ---------- */
