@@ -233,7 +233,9 @@
 		const lab = mk('div', 'mdn-pop-sec mdn-pop-label mdn-dual-only')
 		lab.appendChild(mk('div', 'mdn-pop-cap', '路标签'))
 		const par = mk('div', 'mdn-pop-sec mdn-pop-params')
-		par.appendChild(mk('div', 'mdn-pop-cap', '串口参数 · 单路 / 双路共用'))
+		// 文案随模式：双路两路的参数与协议各自独立(refreshConn 里改)
+		const parCap = mk('div', 'mdn-pop-cap', '串口参数')
+		par.appendChild(parCap)
 		const foot = mk('div', 'mdn-pop-foot mdn-dual-only')
 		const back = btn('btn btn-sm btn-outline-secondary', '回到单路', '切回单路模式：双路的口在后台保持连接')
 		back.prepend(icon('bi-arrow-return-left'), document.createTextNode(' '))
@@ -250,14 +252,15 @@
 			closePops()
 			if (open) openPop(key)
 		})
-		return { wrap: wrap, btn: b, dot: dot, letter: letter, label: label, port: port, params: params, pop: pop, head: head, dev: dev, lab: lab, par: par }
+		return { wrap: wrap, btn: b, dot: dot, letter: letter, label: label, port: port, params: params, pop: pop, head: head, dev: dev, lab: lab, par: par, parCap: parCap }
 	}
 
 	function openPop(key) {
 		const p = refs.paths[key]
 		if (!p) return
-		// 串口参数只有一份，打开哪一路就挂到哪一路的菜单里
+		// 串口参数卡只有一份，打开哪一路就挂到哪一路的菜单里；双路下卡片同时切到这一路的参数与协议
 		if (refs.paramsBox) p.par.appendChild(refs.paramsBox)
+		if (isDual() && window.serialLanes) window.serialLanes.setParamsTarget(sidFor(key))
 		p.pop.hidden = false
 		p.btn.setAttribute('aria-expanded', 'true')
 		refs.openKey = key
@@ -313,8 +316,11 @@
 		})
 		refs.blu = { btn: blu, dot: bluDot, text: bluText }
 		const tools = mk('span', 'mdn-conn-tools')
-		cb.append(main.wrap, b.wrap, addB, sendSlot, sep(), blu, sep(), tools)
+		// 双路预设(经典布局在双路控件区)原样搬到 B 路按钮后面
+		const presetSlot = mk('span', 'mdn-conn-preset mdn-dual-only')
+		cb.append(main.wrap, b.wrap, presetSlot, addB, sendSlot, sep(), blu, sep(), tools)
 		b.wrap.classList.add('mdn-dual-only')
+		park($('serial-dual-preset'), presetSlot)
 		if (send) park(send, sendSlot)
 		park(bar.querySelector('.connect-bar-proto'), tools)
 		cb.appendChild(mk('span', 'mdn-grow'))
@@ -352,6 +358,8 @@
 			observe($(id), { attributes: true, childList: true, subtree: true, characterData: true }, refresh)
 		})
 		observe($('serial-mode-dual'), { attributes: true, attributeFilter: ['class'] }, refresh)
+		// 两路参数 / 协议 / 预设套用
+		listen(document, 'serial-lane-config', refresh)
 		;['serial-session-a-label', 'serial-session-b-label'].forEach(function (id) {
 			listen($(id), 'input', refresh)
 			listen($(id), 'change', refresh)
@@ -369,10 +377,14 @@
 		const dual = isDual()
 		cb.dataset.mode = dual ? 'dual' : 'single'
 		const h = hub()
-		const params = compactParams(($('serial-params-summary-text') || {}).textContent)
+		const lanes = window.serialLanes
 		Object.keys(refs.paths).forEach(function (key) {
 			const p = refs.paths[key]
 			const sid = sidFor(key)
+			// 每路自己的参数；双路两路协议可以不同，按钮上一并写出
+			let params = compactParams(lanes ? lanes.summary(sid) : ($('serial-params-summary-text') || {}).textContent)
+			if (dual && lanes) params += ' · ' + lanes.protocolName(lanes.protocolOf(sid))
+			p.parCap.textContent = dual ? '本路串口参数与协议' : '串口参数'
 			const chip = chipFor(key)
 			const open = h ? h.isOpen(sid) : !!(chip && chip.classList.contains('is-open'))
 			const opening = h ? h.isOpening(sid) : false

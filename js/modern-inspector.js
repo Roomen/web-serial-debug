@@ -1,6 +1,6 @@
 // 现代布局右栏「检查器」的结构化视图：头部(方向、帧标题、协议·时间·长度·应答耗时·校验徽标)、键值表、字节视图、
-// 「从请求到应答」相关行。数据来自 common.js 解析完一帧后派发的 serial-parse-frame 事件(detail: { bytes, result, byteMap, dir, note }，
-// null 表示已清空)，字段用当前协议的 logView(r) 视图模型，没有 logView 或不识别的帧不在这里重画，改为展开下方「原始输出」
+// 「从请求到应答」相关行。数据来自 common.js 解析完一帧后派发的 serial-parse-frame 事件(detail: { bytes, result, byteMap, dir, note, protocol }，
+// null 表示已清空)，字段用 detail.protocol(解析这一帧时那一路的协议)的 logView(r) 视图模型，没有 logView 或不识别的帧不在这里重画，改为展开下方「原始输出」
 // (就是原来的协议解析面板 #serial-parse-body：HEX 输入区 + formatFrame 输出)。
 // 模型里的文本一律 textContent；只有 section.html 原样插入(协议自己拼且已转义，同 js/parse-view.js 的约定)。
 // 视图宿主 #wb-insp-view 由 js/workbench.js 建在检查器面板里；字段模型没有字节偏移，所以字段悬停不做字节高亮，
@@ -307,7 +307,10 @@
 			view.appendChild(emptyView())
 			return
 		}
-		const p = typeof root.getActiveProtocol === 'function' ? root.getActiveProtocol() : null
+		// 用解析这一帧时的协议(双路两路协议可以不同，点的是另一路的行时与顶栏不同)，没带就按顶栏
+		const p = cur.protocol && root._protocols && root._protocols[cur.protocol]
+			? root._protocols[cur.protocol]
+			: (typeof root.getActiveProtocol === 'function' ? root.getActiveProtocol() : null)
 		let models = []
 		let viewErr = ''
 		if (p && typeof p.logView === 'function') {

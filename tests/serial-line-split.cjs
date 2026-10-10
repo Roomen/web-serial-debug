@@ -13,22 +13,26 @@ function harness(opts) {
 	let now = 100000
 	let timerId = 0
 	const timers = new Map()
-	const sess = { packBuf: [], packStart: null, sekWait: null, timer: 0, glitch: false, rxBytes: 0 }
+	// 每路一套分包状态(双路两路独立)；sess 是单路 S 的，原有用例都只用它
+	const sessions = {}
+	const S = sid => sessions[sid] || (sessions[sid] = { packBuf: [], packStart: null, sekWait: null, timer: 0, glitch: false, rxBytes: 0 })
+	const sess = S('S')
 	const rows = []
+	const rowSids = []
 	const hub = {
 		activeSendPhys: () => 'S',
 		isRoutable: () => false,
-		_sess: () => sess,
-		getPackBuf: () => sess.packBuf,
-		setPackBuf: (sid, b) => { sess.packBuf = b },
-		getPackStartTime: () => sess.packStart,
-		setPackStartTime: (sid, t) => { sess.packStart = t },
-		getSekWaitStart: () => sess.sekWait,
-		setSekWaitStart: (sid, t) => { sess.sekWait = t },
-		getPackTimer: () => sess.timer,
-		setPackTimer: (sid, t) => { sess.timer = t },
-		markPackGlitch: () => { sess.glitch = true },
-		takePackGlitch: () => { const g = sess.glitch; sess.glitch = false; return g },
+		_sess: sid => S(sid),
+		getPackBuf: sid => S(sid).packBuf,
+		setPackBuf: (sid, b) => { S(sid).packBuf = b },
+		getPackStartTime: sid => S(sid).packStart,
+		setPackStartTime: (sid, t) => { S(sid).packStart = t },
+		getSekWaitStart: sid => S(sid).sekWait,
+		setSekWaitStart: (sid, t) => { S(sid).sekWait = t },
+		getPackTimer: sid => S(sid).timer,
+		setPackTimer: (sid, t) => { S(sid).timer = t },
+		markPackGlitch: sid => { S(sid).glitch = true },
+		takePackGlitch: sid => { const g = S(sid).glitch; S(sid).glitch = false; return g },
 	}
 	const window = { _activeProtocol: opts.protocol || '' }
 	const ctx = {
@@ -41,15 +45,17 @@ function harness(opts) {
 		toolOptions: { skHoverEnable: false },
 		logOptionsForSid: () => opts.log,
 		getLogTypeForSid: () => opts.log.logType || 'text',
+		// 帧保护按该路自己的协议；没给按路协议时各路都是顶栏协议
+		protocolIdForSid: sid => (opts.laneProtocols && opts.laneProtocols[sid]) || window._activeProtocol,
 		parseLogType: t => ({ parse: String(t).includes('parse') }),
 		isRowLogType: () => true,
 		isAllZero: b => b.every(x => x === 0),
 		noteSerialRx() {},
 		addLogErrSafe(msg) { throw new Error(msg) },
-		addLog(buf) { rows.push(Buffer.from(buf).toString('latin1')) },
+		addLog(buf, isReceive, t, sid) { rows.push(Buffer.from(buf).toString('latin1')); rowSids.push(sid) },
 	}
 	vm.createContext(ctx)
-	if (opts.protocol === 'hostproto') {
+	if (opts.protocol === 'hostproto' || opts.loadHostProto) {
 		ctx.window.registerProtocol = () => {}
 		for (const f of ['parse-view', 'sts-ciu-protocol', 'hostproto-protocol']) {
 			vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/' + f + '.js'), 'utf8'), ctx)
@@ -57,8 +63,8 @@ function harness(opts) {
 	}
 	vm.runInContext(source.slice(start, end) + '\nthis.dataReceived = dataReceived\nthis.flushPendingRx = flushPendingRx', ctx)
 	return {
-		ctx, rows, sess,
-		rx(s) { ctx.dataReceived(typeof s === 'string' ? Uint8Array.from(Buffer.from(s, 'latin1')) : Uint8Array.from(s), 'S') },
+		ctx, rows, rowSids, sess, sessions,
+		rx(s, sid) { ctx.dataReceived(typeof s === 'string' ? Uint8Array.from(Buffer.from(s, 'latin1')) : Uint8Array.from(s), sid || 'S') },
 		advance(ms) {
 			now += ms
 			for (;;) {
@@ -138,6 +144,35 @@ function harness(opts) {
 	assert.equal(h.rows.length, 2)
 	assert.deepEqual([...Buffer.from(h.rows[0], 'latin1')], frame)
 	assert.equal(h.rows[1], 'log\r\n')
+}
+
+// ---- 双路两路协议不同：A 路是 hostProto，半帧按 CRC 等齐、帧内 0x0A 不切；B 路是文本协议，同样的字节照常按换行切 ----
+{
+	const h = harness({ log: { splitMode: 'line', timeOut: 200, logType: 'hex' }, laneProtocols: { A: 'hostproto', B: 'none' }, loadHostProto: true })
+	const H = h.ctx.window.hostProto
+	const frame = [...H.buildFrame({ type: H.TYPE_RSP, cmd: H.CMD.ECHO, seq: 0x0A, payload: [0, 0x0A, 0x0A], preamble: false })]
+	// 前 8 字节里有 seq=0x0A
+	h.rx(frame.slice(0, 8), 'A')
+	h.rx(frame.slice(0, 8), 'B')
+	assert.equal(h.rowSids.filter(s => s === 'A').length, 0, 'A 路 hostProto 半帧不按换行切')
+	assert.ok(h.rowSids.includes('B'), 'B 路不是 hostProto，0x0A 照常成行')
+	h.rx(frame.slice(8), 'A')
+	const aRows = h.rows.filter((r, i) => h.rowSids[i] === 'A')
+	assert.equal(aRows.length, 1)
+	assert.deepEqual([...Buffer.from(aRows[0], 'latin1')], frame, 'A 路整帧一行')
+}
+// ---- 双路：只有 B 路协议是 SEK 时，B 路的 SEK 帧不按 0x0A 切，A 路(文本协议)照常切 ----
+{
+	const sek = [0xA9, 0x9A, 0x0A, 0x0A, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02, 0x00, 0x0A, 0x0A, 0x00, 0x00, 0x16]
+	const h = harness({ log: { splitMode: 'line', timeOut: 50, logType: 'hex' }, laneProtocols: { A: 'none', B: 'sek' } })
+	h.rx(sek, 'B')
+	h.rx(sek, 'A')
+	assert.equal(h.rowSids.filter(s => s === 'B').length, 0, 'B 路 SEK 帧不按换行切')
+	assert.ok(h.rowSids.filter(s => s === 'A').length >= 2, 'A 路按换行切')
+	h.advance(50)
+	const bRows = h.rows.filter((r, i) => h.rowSids[i] === 'B')
+	assert.equal(bRows.length, 1)
+	assert.deepEqual([...Buffer.from(bRows[0], 'latin1')], sek)
 }
 
 console.log('serial-line-split: ok')
