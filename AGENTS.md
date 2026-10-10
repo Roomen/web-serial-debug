@@ -75,6 +75,8 @@ CIU 上电后只 `WOR_INIT` 一次：启动时先查 `WOR_GET_STATUS`，未初�
 
 ## 分支、提交与 PR
 
+用户说「合入到 dev」时，指 GitHub 远端的 `dev` 分支；完成后必须推送并确认远端包含本次提交，不能只完成本地提交或合并。
+
 先从最新 `main` 开 `feat/xxx` / `fix/xxx` 分支再改，不要直接改 `main`。commit message 用 Conventional Commit 前缀（`feat:`、`fix:`、`style:` 等）。
 
 PR 正文只写 **Summary**（用户可见变化、版本号变化）；涉及界面变化附截图或录屏；修复串口设备兼容性问题时关联 issue 或说明设备/浏览器环境。**不要写 Test plan。**

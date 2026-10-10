@@ -582,8 +582,8 @@
 			const st = ui.engine && ui.role === 'ciu' ? ui.engine.getState() : null
 			const idle = !!(st && st.running && st.phase === 'idle' && !ui.opBusy)
 			;[r.tokenBtn, r.statusBtn, r.recBtn, r.valveOpenBtn, r.valveCloseBtn, r.unbindBtn, r.readBtn].forEach(function (b) { b.disabled = !idle })
-			r.tokenInput.disabled = !(ui.running && ui.role === 'ciu')
-			r.simBtn.disabled = r.tokenInput.disabled
+			r.tokenInput.disabled = ui.role !== 'ciu'
+			r.simBtn.disabled = ui.role !== 'ciu'
 			r.abortBtn.disabled = !(ui.running && ui.opBusy)
 			r.tokenBtn.disabled = !idle || r.tokenInput.value.length !== 20
 		}
@@ -917,8 +917,8 @@
 
 		function bind() {
 			const r = ui.refs
-			r.bMeter.addEventListener('click', function () { ui.role = 'meter'; lsSet(KEY_ROLE, ui.role); applyRole() })
-			r.bCiu.addEventListener('click', function () { ui.role = 'ciu'; lsSet(KEY_ROLE, ui.role); applyRole() })
+			r.bMeter.addEventListener('click', function () { ui.role = 'meter'; lsSet(KEY_ROLE, ui.role); applyRole(); updateCiuButtons() })
+			r.bCiu.addEventListener('click', function () { ui.role = 'ciu'; lsSet(KEY_ROLE, ui.role); applyRole(); updateCiuButtons() })
 			r.startBtn.addEventListener('click', function () {
 				if (ui.running || ui.starting || ui.wanted) { plog('info', '手动停止'); stopSim('已停止') } else startSim()
 			})

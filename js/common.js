@@ -1231,7 +1231,7 @@
 	if (sendList) {
 		try {
 			const parsed = JSON.parse(sendList)
-			if (Array.isArray(parsed)) quickSendList = parsed
+			if (Array.isArray(parsed) && parsed.length) quickSendList = parsed
 		} catch (e) {}
 	}
 	quickSendList.forEach((item, index) => {
@@ -1386,6 +1386,9 @@
 				dragSrcRow = null
 			}
 			dragHappened = false
+			// 保存的索引可能越界(快捷发送列表被清空或损坏而 toolOptions 还在)，回退到第一组
+			if (!quickSendList[index]) index = 0
+			if (!quickSendList[index]) return
 			changeOption('quickSendIndex', index)
 			currQuickSend = quickSendList[index]
 			//
@@ -2611,7 +2614,10 @@
 	}
 	// 启动时 applyLogOptionsToUI 先于协议恢复执行,历史行的解析段要按恢复后的协议重渲
 	scheduleParseRerender()
-	quickSend.value = toolOptions.quickSendIndex
+	{
+		const qi = Number(toolOptions.quickSendIndex)
+		quickSend.value = Number.isInteger(qi) && qi >= 0 && qi < quickSendList.length ? qi : 0
+	}
 	quickSend.dispatchEvent(new Event('change'))
 	resetLoopSend()
 
@@ -4522,6 +4528,7 @@
 			const shown = opts.logData ? Uint8Array.from(opts.logData) : data
 			addLog(shown, false, sendTime, sid, false, sendName)
 		} catch (error) {
+			recoverIfWriteDead(sid, session, gen, error)
 			if (opts.throwOnError) throw new Error('串口写入失败')
 			const errorType = error.name || 'UnknownError'
 			const errorMsg = error.message || '未知错误'
@@ -4562,6 +4569,7 @@
 			if ((session.writeSeq || 0) !== gen) return
 			SerialHub._sess(sid).txBytes += u8.length
 		} catch (error) {
+			recoverIfWriteDead(sid, session, gen, error)
 			const errorType = error.name || 'UnknownError'
 			const errorMsg = error.message || '未知错误'
 			addLogErr(`串口写入失败(${sid}): ${errorType} - ${errorMsg}`, sid)
@@ -4574,6 +4582,20 @@
 				}
 			}
 		}
+	}
+
+	// 写入遇到 NetworkError(设备已拔出/断开)按读循环死亡处理，走同一套重开；
+	// 我方关闭/中止造成的写入失败 writeSeq 已变，不触发。手动关闭、正在开关由 recoverDeadReadLoop 自己挡。
+	// 拔线时写入先于 disconnect 事件失败：稍等再确认仍开着，否则会对已拔走的口连试三次重开、刷出失败日志
+	const WRITE_DEAD_CONFIRM_MS = 500
+	function recoverIfWriteDead(sid, session, gen, error) {
+		if (!error || error.name !== 'NetworkError') return
+		if ((session.writeSeq || 0) !== gen) return
+		const port = SerialHub.getPort(sid)
+		setTimeout(function () {
+			if (!SerialHub.isOpen(sid) || SerialHub.getPort(sid) !== port) return
+			recoverDeadReadLoop(sid, '串口写入失败，正在尝试重新打开').catch(function () {})
+		}, WRITE_DEAD_CONFIRM_MS)
 	}
 
 	// 接收流异常先尝试重建；重复异常限制重建频率，不把设备空闲判为断线。
@@ -4944,13 +4966,20 @@
 		const buf = SerialHub.getPackBuf(sid)
 		if (hostProtoIncomplete(sid, buf) || sekFrameStart(sid, buf)) return
 		let start = 0
-		for (let i = 0; i < buf.length; i++) {
-			if (buf[i] !== 0x0A) continue
-			flushSerialPack(buf.slice(start, i + 1), SerialHub.getPackStartTime(sid), sid, start === 0 && SerialHub.takePackGlitch(sid))
-			start = i + 1
-			SerialHub.setPackStartTime(sid, new Date())
+		try {
+			for (let i = 0; i < buf.length; i++) {
+				if (buf[i] !== 0x0A) continue
+				const line = buf.slice(start, i + 1)
+				const glitch = start === 0 && SerialHub.takePackGlitch(sid)
+				start = i + 1
+				// 先把已切走的行从缓冲去掉再输出：输出抛错时这些行不会被下次重复切出
+				SerialHub.setPackBuf(sid, buf.slice(start))
+				flushSerialPack(line, SerialHub.getPackStartTime(sid), sid, glitch)
+				SerialHub.setPackStartTime(sid, new Date())
+			}
+		} finally {
+			if (start > 0) SerialHub.setPackBuf(sid, buf.slice(start))
 		}
-		if (start > 0) SerialHub.setPackBuf(sid, buf.slice(start))
 	}
 
 	//glitch: 整包都是紧随线路错误的全 0 块，紧接在同一路上一条毛刺行之后的直接并入那一行(不新增行)
@@ -5057,15 +5086,19 @@
 			}
 		}
 		if (!lineMode && sidOpts.timeOut == 0 && !hostProtoIncomplete(sid, packBuf)) {
-			flushSerialPack(packBuf, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackGlitch(sid))
+			// 先清缓冲再输出：输出抛错(DOM 异常)时缓冲不会残留并越堆越大
+			const pack = packBuf.slice()
 			SerialHub.setPackBuf(sid, [])
+			flushSerialPack(pack, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackGlitch(sid))
 			return
 		}
 		//持续不断的流永远等不到 timeOut 间隔，缓冲会一直涨到把页面撑爆，超上限就强制断包
 		if (packBuf.length >= SERIAL_PACK_MAX_BYTES) {
 			clearTimeout(SerialHub.getPackTimer(sid))
-			flushSerialPack(packBuf, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackGlitch(sid))
+			// 先清缓冲再输出：输出抛错(DOM 异常)时缓冲不会残留并越堆越大
+			const pack = packBuf.slice()
 			SerialHub.setPackBuf(sid, [])
+			flushSerialPack(pack, SerialHub.getPackStartTime(sid), sid, SerialHub.takePackGlitch(sid))
 			return
 		}
 		//清除之前的时钟
@@ -7186,6 +7219,8 @@
 				}
 				used.push(plan)
 				SerialHub.setPort(sid, plan)
+				// 存着的意图就是「打开」：重连失败也要让之后的热插拔能继续自动重连(manualClose 初值 true 只为拦从没开过的会话)
+				SerialHub.setManualClose(sid, false)
 				SerialHub.setOpening(sid, true)
 				try {
 					await openSerial(sid, { reason: 'reload' })
