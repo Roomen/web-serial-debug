@@ -27,6 +27,7 @@ CIU 上电后只 `WOR_INIT` 一次：启动时先查 `WOR_GET_STATUS`，未初�
 ## 运行与测试
 
 - `python3 -m http.server 8000` 起本地静态服务后用 Chrome 或 Edge 打开（Web Serial API 只有 Chromium 系支持）；`open index.html` 走 `file://` 只适合快速看布局。
+- `node tests/at-modem-protocol.cjs`：蜂窝模组 AT 协议（`js/at-modem-protocol.js`）的指令识别、驻网/校时/通信上报、物理量换算、多行合包与 ParseView 视图模型回归，改该协议后必须跑。
 - `node tests/cjt188-protocol.cjs`：CJ/T 188 协议解析的回归测试，改 `js/cjt188-protocol.js` 后必须跑。测试只用合成数据，不要放真实设备日志。
 - `node tests/sts-ciu-protocol.cjs`：STS 应用层协议（`js/sts-ciu-protocol.js`）的编解码、接收判定与边界回归，改该文件后必须跑。
 - `node tests/hostproto-protocol.cjs`：hostProto 模组指令层（`js/hostproto-protocol.js`）的 CRC/组帧/找帧重同步/解析展示，以及事务层（`js/hostproto-transaction.js`，假时钟）回归，改这两个文件后必须跑。
