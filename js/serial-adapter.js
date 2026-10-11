@@ -1,9 +1,11 @@
 // 串口接入适配层：页面与协议代码只经 window.SerialAdapter 选口、列口、听插拔，不直接碰 navigator.serial。
 // 端口对象的契约是 Web Serial SerialPort 的子集：getInfo()、open(options)、close()、readable / writable(打开后是
 // ReadableStream / WritableStream，未打开或设备丢失为 null)，可选 setSignals(signals)。读出错后 readable 换成一条新流
-// (Chromium 的行为，读循环靠「readable 不再是上一条流」续读)，close() 在流被锁住时拒绝。
-// 后端：web 直通 navigator.serial；原生壳(Tauri 2 等)用 createStreamPort 把「打开 / 写 / 关 / 推数据」包装成上述端口，
-// 在 common.js 之前 register + use 切过去，页面与协议代码不变。
+// (Chromium 的行为，读循环靠「readable 不再是上一条流」续读)，写出错后 writable 同样换新流，close() 在流被锁住时拒绝。
+// 后端：web 直通 navigator.serial；BLE(js/transport-ble.js)与原生壳(Tauri 2 等)用 createStreamPort 把「打开 / 写 / 关 / 推数据」
+// 包装成上述端口，在 common.js 之前 register，由 js/platform-boot.js 按平台画像的传输优先顺序 pick 一个，页面与协议代码不变。
+// 每个后端带 kind(serial | ble | bt-classic)，与 AppPlatform.transports 的取值一致；同一时刻只有一个当前后端(单路够用，
+// 移动端也只有一路)，选口、列口、插拔事件都只走它。
 // 纯逻辑可在 node 里跑(tests/serial-adapter.cjs)。
 ;(function (root) {
 	'use strict'
@@ -41,6 +43,7 @@
 		const serial = nav && nav.serial
 		return {
 			name: 'web',
+			kind: 'serial',
 			supported: !!serial,
 			requestPort(options) { return serial.requestPort(options) },
 			getPorts() { return serial.getPorts() },
@@ -58,6 +61,7 @@
 
 	function register(backend) {
 		if (!backend || !backend.name) throw new TypeError('串口后端缺少 name')
+		if (!backend.kind) backend.kind = 'serial'
 		backends[backend.name] = backend
 		return backend
 	}
@@ -74,6 +78,22 @@
 			})
 		}
 		return b
+	}
+
+	// 按传输种类的优先顺序选第一个已注册且受支持的后端；同种类取 priority 大的(缺省 0，原生壳的后端给正数，
+	// 免得依赖注册先后输给更早注册的 web / Web Bluetooth)，再同则按注册先后。都不可用时保持当前后端不变，返回 null
+	function pick(kinds) {
+		const list = Array.isArray(kinds) ? kinds : []
+		for (let i = 0; i < list.length; i++) {
+			let best = null
+			for (const name in backends) {
+				const b = backends[name]
+				if (b.kind !== list[i] || !b.supported) continue
+				if (!best || (b.priority || 0) > (best.priority || 0)) best = b
+			}
+			if (best) return use(best.name)
+		}
+		return null
 	}
 
 	// ---- 原生后端用：把推送式驱动包装成 Web Serial 形状的端口 ----
@@ -96,6 +116,9 @@
 	function createStreamPort(driver) {
 		let state = 'closed' // closed | opening | opened | closing
 		let gen = 0
+		// 适配层替页面释放(设备丢失)时驱动 close 失败：句柄可能还在。页面看到两条流为 null 不会再调 close，
+		// 所以由下一次 open 先重试释放，释放不掉就拒绝打开，不能在没释放的句柄上再开一次
+		let staleHandle = false
 		let queueLimit = MIN_READ_QUEUE
 		let rs = null
 		let rsCtl = null
@@ -128,8 +151,15 @@
 			const g = gen
 			const stream = new WritableStream({
 				write(chunk) {
-					if (g !== gen || state !== 'opened') return Promise.reject(makeError('NetworkError', '串口已断开'))
-					return Promise.resolve(driver.write(toBytes(chunk)))
+					// 写失败后这条流已报错；与 Chromium 一致，writable 之后换一条新流，端口仍是打开的。
+					// 在 then 里核对代次并调驱动：驱动同步抛错走同一条换流路径，核对与调用之间也插不进设备丢失
+					return Promise.resolve().then(function () {
+						if (g !== gen || state !== 'opened') throw makeError('NetworkError', '串口已断开')
+						return driver.write(toBytes(chunk))
+					}).catch(function (e) {
+						if (ws === stream) ws = null
+						throw e
+					})
 				},
 				close() { if (ws === stream) ws = null },
 				abort() { if (ws === stream) ws = null },
@@ -138,7 +168,8 @@
 			return stream
 		}
 
-		function makeSink(g) {
+		// pending：这次 open 的暂存，打开中报的设备丢失记在 pending.lost，由 open 收尾时处理
+		function makeSink(g, pending) {
 			const live = function () { return g === gen && state === 'opened' }
 			return {
 				data(bytes) {
@@ -159,6 +190,11 @@
 					errorReadable(err || makeError('FramingError', '串口读错误'))
 				},
 				lost(err) {
+					// 打开中丢失(如 BLE 开通知时断开)：驱动的 open 可能照样兑现，不能让 open 报成功
+					if (g === gen && state === 'opening') {
+						if (!pending.lost) pending.lost = err || makeError('NetworkError', '设备已断开')
+						return
+					}
 					if (!live()) return
 					// 与 Chromium 一致：丢失后两条流都是 null，页面不会再调 close，所以句柄在这里替它释放
 					const e = err || makeError('NetworkError', '设备已断开')
@@ -168,7 +204,7 @@
 					const w = ws
 					ws = null
 					if (w && !w.locked) w.abort(e).catch(function () {})
-					Promise.resolve().then(function () { return driver.close() }).catch(function () {}).then(function () {
+					Promise.resolve().then(function () { return driver.close() }).catch(function () { staleHandle = true }).then(function () {
 						if (state === 'closing') state = 'closed'
 					})
 				},
@@ -182,14 +218,31 @@
 			async open(options) {
 				if (state !== 'closed') throw makeError('InvalidStateError', '串口已打开')
 				state = 'opening'
+				if (staleHandle) {
+					try {
+						await driver.close()
+					} catch (e) {
+						state = 'closed'
+						throw makeError('InvalidStateError', '上次断开的设备句柄未能释放')
+					}
+					staleHandle = false
+				}
 				const g = ++gen
 				const buf = options && Number(options.bufferSize)
 				queueLimit = Math.max(buf > 0 ? buf : 0, MIN_READ_QUEUE)
+				const pending = { lost: null }
 				try {
-					await driver.open(options || {}, makeSink(g))
+					await driver.open(options || {}, makeSink(g, pending))
 				} catch (e) {
 					state = 'closed'
 					throw e
+				}
+				if (pending.lost) {
+					// 驱动已打开但设备在途中丢失：替页面释放句柄，open 报失败，端口回到关闭
+					gen++
+					try { await driver.close() } catch (e) { staleHandle = true }
+					state = 'closed'
+					throw pending.lost
 				}
 				state = 'opened'
 			},
@@ -228,6 +281,14 @@
 
 	const api = {
 		get backend() { return active ? active.name : null },
+		// 当前后端的传输种类(serial | ble | bt-classic)；页面里只对 Chromium Web Serial 才有的现象(如蓝牙 RFCOMM 口)按后端名判断
+		get kind() { return active ? active.kind : null },
+		list() {
+			return Object.keys(backends).map(function (name) {
+				const b = backends[name]
+				return { name, kind: b.kind, supported: !!b.supported, active: b === active }
+			})
+		},
 		isSupported() { return !!(active && active.supported) },
 		requestPort(options) {
 			if (!api.isSupported()) return Promise.reject(makeError('NotSupportedError', '当前环境不支持串口'))
@@ -254,6 +315,7 @@
 		},
 		register,
 		use,
+		pick,
 		createStreamPort,
 		createWebBackend,
 	}

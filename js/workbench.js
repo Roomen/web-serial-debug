@@ -1,6 +1,7 @@
 // 串口调试工作台：每个工具是一个面板，停靠在右栏或底栏(与协议解析共用)，由最右侧停靠栏开合
 // 面板 DOM 原样搬运(不克隆)，面板内控件的 id 与已绑定事件不受影响
-// 扩展新工具：Workbench.registerPanel({ id, title, label, icon, el })，el 为面板根节点，其余由本模块接管
+// 扩展新工具：Workbench.registerPanel({ id, title, label, icon, el })，el 为面板根节点，其余由本模块接管；
+// 是否注册由平台功能 panel.<id> 决定(js/platform.js)，新面板默认只在桌面画像出现，移动端要显式加进画像
 ;(function () {
 	'use strict'
 
@@ -101,8 +102,17 @@
 		return state[p.dock] === p.id && isAvailable(p) && !isDockCollapsed(p.dock)
 	}
 
+	// 平台画像没开 panel.<id> 的面板不注册，节点原地隐藏(移动端只留协议、解析与固件升级)。
+	// 用 data-feature 交给平台层注入的 !important 样式隐藏：协议模块会改卡片的 style.display，hidden 属性压不住
+	function panelGatedOff(id, el) {
+		if (!window.AppPlatform || window.AppPlatform.has('panel.' + id)) return false
+		window.AppPlatform.gate(el, 'panel.' + id)
+		return true
+	}
+
 	function registerPanel(def) {
 		if (!def || !def.id || !def.el || find(def.id)) return null
+		if (panelGatedOff(def.id, def.el)) return null
 		const docks = Array.isArray(def.docks) && def.docks.length ? def.docks.filter(function (d) { return DOCKS.indexOf(d) !== -1 }) : DOCKS
 		// base 是经典布局下的面板定义；现代布局按 MODERN_PROFILE 覆盖其中几项(见 applyProfile)
 		const base = {
@@ -324,6 +334,8 @@
 	function standalonePanel(id, title, label, icon, cardId, order, hint) {
 		const card = $(cardId)
 		if (!card) return
+		// 先判平台：不注册就不把卡片搬进游离的面板节点，各模块按 id 仍取得到它
+		if (panelGatedOff(id, card)) return
 		const pane = document.createElement('div')
 		pane.className = 'tab-pane d-flex flex-column wb-pane-scroll'
 		pane.id = 'wb-pane-' + id

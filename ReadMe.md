@@ -74,6 +74,10 @@ python3 -m http.server 8000
 
 版本号见 `js/version.js` 的 `window.APP_VERSION`。
 
+## 多平台
+
+同一套页面按平台画像裁剪功能：web 与 Windows / macOS 客户端功能一致（可多开）；Android / iOS 只保留 SEK 协议设置与下发、固件升级，单路，经蓝牙 BLE 透传连接（Android 的经典蓝牙与 USB 串口由原生客户端接入，尚未提供）。在桌面浏览器里给地址加 `?platform=android` 或 `?platform=ios` 可预览移动端画像。
+
 ## 测试
 
 协议与模拟器回归，仅用合成数据，无需串口：

@@ -54,6 +54,22 @@ const tick = () => new Promise((r) => setTimeout(r, 0))
 		fireNative('connect', port)
 		assert.equal(seen.length, 1)
 		assert.deepEqual(port.getInfo(), { usbVendorId: 0x1a86, usbProductId: 0x7523 })
+
+		// 种类：缺省 serial；pick 按种类优先顺序选第一个受支持的，没有就不动当前后端
+		assert.equal(A.kind, 'serial')
+		A.register({ name: 'ble-off', kind: 'ble', supported: false })
+		A.register({ name: 'spp', kind: 'bt-classic', supported: true, requestPort: async () => port, getPorts: async () => [] })
+		assert.equal(A.pick(['ble']), null)
+		assert.equal(A.backend, 'native')
+		assert.equal(A.pick(['ble', 'bt-classic', 'serial']).name, 'spp')
+		assert.equal(A.kind, 'bt-classic')
+		assert.deepEqual(A.list().filter((b) => b.active).map((b) => b.name), ['spp'])
+		assert.equal(A.pick([]), null)
+		assert.equal(A.pick(['serial']).name, 'native', 'node 里 web 后端不受支持，取同种类里下一个受支持的')
+		// 同种类按 priority 取大的，不看注册先后
+		A.register({ name: 'spp-native', kind: 'bt-classic', supported: true, priority: 10, requestPort: async () => port, getPorts: async () => [] })
+		assert.equal(A.pick(['bt-classic']).name, 'spp-native')
+		A.use('native')
 	}
 
 	// ---- 端口：未打开没有流；打开后读到驱动推的数据，写入透传驱动 ----
@@ -76,6 +92,32 @@ const tick = () => new Promise((r) => setTimeout(r, 0))
 		await w.write(new Uint8Array([0xAA, 0x55]))
 		w.releaseLock()
 		assert.deepEqual(d.written, [[0xAA, 0x55]])
+
+		// 写失败：这条流报错，writable 换新流，端口仍打开、后续写入照常
+		const wsPrev = port.writable
+		const origWrite = d.write
+		d.write = async function () { throw Object.assign(new Error('tx'), { name: 'NetworkError' }) }
+		const wf = port.writable.getWriter()
+		await assert.rejects(wf.write(new Uint8Array([1])), { name: 'NetworkError' })
+		wf.releaseLock()
+		d.write = origWrite
+		assert.notEqual(port.writable, wsPrev)
+		const wn = port.writable.getWriter()
+		await wn.write(new Uint8Array([2]))
+		wn.releaseLock()
+		assert.deepEqual(d.written, [[0xAA, 0x55], [2]])
+		// 驱动同步抛错走同一条换流路径
+		const wsPrev2 = port.writable
+		d.write = function () { throw Object.assign(new Error('sync'), { name: 'NetworkError' }) }
+		const ws2 = port.writable.getWriter()
+		await assert.rejects(ws2.write(new Uint8Array([3])), { message: 'sync' })
+		ws2.releaseLock()
+		d.write = origWrite
+		assert.notEqual(port.writable, wsPrev2)
+		const wn2 = port.writable.getWriter()
+		await wn2.write(new Uint8Array([4]))
+		wn2.releaseLock()
+		assert.deepEqual(d.written, [[0xAA, 0x55], [2], [4]])
 
 		await port.setSignals({ dataTerminalReady: true })
 		assert.deepEqual(d.signals, [{ dataTerminalReady: true }])
@@ -195,6 +237,70 @@ const tick = () => new Promise((r) => setTimeout(r, 0))
 		assert.ok(port.readable)
 		await port.close()
 		assert.equal(d.closes, 1, '迟到完成的句柄照常释放')
+	}
+
+	// ---- 打开中设备丢失：驱动 open 照样兑现也要报失败、释放句柄、端口回到关闭，之后可重新打开 ----
+	{
+		const d = fakeDriver({})
+		d.open = async function (options, sink) {
+			this.opens++
+			this.sink = sink
+			sink.lost()
+			sink.data(new Uint8Array([1]))
+		}
+		const port = A.createStreamPort(d)
+		await assert.rejects(port.open({}), { name: 'NetworkError' })
+		assert.equal(d.closes, 1, '替页面关掉驱动')
+		assert.equal(port.readable, null)
+		assert.equal(port.writable, null)
+		await assert.rejects(port.close(), { name: 'InvalidStateError' })
+		d.open = async function (options, sink) { this.opens++; this.sink = sink }
+		await port.open({})
+		assert.ok(port.readable)
+		d.sink.lost()
+		await tick(); await tick()
+		assert.equal(port.readable, null, '打开后的丢失仍按原路径处理')
+		assert.equal(d.closes, 2)
+	}
+
+	// ---- 替页面释放时驱动 close 失败：不能放行在未释放的句柄上重新打开，下一次 open 先重试释放 ----
+	{
+		const d = fakeDriver({})
+		let closeFails = 2
+		d.close = async function () { this.closes++; if (closeFails > 0) { closeFails--; throw new Error('close busy') } }
+		d.open = async function (options, sink) { this.opens++; this.sink = sink; if (this.opens === 1) sink.lost() }
+		const port = A.createStreamPort(d)
+		await assert.rejects(port.open({}), { name: 'NetworkError' })
+		assert.equal(d.closes, 1)
+		await assert.rejects(port.open({}), { name: 'InvalidStateError' }, '释放仍失败就拒绝打开')
+		assert.equal(d.opens, 1, '没有在未释放的句柄上再开')
+		assert.equal(d.closes, 2)
+		await port.open({})
+		assert.equal(d.closes, 3)
+		assert.equal(d.opens, 2)
+		assert.ok(port.readable)
+		// 打开后的丢失同样：释放失败记下，下次 open 先释放
+		closeFails = 1
+		d.sink.lost()
+		await tick(); await tick()
+		assert.equal(d.closes, 4)
+		await port.open({})
+		assert.equal(d.closes, 5, '重新打开前先补释放')
+		assert.equal(d.opens, 3)
+		await port.close()
+	}
+
+	// ---- 写入在核对代次之后、调驱动之前遇到设备丢失：驱动收不到这次写 ----
+	{
+		const d = fakeDriver({})
+		const port = A.createStreamPort(d)
+		await port.open({})
+		const w = port.writable.getWriter()
+		const p = w.write(new Uint8Array([1]))
+		d.sink.lost()
+		await assert.rejects(p)
+		assert.deepEqual(d.written, [])
+		w.releaseLock()
 	}
 
 	console.log('serial-adapter: ok')
