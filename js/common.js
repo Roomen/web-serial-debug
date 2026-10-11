@@ -1,5 +1,5 @@
 ;(function () {
-	if (!('serial' in navigator)) {
+	if (!SerialAdapter.isSupported()) {
 		alert('当前浏览器不支持串口操作,请更换Edge或Chrome浏览器')
 	}
 
@@ -3406,7 +3406,7 @@
 		if (SerialHub.isOpening(sid)) return
 		SerialHub.setOpening(sid, true)
 		try {
-		await navigator.serial.requestPort().then(async (port) => {
+		await SerialAdapter.requestPort().then(async (port) => {
 				if (isBluetoothSerialPort(port)) {
 					addLogErr('不支持蓝牙串口，请选择 USB 串口', sid)
 					return
@@ -3872,13 +3872,9 @@
 		} catch (e) {}
 	}
 
-	//串口事件监听(Web Serial: 事件目标是 navigator.serial，端口在 e.port)
+	//串口事件监听(经 SerialAdapter，事件对象是 { type, port })
 	function serialEventPort(e) {
-		if (e && e.port && typeof e.port.open === 'function') return e.port
-		//兼容极旧实现：少数环境曾把 SerialPort 放在 target
-		const t = e && e.target
-		if (t && typeof t.open === 'function' && typeof t.getInfo === 'function') return t
-		return null
+		return e && e.port && typeof e.port.open === 'function' ? e.port : null
 	}
 	function serialPortLabel(port) {
 		try {
@@ -4096,10 +4092,10 @@
 			return empty
 		}
 		let fp = buildPortFingerprint(port)
-		// WebUSB：仅当同 VID/PID 恰好 1 台已授权设备时取 SN，避免多设备错绑
-		if (navigator.usb && navigator.usb.getDevices) {
+		// USB 设备表(Web 端是 WebUSB)：仅当同 VID/PID 恰好 1 台已授权设备时取 SN，避免多设备错绑
+		if (fp.vid && fp.pid) {
 			try {
-				const devices = await navigator.usb.getDevices()
+				const devices = await SerialAdapter.getUsbDevices()
 				const matches = []
 				for (let i = 0; i < devices.length; i++) {
 					const d = devices[i]
@@ -4130,9 +4126,9 @@
 		// 同 VID/PID 多 CDC：按 getPorts() 顺序赋 slot（四口复合设备命名互不串）
 		fp.slot = null
 		fp.siblingCount = 1
-		if (fp.vid && fp.pid && navigator.serial && navigator.serial.getPorts) {
+		if (fp.vid && fp.pid) {
 			try {
-				const all = await navigator.serial.getPorts()
+				const all = await SerialAdapter.getPorts()
 				const siblings = []
 				for (let i = 0; i < all.length; i++) {
 					const p = all[i]
@@ -4361,7 +4357,7 @@
 	// 收到过 disconnect 的口。重插后 Chromium 给的是新的 SerialPort 对象，旧对象已作废，
 	// 热插拔只能拿新对象顶替这类口；仍插着、只是关着的口是用户选定的设备，不能被别的设备顶掉
 	const lostPorts = new WeakSet()
-	navigator.serial.addEventListener('connect', (e) => {
+	SerialAdapter.addEventListener('connect', (e) => {
 		const port = serialEventPort(e)
 		if (isBluetoothSerialPort(port)) {
 			addLogErr('不支持蓝牙串口，请选择 USB 串口')
@@ -4394,7 +4390,7 @@
 			})
 		}
 	})
-	navigator.serial.addEventListener('disconnect', async (e) => {
+	SerialAdapter.addEventListener('disconnect', async (e) => {
 		const port = serialEventPort(e)
 		if (isBluAnalyzerPort(port)) return
 		if (port) lostPorts.add(port)
@@ -7137,7 +7133,7 @@
 
 	// 初始化：为已授权端口预计算 identity（跳过蓝牙口）
 	;(function preloadPortIdentities() {
-		navigator.serial.getPorts().then(function (ports) {
+		SerialAdapter.getPorts().then(function (ports) {
 			for (var i = 0; i < ports.length; i++) {
 				if (isExcludedSerialPort(ports[i])) continue
 				getPortIdentityKey(ports[i])
@@ -7172,7 +7168,7 @@
 			} catch (e) {}
 			// 给上一 document 的 pagehide 释放 OS 句柄留一点时间；真正的等待靠 openSerial 的退避重试
 			await new Promise(function (resolve) { setTimeout(resolve, 150) })
-			const allPorts = await navigator.serial.getPorts()
+			const allPorts = await SerialAdapter.getPorts()
 			// 自动重连跳过蓝牙串口与功耗分析仪口
 			const ports = allPorts.filter(function (p) { return !isExcludedSerialPort(p) })
 			if (ports.length === 0) return
