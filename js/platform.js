@@ -8,9 +8,6 @@
 ;(function (root) {
 	'use strict'
 
-	// 移动端固件页是否带「生成升级包(差分 / 压缩)」：需求未定，先只给升级；改成 true 即开放固件打包视图
-	const MOBILE_FIRMWARE_PACK = false
-
 	const FEATURES = [
 		'view.serial', // 串口调试视图(日志、发送；移动端承载协议与固件面板)
 		'view.firmware-pack', // 固件打包视图(原始包 / 压缩包 / 双向差分)
@@ -50,7 +47,8 @@
 			layouts: ['classic', 'modern'],
 		},
 		mobile: {
-			features: ['view.serial', 'panel.protocol', 'panel.parse', 'panel.firmware'].concat(MOBILE_FIRMWARE_PACK ? ['view.firmware-pack'] : []),
+			// 不开固件打包视图：移动端不输出中间产物，原始固件在固件升级面板里按设备版本自动差分 / 压缩后直接升级
+			features: ['view.serial', 'panel.protocol', 'panel.parse', 'panel.firmware'],
 			protocols: ['sek'],
 			lanes: 1,
 			layouts: ['classic'],
@@ -233,7 +231,7 @@
 		return api
 	}
 
-	const lib = { FEATURES, PROFILES, OS_TRANSPORTS, MOBILE_FIRMWARE_PACK, detect, resolve, hasFeature, disabledFeatures, gatingCss, build }
+	const lib = { FEATURES, PROFILES, OS_TRANSPORTS, detect, resolve, hasFeature, disabledFeatures, gatingCss, build }
 
 	if (typeof module !== 'undefined' && module.exports) {
 		module.exports = lib
