@@ -6,7 +6,7 @@ const fs = require('node:fs')
 const vm = require('node:vm')
 const source = fs.readFileSync(require('node:path').join(__dirname, '../js/firmware-upgrade.js'), 'utf8')
 const start = source.indexOf('\t// 累积接收字节, 提取一个完整的 PCP 帧')
-const end = source.indexOf('\tasync function runUpgrade()', start)
+const end = source.indexOf('\t// 自动升级：查设备版本', start)
 assert.ok(start >= 0 && end > start, '接收测试锚点必须存在')
 let receive
 let parses = 0

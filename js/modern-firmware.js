@@ -206,6 +206,15 @@
 				u.tTransfer = 0
 				u.tEnd = 0
 				break
+			// 自动升级的差分包被拒、改用压缩包重来：上一轮的告警、进度与传输计时作废(日志仍保留)
+			case 'retry':
+				u.notice = null
+				u.error = ''
+				u.percent = 0
+				u.sent = 0
+				u.phase = 'query'
+				u.tTransfer = 0
+				break
 			case 'plan':
 				u.plan = { version: e.version, chunkSize: e.chunkSize, totalChunks: e.totalChunks, size: e.size }
 				u.grid = newGrid(e.totalChunks)

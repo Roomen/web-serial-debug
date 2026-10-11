@@ -1012,6 +1012,10 @@
                                             </div>
                                             <pre id="fw-info"
                                                 class="p-2 mb-0 small text-monospace mt-2" style="min-height: 60px; white-space: pre-wrap;"></pre>
+                                            <div class="fw-library-row small text-muted mt-2" id="fw-library-row" title="导入过的原始固件存在本机，升级原始固件时按设备版本在这里找差分基准">
+                                                <i class="bi bi-archive"></i> <span id="fw-library-summary">本机固件库</span>
+                                                <button type="button" class="btn btn-link btn-sm p-0 ms-2 align-baseline" id="fw-library-clear">清空</button>
+                                            </div>
                                         </div>
                                         <div class="fw-upgrade-card mb-0">
                                             <h6 class="pane-section-title"><i class="bi bi-upload"></i> 升级控制</h6>
@@ -1782,6 +1786,8 @@
     <script src="js/modern-inspector.js"></script>
     <script src="js/command-palette.js"></script>
     <script src="js/modern-shell.js"></script>
+    <script src="js/firmware-core.js"></script>
+    <script src="js/firmware-library.js"></script>
     <script src="js/firmware-upgrade.js"></script>
     <script src="https://cdn.bootcdn.net/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="js/firmware-packager.js"></script>

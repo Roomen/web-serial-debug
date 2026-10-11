@@ -56,7 +56,6 @@ const P = require('../js/platform.js')
 	assert.deepEqual(a.transports, ['ble', 'bt-classic', 'serial'])
 	const on = P.FEATURES.filter((f) => P.hasFeature(a, f))
 	const expectOn = ['view.serial', 'panel.protocol', 'panel.firmware', 'panel.parse', 'transport.serial', 'transport.ble', 'transport.bt-classic']
-	if (P.MOBILE_FIRMWARE_PACK) expectOn.push('view.firmware-pack')
 	assert.deepEqual(on.slice().sort(), expectOn.slice().sort())
 	assert.equal(P.hasFeature(a, 'lane.dual'), false)
 	assert.equal(P.hasFeature(a, 'layout.switch'), false)
