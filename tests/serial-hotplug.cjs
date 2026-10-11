@@ -1,5 +1,5 @@
 // Run: node tests/serial-hotplug.cjs — synthetic data only.
-// 覆盖: 串口热插拔(navigator.serial 的 connect / disconnect)对会话的认领。关着的口不能被随后插入的别的设备顶替，
+// 覆盖: 串口热插拔(SerialAdapter 的 connect / disconnect)对会话的认领。关着的口不能被随后插入的别的设备顶替，
 // 重插得到的新 SerialPort 对象接回原会话(双路按型号各回各路)，空会话认领新口后开关键要显示
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -19,10 +19,10 @@ const hubEnd = source.indexOf('\n\t}\n', source.indexOf('\tconst SerialHub = {')
 assert.ok(hubStart > 0 && hubEnd > hubStart, 'common.js 的 SerialHub 段不见了')
 const hubSrc = source.slice(hubStart, hubEnd + 3)
 // 热插拔事件处理，到 serialStatuChange 之前
-const hotplugSrc = slice("\tnavigator.serial.addEventListener('connect'", '\tfunction serialStatuChange(')
+const hotplugSrc = slice("\tSerialAdapter.addEventListener('connect'", '\tfunction serialStatuChange(')
 // connect 之前紧挨着的声明(如已拔出口的记录)也要带上：从上一个函数结束处开始
-const preStart = source.lastIndexOf('\n\t}\n', source.indexOf("\tnavigator.serial.addEventListener('connect'")) + 3
-const preSrc = source.slice(preStart, source.indexOf("\tnavigator.serial.addEventListener('connect'"))
+const preStart = source.lastIndexOf('\n\t}\n', source.indexOf("\tSerialAdapter.addEventListener('connect'")) + 3
+const preSrc = source.slice(preStart, source.indexOf("\tSerialAdapter.addEventListener('connect'"))
 
 let nextId = 0
 function makePort(vid, pid) {
@@ -35,7 +35,7 @@ function harness(mode) {
 	const ctx = {
 		window: {},
 		document: { getElementById() { return null } },
-		navigator: { serial: { addEventListener(type, fn) { listeners[type] = fn } } },
+		SerialAdapter: { addEventListener(type, fn) { listeners[type] = fn } },
 		pinSid: null,
 		readGenBySid: { S: 0, A: 0, B: 0 },
 		rxWatch() { return { lastRxAt: 0, backoff: 0 } },
