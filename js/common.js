@@ -1,4 +1,11 @@
 ;(function () {
+	// 平台画像(js/platform.js)：没加载时按桌面全功能处理
+	const platform = window.AppPlatform || null
+	function platformHas(id) { return !platform || platform.has(id) }
+	function platformAllowsProtocol(id) { return !platform || platform.allowsProtocol(id) }
+	// 会话里只有平台允许的物理路才会被自动恢复 / 重开：只有一路时 A/B 的存储意图保留但不执行，否则界面是单路、后台却开着 A/B
+	function platformHasSid(sid) { return sid === 'S' || platformHas('lane.dual') }
+
 	if (!SerialAdapter.isSupported()) {
 		alert('当前浏览器不支持串口操作,请更换Edge或Chrome浏览器')
 	}
@@ -52,7 +59,9 @@
 
 	// 会话内以这份为准，持久化只是尽力保存：存储写失败时也不能让 data-layout 与已搬好的 DOM、分布局状态键对不上
 	let sessionLayout = (function () {
-		try { return localStorage.getItem(LAYOUT_KEY) === 'modern' ? 'modern' : 'classic' } catch (e) { return 'classic' }
+		let v = 'classic'
+		try { v = localStorage.getItem(LAYOUT_KEY) === 'modern' ? 'modern' : 'classic' } catch (e) {}
+		return platform && !platform.allowsLayout(v) ? 'classic' : v
 	})()
 
 	function layoutChoice() {
@@ -76,6 +85,8 @@
 	window.layoutStateKey = layoutStateKey
 	window.setLayoutChoice = function (choice) {
 		const next = choice === 'modern' ? 'modern' : 'classic'
+		// 平台画像不提供的布局不切、不写存储(移动端只有经典)
+		if (platform && !platform.allowsLayout(next)) return
 		sessionLayout = next
 		try {
 			if (next === 'modern') localStorage.setItem(LAYOUT_KEY, 'modern')
@@ -1099,6 +1110,8 @@
 	}
 
 	window.registerProtocol = function (id, impl) {
+		// 平台画像外的协议不进注册表与下拉框(移动端只有 SEK)；各协议模块照常加载，只是选不到
+		if (!platformAllowsProtocol(id)) return
 		window._protocols[id] = impl
 		// 当前协议晚于日志恢复才注册(启动时 gz/wmbus 等脚本在 common.js 之后加载): 已有的解析段按它重渲
 		if (id === window._activeProtocol || (laneProtocols && (laneProtocols.A === id || laneProtocols.B === id))) scheduleParseRerender()
@@ -2587,7 +2600,7 @@
 	if (toolOptions.skEncType) {
 		set('serial-protocol-enc-type', toolOptions.skEncType)
 	}
-	if (toolOptions.skProtocol) {
+	if (toolOptions.skProtocol && platformAllowsProtocol(toolOptions.skProtocol)) {
 		window._activeProtocol = toolOptions.skProtocol
 		var sel = document.getElementById('serial-protocol-select')
 		if (sel) {
@@ -3599,7 +3612,7 @@
 		updateOpenButton('B')
 		//普通刷新的 pageshow 不再开(reloadAutoReconnect 负责); 仅 bfcache 恢复时按意图补开
 		function reopenIfWanted(sid) {
-			if (!getSerialWantOpen(sid) || SerialHub.isManualClose(sid)) return
+			if (!platformHasSid(sid) || !getSerialWantOpen(sid) || SerialHub.isManualClose(sid)) return
 			if (!SerialHub.getPort(sid) || SerialHub.isOpening(sid)) return
 			SerialHub.setOpening(sid, true)
 			openSerial(sid, { reason: 'reload' }).finally(function () {
@@ -3910,7 +3923,9 @@
 	}
 
 	/** 蓝牙串口检测（Bluetooth Serial / RFCOMM） */
+	// 只拦 Chromium Web Serial 列出的蓝牙 RFCOMM 口；BLE / 原生蓝牙后端的口本来就是蓝牙，照常可用
 	function isBluetoothSerialPort(port) {
+		if (SerialAdapter.backend !== 'web') return false
 		try {
 			const info = port && port.getInfo ? port.getInfo() : {}
 			if (info.bluetoothServiceClassId != null && info.bluetoothServiceClassId !== '') return true
@@ -6518,6 +6533,8 @@
 
 	// 切换 UI 到双路模式（同步；与 switchToSingleUI 通过 modeSwitching 串行化）
 	function switchToDualUI() {
+		// 平台画像只有一路(移动端)时不进双路；所有进双路的入口(模式键、刷新恢复、双路预设)都经这里或 addLaneB
+		if (!platformHas('lane.dual')) return
 		if (modeSwitching) return
 		modeSwitching = true
 		try {
@@ -6684,7 +6701,7 @@
 	// opts.beforeOpen：A 重新打开之前调用(套用双路预设用，让 A 直接按预设参数打开，不必再重连一次)
 	async function addLaneB(opts) {
 		opts = opts || {}
-		if (SerialHub.mode === 'dual') return false
+		if (SerialHub.mode === 'dual' || !platformHas('lane.dual')) return false
 		const busy = laneBusyMsg()
 		if (busy) {
 			showToast(busy, 2000)
@@ -7012,6 +7029,11 @@
 	async function applySerialPreset(preset) {
 		if (DualCfg.isSinglePreset(preset)) return applySingleConfig(preset)
 		if (SerialHub.mode === 'dual') return applyDualConfig(preset)
+		// 平台只有一路(移动端)：双路预设套不上，不能在单路下把两路的参数与协议写进去
+		if (!platformHas('lane.dual')) {
+			showToast('当前平台只支持一路串口，不能套用双路预设', 2000)
+			return { ok: false }
+		}
 		if (window.serialApi && window.serialApi.isPinned()) {
 			showToast('事务进行中，暂不能套用预设', 2000)
 			return { ok: false }
@@ -7161,7 +7183,7 @@
 			// 恢复模式（此时所有 const/函数已初始化，无 TDZ 风险）
 			try {
 				const savedMode = sessionStorage.getItem('serialHubMode')
-				if (savedMode === 'dual') {
+				if (savedMode === 'dual' && platformHas('lane.dual')) {
 					SerialHub.mode = 'dual'
 					switchToDualUI()
 				}
@@ -7200,7 +7222,7 @@
 				return null
 			}
 			async function restoreSid(sid) {
-				if (!getSerialWantOpen(sid)) return null
+				if (!platformHasSid(sid) || !getSerialWantOpen(sid)) return null
 				const idKey = getSerialWantPortKey(sid)
 				let plan = findPortByKey(sid)
 				if (!plan && !idKey) plan = findFirstFreePort()

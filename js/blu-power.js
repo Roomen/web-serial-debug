@@ -6961,9 +6961,9 @@
 		}
 	}
 
-	if (document.readyState === 'loading') {
-		document.addEventListener('DOMContentLoaded', bind)
-	} else {
-		bind()
+	// 平台画像没有功耗分析(移动端)：视图入口已隐藏，这里不绑定、不枚举串口，免得 BLE 等后端的口被当成未知 BLU 口列出来
+	if (!window.AppPlatform || window.AppPlatform.has('view.power')) {
+		if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind)
+		else bind()
 	}
 })()

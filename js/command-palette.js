@@ -128,6 +128,7 @@
 		list.push({
 			group: '串口',
 			title: '切换串口模式（单路/双路）',
+			feature: 'lane.dual',
 			alias: 'moshi mode dual single shuanglu danlu qiehuan',
 			detail: '当前 ' + (window.SerialHub ? window.SerialHub.mode : 'single'),
 			run: function () {
@@ -249,6 +250,7 @@
 				if (!item || !item.content) return
 				list.push({
 					group: '快捷发送',
+					feature: 'panel.quick-send',
 					title: item.name || item.content,
 					detail: (grp.name || '') + ' · ' + item.content + (item.hex ? ' · HEX' : ''),
 					alias: 'kuaijie fasong quick send ' + item.content,
@@ -318,18 +320,21 @@
 		list.push({
 			group: '视图',
 			title: '切换到固件打包',
+			feature: 'view.firmware-pack',
 			alias: 'gujian dabao firmware pack view',
 			run: function () { clickSel('.rail-item[data-view="view-fw-pack"]') }
 		})
 		list.push({
 			group: '视图',
 			title: '切换到功耗分析',
+			feature: 'view.power',
 			alias: 'gonghao fenxi power blu blu100k ppk view',
 			run: function () { clickSel('.rail-item[data-view="view-blu"]') }
 		})
 		list.push({
 			group: '视图',
 			title: '打开串口发送',
+			feature: 'view.power',
 			alias: 'chuankou fasong serial send sheet',
 			run: function () {
 				clickSel('.rail-item[data-view="view-blu"]')
@@ -351,6 +356,7 @@
 			list.push({
 				group: '视图',
 				title: '界面布局：' + t[1],
+				feature: 'layout.switch',
 				detail: layoutNow === t[0] ? '当前' : '',
 				alias: 'jiemian buju layout ' + t[2],
 				run: function () { if (window.setLayoutChoice) window.setLayoutChoice(t[0]) }
@@ -444,10 +450,13 @@
 		all.push.apply(all, quickSendCommands())
 		all.push.apply(all, presetCommands())
 		all.push.apply(all, viewCommands())
-		all.forEach(function (cmd) {
+		// 条目的 feature 是平台功能 id(js/platform.js)：画像没开的功能不列，免得绕过界面上的门控(如移动端执行快捷发送)
+		const P = window.AppPlatform
+		const shown = P ? all.filter(function (cmd) { return !cmd.feature || P.has(cmd.feature) }) : all
+		shown.forEach(function (cmd) {
 			cmd.alias = (cmd.alias || '') + aliasHints(cmd.title)
 		})
-		return all
+		return shown
 	}
 
 	//---- 面板 UI ----

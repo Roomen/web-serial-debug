@@ -353,7 +353,9 @@
 		list.forEach(function (p, i) { (isSinglePreset(p) === !dual ? mine : other).push(i) })
 		if (!mine.length) box.appendChild(mk('div', 'dual-preset-empty', dual ? '还没有双路预设。设好两路的参数、协议与标签后，在下面起个名字保存。' : '还没有单路预设。设好参数与协议后，在下面起个名字保存。'))
 		mine.forEach(function (i) { box.appendChild(presetRow(list[i], i)) })
-		if (other.length) {
+		// 平台只有一路时不列双路预设(套不上)；存储里照留，回到桌面端仍可用
+		const canDual = !window.AppPlatform || window.AppPlatform.has('lane.dual')
+		if (other.length && (dual || canDual)) {
 			const target = dual && l ? sidLabel(l.singleTarget()) : ''
 			box.appendChild(mk('div', 'dual-preset-group', dual ? '单路预设 · 套用到主发路（' + target + '）' : '双路预设 · 套用后进入双路'))
 			other.forEach(function (i) { box.appendChild(presetRow(list[i], i)) })
