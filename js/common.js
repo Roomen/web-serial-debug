@@ -4046,12 +4046,21 @@
 			const v = info[k]
 			if (typeof v !== 'string' || !v.trim()) continue
 			const t = v.trim()
-			fp.labels.push(t)
 			const lk = k.toLowerCase()
+			// 原生后端(桌面客户端)的 getInfo 直接带产品名与厂商(Web Serial 没有这两个键，网页版仍靠 USB 设备表补)。
+			// 它们不进 labels：label 键的分值高于 prod 键，同厂商 / 同型号的另一台设备会被套上这台的别名
+			if (lk === 'productname' || lk === 'manufacturername') {
+				if (lk === 'productname' && !fp.productName) fp.productName = t
+				if (lk === 'manufacturername' && !fp.manufacturerName) fp.manufacturerName = t
+				continue
+			}
+			fp.labels.push(t)
 			if (!fp.sn && lk.indexOf('serial') !== -1) fp.sn = t
 			else if (!fp.path && lk.indexOf('path') !== -1) {
 				const toks = extractPathTokens(t)
+				// 原生后端的 path 是完整设备路径；不是 cu.* / tty.* / COMx 的(如 Linux /dev/ttyUSB0)取最后一段
 				if (toks.length) fp.path = toks[0]
+				else if (t.indexOf('/') !== -1) fp.path = t.split('/').pop().toLowerCase() || null
 			}
 		}
 		// 从全部字符串字段里兜底提取 path token

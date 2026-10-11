@@ -21,6 +21,17 @@ Web Serial API 目前仅桌面端 Chromium 内核浏览器支持：
 
 > 使用前请确认在桌面端 Chrome/Edge 中打开本工具。
 
+## 桌面客户端（macOS）
+
+`desktop/` 是基于 Tauri 2 的桌面客户端，功能与网页版一致，串口由原生层打开（不依赖浏览器的 Web Serial），选口时列出设备名、厂商、口名（如 `cu.usbserial-0001`）、VID:PID 与序列号。需要 Node.js 与 Rust 工具链：
+
+```bash
+cd desktop
+npm install
+npm run dev     # 开发运行
+npm run build   # 生成 .app 与 .dmg（desktop/src-tauri/target/release/bundle/）
+```
+
 ## 使用方法
 
 1. 起本地静态服务后在 Chrome / Edge 打开（见下方「本地运行」）

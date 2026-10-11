@@ -1,0 +1,7 @@
+{
+	"$schema": "../gen/schemas/desktop-schema.json",
+	"identifier": "default",
+	"description": "主窗口：原生串口命令(经 invoke_handler 注册，不需要权限条目)与下载完成事件；外部链接由 Rust 端交给系统浏览器",
+	"windows": ["main", "main-*"],
+	"permissions": ["core:default"]
+}

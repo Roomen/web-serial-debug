@@ -7471,6 +7471,171 @@ body.blu-wave-fullscreen-open {
   color: var(--text-secondary);
 }
 
+/* ========== 桌面客户端选口对话框 (js/transport-native-serial.js) ========== */
+/* WebView 里没有浏览器的串口选择框，客户端用这个对话框列出设备名、厂商、口名、VID:PID 与序列号 */
+.native-port-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.native-port-dialog {
+  width: min(560px, 100%);
+  max-height: min(640px, calc(100vh - 32px));
+  display: flex;
+  flex-direction: column;
+}
+
+/* Bootstrap 的 modal 间距变量定义在 .modal 上，这里不套 .modal，按 Bootstrap 的默认值补上 */
+.native-port-dialog > .modal-header,
+.native-port-dialog > .modal-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+}
+
+.native-port-dialog > .modal-header {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.native-port-dialog > .modal-footer {
+  border-top: 1px solid var(--border-color);
+}
+
+.native-port-dialog .modal-title {
+  margin: 0;
+  font-size: 16px;
+}
+
+.native-port-body {
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.native-port-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.native-port-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 120px;
+  overflow-y: auto;
+}
+
+.native-port-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  outline: none;
+}
+
+.native-port-row:hover {
+  background: var(--bg-surface-hover);
+}
+
+.native-port-row.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+.native-port-row:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+.native-port-icon {
+  font-size: 18px;
+  color: var(--text-secondary);
+  flex: none;
+}
+
+.native-port-row.is-selected .native-port-icon {
+  color: var(--accent);
+}
+
+.native-port-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.native-port-line1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.native-port-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.native-port-badge {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--warning);
+  border: 1px solid var(--warning);
+}
+
+.native-port-details {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.native-port-path {
+  flex: none;
+  max-width: 45%;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.native-port-empty {
+  padding: 24px 12px;
+  text-align: center;
+}
+
+.native-port-empty-title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.native-port-empty-text {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 /* ========== Workbench: 停靠栏 / 停靠区 / 状态栏 ========== */
 /* 三列显式定位：右栏收起时整列让出，停靠栏仍在第三列 */
 #log-main {
