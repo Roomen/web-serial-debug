@@ -188,29 +188,33 @@
 				try {
 					await driver.open(options || {}, makeSink(g))
 				} catch (e) {
-					if (g === gen) state = 'closed'
+					state = 'closed'
 					throw e
 				}
-				if (g !== gen) throw makeError('AbortError', '打开被关闭打断')
 				state = 'opened'
 			},
+			// 只有已打开才能关：打开中关闭会与驱动的 open 赛跑，后完成的 open 留下没人释放的句柄。
+			// 与 Chromium 一致，打开中两条流都是 null，页面本就不会在这时调 close
 			async close() {
-				if (state === 'closed' || state === 'closing') throw makeError('InvalidStateError', '串口未打开')
+				if (state !== 'opened') throw makeError('InvalidStateError', '串口未打开')
 				if ((rs && rs.locked) || (ws && ws.locked)) throw makeError('InvalidStateError', '串口流仍被占用')
 				const r = rs
 				const w = ws
 				rs = null
 				rsCtl = null
 				ws = null
-				gen++
 				state = 'closing'
 				if (r) { try { await r.cancel() } catch (e) {} }
 				if (w) { try { await w.abort() } catch (e) {} }
+				// 驱动没关掉就回到已打开：句柄仍在，流照常可取，页面重试 close 会再调驱动，不能报成已释放、放行重新打开
 				try {
 					await driver.close()
-				} finally {
-					state = 'closed'
+				} catch (e) {
+					state = 'opened'
+					throw e
 				}
+				gen++
+				state = 'closed'
 			},
 		}
 		if (typeof driver.setSignals === 'function') {

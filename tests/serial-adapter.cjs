@@ -159,5 +159,43 @@ const tick = () => new Promise((r) => setTimeout(r, 0))
 		await port.close()
 	}
 
+	// ---- 驱动关闭失败：不能报成已关闭，流仍可取、数据照收，重试 close 会再调驱动，成功前不放行重新打开 ----
+	{
+		const d = fakeDriver({})
+		let failClose = true
+		d.close = async function () { this.closes++; if (failClose) throw new Error('close failed') }
+		const port = A.createStreamPort(d)
+		await port.open({})
+		await assert.rejects(port.close(), /close failed/)
+		assert.ok(port.readable, '关闭失败后仍是打开态，页面重试时会再调 close')
+		await assert.rejects(port.open({}), { name: 'InvalidStateError' }, '句柄没释放前不能重新打开')
+		const r = port.readable.getReader()
+		d.sink.data(new Uint8Array([7]))
+		assert.deepEqual(Array.from((await r.read()).value), [7], '关闭失败后驱动的数据照常送达')
+		await r.cancel()
+		r.releaseLock()
+		failClose = false
+		await port.close()
+		assert.equal(d.closes, 2)
+		assert.equal(port.readable, null)
+	}
+
+	// ---- 打开中关闭：拒绝，不与驱动的 open 赛跑；open 完成后句柄归页面，照常能关 ----
+	{
+		const d = fakeDriver({})
+		let finishOpen = null
+		d.open = function (o, sink) { this.sink = sink; return new Promise((r) => { finishOpen = r }) }
+		const port = A.createStreamPort(d)
+		const opening = port.open({})
+		assert.equal(port.readable, null, '打开中没有流')
+		await assert.rejects(port.close(), { name: 'InvalidStateError' })
+		assert.equal(d.closes, 0, '打开中不调驱动的 close')
+		finishOpen()
+		await opening
+		assert.ok(port.readable)
+		await port.close()
+		assert.equal(d.closes, 1, '迟到完成的句柄照常释放')
+	}
+
 	console.log('serial-adapter: ok')
 })().catch((e) => { console.error(e); process.exit(1) })
