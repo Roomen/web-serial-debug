@@ -511,7 +511,7 @@
 
 	function onInputKeydown(e) {
 		//Cmd+K 之外的按键不许冒泡到全局（页面里还有别的 Esc 处理）
-		const isToggle = (e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')
+		const isToggle = isPaletteKey(e)
 		if (!isToggle) e.stopPropagation()
 		if (isToggle) return
 		if (e.key === 'Escape') {
@@ -610,6 +610,11 @@
 		}
 	}
 
+	//只认不带 Shift / Alt 的 ⌘/Ctrl+K：⇧⌘K 是清空日志(桌面客户端菜单)，不能顺手把面板也开关一次。native-shell.js 的 PAGE_KEYS 与此一致
+	function isPaletteKey(e) {
+		return (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')
+	}
+
 	function isLocked() {
 		const login = el('login-overlay')
 		if (!login) return false
@@ -618,12 +623,17 @@
 		return cs.display !== 'none' && cs.visibility !== 'hidden'
 	}
 
+	//页内对话框(js/app-dialog.js)开着时它是最上层模态，命令面板不能盖上去接管键盘
+	function dialogOpen() {
+		return !!(window.AppDialog && window.AppDialog.isOpen && window.AppDialog.isOpen())
+	}
+
 	function isOpen() {
 		return overlay && !overlay.hidden
 	}
 
 	function open() {
-		if (isLocked()) return
+		if (isLocked() || dialogOpen()) return
 		if (!overlay) buildDom()
 		commands = collectCommands()
 		overlay.hidden = false
@@ -640,8 +650,8 @@
 	}
 
 	document.addEventListener('keydown', function (e) {
-		if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
-			if (isLocked()) return
+		if (isPaletteKey(e)) {
+			if (isLocked() || dialogOpen()) return
 			e.preventDefault()
 			if (isOpen()) close()
 			else open()

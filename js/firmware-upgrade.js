@@ -854,9 +854,9 @@
 		if (parseBtn) parseBtn.click()
 	}
 	if (el.libraryClear) {
-		el.libraryClear.addEventListener('click', function () {
+		el.libraryClear.addEventListener('click', async function () {
 			if (!library) return
-			if (!window.confirm('清空本机固件库？之后找不到原固件时只能用压缩包升级。')) return
+			if (!await window.AppDialog.confirm('清空本机固件库？之后找不到原固件时只能用压缩包升级。', { title: '清空固件库', okText: '清空', danger: true })) return
 			library.clear().then(function () {
 				log('已清空本机固件库', 'info')
 				refreshLibrarySummary()

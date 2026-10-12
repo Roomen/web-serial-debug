@@ -33,15 +33,21 @@ const P = require('../js/platform.js')
 		assert.equal(d.profile, 'desktop')
 		assert.equal(d.mobile, false)
 		assert.equal(d.lanes, 2)
-		assert.deepEqual(d.layouts, ['classic', 'modern'])
+		// 浏览器里两套布局可切；桌面客户端只做现代布局，切换入口随之关闭，退回的布局是画像里第一个
+		assert.deepEqual(d.layouts, os === 'web' ? ['classic', 'modern'] : ['modern'])
+		assert.equal(P.hasFeature(d, 'layout.switch'), os === 'web')
 		assert.equal(d.protocols, '*')
 		assert.deepEqual(d.transports, ['serial'])
 		assert.equal(d.multiInstance, true)
-		P.FEATURES.filter((f) => f.indexOf('transport.') !== 0).forEach((f) => assert.equal(P.hasFeature(d, f), true, os + ' ' + f))
+		P.FEATURES.filter((f) => f.indexOf('transport.') !== 0 && f !== 'auth.expiry' && f !== 'shell.browser' && f !== 'layout.switch').forEach((f) => assert.equal(P.hasFeature(d, f), true, os + ' ' + f))
+		// 登录过期只在浏览器里：客户端登录一次长期有效
+		assert.equal(P.hasFeature(d, 'auth.expiry'), os === 'web')
+		// 网页外壳入口(GitHub / 反馈链接)同样只在浏览器里
+		assert.equal(P.hasFeature(d, 'shell.browser'), os === 'web')
 		assert.equal(P.hasFeature(d, 'transport.serial'), true)
 		assert.equal(P.hasFeature(d, 'transport.ble'), false)
 		assert.equal(P.hasFeature(d, 'panel.some-future-tool'), true, '目录外的新功能在桌面默认开启')
-		assert.equal(P.gatingCss(d), '[data-feature~="transport.ble"]{display:none !important}\n[data-feature~="transport.bt-classic"]{display:none !important}')
+		assert.equal(P.gatingCss(d), (os === 'web' ? '' : '[data-feature~="layout.switch"]{display:none !important}\n') + '[data-feature~="transport.ble"]{display:none !important}\n[data-feature~="transport.bt-classic"]{display:none !important}' + (os === 'web' ? '' : '\n[data-feature~="auth.expiry"]{display:none !important}\n[data-feature~="shell.browser"]{display:none !important}'))
 	})
 }
 
@@ -71,6 +77,23 @@ const P = require('../js/platform.js')
 	assert.deepEqual(i.transports, ['ble'], 'iOS 没有串口与经典蓝牙')
 	assert.equal(P.hasFeature(i, 'transport.serial'), false)
 	assert.equal(P.hasFeature(i, 'panel.firmware'), true)
+}
+
+// ---- 客户端运行时：布局只有现代，退回布局取画像第一个；移动端客户端仍只有经典 ----
+{
+	const w = fakeWin('', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)')
+	w.__TAURI_INTERNALS__ = {}
+	const api = P.build(w)
+	assert.equal(api.os, 'macos')
+	assert.deepEqual(api.layouts, ['modern'])
+	assert.equal(api.allowsLayout('classic'), false)
+	assert.equal(api.allowsLayout('modern'), true)
+	assert.equal(api.fallbackLayout(), 'modern')
+	assert.equal(api.has('layout.switch'), false)
+	assert.equal(api.has('shell.browser'), false)
+	assert.ok(rulesOf(w).includes('[data-feature~="layout.switch"]{display:none !important}'))
+	assert.equal(P.build(fakeWin('')).fallbackLayout(), 'classic')
+	assert.equal(P.resolve({ os: 'android', runtime: 'tauri' }).layouts[0], 'classic')
 }
 
 // ---- 预览覆盖：只换系统，运行时不变；非法值忽略 ----
@@ -126,6 +149,7 @@ function rulesOf(win) { const st = win.document.head.children.find((e) => e.id =
 	assert.equal(api.allowsProtocol('sek'), true)
 	assert.equal(api.allowsProtocol('gz'), false)
 	assert.equal(api.allowsLayout('modern'), false)
+	assert.equal(api.fallbackLayout(), 'classic')
 	// 平台服务
 	assert.equal(api.service('scanner'), null)
 	const scanner = { scan: async () => 'x' }

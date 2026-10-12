@@ -408,7 +408,47 @@
 			open: function () { open(panel) },
 		}
 	}
+	// 功耗仪连接状态：左侧导航「功耗」项的角标(两种布局共用同一个导航)，已连接且不在功耗视图时再在状态栏给一枚电流芯片。
+	// 电流读数直接取 blu-power.js 按自己节奏写进 #blu-current 的文本，不另起采样；连接状态没有事件可挂，跟状态栏一起每秒看一次
+	const POWER_NAV_TITLE = '功耗分析'
+	function powerConnected() {
+		const api = window.bluApi
+		return !!(api && typeof api.isOpen === 'function' && api.isOpen())
+	}
+	function powerViewActive() {
+		const v = $('view-blu')
+		return !!(v && v.classList.contains('active'))
+	}
+	function refreshPowerBadge() {
+		const item = document.querySelector('.rail-item[data-view="view-blu"]')
+		if (!item) return
+		const on = powerConnected()
+		if (on) {
+			item.dataset.conn = 'open'
+			item.title = POWER_NAV_TITLE + ' · 功耗仪已连接'
+			item.setAttribute('aria-label', POWER_NAV_TITLE + ' · 功耗仪已连接')
+		} else if (item.dataset.conn) {
+			delete item.dataset.conn
+			item.title = POWER_NAV_TITLE
+			item.removeAttribute('aria-label')
+		}
+	}
 	const TASKS = [
+		{
+			label: '功耗仪',
+			title: '切换到功耗分析',
+			noSpin: true,
+			running: function () { return powerConnected() && !powerViewActive() },
+			text: function () {
+				const cur = $('blu-current')
+				const t = cur ? cur.textContent.trim() : ''
+				return '⚡ ' + (t && t !== '--' ? t : '功耗仪已连接')
+			},
+			open: function () {
+				const item = document.querySelector('.rail-item[data-view="view-blu"]')
+				if (item) item.click()
+			},
+		},
 		panelTask('rw', 'sk-rw-stop', 'sk-rw-progress-bar', '随机读写'),
 		panelTask('batch', 'sk-batch-stop', 'sk-batch-progress-bar', '批量配置'),
 		panelTask('protocol', 'gz-auto-stop', 'gz-auto-progress-bar', '工位测试'),
@@ -511,7 +551,8 @@
 			b.dataset.task = String(idx)
 			b.title = t.title
 			const text = span('', '')
-			b.append(span('sb-spin'), text)
+			if (t.noSpin) b.append(text)
+			else b.append(span('sb-spin'), text)
 			tasks.appendChild(b)
 			return { def: t, btn: b, text: text }
 		})
@@ -811,11 +852,13 @@
 		if (parsePanel) watch.observe(parsePanel, { attributes: true, attributeFilter: ['class'] })
 
 		initConnectBarTools()
+		refreshPowerBadge()
 		updateStatusBar()
 		// 复用后台任务/连接状态的现有 1s 刷新，不另建接收计时器。
 		// 现代布局的状态栏是三个视图共用的，不在串口视图时也要刷新
 		setInterval(function () {
 			if (document.hidden) return
+			refreshPowerBadge()
 			const view = $('view-serial')
 			if (!modern && view && !view.classList.contains('active')) return
 			updateStatusBar()

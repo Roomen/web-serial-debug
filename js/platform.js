@@ -1,6 +1,6 @@
 // 平台层：识别运行环境(系统 × 运行时)，给出功能画像，页面与各模块只经 window.AppPlatform 问「这里能不能用某功能」，
 // 不要自己嗅探 UA、navigator.serial 或 Tauri 全局量。在 <head> 里第一个加载(首屏前定下 data-* 与功能门控样式)，不依赖任何模块。
-// 画像：desktop(web / Windows / macOS / Linux，全部功能、双路、两套布局、可多开)；mobile(Android / iOS，只留 SEK 协议设置与下发、
+// 画像：desktop(web / Windows / macOS / Linux，全部功能、双路、可多开；浏览器里两套布局，桌面客户端只有现代布局)；mobile(Android / iOS，只留 SEK 协议设置与下发、
 // 固件升级，单路，只用经典布局，传输按系统取 BLE / 经典蓝牙 / 串口)。功能 id 见 FEATURES；画像外的功能在 DOM 上用
 // data-feature="id"(多个以空格分隔，须全部开启)标注，由这里注入的样式隐藏，模块代码用 AppPlatform.has(id) 判断。
 // 预览其它平台：URL 加 ?platform=android|ios|windows|macos|linux|web(只换系统，运行时仍按实际识别)。
@@ -24,6 +24,8 @@
 		'transport.serial',
 		'transport.ble',
 		'transport.bt-classic',
+		'auth.expiry', // 登录 3 天过期(由运行时推出：只在浏览器里开，客户端登录一次长期有效)
+		'shell.browser', // 网页外壳入口(GitHub / 反馈链接等，由运行时推出：只在浏览器里开，客户端里没有意义)
 	]
 
 	const OS_LIST = ['web', 'windows', 'macos', 'linux', 'android', 'ios']
@@ -86,12 +88,15 @@
 		const runtime = info.runtime === 'tauri' ? 'tauri' : 'browser'
 		const profileId = MOBILE_OS.indexOf(os) !== -1 ? 'mobile' : 'desktop'
 		const prof = PROFILES[profileId]
+		// 桌面客户端只做现代布局：画像的 layouts 由运行时收窄，layout.switch 随之关闭
+		const layouts = profileId === 'desktop' && runtime === 'tauri' ? ['modern'] : prof.layouts.slice()
 		const transports = OS_TRANSPORTS[os].slice()
 		const enabled = {}
 		FEATURES.forEach(function (f) {
 			if (f.indexOf('transport.') === 0) enabled[f] = transports.indexOf(f.slice(10)) !== -1
 			else if (f === 'lane.dual') enabled[f] = prof.lanes > 1
-			else if (f === 'layout.switch') enabled[f] = prof.layouts.length > 1
+			else if (f === 'layout.switch') enabled[f] = layouts.length > 1
+			else if (f === 'auth.expiry' || f === 'shell.browser') enabled[f] = runtime !== 'tauri'
 			else enabled[f] = prof.features === '*' || prof.features.indexOf(f) !== -1
 		})
 		return {
@@ -100,7 +105,7 @@
 			profile: profileId,
 			mobile: profileId === 'mobile',
 			lanes: prof.lanes,
-			layouts: prof.layouts.slice(),
+			layouts,
 			transports,
 			protocols: prof.protocols === '*' ? '*' : prof.protocols.slice(),
 			// 桌面浏览器多开就是多标签页；桌面客户端允许多窗口 / 多进程；移动端单实例
@@ -178,6 +183,8 @@
 			has(id) { return hasFeature(desc, id) },
 			allowsProtocol(id) { return desc.protocols === '*' || desc.protocols.indexOf(id) !== -1 },
 			allowsLayout(id) { return desc.layouts.indexOf(id) !== -1 },
+			// 请求的布局不被画像允许时退回的布局：画像允许的第一个(客户端 modern，移动端 classic)
+			fallbackLayout() { return desc.layouts[0] },
 			provide(name, impl) {
 				if (!name || !impl) throw new TypeError('平台服务缺少 name 或实现')
 				services[name] = impl
