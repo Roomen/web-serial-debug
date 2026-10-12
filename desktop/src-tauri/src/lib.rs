@@ -4,11 +4,11 @@
 mod menu;
 mod serial;
 mod updater;
+mod winstate;
 
 use tauri::webview::{DownloadEvent, NewWindowResponse};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
-use tauri_plugin_window_state::StateFlags;
 
 const MAIN: &str = "main";
 // 新窗口相对参考窗口错开的距离(逻辑像素)
@@ -35,7 +35,7 @@ fn unique_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
 	unreachable!()
 }
 
-// 第一个窗口固定叫 main(窗口位置大小只记它的，见 run 里的 window-state)，其余取最小的空闲 main-N
+// 第一个窗口固定叫 main(窗口位置大小只记它的，见 winstate.rs)，其余取最小的空闲 main-N
 fn next_label(app: &AppHandle) -> String {
 	if app.get_webview_window(MAIN).is_none() {
 		return MAIN.to_string();
@@ -104,10 +104,19 @@ fn build_window_with_session(app: &AppHandle, label: &str, session: Option<&std:
 	if let Some(session) = session {
 		builder = builder.initialization_script(updater::session_script(session));
 	}
-	// main 的位置大小由 window-state 在窗口就绪时还原(没存过就居中)；其余窗口跟着参考窗口错开
+	// main 的大小(逻辑像素)与位置由 winstate 还原并钳进目标屏工作区(没存过就居中)；其余窗口跟着参考窗口错开
+	let mut restore = None;
 	match (label != MAIN).then(|| cascade_from(app)).flatten() {
 		Some((pos, size)) => builder = builder.position(pos.x, pos.y).inner_size(size.width, size.height),
-		None => builder = builder.inner_size(1440.0, 900.0).center(),
+		None if label == MAIN => {
+			let saved = winstate::load(app);
+			let (areas, primary) = winstate::areas(app);
+			let (size, pos) = winstate::plan(saved, &areas, primary);
+			// 先隐藏建出来，位置设好再显示，免得在别的屏上闪一下
+			builder = builder.inner_size(size.0, size.1).visible(false);
+			restore = Some((pos, saved.map(|s| s.maximized).unwrap_or(false)));
+		}
+		None => builder = builder.inner_size(winstate::DEFAULT_SIZE.0, winstate::DEFAULT_SIZE.1).center(),
 	}
 	#[cfg(target_os = "macos")]
 	{
@@ -117,6 +126,9 @@ fn build_window_with_session(app: &AppHandle, label: &str, session: Option<&std:
 			.traffic_light_position(LogicalPosition::new(TRAFFIC_LIGHTS.0, TRAFFIC_LIGHTS.1));
 	}
 	let window = builder.build()?;
+	if let Some((pos, maximized)) = restore {
+		winstate::apply(&window, pos, maximized);
+	}
 	#[cfg(target_os = "windows")]
 	window.hide_menu()?;
 	Ok(window)
@@ -154,14 +166,8 @@ pub fn run() {
 	let app = tauri::Builder::default()
 		.plugin(tauri_plugin_opener::init())
 		.plugin(tauri_plugin_updater::Builder::new().build())
-		// 只记 main 窗口的位置、大小与最大化：多开的窗口按 main-N 编号，每次都相对当前窗口错开，记下来反而会叠在旧位置上
-		.plugin(
-			tauri_plugin_window_state::Builder::new()
-				.with_state_flags(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED)
-				.with_filter(|label| label == MAIN)
-				.build(),
-		)
 		.manage(serial::SerialState::default())
+		.manage(winstate::WinState::default())
 		.manage(updater::UpdateState::default())
 		.invoke_handler(tauri::generate_handler![
 			serial::serial_list,
@@ -179,6 +185,12 @@ pub fn run() {
 		.on_window_event(|window, event| {
 			if let tauri::WindowEvent::Destroyed = event {
 				serial::release_owner(&window.state::<serial::SerialState>(), window.label());
+			}
+			// 只记 main 的大小位置：多开的 main-N 每次都相对当前窗口错开，记下来反而会叠在旧位置上
+			if window.label() == MAIN && matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_) | tauri::WindowEvent::CloseRequested { .. }) {
+				if let Some(w) = window.app_handle().get_webview_window(MAIN) {
+					winstate::record(&w);
+				}
 			}
 		})
 		.on_menu_event(|app, event| {
