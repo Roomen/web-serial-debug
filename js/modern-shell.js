@@ -227,8 +227,8 @@
 			sync()
 			items.push(divider(), li)
 		}
-		// 反馈 / GitHub：链接地址取自左栏原链接，不另写一份；桌面客户端由原生「帮助」菜单提供，这里按 shell.browser 隐藏
-		const links = document.querySelectorAll('#activity-rail .rail-bottom > a.rail-item')
+		// 反馈 / GitHub：链接地址取自左栏原链接，不另写一份；桌面客户端由原生「帮助」菜单提供，这里按 shell.browser 隐藏。下载客户端留在左栏一级，不收进来
+		const links = document.querySelectorAll('#activity-rail .rail-bottom > a.rail-item:not(#rail-download)')
 		if (links.length) {
 			const div = divider()
 			div.setAttribute('data-feature', 'shell.browser')

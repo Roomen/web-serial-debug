@@ -12172,7 +12172,7 @@ html[data-layout='modern'] #view-blu .mp-page .blu-log-last {
 /* js/modern-shell.js 在现代布局下新建的宿主(#mdn-connbar / #mdn-logbar / #mdn-quickrow 等)与搬进去的原控件；
    经典布局没有这些宿主，原控件按占位放回 */
 
-/* ---------- 左栏：68px 窄栏，图标 + 短标签；主题、反馈、GitHub 收进「配置」菜单 ---------- */
+/* ---------- 左栏：68px 窄栏，图标 + 短标签；主题、反馈、GitHub 收进「配置」菜单，下载客户端留在一级 ---------- */
 html[data-layout='modern'] #activity-rail {
 	width: 68px;
 	padding: 10px 0;
@@ -12181,7 +12181,7 @@ html[data-layout='modern'] #activity-rail {
 html[data-layout='modern'] #activity-rail .rail-brand,
 html[data-layout='modern'] #activity-rail .rail-divider,
 html[data-layout='modern'] #activity-rail #theme-switch,
-html[data-layout='modern'] #activity-rail .rail-bottom > a.rail-item {
+html[data-layout='modern'] #activity-rail .rail-bottom > a.rail-item:not(#rail-download) {
 	display: none;
 }
 
