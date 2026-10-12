@@ -150,6 +150,14 @@
                     <i class="bi bi-github"></i>
                     <span class="rail-label">GitHub</span>
                 </a>
+                <a href="https://serial.logan825.org/download/" target="_blank" rel="noopener" class="rail-item" id="rail-download" data-feature="shell.browser" title="下载客户端">
+                    <i class="bi bi-download"></i>
+                    <span class="rail-label">客户端</span>
+                </a>
+                <script>
+                    // 预览站(serial-dev)下载预览版客户端，其余(正式站、本地)下载正式版；现代布局的配置菜单抄这里的地址，所以要在它挂载前定好
+                    if (/^serial-dev\./.test(location.hostname)) document.getElementById('rail-download').href = 'https://serial-dev.logan825.org/download/'
+                </script>
                 <div class="rail-version" id="app-version" title="应用版本"></div>
             </div>
         </nav>
