@@ -272,7 +272,13 @@
 		const label = mk('span', 'mdn-conn-label')
 		const port = mk('span', 'mdn-conn-port')
 		const params = mk('span', 'mdn-conn-params')
-		b.append(dot, letter, label, port, params, icon('bi-chevron-down'))
+		b.append(dot, letter, label, port, params)
+		// 设备与配置分开：主按钮管设备(网页版本路没选口时直接弹浏览器选择框)，右侧箭头总是打开设备 / 参数菜单
+		const more = btn('mdn-conn-more', '', '串口设备与参数')
+		more.setAttribute('aria-haspopup', 'dialog')
+		more.setAttribute('aria-expanded', 'false')
+		more.setAttribute('aria-label', '打开串口设备与参数菜单')
+		more.appendChild(icon('bi-chevron-down'))
 		const pop = mk('div', 'mdn-pop')
 		pop.hidden = true
 		pop.setAttribute('role', 'dialog')
@@ -308,14 +314,26 @@
 			if (lanes) lanes.setProtocol(sidFor(key), proto.value)
 			if (refs.refreshConn) refs.refreshConn()
 		})
-		wrap.append(b, proto, pop)
-		listen(b, 'click', function () {
+		wrap.append(b, more, proto, pop)
+		const toggleMenu = function () {
 			const open = pop.hidden
 			closePops()
 			if (open) openPop(key)
+		}
+		listen(b, 'click', function () {
+			const lanes = window.serialLanes
+			const A = window.SerialAdapter
+			// 网页版列不出没授权的口，本路还没选口时菜单里只有空列表：直接弹浏览器选择框，选完即连接
+			if (lanes && A && !A.canEnumerate() && !lanes.portOf(sidFor(key))) {
+				closePops()
+				lanes.requestPort(sidFor(key))
+				return
+			}
+			toggleMenu()
 		})
+		listen(more, 'click', toggleMenu)
 		const ports = makePortList(key)
-		return { wrap: wrap, btn: b, proto: proto, dot: dot, letter: letter, label: label, port: port, params: params, pop: pop, head: head, dev: dev, lab: lab, par: par, parCap: parCap, ports: ports }
+		return { wrap: wrap, btn: b, more: more, proto: proto, dot: dot, letter: letter, label: label, port: port, params: params, pop: pop, head: head, dev: dev, lab: lab, par: par, parCap: parCap, ports: ports }
 	}
 
 	function openPop(key) {
@@ -326,6 +344,7 @@
 		if (isDual() && window.serialLanes) window.serialLanes.setParamsTarget(sidFor(key))
 		p.pop.hidden = false
 		p.btn.setAttribute('aria-expanded', 'true')
+		p.more.setAttribute('aria-expanded', 'true')
 		refs.openKey = key
 		// 菜单一打开就重新列口；先按上次的结果画，列完再换
 		renderPorts(p.ports)
@@ -339,13 +358,14 @@
 			if (ed) ed.input.blur()
 			refs.paths[k].pop.hidden = true
 			refs.paths[k].btn.setAttribute('aria-expanded', 'false')
+			refs.paths[k].more.setAttribute('aria-expanded', 'false')
 		})
 		refs.openKey = null
 	}
 
 	// ---------- 每路菜单里的串口列表 ----------
-	// 现代布局选口的主路径：直接列出串口(桌面客户端是在位的全部串口，网页版是浏览器里授权过的口)，单击选为本路设备、
-	// 双击或回车选中并连接(本路当前设备那一行是连接 / 断开切换)，行内改名。选用、连接、改名一律经 window.serialLanes
+	// 现代布局选口的主路径：直接列出串口(桌面客户端是在位的全部串口，网页版是浏览器里授权过的口)，单击或回车即选为本路设备并连接
+	// (本路正连着别的口就先断开再连；本路当前设备那一行没连着就连上，连着就不动作，断开走芯片上的按钮)，行内改名。选用、连接、改名一律经 window.serialLanes
 	// 走 common.js 原有的绑定与打开路径，这里不碰会话。设备字符串(产品名、序列号、别名)一律 textContent
 	function makePortList(key) {
 		const box = mk('div', 'mdn-ports')
@@ -355,21 +375,20 @@
 		const empty = mk('div', 'mdn-ports-empty')
 		const hint = mk('div', 'mdn-ports-hint')
 		const foot = mk('div', 'mdn-ports-foot')
-		const add = btn('btn btn-sm btn-outline-secondary', '', '在浏览器的选择框里授权一个串口设备，之后它会一直列在这里')
-		add.append(icon('bi-plus-lg'), document.createTextNode(' 添加设备…'))
+		const add = btn('btn btn-sm btn-outline-primary', '', '在浏览器的选择框里选一个串口设备并连接，选过的设备之后会一直列在这里')
+		add.append(icon('bi-usb-plug'), document.createTextNode(' 选择串口…'))
 		const reload = btn('btn btn-sm btn-outline-secondary', '', '重新列出串口')
 		reload.append(icon('bi-arrow-clockwise'), document.createTextNode(' 刷新'))
 		foot.append(add, reload)
 		box.append(list, empty, hint, foot)
 		const st = { key: key, box: box, list: list, empty: empty, hint: hint, add: add, reload: reload, foot: foot,
-			ports: [], rows: [], rowEls: null, loaded: false, seq: 0, sig: '', editing: null, queue: Promise.resolve(), clickWasCurrent: false, clickSwitched: false, focusPort: null, wantFocus: false }
+			ports: [], rows: [], rowEls: null, loaded: false, seq: 0, sig: '', editing: null, queue: Promise.resolve(), focusPort: null, wantFocus: false }
 		listen(add, 'click', function () {
 			const lanes = window.serialLanes
 			if (lanes) enqueuePort(st, function () { return lanes.requestPort(sidFor(key)) })
 		})
 		listen(reload, 'click', function () { loadPorts(st) })
 		listen(list, 'click', function (e) { onPortClick(st, e) })
-		listen(list, 'dblclick', function (e) { onPortDblClick(st, e) })
 		listen(list, 'keydown', function (e) { onPortKey(st, e) })
 		return st
 	}
@@ -396,7 +415,7 @@
 		})
 	}
 
-	// 动作排队：双击的第一下单击还在选用(异步)时，双击要等它做完再连接
+	// 动作排队：上一下单击的选用 / 连接(异步)还没做完时，后来的动作等它做完
 	function enqueuePort(st, fn) {
 		st.queue = st.queue.then(fn).catch(function (e) { console.warn(e) }).then(function () {
 			if (mounted) return loadPorts(st)
@@ -447,8 +466,8 @@
 		if (sig === st.sig) return
 		st.sig = sig
 		const hadFocus = st.list.contains(document.activeElement)
-		// 行节点按端口对象复用、原地更新：单击选用会改当前设备(签名跟着变)，真实鼠标双击的第二下要落在同一个节点上，
-		// 节点被换掉的话第二下的 click / dblclick 会落到别的节点或丢掉
+		// 行节点按端口对象复用、原地更新：单击连接会改当前设备(签名跟着变)，连点的第二下要落在同一个节点上，
+		// 靠 e.detail 认出是连点而不重复动作，节点被换掉的话第二下会落到别的节点上，被当成新的单击
 		const reuse = st.rowEls || new Map()
 		const keep = new Map()
 		let tabRow = null
@@ -488,9 +507,9 @@
 		st.list.hidden = !rows.length
 		st.empty.hidden = !!rows.length
 		st.empty.textContent = !st.loaded ? '正在查找串口…'
-			: (enumerable ? '未发现串口设备，插入后会自动出现' : '还没有可用的串口设备。点「添加设备…」在浏览器的选择框里授权，之后它会一直列在这里')
+			: (enumerable ? '未发现串口设备，插入后会自动出现' : '还没有选过串口设备。点「选择串口…」在浏览器的选择框里选择，之后它会一直列在这里')
 		st.hint.hidden = !rows.length
-		st.hint.textContent = laneBusy ? '单击其它设备即切换过去（先断开当前设备）' : '单击选为本路设备 · 双击或回车连接'
+		st.hint.textContent = laneBusy ? '单击其它设备即切换过去（先断开当前设备）' : '单击设备即连接'
 		st.add.hidden = enumerable
 		st.reload.hidden = !enumerable
 	}
@@ -536,13 +555,21 @@
 		return r ? { el: row, r: r } : null
 	}
 
-	// 选中并连接；本路当前设备就是连接 / 断开切换
-	function activatePort(st, r, wasCurrent) {
+	// 单击 / 回车：选为本路设备并连接。本路正连着别的口就先断开再连(bindSessionPort 一步完成)；
+	// 当前设备没连着就连上，已连着或正在连接就不动作(避免误触断开，断开走芯片上的按钮)
+	function activatePort(st, r) {
 		const lanes = window.serialLanes
-		if (!lanes || r.state.disabled) return
+		const h = hub()
+		if (!lanes || !h || r.state.disabled) return
 		const sid = sidFor(st.key)
-		if (wasCurrent) enqueuePort(st, function () { return lanes.toggle(sid) })
-		else enqueuePort(st, function () { return lanes.selectPort(sid, r.port, { open: true }) })
+		const cur = lanes.portOf(sid)
+		if (r.port === cur) {
+			if (!h.isOpen(sid) && !h.isOpening(sid)) enqueuePort(st, function () { return lanes.toggle(sid) })
+			return
+		}
+		// 关闭失败的口还占着句柄，换设备得先等它释放
+		if (cur && h.isReleaseFailed(sid)) return
+		enqueuePort(st, function () { return lanes.selectPort(sid, r.port, { open: true }) })
 	}
 
 	function onPortClick(st, e) {
@@ -550,7 +577,6 @@
 		if (!hit || e.target.closest('input')) return
 		const r = hit.r
 		const lanes = window.serialLanes
-		const h = hub()
 		const sid = sidFor(st.key)
 		const act = e.target.closest('.mdn-port-act')
 		if (act) {
@@ -562,27 +588,9 @@
 		}
 		st.focusPort = r.port
 		hit.el.focus()
-		const cur = lanes ? lanes.portOf(sid) : null
-		// 双击的两下单击各派发一次：只按第一下时它是不是本路当前设备来决定双击是切换还是选中并连接
-		if (e.detail <= 1) {
-			st.clickWasCurrent = r.port === cur
-			st.clickSwitched = false
-		}
-		if (!lanes || !h || r.state.disabled || r.port === cur) return
-		// 关闭失败的口还占着句柄，换设备得先等它释放
-		if (cur && h.isReleaseFailed(sid)) return
-		// 本路正连着别的口：单击直接切过去(先断开当前设备再连新的)，与桌面串口工具的习惯一致
-		const switching = !!(cur && (h.isOpen(sid) || h.isOpening(sid)))
-		if (switching && e.detail <= 1) st.clickSwitched = true
-		enqueuePort(st, function () { return lanes.selectPort(sid, r.port, { open: switching }) })
-	}
-
-	function onPortDblClick(st, e) {
-		const hit = rowOf(st, e)
-		if (!hit || e.target.closest('input') || e.target.closest('.mdn-port-act')) return
-		// 第一下单击已经切过去并连上了，双击不再重复打开
-		if (st.clickSwitched) return
-		activatePort(st, hit.r, st.clickWasCurrent)
+		// 双击的第二下不再重复动作：第一下已经在连了
+		if (e.detail > 1) return
+		activatePort(st, r)
 	}
 
 	function onPortKey(st, e) {
@@ -606,10 +614,9 @@
 		if (at < 0) return
 		const r = st.rows[Number(rowsEl[at].dataset.idx)]
 		if (!r) return
-		const lanes = window.serialLanes
 		if (e.key === 'Enter') {
 			e.preventDefault()
-			activatePort(st, r, !!lanes && r.port === lanes.portOf(sidFor(st.key)))
+			activatePort(st, r)
 		} else if (e.key === 'F2' && !r.absent) {
 			e.preventDefault()
 			startPortRename(st, r)
