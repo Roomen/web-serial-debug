@@ -1,5 +1,5 @@
 // 包一层 tauri CLI：应用版本只来自 js/version.js(window.APP_VERSION)，每次经 --config 传入，tauri.conf.json 与 Cargo.toml 不写版本。
-// build 成功后把安装包复制进 desktop/release/<通道>/(每个通道只留最新一版，不入库)：macOS 是 .dmg 与打成 zip 的 .app，Windows 是 NSIS 安装程序。
+// build 成功后把安装包复制进 desktop/release/<通道>/(每个通道只留最新一版，不入库)：macOS 只有 .dmg，Windows 是 NSIS 安装程序；配了更新签名时另带应用内更新用的包与 .sig。
 // 通道两个：main(正式版，从 main 分支构建)与 dev(最新预览，其它分支构建都算)，按构建时所在的 git 分支判定，环境变量 RELEASE_CHANNEL=main|dev 可强制指定；
 // 只清理并写入本通道的目录，另一个通道的包原样保留。
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
@@ -67,7 +67,6 @@ function collect() {
 		const base = 'Serial-Debug_' + version + '_'
 		list(join(dir, 'dmg'), '.dmg').forEach((f) => jobs.push({ from: f, name: base + 'macos_' + arch + '.dmg' }))
 		list(join(dir, 'macos'), '.app.tar.gz').forEach((f) => jobs.push({ from: f, name: base + 'macos_' + arch + '.app.tar.gz', signature: true }))
-		list(join(dir, 'macos'), '.app').forEach((f) => jobs.push({ from: f, name: base + 'macos_' + arch + '.app.zip', zip: true }))
 		list(join(dir, 'nsis'), '.exe').forEach((f) => jobs.push({ from: f, name: base + 'windows_' + arch + '-setup.exe', signature: true }))
 	}
 	if (!jobs.length) {
@@ -78,17 +77,8 @@ function collect() {
 	mkdirSync(out, { recursive: true })
 	for (const j of jobs) {
 		const dest = join(out, j.name)
-		if (j.zip) {
-			// ditto 保留 .app 的符号链接、扩展属性与签名，zip 命令会弄坏
-			const z = spawnSync('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', j.from, dest], { stdio: 'inherit' })
-			if (z.status !== 0) {
-				console.warn('release: 打包 ' + basename(j.from) + ' 失败，跳过')
-				continue
-			}
-		} else {
-			copyFileSync(j.from, dest)
-			if (j.signature && existsSync(j.from + '.sig')) copyFileSync(j.from + '.sig', dest + '.sig')
-		}
+		copyFileSync(j.from, dest)
+		if (j.signature && existsSync(j.from + '.sig')) copyFileSync(j.from + '.sig', dest + '.sig')
 		console.log('release: ' + basename(j.from) + ' → desktop/release/' + channel + '/' + j.name)
 	}
 }
