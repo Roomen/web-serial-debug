@@ -13371,6 +13371,43 @@ html[data-layout='modern'] .mdn-ports-foot .btn {
 	font-size: 12px;
 }
 
+/* 设备键的下拉(桌面客户端)：只有串口列表与「刷新」，贴在设备键下面，单击一行即选用并连接 */
+html[data-layout='modern'] .mdn-dd {
+	position: absolute;
+	top: calc(100% + 6px);
+	left: 0;
+	z-index: 1050;
+	width: 320px;
+	max-width: calc(100vw - 24px);
+	max-height: calc(100vh - 80px);
+	overflow: auto;
+	padding: 8px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: 10px;
+	box-shadow: 0 8px 24px rgba(28, 35, 48, 0.16);
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] .mdn-dd[hidden] {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-ports--quick {
+	margin-top: 0;
+}
+
+html[data-layout='modern'] .mdn-ports--quick .mdn-ports-list {
+	max-height: min(320px, calc(100vh - 160px));
+	border: 0;
+	padding: 0;
+}
+
+html[data-layout='modern'] .mdn-ports--quick .mdn-ports-hint,
+html[data-layout='modern'] .mdn-ports--quick .mdn-port-acts {
+	display: none;
+}
+
 html[data-layout='modern'][data-theme='dark'] .mdn-port[data-kind='open'] .mdn-port-tag {
 	color: #0b1220;
 	background: #3ccf7f;

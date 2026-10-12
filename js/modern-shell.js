@@ -314,7 +314,13 @@
 			if (lanes) lanes.setProtocol(sidFor(key), proto.value)
 			if (refs.refreshConn) refs.refreshConn()
 		})
-		wrap.append(b, more, proto, pop)
+		// 能枚举的后端(桌面客户端)点设备键直接下拉：只有串口列表(在位的全部口)，单击即选为本路设备并连接、随即收起。
+		// 它是另一份列表实例(行节点各管各的)，与完整菜单里的那份共用同一路的动作队列
+		const dd = mk('div', 'mdn-dd')
+		dd.hidden = true
+		dd.setAttribute('role', 'dialog')
+		dd.setAttribute('aria-label', '选择串口设备')
+		wrap.append(b, more, proto, pop, dd)
 		const toggleMenu = function () {
 			const open = pop.hidden
 			closePops()
@@ -329,11 +335,22 @@
 				lanes.requestPort(sidFor(key))
 				return
 			}
+			// 按能力分支，不按平台名：能枚举就下拉选口，网页版(已选过口)仍打开完整菜单
+			if (A && A.canEnumerate()) {
+				const open = dd.hidden
+				closePops()
+				if (open) openDropdown(key)
+				return
+			}
 			toggleMenu()
 		})
 		listen(more, 'click', toggleMenu)
 		const ports = makePortList(key)
-		return { wrap: wrap, btn: b, more: more, proto: proto, dot: dot, letter: letter, label: label, port: port, params: params, pop: pop, head: head, dev: dev, lab: lab, par: par, parCap: parCap, ports: ports }
+		const quick = makePortList(key, true)
+		// 两份列表共用一条动作队列：一路上的选用 / 连接串行做完，不论从哪份列表发起
+		Object.defineProperty(quick, 'queue', { get: function () { return ports.queue }, set: function (v) { ports.queue = v } })
+		dd.appendChild(quick.box)
+		return { wrap: wrap, btn: b, more: more, proto: proto, dot: dot, letter: letter, label: label, port: port, params: params, pop: pop, dd: dd, head: head, dev: dev, lab: lab, par: par, parCap: parCap, ports: ports, quick: quick }
 	}
 
 	function openPop(key) {
@@ -350,25 +367,52 @@
 		renderPorts(p.ports)
 		loadPorts(p.ports)
 	}
+	// 设备键的下拉：只有本路的串口列表，打开就把焦点放到当前设备(没有就第一行)，上下键移动、回车选用、Esc 收起
+	function openDropdown(key) {
+		const p = refs.paths[key]
+		if (!p) return
+		p.dd.hidden = false
+		p.btn.setAttribute('aria-expanded', 'true')
+		refs.ddKey = key
+		const st = p.quick
+		st.wantFocus = true
+		renderPorts(st)
+		const row = st.list.querySelector('.mdn-port[tabindex="0"]')
+		if (row) row.focus()
+		loadPorts(st)
+	}
+	// 选用后下拉随即收起，收起后连点的第二下会落到下面的控件上：短时间内吞掉连点(e.detail > 1)的 click
+	function swallowDoubleClick() {
+		const h = function (e) {
+			if (e.detail > 1) {
+				e.stopPropagation()
+				e.preventDefault()
+			}
+		}
+		document.addEventListener('click', h, true)
+		setTimeout(function () { document.removeEventListener('click', h, true) }, 700)
+	}
 	function closePops() {
 		if (!refs.paths) return
 		Object.keys(refs.paths).forEach(function (k) {
 			// 改名输入框开着就先失焦(按保存收尾)，隐藏后不一定还会派发 blur
 			const ed = refs.paths[k].ports && refs.paths[k].ports.editing
 			if (ed) ed.input.blur()
+			refs.paths[k].dd.hidden = true
 			refs.paths[k].pop.hidden = true
 			refs.paths[k].btn.setAttribute('aria-expanded', 'false')
 			refs.paths[k].more.setAttribute('aria-expanded', 'false')
 		})
 		refs.openKey = null
+		refs.ddKey = null
 	}
 
 	// ---------- 每路菜单里的串口列表 ----------
 	// 现代布局选口的主路径：直接列出串口(桌面客户端是在位的全部串口，网页版是浏览器里授权过的口)，单击或回车即选为本路设备并连接
 	// (本路正连着别的口就先断开再连；本路当前设备那一行没连着就连上，连着就不动作，断开走芯片上的按钮)，行内改名。选用、连接、改名一律经 window.serialLanes
 	// 走 common.js 原有的绑定与打开路径，这里不碰会话。设备字符串(产品名、序列号、别名)一律 textContent
-	function makePortList(key) {
-		const box = mk('div', 'mdn-ports')
+	function makePortList(key, quick) {
+		const box = mk('div', quick ? 'mdn-ports mdn-ports--quick' : 'mdn-ports')
 		const list = mk('div', 'mdn-ports-list')
 		list.setAttribute('role', 'listbox')
 		list.setAttribute('aria-label', '串口设备')
@@ -382,7 +426,7 @@
 		foot.append(add, reload)
 		box.append(list, empty, hint, foot)
 		const st = { key: key, box: box, list: list, empty: empty, hint: hint, add: add, reload: reload, foot: foot,
-			ports: [], rows: [], rowEls: null, loaded: false, seq: 0, sig: '', editing: null, queue: Promise.resolve(), focusPort: null, wantFocus: false }
+			quick: !!quick, ports: [], rows: [], rowEls: null, loaded: false, seq: 0, sig: '', editing: null, queue: Promise.resolve(), focusPort: null, wantFocus: false }
 		listen(add, 'click', function () {
 			const lanes = window.serialLanes
 			if (lanes) enqueuePort(st, function () { return lanes.requestPort(sidFor(key)) })
@@ -563,13 +607,21 @@
 		if (!lanes || !h || r.state.disabled) return
 		const sid = sidFor(st.key)
 		const cur = lanes.portOf(sid)
+		// 下拉里选定就收起(下拉只负责选口)；完整菜单里的列表保持打开
+		const done = function () {
+			if (!st.quick) return
+			closePops()
+			swallowDoubleClick()
+		}
 		if (r.port === cur) {
 			if (!h.isOpen(sid) && !h.isOpening(sid)) enqueuePort(st, function () { return lanes.toggle(sid) })
+			done()
 			return
 		}
 		// 关闭失败的口还占着句柄，换设备得先等它释放
 		if (cur && h.isReleaseFailed(sid)) return
 		enqueuePort(st, function () { return lanes.selectPort(sid, r.port, { open: true }) })
+		done()
 	}
 
 	function onPortClick(st, e) {
@@ -675,9 +727,11 @@
 
 	// 插拔(含没授权过的口出现 / 消失)、授权变化后，开着的那一路菜单重新列口
 	function onPortsChanged() {
-		if (!mounted || !refs.openKey || !refs.paths) return
-		const p = refs.paths[refs.openKey]
+		if (!mounted || !refs.paths) return
+		const p = refs.openKey ? refs.paths[refs.openKey] : null
 		if (p && p.ports) loadPorts(p.ports)
+		const q = refs.ddKey ? refs.paths[refs.ddKey] : null
+		if (q && q.quick) loadPorts(q.quick)
 	}
 
 	function mountConnBar() {
@@ -734,15 +788,17 @@
 		park($('wb-palette-btn'), cb)
 
 		listen(document, 'pointerdown', function (e) {
-			if (!refs.openKey) return
-			const p = refs.paths[refs.openKey]
+			const k = refs.openKey || refs.ddKey
+			if (!k) return
+			const p = refs.paths[k]
 			// 改名弹窗等模态层不算「点到外面」
 			if (p.wrap.contains(e.target) || e.target.closest('.modal')) return
 			closePops()
 		}, true)
 		listen(document, 'keydown', function (e) {
-			if (e.key !== 'Escape' || !refs.openKey) return
-			const p = refs.paths[refs.openKey]
+			const k = refs.openKey || refs.ddKey
+			if (e.key !== 'Escape' || !k) return
+			const p = refs.paths[k]
 			closePops()
 			p.btn.focus()
 		})
@@ -841,6 +897,7 @@
 		})
 		// 开着的那一路菜单：状态(当前设备 / 已连接 / 被另一路占用)跟着刷新，内容没变不重建
 		if (refs.openKey && refs.paths[refs.openKey]) renderPorts(refs.paths[refs.openKey].ports)
+		if (refs.ddKey && refs.paths[refs.ddKey]) renderPorts(refs.paths[refs.ddKey].quick)
 		// 快捷行上的「发往」分段不在连接栏里，显隐单独跟模式
 		if (refs.sendTo) refs.sendTo.hidden = !dual
 	}
