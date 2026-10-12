@@ -1,5 +1,7 @@
 // 包一层 tauri CLI：应用版本只来自 js/version.js(window.APP_VERSION)，每次经 --config 传入，tauri.conf.json 与 Cargo.toml 不写版本。
-// build 成功后把安装包复制进 desktop/release/(只留最新一版，不入库)：macOS 是 .dmg 与打成 zip 的 .app，Windows 是 NSIS 安装程序与 .msi。
+// build 成功后把安装包复制进 desktop/release/<通道>/(每个通道只留最新一版，不入库)：macOS 是 .dmg 与打成 zip 的 .app，Windows 是 NSIS 安装程序与 .msi。
+// 通道两个：main(正式版，从 main 分支构建)与 dev(最新预览，其它分支构建都算)，按构建时所在的 git 分支判定，环境变量 RELEASE_CHANNEL=main|dev 可强制指定；
+// 只清理并写入本通道的目录，另一个通道的包原样保留。
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { basename, dirname, join } from 'node:path'
@@ -11,6 +13,7 @@ const m = src.match(/APP_VERSION\s*=\s*['"](\d+\.\d+\.\d+)['"]/)
 if (!m) throw new Error('js/version.js 里找不到 APP_VERSION')
 const version = m[1]
 
+const channel = releaseChannel()
 const args = process.argv.slice(2)
 const sub = args[0]
 if (sub === 'dev' || sub === 'build') args.push('--config', JSON.stringify({ version }))
@@ -20,7 +23,14 @@ const r = spawnSync(bin, args, { cwd: desktop, stdio: 'inherit', shell: process.
 if (r.status === 0 && sub === 'build' && args.indexOf('--no-bundle') === -1) collect()
 process.exit(r.status == null ? 1 : r.status)
 
-// ---- 构建产物 → desktop/release ----
+// ---- 构建产物 → desktop/release/<通道> ----
+function releaseChannel() {
+	const forced = String(process.env.RELEASE_CHANNEL || '').toLowerCase()
+	if (forced === 'main' || forced === 'dev') return forced
+	const g = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: desktop, encoding: 'utf8' })
+	return g.status === 0 && g.stdout.trim() === 'main' ? 'main' : 'dev'
+}
+
 function archOf(triple) {
 	const a = (triple || '').split('-')[0] || process.arch
 	if (a === 'aarch64' || a === 'arm64') return 'arm64'
@@ -55,7 +65,8 @@ function list(dir, ext) {
 }
 
 function collect() {
-	const out = join(desktop, 'release')
+	const root = join(desktop, 'release')
+	const out = join(root, channel)
 	const jobs = []
 	for (const { dir, arch } of bundleDirs()) {
 		const base = 'Serial-Debug_' + version + '_'
@@ -65,8 +76,14 @@ function collect() {
 		list(join(dir, 'msi'), '.msi').forEach((f) => jobs.push({ from: f, name: base + 'windows_' + arch + '.msi' }))
 	}
 	if (!jobs.length) {
-		console.warn('release: 没找到本次构建的安装包，desktop/release 保持不变')
+		console.warn('release: 没找到本次构建的安装包，desktop/release/' + channel + ' 保持不变')
 		return
+	}
+	// 早先不分通道时直接放在 release/ 下的安装包一并清掉，只留通道目录
+	if (existsSync(root)) {
+		for (const n of readdirSync(root)) {
+			if (n !== 'main' && n !== 'dev') rmSync(join(root, n), { recursive: true, force: true })
+		}
 	}
 	rmSync(out, { recursive: true, force: true })
 	mkdirSync(out, { recursive: true })
@@ -82,6 +99,6 @@ function collect() {
 		} else {
 			copyFileSync(j.from, dest)
 		}
-		console.log('release: ' + basename(j.from) + ' → desktop/release/' + j.name)
+		console.log('release: ' + basename(j.from) + ' → desktop/release/' + channel + '/' + j.name)
 	}
 }
