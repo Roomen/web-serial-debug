@@ -14,11 +14,11 @@
 - Secrets：`TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
 - macOS Secrets：`APPLE_CERTIFICATE`（P12 的 Base64）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`（公证专用密码）、`APPLE_TEAM_ID`。
 
-私钥和 Apple 凭据不要提交仓库。macOS 发布工作流要求 Developer ID 签名与公证配置齐全，缺少配置直接失败。Windows 更新包有 Tauri 更新签名；Windows Authenticode 代码签名尚需另行配置，现阶段安装包可能出现系统信誉提示。
+私钥和 Apple 凭据不要提交仓库。正式版（`main`）要求更新签名与 Developer ID 签名公证配置齐全，缺少配置直接失败；预览版（`dev`）缺 Apple 配置时出未签名的 macOS 包（发布说明附 `xattr -cr` 打开方法），缺更新签名时只发布安装包、不生成更新清单，客户端不会收到这一版的应用内更新。Windows 更新包有 Tauri 更新签名；Windows Authenticode 代码签名尚需另行配置，现阶段安装包可能出现系统信誉提示。
 
 ## 发布流程
 
-在 GitHub Actions 手动运行 `Desktop release`，选择 `main` 或 `dev` 并填写更新说明。工作流分别构建 macOS ARM64、macOS x64、Windows x64；任何一项失败都不推进更新通道。
+`dev` 分支上 `js/version.js` 有变化的推送（含 PR 合入）自动运行 `Desktop release`，发布预览版 `desktop-dev-v<version>`（GitHub 上标为 Pre-release）；版本号已发布过就跳过构建，所以不 bump 的推送不会出包。正式版只在 `main` 上手动运行该工作流（手动入口要等工作流文件进了 `main` 才出现），可填写更新说明，留空时预览版用触发提交的标题。工作流分别构建 macOS ARM64、macOS x64、Windows x64；任何一项失败都不发布、不推进更新通道。
 
 安装包及签名上传到草稿 `desktop-<channel>-v<version>`，完成后发布。该版本标签和资产按不可变发布管理，禁止替换；应递增版本重新发布。下载 URL 永远指向这个版本的资产。
 

@@ -1,10 +1,17 @@
 name: Desktop release
+# dev 分支每次推送自动构建预览版(desktop-dev-v<版本>)；main 正式版只手动触发。
+# 同一版本号只发布一次：版本没变(文档、内部改动)的推送直接跳过构建。
 on:
+  push:
+    branches: [dev]
+    paths:
+      - js/version.js
+      - .github/workflows/desktop-release.yml
   workflow_dispatch:
     inputs:
       notes:
         description: Release notes (Markdown)
-        required: true
+        required: false
         type: string
 permissions:
   contents: read
@@ -17,6 +24,9 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       channel: ${{ steps.meta.outputs.channel }}
+      publish: ${{ steps.meta.outputs.publish }}
+      updater: ${{ steps.meta.outputs.updater }}
+      apple: ${{ steps.meta.outputs.apple }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,22 +34,46 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node --test desktop/scripts/updater-manifest.test.mjs
+      - run: node --test desktop/scripts/updater-manifest.test.mjs desktop/scripts/installer-templates.test.mjs
       - id: meta
         env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           REF_NAME: ${{ github.ref_name }}
           UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          node --input-type=module <<'JS'
-          import { readFileSync, appendFileSync } from 'node:fs';
-          if (!['main', 'dev'].includes(process.env.REF_NAME)) throw new Error('Publish only from main or dev');
-          if (!process.env.UPDATER_KEY || !process.env.UPDATER_PUBLIC_KEY) throw new Error('Updater signing configuration is required');
-          const version = readFileSync('js/version.js', 'utf8').match(/APP_VERSION\s*=\s*['"](\d+\.\d+\.\d+)['"]/)[1];
-          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\nchannel=${process.env.REF_NAME}\n`);
-          JS
+          version=$(node -e "const m=require('fs').readFileSync('js/version.js','utf8').match(/APP_VERSION\s*=\s*['\"](\d+\.\d+\.\d+)['\"]/);if(!m)process.exit(1);console.log(m[1])")
+          case "$REF_NAME" in main|dev) ;; *) echo "::error::Publish only from main or dev"; exit 1 ;; esac
+          updater=false
+          if [ -n "$UPDATER_KEY" ] && [ -n "$UPDATER_PUBLIC_KEY" ]; then updater=true; fi
+          apple=true
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!v}" ]; then apple=false; fi
+          done
+          # 正式版必须带更新签名与 Apple 签名公证；预览版缺配置时照样出未签名安装包
+          if [ "$REF_NAME" = main ] && { [ "$updater" != true ] || [ "$apple" != true ]; }; then
+            echo "::error::main release requires updater signing and Apple signing/notarization secrets"; exit 1
+          fi
+          publish=true
+          if gh release view "desktop-$REF_NAME-v$version" > /dev/null 2>&1; then
+            publish=false
+            echo "::notice::desktop-$REF_NAME-v$version already released; bump js/version.js to publish again"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$REF_NAME" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "updater=$updater" >> "$GITHUB_OUTPUT"
+          echo "apple=$apple" >> "$GITHUB_OUTPUT"
   build:
     needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -56,8 +90,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
-      TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_UPDATER_PUBLIC_KEY: ${{ needs.prepare.outputs.updater == 'true' && vars.TAURI_UPDATER_PUBLIC_KEY || '' }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ needs.prepare.outputs.updater == 'true' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
@@ -69,23 +103,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - name: Require macOS signing and notarization
-        if: runner.os == 'macOS'
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          node --input-type=module <<'JS'
-          for (const name of ['APPLE_CERTIFICATE', 'APPLE_CERTIFICATE_PASSWORD', 'APPLE_SIGNING_IDENTITY', 'APPLE_ID', 'APPLE_PASSWORD', 'APPLE_TEAM_ID']) {
-            if (!process.env[name]) throw new Error(`Missing required ${name}`);
-          }
-          JS
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+          key: ${{ matrix.target }}
       - name: Import Developer ID certificate into temporary keychain
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && needs.prepare.outputs.apple == 'true'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -108,18 +131,27 @@ jobs:
           rm -f "$RUNNER_TEMP/desktop-certificate.p12"
       - run: npm ci
         working-directory: desktop
-      - name: Build signed desktop artifacts
+      - name: Build desktop artifacts
         working-directory: desktop
+        shell: bash
         env:
+          APPLE_SIGNING: ${{ needs.prepare.outputs.apple }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run build -- --target ${{ matrix.target }}
+        run: |
+          # 没有 Apple 凭据时不能留空变量给 tauri，否则它会按配置了签名去找证书
+          if [ "$APPLE_SIGNING" != true ]; then
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          fi
+          [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          [ -n "$TAURI_UPDATER_PUBLIC_KEY" ] || unset TAURI_UPDATER_PUBLIC_KEY
+          npm run build -- --target ${{ matrix.target }}
       - name: Remove temporary signing keychain
-        if: always() && runner.os == 'macOS'
+        if: always() && runner.os == 'macOS' && needs.prepare.outputs.apple == 'true'
         run: |
           python3 - <<'PY'
           import os, shlex, subprocess
@@ -145,7 +177,10 @@ jobs:
       GH_REPO: ${{ github.repository }}
       VERSION: ${{ needs.prepare.outputs.version }}
       CHANNEL: ${{ needs.prepare.outputs.channel }}
+      UPDATER: ${{ needs.prepare.outputs.updater }}
+      APPLE: ${{ needs.prepare.outputs.apple }}
       RELEASE_NOTES: ${{ inputs.notes }}
+      COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -158,12 +193,22 @@ jobs:
           pattern: desktop-*
           path: artifacts
           merge-multiple: true
-      - name: Validate monotonic version and all update assets
+      - name: Write release notes
         run: |
           node --input-type=module <<'JS'
           import { writeFileSync } from 'node:fs';
-          writeFileSync('release-notes.md', process.env.RELEASE_NOTES);
+          const e = process.env;
+          let notes = (e.RELEASE_NOTES || '').trim();
+          if (!notes) notes = e.CHANNEL === 'dev'
+            ? `预览版，构建自 dev 分支 ${e.GITHUB_SHA.slice(0, 7)}。\n\n${(e.COMMIT_MESSAGE || '').split('\n')[0]}`
+            : `Serial Debug ${e.VERSION}`;
+          if (e.APPLE !== 'true') notes += '\n\n> macOS 安装包未经 Apple 签名公证：首次打开若提示「已损坏」或「无法验证开发者」，在终端执行 `xattr -cr "/Applications/Serial Debug.app"` 后再打开。';
+          if (e.UPDATER !== 'true') notes += '\n\n> 此版本未启用应用内更新，新版本请到 Releases 页下载。';
+          writeFileSync('release-notes.md', notes + '\n');
           JS
+      - name: Build updater manifest
+        if: env.UPDATER == 'true'
+        run: |
           # Only a missing channel release is accepted; network/auth failures abort.
           gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > releases.json
           node --input-type=module <<'JS'
@@ -175,13 +220,20 @@ jobs:
             gh release download "desktop-$CHANNEL" --pattern latest.json --dir previous
           fi
           node desktop/scripts/updater-manifest.mjs artifacts "$VERSION" "$CHANNEL" latest.json previous/latest.json release-notes.md
-      - name: Publish immutable version release, then advance channel pointer
+      - name: Publish immutable version release
         run: |
           TAG="desktop-$CHANNEL-v$VERSION"
           PRERELEASE=()
-          if [ "$CHANNEL" = dev ]; then PRERELEASE=(--prerelease); fi
-          gh release create "$TAG" artifacts/* --target "$GITHUB_SHA" --draft "${PRERELEASE[@]}" --title "Serial Debug $VERSION ($CHANNEL)" --notes-file release-notes.md
+          if [ "$CHANNEL" = dev ]; then PRERELEASE=(--prerelease --latest=false); fi
+          TITLE="Serial Debug $VERSION"
+          if [ "$CHANNEL" = dev ]; then TITLE="$TITLE 预览版"; fi
+          gh release create "$TAG" artifacts/* --target "$GITHUB_SHA" --draft "${PRERELEASE[@]}" --title "$TITLE" --notes-file release-notes.md
           gh release edit "$TAG" --draft=false
+      - name: Advance updater channel pointer
+        if: env.UPDATER == 'true'
+        run: |
+          PRERELEASE=()
+          if [ "$CHANNEL" = dev ]; then PRERELEASE=(--prerelease); fi
           if [ "$(cat pointer-exists)" = no ]; then
             gh release create "desktop-$CHANNEL" latest.json --target "$GITHUB_SHA" --draft "${PRERELEASE[@]}" --latest=false --title "Desktop $CHANNEL update channel" --notes "Updater channel manifest. Download installers from version releases."
             gh release edit "desktop-$CHANNEL" --draft=false
