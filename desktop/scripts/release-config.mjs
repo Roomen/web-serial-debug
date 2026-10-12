@@ -23,3 +23,9 @@ export function updaterConfig(channel, env = process.env) {
 		} }
 	}
 }
+
+// 没有 Developer ID 时整包 ad-hoc 签名：只有链接器签过的包没有封存资源，下载后被判「已损坏」，「隐私与安全性」里不给「仍要打开」。
+export function macSigningConfig(env = process.env, platform = process.platform) {
+	if (platform !== 'darwin' || String(env.APPLE_SIGNING_IDENTITY || '').trim()) return {}
+	return { bundle: { macOS: { signingIdentity: '-' } } }
+}

@@ -6,7 +6,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync,
 import { spawnSync } from 'node:child_process'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { releaseChannel, updaterConfig } from './release-config.mjs'
+import { macSigningConfig, releaseChannel, updaterConfig } from './release-config.mjs'
 
 const desktop = join(dirname(fileURLToPath(import.meta.url)), '..')
 const src = readFileSync(join(desktop, '..', 'js', 'version.js'), 'utf8')
@@ -18,7 +18,11 @@ const channel = releaseChannel(desktop)
 process.env.RELEASE_CHANNEL = channel
 const args = process.argv.slice(2)
 const sub = args[0]
-if (sub === 'dev' || sub === 'build') args.push('--config', JSON.stringify({ version, ...updaterConfig(channel) }))
+if (sub === 'dev' || sub === 'build') {
+	const updater = updaterConfig(channel)
+	const mac = macSigningConfig()
+	args.push('--config', JSON.stringify({ version, ...updater, bundle: { ...updater.bundle, ...mac.bundle } }))
+}
 const bin = join(desktop, 'node_modules', '@tauri-apps', 'cli', 'tauri.js')
 const started = Date.now()
 const r = spawnSync(process.execPath, [bin, ...args], { cwd: desktop, stdio: 'inherit' })

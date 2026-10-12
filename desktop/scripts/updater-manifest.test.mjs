@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { compareVersions, createManifest } from './updater-manifest.mjs'
 import { promotePointer } from './channel-pointer.mjs'
-import { updaterConfig } from './release-config.mjs'
+import { macSigningConfig, updaterConfig } from './release-config.mjs'
 
 test('installer-specific manifests use immutable assets and matching signatures', () => {
 	const dir = mkdtempSync(join(tmpdir(), 'updater-'))
@@ -72,4 +72,10 @@ test('pointer response failure after successful promotion does not undo the new 
 	promotePointer({ old, staged, backupName: 'backup.json', api, releasePath: 'release', assetPath: String })
 	assert.equal(old.name, 'backup.json')
 	assert.equal(staged.name, 'latest.json')
+})
+
+test('macOS builds without Developer ID are ad-hoc signed as a whole bundle', () => {
+	assert.deepEqual(macSigningConfig({}, 'darwin'), { bundle: { macOS: { signingIdentity: '-' } } })
+	assert.deepEqual(macSigningConfig({ APPLE_SIGNING_IDENTITY: 'Developer ID Application: X' }, 'darwin'), {})
+	assert.deepEqual(macSigningConfig({}, 'win32'), {})
 })

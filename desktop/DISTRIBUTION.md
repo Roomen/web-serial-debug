@@ -14,7 +14,7 @@
 - Secrets：`TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
 - macOS Secrets：`APPLE_CERTIFICATE`（P12 的 Base64）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`（公证专用密码）、`APPLE_TEAM_ID`。
 
-私钥和 Apple 凭据不要提交仓库。正式版（`main`）要求更新签名与 Developer ID 签名公证配置齐全，缺少配置直接失败；预览版（`dev`）缺 Apple 配置时出未签名的 macOS 包（发布说明附 `xattr -cr` 打开方法），缺更新签名时只发布安装包、不生成更新清单，客户端不会收到这一版的应用内更新。Windows 更新包有 Tauri 更新签名；Windows Authenticode 代码签名尚需另行配置，现阶段安装包可能出现系统信誉提示。
+私钥和 Apple 凭据不要提交仓库。正式版（`main`）要求更新签名与 Developer ID 签名公证配置齐全，缺少配置直接失败；预览版（`dev`）缺 Apple 配置时出整包 ad-hoc 签名的 macOS 包（`release-config.mjs` 的 `macSigningConfig`，首次打开在「隐私与安全性」点「仍要打开」；不要退回只有链接器签名的包，没有封存资源会被判「已损坏」，只能 `xattr -cr`），缺更新签名时只发布安装包、不生成更新清单，客户端不会收到这一版的应用内更新。Windows 更新包有 Tauri 更新签名；Windows Authenticode 代码签名尚需另行配置，现阶段安装包可能出现系统信誉提示。
 
 ## 发布流程
 

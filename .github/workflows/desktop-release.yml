@@ -199,7 +199,7 @@ jobs:
           if (!notes) notes = e.CHANNEL === 'dev'
             ? `预览版，构建自 dev 分支 ${e.GITHUB_SHA.slice(0, 7)}。\n\n${(e.COMMIT_MESSAGE || '').split('\n')[0]}`
             : `Serial Debug ${e.VERSION}`;
-          if (e.APPLE !== 'true') notes += '\n\n> macOS 安装包未经 Apple 签名公证：首次打开若提示「已损坏」或「无法验证开发者」，在终端执行 `xattr -cr "/Applications/Serial Debug.app"` 后再打开。';
+          if (e.APPLE !== 'true') notes += '\n\n> macOS 安装包未经 Apple 签名公证：首次打开被拦截时点「完成」，到「系统设置 → 隐私与安全性」底部点「仍要打开」并输入密码。若仍提示「已损坏」，在终端执行 `xattr -cr "/Applications/Serial Debug.app"` 后再打开。';
           if (e.UPDATER !== 'true') notes += '\n\n> 此版本未启用应用内更新，新版本请到 Releases 页下载。';
           writeFileSync('release-notes.md', notes + '\n');
           JS
