@@ -28,10 +28,10 @@ jobs:
       updater: ${{ steps.meta.outputs.updater }}
       apple: ${{ steps.meta.outputs.apple }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
       - run: node --test desktop/scripts/updater-manifest.test.mjs desktop/scripts/installer-templates.test.mjs
@@ -91,10 +91,10 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY: ${{ needs.prepare.outputs.updater == 'true' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
@@ -159,7 +159,7 @@ jobs:
           PY
           security delete-keychain "$RUNNER_TEMP/desktop-signing.keychain-db" || true
           rm -f "$RUNNER_TEMP/desktop-certificate.p12"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: desktop-${{ matrix.name }}
           path: desktop/release/${{ needs.prepare.outputs.channel }}/
@@ -179,13 +179,13 @@ jobs:
       RELEASE_NOTES: ${{ inputs.notes }}
       COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: desktop-*
           path: artifacts
