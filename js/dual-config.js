@@ -376,7 +376,7 @@
 			return
 		}
 		if (b.dataset.act === 'rename') {
-			const to = window.prompt('预设新名称（最多 ' + NAME_MAX + ' 字）', p.name)
+			const to = await window.AppDialog.prompt('预设新名称（最多 ' + NAME_MAX + ' 字）', p.name, { title: '重命名预设', maxLength: NAME_MAX })
 			if (to === null) return
 			try {
 				if (savePresets(renamePreset(list, p.name, to))) render()
@@ -387,13 +387,13 @@
 			return
 		}
 		if (b.dataset.act === 'delete') {
-			if (!window.confirm('删除预设「' + p.name + '」？')) return
+			if (!await window.AppDialog.confirm('删除预设「' + p.name + '」？', { title: '删除预设', okText: '删除', danger: true })) return
 			if (savePresets(removePreset(list, p.name))) render()
 			else toast('删除失败：浏览器存储不可用', 'error')
 		}
 	}
 
-	function onSave(e) {
+	async function onSave(e) {
 		e.preventDefault()
 		const input = document.getElementById('serial-dual-preset-name')
 		const l = lanes()
@@ -408,7 +408,7 @@
 			return
 		}
 		const list = loadPresets()
-		if (indexOfName(list, preset.name) !== -1 && !window.confirm('已有预设「' + preset.name + '」，用当前' + (dual ? '两路' : '串口') + '配置覆盖它？')) return
+		if (indexOfName(list, preset.name) !== -1 && !await window.AppDialog.confirm('已有预设「' + preset.name + '」，用当前' + (dual ? '两路' : '串口') + '配置覆盖它？', { title: '覆盖预设', okText: '覆盖' })) return
 		let res
 		try {
 			res = upsertPreset(list, preset)

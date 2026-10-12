@@ -1,14 +1,20 @@
 // 桌面客户端外壳：加载与网页版同一份静态页面(desktop/scripts/stage-web.mjs 复制进 dist)，只补网页在 WebView 里缺的能力：
-// 原生串口(serial.rs，前端 js/transport-native-serial.js)、下载落盘、多窗口。页面功能与网页版一致，平台差异只走 js/platform.js。
+// 原生串口(serial.rs，前端 js/transport-native-serial.js)、下载落盘、多窗口、原生菜单(menu.rs)与窗口外观。
+// 页面功能与网页版一致，平台差异只走 js/platform.js，页面侧胶水在 js/native-shell.js。
+mod menu;
 mod serial;
 
-use std::sync::atomic::{AtomicU32, Ordering};
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::webview::{DownloadEvent, NewWindowResponse};
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_window_state::StateFlags;
 
-static WINDOW_SEQ: AtomicU32 = AtomicU32::new(0);
+const MAIN: &str = "main";
+// 新窗口相对参考窗口错开的距离(逻辑像素)
+const CASCADE: f64 = 28.0;
+// macOS 一体化标题栏：红绿灯浮在页面左上(左侧导航栏顶部)，纵向与顶栏 46px 的中线对齐；页面按 html[data-platform='macos'] 留出空位
+#[cfg(target_os = "macos")]
+const TRAFFIC_LIGHTS: (f64, f64) = (8.0, 15.0);
 
 // 同名文件已存在时按「名称 (n).扩展名」顺延，与浏览器下载的习惯一致
 fn unique_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
@@ -28,15 +34,35 @@ fn unique_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
 	unreachable!()
 }
 
-fn open_window(app: &AppHandle) -> tauri::Result<()> {
-	let n = WINDOW_SEQ.fetch_add(1, Ordering::Relaxed);
-	let label = if n == 0 { "main".to_string() } else { format!("main-{}", n + 1) };
+// 第一个窗口固定叫 main(窗口位置大小只记它的，见 run 里的 window-state)，其余取最小的空闲 main-N
+fn next_label(app: &AppHandle) -> String {
+	if app.get_webview_window(MAIN).is_none() {
+		return MAIN.to_string();
+	}
+	(2..).map(|n| format!("main-{}", n)).find(|l| app.get_webview_window(l).is_none()).unwrap()
+}
+
+// 新开的窗口跟参考窗口(聚焦的，没有就任取一个)同大小、向右下错开；参考窗口最大化或全屏时不跟它的尺寸
+fn cascade_from(app: &AppHandle) -> Option<(LogicalPosition<f64>, LogicalSize<f64>)> {
+	let w = menu::focused_window(app).or_else(|| app.webview_windows().into_values().next())?;
+	if w.is_fullscreen().unwrap_or(false) || w.is_maximized().unwrap_or(false) || w.is_minimized().unwrap_or(false) {
+		return None;
+	}
+	let scale = w.scale_factor().ok()?;
+	let pos = w.outer_position().ok()?.to_logical::<f64>(scale);
+	let size = w.inner_size().ok()?.to_logical::<f64>(scale);
+	Some((LogicalPosition::new(pos.x + CASCADE, pos.y + CASCADE), size))
+}
+
+fn open_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+	let label = next_label(app);
 	let handle = app.clone();
 	let opener = app.clone();
-	WebviewWindowBuilder::new(app, &label, WebviewUrl::default())
+	let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::default())
 		.title("Serial Debug")
-		.inner_size(1440.0, 900.0)
 		.min_inner_size(960.0, 600.0)
+		// Tauri 的文件拖放处理会吞掉页面的 HTML5 drop(固件拖拽卡、快捷发送拖动排序)，页面不用 Tauri 的拖放事件
+		.disable_drag_drop_handler()
 		// 页面里 target="_blank" 的外部链接(GitHub、反馈)交给系统浏览器，不在客户端里开新窗口
 		.on_new_window(move |url, _features| {
 			if matches!(url.scheme(), "http" | "https" | "mailto") {
@@ -65,14 +91,60 @@ fn open_window(app: &AppHandle) -> tauri::Result<()> {
 				_ => {}
 			}
 			true
-		})
-		.build()?;
-	Ok(())
+		});
+	// main 的位置大小由 window-state 在窗口就绪时还原(没存过就居中)；其余窗口跟着参考窗口错开
+	match (label != MAIN).then(|| cascade_from(app)).flatten() {
+		Some((pos, size)) => builder = builder.position(pos.x, pos.y).inner_size(size.width, size.height),
+		None => builder = builder.inner_size(1440.0, 900.0).center(),
+	}
+	#[cfg(target_os = "macos")]
+	{
+		builder = builder
+			.title_bar_style(tauri::TitleBarStyle::Overlay)
+			.hidden_title(true)
+			.traffic_light_position(LogicalPosition::new(TRAFFIC_LIGHTS.0, TRAFFIC_LIGHTS.1));
+	}
+	builder.build()
+}
+
+// 双击一体化标题栏的空白处：按系统设置「连按窗口标题栏以」缩放 / 最小化 / 不动作(默认缩放)
+#[tauri::command]
+fn titlebar_double_click(window: tauri::WebviewWindow) {
+	#[cfg(target_os = "macos")]
+	{
+		let action = std::process::Command::new("defaults")
+			.args(["read", "-g", "AppleActionOnDoubleClick"])
+			.output()
+			.ok()
+			.filter(|o| o.status.success())
+			.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+			.unwrap_or_default();
+		match action.as_str() {
+			"Minimize" => {
+				let _ = window.minimize();
+				return;
+			}
+			"None" => return,
+			_ => {}
+		}
+	}
+	let _ = if window.is_maximized().unwrap_or(false) {
+		window.unmaximize()
+	} else {
+		window.maximize()
+	};
 }
 
 pub fn run() {
-	tauri::Builder::default()
+	let app = tauri::Builder::default()
 		.plugin(tauri_plugin_opener::init())
+		// 只记 main 窗口的位置、大小与最大化：多开的窗口按 main-N 编号，每次都相对当前窗口错开，记下来反而会叠在旧位置上
+		.plugin(
+			tauri_plugin_window_state::Builder::new()
+				.with_state_flags(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED)
+				.with_filter(|label| label == MAIN)
+				.build(),
+		)
 		.manage(serial::SerialState::default())
 		.invoke_handler(tauri::generate_handler![
 			serial::serial_list,
@@ -80,38 +152,50 @@ pub fn run() {
 			serial::serial_write,
 			serial::serial_set_signals,
 			serial::serial_close,
-			serial::serial_release_owned
+			serial::serial_release_owned,
+			menu::menu_sync,
+			titlebar_double_click
 		])
 		.on_window_event(|window, event| {
 			if let tauri::WindowEvent::Destroyed = event {
 				serial::release_owner(&window.state::<serial::SerialState>(), window.label());
 			}
 		})
-		// 默认菜单的 File 里只有「关闭窗口」，在它前面加「新建窗口」：桌面客户端可多开，每个窗口是独立实例
-		.menu(|app| {
-			let menu = Menu::default(app)?;
-			let new_window = MenuItem::with_id(app, "new-window", "新建窗口", true, Some("CmdOrCtrl+N"))?;
-			let sep = PredefinedMenuItem::separator(app)?;
-			let file = menu
-				.items()?
-				.into_iter()
-				.filter_map(|i| i.as_submenu().cloned())
-				.find(|s| s.text().map(|t| t == "File").unwrap_or(false));
-			match file {
-				Some(f) => f.prepend_items(&[&new_window, &sep])?,
-				None => menu.append(&Submenu::with_items(app, "File", true, &[&new_window])?)?,
-			}
-			Ok(menu)
-		})
 		.on_menu_event(|app, event| {
-			if event.id() == "new-window" {
+			let id = event.id().as_ref();
+			if id == menu::NEW_WINDOW {
 				let _ = open_window(app);
+			} else {
+				menu::dispatch(app, id);
 			}
 		})
 		.setup(|app| {
+			let m = menu::build(app.handle())?;
+			app.set_menu(m)?;
 			open_window(app.handle())?;
 			Ok(())
 		})
-		.run(tauri::generate_context!())
+		.build(tauri::generate_context!())
 		.expect("启动客户端失败");
+	app.run(|app, event| {
+		// macOS 习惯：关掉最后一个窗口不退出，点 Dock 图标再开一个(有最小化的窗口就还原它)；⌘Q / Dock「退出」走 terminate，不经这里
+		#[cfg(target_os = "macos")]
+		match event {
+			tauri::RunEvent::ExitRequested { api, code: None, .. } => api.prevent_exit(),
+			tauri::RunEvent::Reopen {
+				has_visible_windows: false, ..
+			} => match app.webview_windows().into_values().next() {
+				Some(w) => {
+					let _ = w.unminimize();
+					let _ = w.set_focus();
+				}
+				None => {
+					let _ = open_window(app);
+				}
+			},
+			_ => {}
+		}
+		#[cfg(not(target_os = "macos"))]
+		let _ = (app, event);
+	});
 }

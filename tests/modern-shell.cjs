@@ -1,5 +1,5 @@
 // Run: node tests/modern-shell.cjs — synthetic data only.
-// 覆盖: 现代布局外壳 js/modern-shell.js 的纯函数（日志过滤的解析与匹配、连接按钮的参数摘要、日志缩放档位）
+// 覆盖: 现代布局外壳 js/modern-shell.js 的纯函数（日志过滤的解析与匹配、连接按钮的参数摘要、日志缩放档位、串口列表行的标题 / 次行 / 状态）
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const vm = require('node:vm')
@@ -77,6 +77,36 @@ const sys = { dir: '', text: '10:00:01.000 ! 未选择串口设备', hex: '' }
 	let z = 1
 	for (let i = 0; i < 20; i++) z = M.stepZoom(z, 1)
 	assert.equal(z, 2)
+}
+
+// 串口列表行
+{
+	const native = { alias: null, productName: 'CP2102 USB to UART Bridge Controller', portName: 'cu.usbserial-0001', vid: '10c4', pid: 'ea60', sn: 'AB12', slot: null }
+	assert.equal(M.portRowTitle(native), 'CP2102 USB to UART Bridge Controller')
+	assert.equal(M.portRowSub(native), 'cu.usbserial-0001 · 10C4:EA60 · SN AB12')
+	assert.equal(M.portRowTitle(Object.assign({}, native, { alias: '电表 1 号' })), '电表 1 号')
+	assert.equal(M.portRowTitle(Object.assign({}, native, { slot: 1 })), 'CP2102 USB to UART Bridge Controller #2')
+	// 没产品名：标题是口名，次行不重复口名
+	const bare = { portName: 'COM3', vid: '1a86', pid: '7523' }
+	assert.equal(M.portRowTitle(bare), 'COM3')
+	assert.equal(M.portRowSub(bare), '1A86:7523')
+	// 网页版只有 VID/PID
+	assert.equal(M.portRowTitle({ vid: '1a86', pid: '7523' }), 'USB 串口设备')
+	assert.equal(M.portRowTitle({}), '串口设备')
+	assert.equal(M.portRowSub({}), '')
+
+	assert.equal(JSON.stringify(M.portRowState({})), JSON.stringify({ tag: '', kind: 'idle', disabled: false }))
+	assert.equal(M.portRowState({ current: true }).kind, 'current')
+	assert.equal(M.portRowState({ current: true, open: true }).tag, '已连接')
+	assert.equal(M.portRowState({ current: true, open: true, opening: true }).kind, 'opening')
+	assert.equal(M.portRowState({ current: true, failed: true, open: true }).kind, 'failed')
+	const busy = M.portRowState({ owner: 'B' })
+	assert.equal(busy.tag, 'B 路占用')
+	assert.equal(busy.disabled, true)
+	assert.equal(M.portRowState({ owner: 'S' }).tag, '单路占用')
+	assert.equal(M.portRowState({ owner: 'BLU' }).tag, '功耗分析占用')
+	// 未在位优先于其它状态：灰显、不可选
+	assert.equal(JSON.stringify(M.portRowState({ absent: true, current: true })), JSON.stringify({ tag: '未在位', kind: 'absent', disabled: true }))
 }
 
 console.log('modern-shell ok')

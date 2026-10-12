@@ -1,6 +1,6 @@
 // Run: node tests/transport-native-serial.cjs — synthetic data only.
 // 覆盖: 桌面客户端原生串口后端(js/transport-native-serial.js)：getInfo 带设备名与口名、选口过滤与取消、授权后才进 getPorts 与插拔事件、
-// 拔插给新端口对象、同一路径换设备、打开参数映射、通道推数据、读错误换流、设备丢失替页面释放句柄、写入、控制信号、按 kind 被 pick 选中
+// 拔插给新端口对象、同一路径换设备、listPorts 列出全部在位口与 grantPort 授权、change 事件(含未授权口)、打开参数映射、通道推数据、读错误换流、设备丢失替页面释放句柄、写入、控制信号、按 kind 被 pick 选中
 const assert = require('node:assert/strict')
 const A = require('../js/serial-adapter.js')
 const N = require('../js/transport-native-serial.js')
@@ -48,9 +48,11 @@ function setup(opts) {
 		setInterval: () => 1,
 		clearInterval: () => {},
 	})
+	// connect / disconnect 与 change 分开记：前者只对授权口，后者是列表用的「在位的口变了」
 	const events = []
-	backend.attach((type, port) => events.push({ type, port }))
-	return { backend, state, events, storage, setChoose(fn) { choose = fn } }
+	const changes = []
+	backend.attach((type, port) => (type === 'change' ? changes : events).push({ type, port }))
+	return { backend, state, events, changes, storage, setChoose(fn) { choose = fn } }
 }
 
 async function readAll(port, n) {
@@ -146,6 +148,62 @@ test('同一路径换成另一台设备：按拔出旧的、插入新的处理',
 	await t.backend._refresh()
 	assert.deepEqual(t.events.map((e) => e.type), ['disconnect'])
 	assert.equal(t.events[0].port, p)
+})
+
+test('listPorts 列出在位的全部口(不只授权过的)，顺序同选口对话框；同一设备多次调用是同一对象，与 getPorts 一致', async () => {
+	const t = setup()
+	const all = await t.backend.listPorts()
+	assert.deepEqual(all.map((p) => p.getInfo().path), [CP2102.path, CH340.path, BT.path])
+	assert.deepEqual(await t.backend.getPorts(), [])
+	const again = await t.backend.listPorts()
+	all.forEach((p, i) => assert.equal(again[i], p))
+	// 选用(授权)后进 getPorts，给的是同一个对象
+	assert.equal(t.backend.grantPort(all[1]), true)
+	assert.deepEqual(await t.backend.getPorts(), [all[1]])
+	// 授权存进 storage：没序列号的按路径 + VID/PID 记
+	assert.deepEqual(JSON.parse(t.storage.getItem('nativeSerialGranted')), [{ path: CH340.path, vid: CH340.vendorId, pid: CH340.productId }])
+	// 已拔出的旧对象不记
+	t.state.list = [CP2102]
+	await t.backend._refresh()
+	assert.equal(t.backend.grantPort(all[2]), false)
+})
+
+test('grantPort 之后插拔事件也对它派发；与对话框里选中的效果一样', async () => {
+	const t = setup({ list: [CP2102] })
+	const [p] = await t.backend.listPorts()
+	t.state.list = []
+	await t.backend._refresh()
+	assert.deepEqual(t.events, [], '没授权时拔出不派发 disconnect')
+	t.state.list = [CP2102]
+	await t.backend._refresh()
+	const [np] = await t.backend.listPorts()
+	assert.notEqual(np, p)
+	t.backend.grantPort(np)
+	t.state.list = []
+	await t.backend._refresh()
+	assert.deepEqual(t.events.map((e) => [e.type, e.port]), [['disconnect', np]])
+	t.state.list = [CP2102]
+	await t.backend._refresh()
+	assert.deepEqual(t.events.map((e) => e.type), ['disconnect', 'connect'])
+})
+
+test('change：在位集合变了(含没授权的口、同一路径换设备)就派发，不带端口；没变不派发', async () => {
+	const t = setup({ list: [CH340] })
+	await t.backend._refresh()
+	assert.equal(t.changes.length, 1, '第一次列口建表也通知')
+	assert.equal(t.changes[0].port, null)
+	await t.backend._refresh()
+	assert.equal(t.changes.length, 1, '没变化不派发')
+	t.state.list = [CH340, CP2102]
+	await t.backend._refresh()
+	assert.equal(t.changes.length, 2, '未授权的口插入')
+	assert.deepEqual(t.events, [], '未授权的口不派发 connect')
+	t.state.list = [Object.assign({}, CH340, { vendorId: 0x0403, productId: 0x6001 }), CP2102]
+	await t.backend._refresh()
+	assert.equal(t.changes.length, 3, '同一路径换设备')
+	t.state.list = [CP2102]
+	await t.backend._refresh()
+	assert.equal(t.changes.length, 4, '拔出')
 })
 
 test('打开参数映射、通道推数据、写入与控制信号', async () => {

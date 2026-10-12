@@ -6,11 +6,14 @@
 // 包装成上述端口，在 common.js 之前 register，由 js/platform-boot.js 按平台画像的传输优先顺序 pick 一个，页面与协议代码不变。
 // 每个后端带 kind(serial | ble | bt-classic)，与 AppPlatform.transports 的取值一致；同一时刻只有一个当前后端(单路够用，
 // 移动端也只有一路)，选口、列口、插拔事件都只走它。
+// 列口有两种：getPorts 只给用户选用过(授权过)的口，与 Web Serial 一致，热插拔认领与刷新后自动重连都只认它；能枚举的后端(原生壳)
+// 另给 listPorts 列出当前在位的全部串口，供现代布局连接栏的串口列表「直接列出、选了就用」，选用时由页面调 grantPort 记为已授权。
+// 不能枚举的后端(web)listPorts 退化为 getPorts。在位集合变化另派发 change 事件(port 为 null)，connect / disconnect 仍只对已授权的口派发。
 // 纯逻辑可在 node 里跑(tests/serial-adapter.cjs)。
 ;(function (root) {
 	'use strict'
 
-	const listeners = { connect: [], disconnect: [] }
+	const listeners = { connect: [], disconnect: [], change: [] }
 	const backends = {}
 	const attached = new Set()
 	let active = null
@@ -24,8 +27,9 @@
 
 	function emit(type, port) {
 		const list = listeners[type]
-		if (!list || !port) return
-		const ev = { type, port }
+		// change 只说「在位的口变了」，不带端口；connect / disconnect 必须带端口
+		if (!list || (!port && type !== 'change')) return
+		const ev = { type, port: port || null }
 		list.slice().forEach(function (fn) {
 			try { fn(ev) } catch (e) { console.error(e) }
 		})
@@ -298,12 +302,25 @@
 			if (!api.isSupported()) return Promise.resolve([])
 			return Promise.resolve(active.getPorts())
 		},
+		// 能否列出当前在位的全部串口(不只授权过的)：原生后端能；Web Serial 只看得到用户在浏览器选择框里授权过的口
+		canEnumerate() { return !!(api.isSupported() && typeof active.listPorts === 'function') },
+		// 能枚举时返回在位的全部端口(同一设备在位期间多次调用给同一对象，与 getPorts、插拔事件给的对象一致)；否则同 getPorts
+		listPorts() {
+			if (!api.isSupported()) return Promise.resolve([])
+			if (typeof active.listPorts === 'function') return Promise.resolve(active.listPorts())
+			return api.getPorts()
+		},
+		// 页面选用了 listPorts 里的某个口：记为已授权，之后 getPorts、插拔事件、刷新后自动重连都认它。后端不需要(web 由浏览器授权)时返回 false
+		grantPort(port) {
+			if (!port || !api.isSupported() || typeof active.grantPort !== 'function') return false
+			return !!active.grantPort(port)
+		},
 		// 返回 [{ vendorId, productId, serialNumber, productName, manufacturerName }]；原生后端不提供就是空表
 		getUsbDevices() {
 			if (!api.isSupported() || !active.getUsbDevices) return Promise.resolve([])
 			return Promise.resolve(active.getUsbDevices()).catch(function () { return [] })
 		},
-		// 事件对象是 { type, port }，与 Web Serial 的 e.port 读法一致
+		// 事件对象是 { type, port }，与 Web Serial 的 e.port 读法一致；change 的 port 为 null
 		addEventListener(type, fn) {
 			if (listeners[type] && typeof fn === 'function') listeners[type].push(fn)
 		},

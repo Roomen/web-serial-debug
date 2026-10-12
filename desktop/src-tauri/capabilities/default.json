@@ -1,7 +1,7 @@
 {
 	"$schema": "../gen/schemas/desktop-schema.json",
 	"identifier": "default",
-	"description": "主窗口：原生串口命令(经 invoke_handler 注册，不需要权限条目)与下载完成事件；外部链接由 Rust 端交给系统浏览器",
+	"description": "主窗口：原生串口、菜单状态与标题栏双击命令(经 invoke_handler 注册，不需要权限条目)；拖动一体化标题栏、按连接设备改窗口标题；系统浏览器打开外部链接、在访达 / 资源管理器中显示下载的文件",
 	"windows": ["main", "main-*"],
-	"permissions": ["core:default"]
+	"permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-set-title", "opener:default"]
 }

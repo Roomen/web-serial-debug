@@ -6,6 +6,8 @@
 //   VID:PID 与序列号，供用户分清同型号的多台设备；按 filters(usbVendorId / usbProductId)过滤。
 // - 选过的口记为「已授权」(存 localStorage nativeSerialGranted，跨实例共享，与浏览器的串口权限一样)，getPorts 只返回已授权且在位的口，
 //   connect / disconnect 也只对已授权的口派发：页面的热插拔认领逻辑假定事件只来自用户选过的设备。
+// - listPorts 列出在位的全部口(不只授权过的，现代布局连接栏的串口列表用)，页面选用某个口时经 grantPort 记为已授权；
+//   在位集合有变化(插入、拔出、同一路径换设备，含未授权的口)派发 change(不带端口)，供列表刷新，不影响 connect / disconnect 的语义。
 // - 插拔靠每 1.5 s 列一次口比对；同一路径在位期间端口对象不变，拔掉再插回给新对象(与 Chromium 重插给新 SerialPort 一致)。
 // - getInfo 带 path、productName、manufacturerName、serialNumber，页面据此显示设备名并生成别名指纹；不放含 bluetooth 字样的键。
 // 纯逻辑可在 node 里跑(tests/transport-native-serial.cjs)。
@@ -199,6 +201,7 @@
 			const list = await invoke('serial_list')
 			const seen = new Set()
 			const added = []
+			let replaced = false
 			;(Array.isArray(list) ? list : []).forEach(function (d) {
 				if (!d || !d.path) return
 				seen.add(d.path)
@@ -206,6 +209,7 @@
 				// 同一路径换了一台设备(序列号或 VID/PID 变了)：按拔出旧的、插入新的处理
 				if (cur && (cur.desc.vendorId !== d.vendorId || cur.desc.productId !== d.productId || cur.desc.serialNumber !== d.serialNumber)) {
 					present.delete(d.path)
+					replaced = true
 					if (fire && isGranted(cur.desc)) fire('disconnect', cur.port)
 				} else if (cur) {
 					cur.desc = d
@@ -226,6 +230,8 @@
 				added.forEach(function (entry) { if (isGranted(entry.desc)) fire('connect', entry.port) })
 			}
 			listed = true
+			// 列表用：未授权的口出现 / 消失也要通知(第一次列口建表时同样通知，菜单可能已在等)
+			if (fire && (added.length || removed.length || replaced)) fire('change', null)
 			watchers.forEach(function (fn) { try { fn(snapshot()) } catch (e) {} })
 		}
 
@@ -271,6 +277,21 @@
 				const out = []
 				present.forEach(function (entry) { if (isGranted(entry.desc)) out.push(entry.port) })
 				return out
+			},
+			// 在位的全部口，按对话框同样的顺序(USB 在前、同类按口名)；端口对象与 getPorts / 插拔事件给的是同一个
+			async listPorts() {
+				await refresh()
+				const byPath = new Map()
+				present.forEach(function (entry) { byPath.set(entry.desc.path, entry.port) })
+				return snapshot().map(function (d) { return byPath.get(d.path) })
+			},
+			// 页面选用了 listPorts 里的口：与在对话框里选中一样记为已授权。不在位(已拔出的旧对象)就不记
+			grantPort(port) {
+				let hit = null
+				present.forEach(function (entry) { if (entry.port === port) hit = entry })
+				if (!hit) return false
+				grant(hit.desc)
+				return true
 			},
 			// 网页版靠 WebUSB 设备表按 VID/PID 补产品名与序列号；原生口的 getInfo 已经带上，这里给空表，
 			// 免得页面再按 VID/PID 去猜(同型号多台时会猜错)

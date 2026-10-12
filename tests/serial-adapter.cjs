@@ -1,5 +1,5 @@
 // Run: node tests/serial-adapter.cjs — synthetic data only.
-// 覆盖: 串口接入适配层(js/serial-adapter.js)的后端切换与事件转发，以及 createStreamPort 包出来的端口是否守住
+// 覆盖: 串口接入适配层(js/serial-adapter.js)的后端切换与事件转发、可选的枚举能力(canEnumerate / listPorts / grantPort / change 事件)，以及 createStreamPort 包出来的端口是否守住
 // Web Serial 的契约：打开前后流的有无、读错误换新流、设备丢失置 null 并释放句柄、锁住时拒绝 close、写入与控制线
 const assert = require('node:assert/strict')
 const A = require('../js/serial-adapter.js')
@@ -69,6 +69,48 @@ const tick = () => new Promise((r) => setTimeout(r, 0))
 		// 同种类按 priority 取大的，不看注册先后
 		A.register({ name: 'spp-native', kind: 'bt-classic', supported: true, priority: 10, requestPort: async () => port, getPorts: async () => [] })
 		assert.equal(A.pick(['bt-classic']).name, 'spp-native')
+		A.use('native')
+	}
+
+	// ---- 枚举：后端有 listPorts 才算能枚举；没有时 listPorts 退化为 getPorts、grantPort 是空操作；change 不带端口也转发 ----
+	{
+		const p1 = A.createStreamPort(fakeDriver({ path: '/dev/cu.a' }))
+		const p2 = A.createStreamPort(fakeDriver({ path: '/dev/cu.b' }))
+		const granted = new Set()
+		let fireEnum = null
+		A.register({
+			name: 'enum',
+			supported: true,
+			requestPort: async () => p1,
+			getPorts: async () => [p1, p2].filter((p) => granted.has(p)),
+			listPorts: async () => [p1, p2],
+			grantPort(p) { if (p !== p1 && p !== p2) return false; granted.add(p); return true },
+			attach(fire) { fireEnum = fire },
+		})
+		A.register({ name: 'plain', supported: true, requestPort: async () => p1, getPorts: async () => [p1] })
+		A.use('plain')
+		assert.equal(A.canEnumerate(), false)
+		assert.deepEqual(await A.listPorts(), [p1], '不能枚举时只给授权过的口')
+		assert.equal(A.grantPort(p1), false)
+		A.use('enum')
+		assert.equal(A.canEnumerate(), true)
+		assert.deepEqual(await A.listPorts(), [p1, p2])
+		assert.deepEqual(await A.getPorts(), [])
+		assert.equal(A.grantPort(p2), true)
+		assert.equal(A.grantPort(null), false)
+		assert.deepEqual(await A.getPorts(), [p2])
+		const seen = []
+		const onChange = (e) => seen.push([e.type, e.port])
+		A.addEventListener('change', onChange)
+		fireEnum('change', null)
+		assert.deepEqual(seen, [['change', null]])
+		A.use('plain')
+		fireEnum('change', null)
+		assert.equal(seen.length, 1, '非当前后端的 change 不转发')
+		A.removeEventListener('change', onChange)
+		A.use('none')
+		assert.equal(A.canEnumerate(), false)
+		assert.deepEqual(await A.listPorts(), [])
 		A.use('native')
 	}
 
