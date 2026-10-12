@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>下载客户端 · Web Serial Debug</title>
+    <link rel="icon" href="../imgs/logo.svg" type="image/svg+xml">
+    <script>
+        (function () {
+            // 跟随主站保存的主题(同源 localStorage)，未设置就跟随系统
+            try {
+                var t = localStorage.getItem('serial-debug-theme')
+                if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t)
+            } catch (e) {}
+        })()
+    </script>
+    <style>
+        :root {
+            color-scheme: light;
+            --bg: #f5f5f7;
+            --surface: #ffffff;
+            --text: #1d1d1f;
+            --muted: #6e6e73;
+            --border: #e5e5ea;
+            --accent: #007aff;
+            --accent-hover: #0066d6;
+            --accent-soft: rgba(0, 122, 255, 0.08);
+            --warn: #c93400;
+            --warn-soft: rgba(255, 149, 0, 0.14);
+            --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            --mono: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme='light']) {
+                color-scheme: dark;
+                --bg: #1c1c1e;
+                --surface: #2c2c2e;
+                --text: #f5f5f7;
+                --muted: #a1a1a6;
+                --border: #3a3a3c;
+                --accent: #0a84ff;
+                --accent-hover: #409cff;
+                --accent-soft: rgba(10, 132, 255, 0.14);
+                --warn: #ffb340;
+                --warn-soft: rgba(255, 159, 10, 0.16);
+            }
+        }
+        :root[data-theme='dark'] {
+            color-scheme: dark;
+            --bg: #1c1c1e;
+            --surface: #2c2c2e;
+            --text: #f5f5f7;
+            --muted: #a1a1a6;
+            --border: #3a3a3c;
+            --accent: #0a84ff;
+            --accent-hover: #409cff;
+            --accent-soft: rgba(10, 132, 255, 0.14);
+            --warn: #ffb340;
+            --warn-soft: rgba(255, 159, 10, 0.16);
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 var(--font); -webkit-font-smoothing: antialiased; }
+        main { max-width: 720px; margin: 0 auto; padding: 48px 16px 64px; }
+        header { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+        header img { width: 44px; height: 44px; }
+        h1 { font-size: 26px; margin: 0; letter-spacing: -0.01em; }
+        .badge { display: inline-block; margin-left: 8px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; vertical-align: middle; background: var(--accent-soft); color: var(--accent); }
+        [data-channel='dev'] .badge { background: var(--warn-soft); color: var(--warn); }
+        .sub { color: var(--muted); margin: 0 0 28px; }
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 24px; }
+        #dl-recommend h2 { font-size: 22px; margin: 4px 0 6px; }
+        .eyebrow { font-size: 12px; font-weight: 600; color: var(--accent); letter-spacing: 0.04em; }
+        .muted { color: var(--muted); font-size: 14px; margin: 0; }
+        .file { font-family: var(--mono); font-size: 12.5px; color: var(--muted); margin-top: 6px; word-break: break-all; }
+        #dl-recommend .btn { margin-top: 18px; }
+        .btn { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--border); background: transparent; color: var(--text); font: 600 14px var(--font); text-decoration: none; white-space: nowrap; }
+        .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+        .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+        .btn:disabled { color: var(--muted); }
+        h3 { font-size: 15px; margin: 32px 0 10px; }
+        #dl-list { list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 18px; }
+        .item { display: flex; align-items: center; gap: 16px; padding: 16px 20px; }
+        .item + .item { border-top: 1px solid var(--border); }
+        .item .info { flex: 1; min-width: 0; }
+        .item .title { font-weight: 600; }
+        .tag { margin-left: 8px; padding: 1px 7px; border-radius: 6px; font-size: 11px; background: var(--accent-soft); color: var(--accent); }
+        .notes { margin-top: 28px; color: var(--muted); font-size: 13px; }
+        .notes p { margin: 0 0 6px; }
+        .notes a { color: var(--accent); }
+        @media (max-width: 520px) {
+            main { padding-top: 28px; }
+            .item { flex-direction: column; align-items: stretch; gap: 10px; }
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        <header>
+            <img src="../imgs/logo.svg" alt="">
+            <h1>Serial Debug 客户端<span class="badge" id="dl-channel">正式版</span></h1>
+        </header>
+        <p class="sub" id="dl-version">正在查询最新版本…</p>
+
+        <section class="card" id="dl-recommend" aria-live="polite"></section>
+
+        <h3>全部安装包</h3>
+        <ul id="dl-list"></ul>
+
+        <div class="notes">
+            <p id="dl-channel-note"></p>
+            <p>客户端与网页版功能一致，额外支持多窗口与原生串口。macOS 发布页另有 .app.zip，可免安装直接解压使用。</p>
+            <p>不想安装？<a href="../">直接使用网页版</a></p>
+        </div>
+    </main>
+    <script src="download.js"></script>
+</body>
+
+</html>
