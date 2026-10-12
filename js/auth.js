@@ -35,7 +35,9 @@
 		if (p < 0) return false
 		var t = parseInt(v.substring(0, p), 36)
 		if (!t || t > Date.now() + 86400000) return false
-		if (Date.now() - t > _expiry) return false
+		// 客户端(平台画像关掉 auth.expiry)登录一次长期有效；网页版按 _expiry 过期
+		var expires = !window.AppPlatform || window.AppPlatform.has('auth.expiry')
+		if (expires && Date.now() - t > _expiry) return false
 		var s = parseInt(v.substring(p + 1), 36)
 		var x = (_h[0] << 24) | (_h[1] << 16) | (_h[2] << 8) | _h[3]
 		return s === (t ^ x)

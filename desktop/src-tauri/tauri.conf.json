@@ -1,0 +1,35 @@
+{
+	"$schema": "https://schema.tauri.app/config/2",
+	"productName": "Serial Debug",
+	"identifier": "org.logan825.serialdebug",
+	"build": {
+		"frontendDist": "../dist",
+		"beforeDevCommand": "node scripts/stage-web.mjs",
+		"beforeBuildCommand": "node scripts/stage-web.mjs"
+	},
+	"app": {
+		"withGlobalTauri": true,
+		"windows": [],
+		"security": {
+			"csp": null
+		}
+	},
+	"bundle": {
+		"active": true,
+		"targets": "all",
+		"category": "DeveloperTool",
+		"icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+		"windows": {
+			"nsis": {
+				"template": "../installers/installer.nsi",
+				"installMode": "currentUser"
+			},
+			"wix": {
+				"template": "../installers/main.wxs"
+			}
+		},
+		"macOS": {
+			"minimumSystemVersion": "11.0"
+		}
+	}
+}

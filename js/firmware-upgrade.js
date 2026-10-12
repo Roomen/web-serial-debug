@@ -14,6 +14,12 @@
 	const PCPMessageCode = window.PCPMessageCode
 	const FirmwareParser = window.FirmwareParser
 	const serialApi = window.serialApi
+	// 自动升级(原始固件 → 按设备版本在内存里生成差分包或压缩包再升级，不输出中间产物)：js/firmware-core.js 与 js/firmware-library.js
+	const Core = window.FirmwareCore
+	const library = window.FirmwareLibrary || null
+	const diffRunner = Core.createDiffRunner(new URL('firmware-diff-worker.js', document.currentScript.src).href, {
+		onDone: function (r) { log('差分计算耗时 ' + Math.round(r.ms) + 'ms, patch ' + fmtSize(r.size), 'info') },
+	})
 
 	let fw = null                 // 解析后的固件信息
 	let fwFileBuffer = null       // 固件 ArrayBuffer
@@ -44,6 +50,8 @@
 		status: document.getElementById('fw-status'),
 		progress: document.getElementById('fw-progress'),
 		log: document.getElementById('fw-log'),
+		librarySummary: document.getElementById('fw-library-summary'),
+		libraryClear: document.getElementById('fw-library-clear'),
 	}
 
 	// 只读事件：现代布局的升级流水线(js/modern-firmware.js)据此显示进度、分块与校验，不影响升级流程与时序
@@ -52,6 +60,8 @@
 	}
 	let lastError = ''
 	let outcomeOk = false
+	// 本轮设备上报的下载结果码(0x16)，自动升级据此判断差分包被拒后是否改用压缩包
+	let lastDownloadStatus = null
 
 	function fmtSize(bytes) {
 		if (bytes < 1024) return bytes + ' B'
@@ -71,6 +81,39 @@
 		const parts = s.split(/[\s_-]+to[\s_-]+/i)
 		if (parts.length > 1) s = parts[parts.length - 1].replace(/_\d+$/, '')
 		return s.slice(0, 16)
+	}
+
+	function autoInfoText(f) {
+		return [
+			'文件: ' + (f.fileName || ''),
+			'类型: 原始固件 (自动升级)',
+			'内嵌版本: ' + f.version,
+			'大小: ' + f.rawData.length + ' 字节, CRC32 0x' + f.crc.toString(16).toUpperCase().padStart(8, '0'),
+			'',
+			'开始升级时先查设备版本：本机固件库里有同版本的原固件就生成差分包，',
+			'没有(或同版本有多份不同构建)就生成压缩包；升级包只在内存里生成，不输出文件。',
+		].join('\n')
+	}
+
+	// 原始固件存进本机固件库，之后设备跑的是它时可以作差分基准
+	// 进行中的存库任务：自动升级查库前先等它，免得刚导入的旧固件还没写进去就判成「找不到」
+	let librarySaving = Promise.resolve()
+	function saveToLibrary(name, data) {
+		if (!library) return
+		const job = library.add(name, data).then(function (r) {
+			if (r && r.evicted) log('固件库已满，淘汰了 ' + r.evicted + ' 份最久未用的固件', 'info')
+			refreshLibrarySummary()
+		}).catch(function (e) { log('存入固件库失败: ' + (e && e.message || e), 'warn') })
+		// 等全部在途的存库，不只最近一次(先导入的那份可能更慢)
+		librarySaving = Promise.all([librarySaving, job])
+	}
+
+	function refreshLibrarySummary() {
+		if (!el.librarySummary) return
+		if (!library) { el.librarySummary.textContent = '固件库不可用'; return }
+		library.summary().then(function (s) {
+			el.librarySummary.textContent = '本机固件库：' + s.count + ' 份' + (s.count ? '（' + fmtSize(s.bytes) + '）' : '')
+		}).catch(function () { el.librarySummary.textContent = '固件库不可用' })
 	}
 
 	function manualInfoText(name, size, version) {
@@ -205,6 +248,17 @@
 			el.start.disabled = !serialApi.isOpen()
 			return
 		}
+		const bytes = new Uint8Array(fwFileBuffer)
+		const kind = Core.classify(bytes)
+		if (kind.kind === 'raw') {
+			fw = { ok: true, auto: true, fileName: el.fileName.dataset.name, rawData: bytes, version: kind.version, crc: kind.crc }
+			el.info.textContent = autoInfoText(fw)
+			log('原始固件, 内嵌版本 ' + kind.version + '；开始升级时按设备版本自动差分或压缩', 'success')
+			saveToLibrary(fw.fileName, bytes)
+			emit({ type: 'parsed', ok: true, raw: false, auto: true, version: kind.version, pkgType: '原始固件（自动差分 / 压缩）', size: bytes.length })
+			el.start.disabled = !serialApi.isOpen()
+			return
+		}
 		const r = FirmwareParser.parse(fwFileBuffer)
 		if (!r.ok) {
 			log('固件解析失败: ' + r.error, 'error')
@@ -228,6 +282,10 @@
 		}
 		if (fw.raw) {
 			el.info.textContent = manualInfoText(fw.fileName, fw.firmwareData.length, effectiveVersion())
+			return
+		}
+		if (fw.auto) {
+			el.info.textContent = autoInfoText(fw)
 			return
 		}
 		el.info.textContent = FirmwareParser.diagnose(fw)
@@ -309,7 +367,7 @@
 		running = true
 		lastError = ''
 		outcomeOk = false
-		emit({ type: 'start', version: ver, chunkSize: parseInt(el.chunkSize.value) || 128, size: fw.firmwareData.length })
+		emit({ type: 'start', version: ver, chunkSize: parseInt(el.chunkSize.value) || 128, size: fw.auto ? fw.rawData.length : fw.firmwareData.length })
 		stopFlag = false
 		window.serialApi.suppressParse = true
 		// 升级事务钉扎主发口: 期间切主发口被拦, 下发与 RX 等待稳定在同一设备
@@ -319,8 +377,10 @@
 		el.query.disabled = true
 		setProgress(0)
 		try {
-			await runUpgrade()
+			if (fw.auto) await runAuto(fw)
+			else await runUpgrade(fw)
 		} finally {
+			diffRunner.dispose()
 			running = false
 			serialApi.unpinSession()
 			window.serialApi.suppressParse = false
@@ -337,7 +397,52 @@
 		if (!running) return
 		stopFlag = true
 		log('正在停止升级...', 'warn')
+		// 自动升级的准备阶段(查库、取 BLANK、算差分)不经串口，要主动打断：结束在途差分、中止 BLANK 请求、让等待立即返回
+		cancelPrepare()
 	})
+
+	// ---- 自动升级准备阶段的取消 ----
+	// StopError：用户点停止(记为已停止)；断线时 disconnected 为 true(记为失败)
+	class StopError extends Error {
+		constructor(msg, disconnected) { super(msg); this.disconnected = !!disconnected }
+	}
+	let prepAbort = null
+	let prepStop = null
+	let prepWatch = 0
+	function beginPrepare() {
+		prepAbort = typeof AbortController === 'function' ? new AbortController() : null
+		let fire = null
+		const p = new Promise(function (resolve, reject) { fire = reject })
+		p.catch(function () {})
+		prepStop = { promise: p, fire: fire, reason: null }
+		// 准备阶段不收发串口，断线不会让任何等待自己结束：盯着连接状态，断了就走同一条取消路径
+		prepWatch = setInterval(function () {
+			if (!serialApi.isOpen()) cancelPrepare(new StopError('串口已断开', true))
+		}, 200)
+	}
+	// 在途差分由 buildAutoPackage 的 finally 结束 Worker(等待被这里打断后立即走到)
+	function cancelPrepare(reason) {
+		const r = reason || new StopError('已停止')
+		// 先记原因再 abort：被中止的请求先报错时，调用方据此认出这是取消而不是普通失败
+		if (prepStop && !prepStop.reason) prepStop.reason = r
+		if (prepAbort) prepAbort.abort()
+		if (prepStop) prepStop.fire(r)
+	}
+	function endPrepare() {
+		clearInterval(prepWatch)
+		prepWatch = 0
+		prepAbort = null
+		prepStop = null
+	}
+	function prepInterrupted(e) {
+		if (e && e.disconnected) log('串口已断开，自动升级中止', 'error')
+	}
+	// 等一个准备阶段的异步结果；停止后立即抛 StopError，迟到的结果丢弃
+	function untilStopped(promise) {
+		if (prepStop && prepStop.reason) return Promise.reject(prepStop.reason)
+		if (stopFlag) return Promise.reject(new StopError('已停止'))
+		return prepStop ? Promise.race([promise, prepStop.promise]) : promise
+	}
 
 	// 累积接收字节, 提取一个完整的 PCP 帧(起始 0xFFFE + 8字节头 + dataLength)
 	function tryReadFrame() {
@@ -419,11 +524,143 @@
 		return Array.from(arr).map(b => ('0' + b.toString(16).toUpperCase()).slice(-2)).join(' ')
 	}
 
-	async function runUpgrade() {
+	// 自动升级：查设备版本 → 固件库找原固件 → 内存里生成差分包(找到唯一一份)或压缩包 → 照常升级；
+	// 设备以「校验失败 / 不支持该包类型」拒收差分包时，应答该结果后改用压缩包重来一次
+	async function runAuto(src) {
+		let deviceVersion = ''
+		try {
+			const resp = await sendAndWait(PCP.buildQueryVersionRequest(), PCPMessageCode.QUERY_VERSION, 5000)
+			const res = PCP.parseQueryVersionResponse(resp)
+			if (res.resultCode !== 0) {
+				log('查询版本失败: 0x' + res.resultCode.toString(16), 'error')
+				return
+			}
+			deviceVersion = res.version
+			log('设备当前版本: ' + deviceVersion, 'success')
+			emit({ type: 'device-version', ok: true, source: 'upgrade', version: deviceVersion })
+		} catch (e) {
+			log('查询版本超时: ' + e.message, 'error')
+			return
+		}
+		if (stopFlag) return
+		beginPrepare()
+		let plan = null
+		let pkg = null
+		try {
+			let candidates = []
+			if (library) {
+				try {
+					await untilStopped(librarySaving)
+					candidates = await untilStopped(library.findByVersion(deviceVersion))
+				} catch (e) {
+					if (e instanceof StopError) throw e
+					log('读取固件库失败，改用压缩包: ' + (e && e.message || e), 'warn')
+				}
+			}
+			plan = Core.planUpgrade({ deviceVersion, candidates })
+			const why = { 'no-device-version': '设备没有上报版本', 'not-found': '本机固件库里没有 ' + deviceVersion + ' 的原固件', 'ambiguous': '固件库里 ' + deviceVersion + ' 有 ' + plan.count + ' 份不同构建，无法确定设备上是哪一份' }
+			if (plan.mode === 'diff') log('在固件库找到原固件 ' + (plan.base.name || deviceVersion) + '，生成差分包', 'info')
+			else log((why[plan.reason] || '') + '，生成压缩包', 'info')
+			pkg = await buildAutoPackage(plan, src)
+		} catch (e) {
+			if (!(e instanceof StopError)) throw e
+			prepInterrupted(e)
+			return
+		} finally {
+			endPrepare()
+		}
+		if (!pkg || stopFlag) return
+		await runUpgrade(pkg)
+		if (!outcomeOk && !stopFlag && Core.shouldFallbackToCompress(plan.mode, lastDownloadStatus)) {
+			log('设备拒收差分包，改用压缩包重新升级', 'warn')
+			// 先应答这次失败的下载结果，设备收尾后才接新一轮通知；应答都发不出去就不再重来
+			try {
+				await serialApi.writeData(PCP.buildDownloadResultAck(0))
+			} catch (e) {
+				log('应答下载结果失败，不再重试: ' + (e && e.message || e), 'error')
+				return
+			}
+			lastError = ''
+			emit({ type: 'retry', reason: 'diff-rejected', status: lastDownloadStatus })
+			// 之后成功的是压缩包：被拒的差分基准不能记成「最近用过」
+			plan = { mode: 'compress', reason: 'device-rejected' }
+			beginPrepare()
+			try {
+				pkg = await buildAutoPackage(plan, src)
+			} catch (e) {
+				if (!(e instanceof StopError)) throw e
+				prepInterrupted(e)
+				return
+			} finally {
+				endPrepare()
+			}
+			if (!pkg || stopFlag) return
+			await runUpgrade(pkg)
+		}
+		if (outcomeOk && plan.mode === 'diff' && library) library.touch(plan.base.key).catch(function () {})
+	}
+
+	let blankData = null
+	async function loadBlank() {
+		if (blankData) return blankData
+		try {
+			// 取不到就用内置默认值；给个超时，网络挂住也不拖住升级
+			const timer = setTimeout(function () { if (prepAbort) prepAbort.abort() }, 5000)
+			try {
+				const r = await untilStopped(fetch('imgs/BLANK.BIN', prepAbort ? { signal: prepAbort.signal } : undefined))
+				if (!r.ok) throw new Error('HTTP ' + r.status)
+				blankData = new Uint8Array(await untilStopped(r.arrayBuffer()))
+			} finally {
+				clearTimeout(timer)
+			}
+		} catch (e) {
+			if (e instanceof StopError) throw e
+			if (prepStop && prepStop.reason) throw prepStop.reason
+			if (stopFlag) throw new StopError('已停止')
+			blankData = Core.BLANK_BUILTIN
+		}
+		return blankData
+	}
+
+	// 生成并解析一个内存里的升级包；失败记日志返回 null，停止抛 StopError。生成完立即释放差分 Worker(WASM 内存)，不留到传输结束
+	async function buildAutoPackage(plan, src) {
+		const type = plan.mode === 'diff' ? 'diff' : 'compress'
+		const label = type === 'diff' ? '差分包' : '压缩包'
+		try {
+			const base = type === 'diff' ? plan.base.data : await loadBlank()
+			if (stopFlag) throw new StopError('已停止')
+			const data = await untilStopped(Core.buildPackage(type, src.rawData, base, diffRunner.createPatch))
+			if (stopFlag) throw new StopError('已停止')
+			const r = FirmwareParser.parse(data.buffer)
+			if (!r.ok) {
+				log('生成的升级包校验失败: ' + r.error, 'error')
+				return null
+			}
+			if (r.version !== src.version) {
+				log('生成的升级包版本(' + (r.version || '空') + ')与原始固件(' + src.version + ')不一致', 'error')
+				return null
+			}
+			r.fileName = src.fileName
+			log(label + '已生成: ' + fmtSize(data.length) + '（原始固件 ' + fmtSize(src.rawData.length) + '）', 'success')
+			return r
+		} catch (e) {
+			if (e instanceof StopError) throw e
+			if (prepStop && prepStop.reason) throw prepStop.reason
+			if (stopFlag) throw new StopError('已停止')
+			log(label + '生成失败: ' + (e && e.message || e), 'error')
+			return null
+		} finally {
+			diffRunner.dispose()
+		}
+	}
+
+	async function runUpgrade(target) {
 		const chunkSize = parseInt(el.chunkSize.value) || 128
-		const firmwareData = fw.firmwareData
+		const firmwareData = target.firmwareData
 		const totalChunks = Math.ceil(firmwareData.length / chunkSize)
-		const version = effectiveVersion()
+		// 手动模式(不读包头)取输入框里的版本，其余取包头里的版本
+		const version = target.raw ? el.version.value.trim() : target.version
+		lastDownloadStatus = null
 		log('开始固件升级, 版本: ' + version + ', 分片: ' + totalChunks, 'info')
 		emit({ type: 'plan', version: version, chunkSize: chunkSize, totalChunks: totalChunks, size: firmwareData.length })
 
@@ -547,6 +784,7 @@
 				return
 			}
 			const res = PCP.parseDownloadResultReport(reportData)
+			lastDownloadStatus = res.downloadStatus
 			const errMap = {
 				0x05: '剩余空间不足', 0x06: '下载超时', 0x07: '升级包校验失败',
 				0x08: '升级包类型不支持（设备可能不支持差分包，请使用原始包）',
@@ -615,6 +853,18 @@
 		var parseBtn = document.getElementById('fw-parse')
 		if (parseBtn) parseBtn.click()
 	}
+	if (el.libraryClear) {
+		el.libraryClear.addEventListener('click', async function () {
+			if (!library) return
+			if (!await window.AppDialog.confirm('清空本机固件库？之后找不到原固件时只能用压缩包升级。', { title: '清空固件库', okText: '清空', danger: true })) return
+			library.clear().then(function () {
+				log('已清空本机固件库', 'info')
+				refreshLibrarySummary()
+			}).catch(function (e) { log('清空固件库失败: ' + (e && e.message || e), 'error') })
+		})
+	}
+	refreshLibrarySummary()
+
 	// 监听 serialApi 状态: 简单轮询 open 状态变化
 	let lastOpen = serialApi.isOpen()
 	setInterval(() => {

@@ -249,4 +249,24 @@ function stage(m) { return F.deriveStages(m).map((s) => s.key + ':' + s.state) }
 	jeq(F.deriveStages(m3).slice(0, 2).map((x) => x.state + ':' + x.summary), ['done:直接载入升级包', 'done:已跳过'])
 }
 
+// 自动升级差分被拒改用压缩重来：retry 清掉上一轮告警与进度，最终成功不残留错误
+{
+	const m = F.newModel()
+	F.reduceUpgrade(m, { type: 'start', version: 'V2', chunkSize: 128, size: 1000 }, 1)
+	F.reduceUpgrade(m, { type: 'plan', version: 'V2', chunkSize: 128, totalChunks: 4, size: 500 }, 2)
+	F.reduceUpgrade(m, { type: 'progress', percent: 70 }, 3)
+	F.reduceUpgrade(m, { type: 'log', msg: '设备下载失败: 升级包校验失败', level: 'error' }, 4)
+	F.reduceUpgrade(m, { type: 'log', msg: '设备拒收差分包，改用压缩包重新升级', level: 'warn' }, 5)
+	F.reduceUpgrade(m, { type: 'retry', reason: 'diff-rejected', status: 7 }, 6)
+	assert.equal(m.up.notice, null)
+	assert.equal(m.up.percent, 0)
+	assert.equal(m.up.running, true)
+	F.reduceUpgrade(m, { type: 'plan', version: 'V2', chunkSize: 128, totalChunks: 8, size: 1000 }, 7)
+	F.reduceUpgrade(m, { type: 'end', ok: true, stopped: false, error: '' }, 8)
+	assert.equal(m.up.outcome, 'ok')
+	assert.equal(m.up.error, '')
+	assert.equal(m.up.notice, null)
+	assert.equal(m.up.grid.total, 8)
+}
+
 console.log('modern-firmware: ok')

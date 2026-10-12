@@ -17,3 +17,10 @@ tools/sk-cross-test/*.o
 
 # 冒烟测试输出
 tools/smoke-out
+
+# 桌面客户端(Tauri)：网页文件的复制件、依赖与构建产物
+/desktop/dist
+/desktop/node_modules
+/desktop/src-tauri/target
+/desktop/src-tauri/gen
+/desktop/release

@@ -20,6 +20,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
     <link rel="icon" href="imgs/logo.svg" type="image/svg+xml">
     <link rel="mask-icon" href="imgs/logo.svg" color="#007aff">
+    <script src="js/platform.js"></script>
     <script>
         (function () {
             // 主题三档：light / dark 为手动选择，其余(未设置)跟随系统；首屏前就定下，避免闪烁
@@ -35,6 +36,8 @@
                 if (localStorage.getItem('serial-debug-layout') === 'modern') layout = 'modern'
                 if (localStorage.getItem('serial-debug-dual-view') === 'bubble') dualView = 'bubble'
             } catch (e) { /* 存储不可用时按默认 */ }
+            // 平台画像不提供的布局退回画像允许的第一个(桌面客户端只有现代、移动端只有经典)，不改存储
+            if (window.AppPlatform && !window.AppPlatform.allowsLayout(layout)) layout = window.AppPlatform.fallbackLayout()
             document.documentElement.dataset.layout = layout
             document.documentElement.dataset.dualView = dualView
         })()
@@ -66,7 +69,7 @@
             </div>
         </div>
     </div>
-    <div id="issue-tip" class="issue-tip" hidden>
+    <div id="issue-tip" class="issue-tip" data-feature="shell.browser" hidden>
         <i class="bi bi-info-circle issue-tip-icon"></i>
         <div class="issue-tip-body">
             <strong>欢迎使用 Web Serial Debug</strong>
@@ -102,11 +105,11 @@
                     <i class="bi bi-terminal"></i>
                     <span class="rail-label">串口调试</span>
                 </button>
-                <button class="rail-item" data-view="view-fw-pack" title="固件打包">
+                <button class="rail-item" data-view="view-fw-pack" data-feature="view.firmware-pack" title="固件打包">
                     <i class="bi bi-box-seam"></i>
                     <span class="rail-label">固件打包</span>
                 </button>
-                <button class="rail-item" data-view="view-blu" title="功耗分析">
+                <button class="rail-item" data-view="view-blu" data-feature="view.power" title="功耗分析">
                     <i class="bi bi-speedometer2"></i>
                     <span class="rail-label">功耗分析</span>
                 </button>
@@ -119,7 +122,7 @@
                         <span class="rail-label">配置</span>
                     </button>
                     <ul class="dropdown-menu rail-config-menu" aria-labelledby="rail-config-btn">
-                        <li class="rail-config-layout">
+                        <li class="rail-config-layout" data-feature="layout.switch">
                             <span class="rail-config-layout-title">界面布局</span>
                             <div class="ctl-seg" id="serial-layout-seg" role="group" aria-label="界面布局">
                                 <button type="button" id="serial-layout-classic" aria-pressed="true">经典</button>
@@ -139,14 +142,22 @@
                     <button type="button" role="radio" data-theme-choice="light" title="主题：浅色" aria-label="浅色"><i class="bi bi-sun"></i></button>
                     <button type="button" role="radio" data-theme-choice="dark" title="主题：深色" aria-label="深色"><i class="bi bi-moon-stars"></i></button>
                 </div>
-                <a href="https://github.com/Roomen/web-serial-debug/issues/new" target="_blank" rel="noopener" class="rail-item" title="提交建议 / Bug">
+                <a href="https://github.com/Roomen/web-serial-debug/issues/new" target="_blank" rel="noopener" class="rail-item" data-feature="shell.browser" title="提交建议 / Bug">
                     <i class="bi bi-chat-dots"></i>
                     <span class="rail-label">反馈</span>
                 </a>
-                <a href="https://github.com/Roomen/web-serial-debug" target="_blank" rel="noopener" class="rail-item" title="GitHub 仓库">
+                <a href="https://github.com/Roomen/web-serial-debug" target="_blank" rel="noopener" class="rail-item" data-feature="shell.browser" title="GitHub 仓库">
                     <i class="bi bi-github"></i>
                     <span class="rail-label">GitHub</span>
                 </a>
+                <a href="https://serial.logan825.org/download/" target="_blank" rel="noopener" class="rail-item" id="rail-download" data-feature="shell.browser" title="下载客户端">
+                    <i class="bi bi-download"></i>
+                    <span class="rail-label">客户端</span>
+                </a>
+                <script>
+                    // 预览站(serial-dev)下载预览版客户端，其余(正式站、本地)下载正式版；现代布局的配置菜单抄这里的地址，所以要在它挂载前定好
+                    if (/^serial-dev\./.test(location.hostname)) document.getElementById('rail-download').href = 'https://serial-dev.logan825.org/download/'
+                </script>
                 <div class="rail-version" id="app-version" title="应用版本"></div>
             </div>
         </nav>
@@ -158,7 +169,7 @@
                 <!--顶部连接条-->
                 <div id="serial-connect-bar">
                     <!-- 单路/双路模式切换 -->
-                    <div class="connect-bar-section connect-bar-mode">
+                    <div class="connect-bar-section connect-bar-mode" data-feature="lane.dual">
                         <div class="serial-mode-toggle ctl-seg">
                             <button class="serial-mode-btn active" data-mode="single" id="serial-mode-single">单路</button>
                             <button class="serial-mode-btn" data-mode="dual" id="serial-mode-dual">双路</button>
@@ -1009,6 +1020,10 @@
                                             </div>
                                             <pre id="fw-info"
                                                 class="p-2 mb-0 small text-monospace mt-2" style="min-height: 60px; white-space: pre-wrap;"></pre>
+                                            <div class="fw-library-row small text-muted mt-2" id="fw-library-row" title="导入过的原始固件存在本机，升级原始固件时按设备版本在这里找差分基准">
+                                                <i class="bi bi-archive"></i> <span id="fw-library-summary">本机固件库</span>
+                                                <button type="button" class="btn btn-link btn-sm p-0 ms-2 align-baseline" id="fw-library-clear">清空</button>
+                                            </div>
                                         </div>
                                         <div class="fw-upgrade-card mb-0">
                                             <h6 class="pane-section-title"><i class="bi bi-upload"></i> 升级控制</h6>
@@ -1700,6 +1715,7 @@
         </div>
     </div>
     <script src="js/version.js"></script>
+    <script src="js/release-config.js"></script>
     <script src="js/auth.js"></script>
     <script src="js/update-check.js"></script>
     <script src="js/ansi_up.min.js"></script>
@@ -1725,9 +1741,17 @@
                 localStorage.setItem(KEY, id)
                 current = id
             }
+            // 视图入口带 data-feature 时，平台画像没开这项功能就回到串口调试(存下的视图可能来自别的平台)
+            function allowed(id) {
+                var it = rail.querySelector('.rail-item[data-view="' + id + '"]')
+                var f = it && it.dataset.feature
+                if (!f || !window.AppPlatform) return true
+                return f.split(/\s+/).every(function (x) { return window.AppPlatform.has(x) })
+            }
             function switchTo(id) {
                 // 旧书签 view-emk → view-blu
                 if (id === 'view-emk') id = 'view-blu'
+                if (!allowed(id)) id = 'view-serial'
                 activate(id)
             }
             items.forEach(function (it) {
@@ -1746,6 +1770,12 @@
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
     <script src="js/serial-term.js"></script>
+    <script src="js/app-dialog.js"></script>
+    <script src="js/serial-adapter.js"></script>
+    <script src="js/transport-ble.js"></script>
+    <script src="js/transport-native-serial.js"></script>
+    <script src="js/platform-boot.js"></script>
+    <script src="js/native-shell.js"></script>
     <script src="js/dual-config.js"></script>
     <script src="js/common.js"></script>
     <script src="js/wmbus-protocol.js"></script>
@@ -1768,6 +1798,8 @@
     <script src="js/modern-inspector.js"></script>
     <script src="js/command-palette.js"></script>
     <script src="js/modern-shell.js"></script>
+    <script src="js/firmware-core.js"></script>
+    <script src="js/firmware-library.js"></script>
     <script src="js/firmware-upgrade.js"></script>
     <script src="https://cdn.bootcdn.net/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="js/firmware-packager.js"></script>
@@ -1779,6 +1811,7 @@
     <script src="js/blu-power.js"></script>
     <script src="js/blu-cmd-sheet.js"></script>
     <script src="js/modern-power.js"></script>
+    <script src="js/app-update.js"></script>
 
 </body>
 

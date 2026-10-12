@@ -1,20 +1,9 @@
 ;(function () {
 	'use strict'
 
-	const HEADER_SIZE = 128
-	const MAGIC_NUM = 0x6b636553
-
-	function crc32(data) {
-		let crc = 0xFFFFFFFF
-		const len = data.length
-		for (let i = 0; i < len; i++) {
-			crc ^= data[i]
-			for (let j = 0; j < 8; j++) {
-				crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1))
-			}
-		}
-		return (crc ^ 0xFFFFFFFF) >>> 0
-	}
+	// 包头、CRC、差分 Worker 调度都在 js/firmware-core.js(与固件升级面板共用)，这里只做打包页的界面与产物输出
+	const C = window.FirmwareCore
+	const { HEADER_SIZE, crc32, buildHeader, getNewFileInfo, packFirmware } = C
 
 	function parseFirmwareName(fileName) {
 		const name = fileName.replace(/\.[^.]+$/, '')
@@ -22,85 +11,6 @@
 		const version = parts.length > 0 && parts[0] ? parts[0] : 'Ver'
 		const timestamp = parts.length > 1 && parts[1] ? parts[1] : '0'
 		return { version, timestamp }
-	}
-
-	function toBytesLE(value, byteLength) {
-		const bytes = new Uint8Array(byteLength)
-		for (let i = 0; i < byteLength; i++) {
-			bytes[i] = (value >>> (i * 8)) & 0xFF
-		}
-		return bytes
-	}
-
-	function buildHeader(info) {
-		const body = new Uint8Array(124)
-
-		let off = 0
-		const setU32 = (v) => { body.set(toBytesLE(v, 4), off); off += 4 }
-		const skipU32 = () => { off += 4 }
-
-		setU32(MAGIC_NUM)
-		setU32(info.pkgHeaderVersion || 0)
-		setU32(info.pkgType)
-		setU32(info.pkgEncType || 0)
-		setU32(info.pkgDataSize)
-		skipU32()
-		setU32(info.patchFileSize)
-		setU32(info.oldFileSize || 0)
-		skipU32()
-		setU32(info.newFileSize)
-		skipU32()
-
-		off = 11 * 4
-
-		if (info.newFileInfo) {
-			body.set(info.newFileInfo.slice(0, 32), off)
-		}
-		off += 32
-
-		if (info.userDefine) {
-			const enc = new TextEncoder()
-			const ud = enc.encode(info.userDefine)
-			body.set(ud.slice(0, 48), off)
-		}
-		off += 48
-
-		const pkgDataCRC32 = crc32(info.pkgData)
-		const newFileCRC32 = crc32(info.newFileData)
-		const oldFileCRC32 = info.oldFileData ? crc32(info.oldFileData) : 0
-
-		toBytesLE(pkgDataCRC32, 4).forEach((b, i) => { body[5 * 4 + i] = b })
-		toBytesLE(oldFileCRC32, 4).forEach((b, i) => { body[8 * 4 + i] = b })
-		toBytesLE(newFileCRC32, 4).forEach((b, i) => { body[10 * 4 + i] = b })
-
-		const headerCRC32 = crc32(body)
-		const result = new Uint8Array(HEADER_SIZE)
-		result.set(body)
-		result.set(toBytesLE(headerCRC32, 4), 124)
-		return result
-	}
-
-	function getNewFileInfo(data) {
-		const info = new Uint8Array(32)
-		if (data.length > 0x4020) {
-			info.set(data.subarray(0x4000, 0x4020))
-		}
-		return info
-	}
-
-	function packFirmware({ firmwareData, pkgType, userDefine, oldFileData, newFileData }) {
-		return buildHeader({
-			pkgType: pkgType,
-			pkgData: firmwareData,
-			pkgDataSize: firmwareData.length,
-			patchFileSize: firmwareData.length,
-			oldFileData: oldFileData || null,
-			oldFileSize: oldFileData ? oldFileData.length : 0,
-			newFileData: newFileData || firmwareData,
-			newFileSize: (newFileData || firmwareData).length,
-			newFileInfo: getNewFileInfo(newFileData || firmwareData),
-			userDefine: userDefine || '',
-		})
 	}
 
 	function downloadBlob(data, fileName) {
@@ -292,10 +202,13 @@
 	const blank = { val: null }
 	const blankNameVal = { val: '' }
 
-	let diffWorker = null
-	let diffJob = null
 	let packRunning = false
-	const diffWorkerUrl = new URL('firmware-diff-worker.js', document.currentScript.src).href
+	// 按需创建差分 Worker，整轮生成结束即释放其 WASM 内存；不在串口页预载
+	const diffRunner = C.createDiffRunner(new URL('firmware-diff-worker.js', document.currentScript.src).href, {
+		onDone: function (r) { log('hdiffi 差分耗时: ' + Math.round(r.ms) + 'ms, patch: ' + fmtSize(r.size), 'info') },
+	})
+	const wasmCreatePatch = diffRunner.createPatch
+	const disposeDiffWorker = diffRunner.dispose
 
 	function log(msg, level) {
 		const cls = { info: '', success: 'text-success', error: 'text-danger', warn: 'text-warning' }[level || 'info']
@@ -447,53 +360,6 @@
 	el.logClear.addEventListener('click', function () {
 		el.log.innerHTML = ''
 	})
-
-	// 按需创建差分 Worker，整轮生成结束即释放其 WASM 内存；不在串口页预载。
-	function disposeDiffWorker(error) {
-		if (diffWorker) diffWorker.terminate()
-		diffWorker = null
-		if (diffJob) {
-			clearTimeout(diffJob.timer)
-			const job = diffJob
-			diffJob = null
-			job.reject(error || new Error('差分任务已结束'))
-		}
-	}
-
-	function wasmCreatePatch(oldData, newData) {
-		return new Promise(function (resolve, reject) {
-			if (diffJob) { reject(new Error('差分任务正在执行')); return }
-			try {
-				if (!diffWorker) {
-					diffWorker = new Worker(diffWorkerUrl)
-					diffWorker.onmessage = function (e) {
-						const job = diffJob
-						if (!job) return
-						clearTimeout(job.timer)
-						diffJob = null
-						if (e.data.error) job.reject(new Error(e.data.error))
-						else {
-							const patch = new Uint8Array(e.data.patch)
-							log('hdiffi 差分耗时: ' + Math.round(e.data.ms) + 'ms, patch: ' + fmtSize(patch.length), 'info')
-							job.resolve(patch)
-						}
-					}
-					diffWorker.onerror = function () { disposeDiffWorker(new Error('差分 Worker 加载或执行失败')) }
-					diffWorker.onmessageerror = function () { disposeDiffWorker(new Error('差分 Worker 数据传输失败')) }
-				}
-				// 输入保留给组包 CRC 和反向差分；只转移本任务的副本。
-				const oldCopy = oldData.slice()
-				const newCopy = newData.slice()
-				diffJob = { resolve: resolve, reject: reject, timer: setTimeout(function () {
-					disposeDiffWorker(new Error('差分生成超时'))
-				}, 5 * 60 * 1000) }
-				diffWorker.postMessage({ old: oldCopy.buffer, nw: newCopy.buffer }, [oldCopy.buffer, newCopy.buffer])
-			} catch (e) {
-				if (diffJob) disposeDiffWorker(e)
-				else reject(e)
-			}
-		})
-	}
 
 	el.start.addEventListener('click', async function () {
 		if (packRunning) return
@@ -686,11 +552,7 @@
 	})
 
 	// 内置 BLANK.BIN — 优先 fetch，失败则使用内嵌默认值
-	var blankBuiltin = new Uint8Array([
-		0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
-		0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
-		0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff
-	])
+	var blankBuiltin = C.BLANK_BUILTIN
 
 	// 先用内嵌默认，fetch 成功后再覆盖
 	blank.val = blankBuiltin

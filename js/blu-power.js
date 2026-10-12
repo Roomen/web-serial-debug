@@ -72,6 +72,7 @@
 		// 只有真正打开（或正在打开）才算占用；页面加载时自动填进下拉框的口只是「选中」，不能挡住串口调试
 		ownsPort: function (port) { return !!(port && bluPort === port && (bluOpen || bluOpening)) },
 		isOpen: function () { return !!bluOpen },
+		isBusyForUpdate: function () { return !!(bluOpen || bluOpening) },
 		getPort: function () { return bluPort },
 		// 排查样点流用：先 captureRaw() 再采样，停采后 dumpRaw() 导出 .bin + .json
 		captureRaw: function (bytes) { return rawCapArm(bytes) },
@@ -6119,9 +6120,8 @@
 	/** WebUSB：已授权同 VID/PID 设备可读 serialNumber（与 pyserial 的 sn 同源） */
 	async function fetchBluUsbSerials() {
 		const out = []
-		if (!navigator.usb || !navigator.usb.getDevices) return out
 		try {
-			const devices = await navigator.usb.getDevices()
+			const devices = await SerialAdapter.getUsbDevices()
 			for (let i = 0; i < devices.length; i++) {
 				const d = devices[i]
 				if (d.vendorId === 0x15A2 && d.productId === 0x300A) {
@@ -6231,19 +6231,19 @@
 	/** 打开/刷新页面：自动检测已授权 BLU 并填入下拉框（不自动打开） */
 	async function refreshBluPorts(opts) {
 		opts = opts || {}
-		if (!navigator.serial || !navigator.serial.getPorts) {
+		if (!SerialAdapter.isSupported()) {
 			const sel = E('blu-port-select')
 			if (sel) {
 				sel.innerHTML = ''
 				const opt = document.createElement('option')
 				opt.value = ''
-				opt.textContent = '浏览器不支持 Web Serial'
+				opt.textContent = '当前环境不支持串口'
 				sel.appendChild(opt)
 			}
 			return
 		}
 		try {
-			const ports = await navigator.serial.getPorts()
+			const ports = await SerialAdapter.getPorts()
 			const matched = []
 			const unknown = []
 			for (let i = 0; i < ports.length; i++) {
@@ -6325,7 +6325,7 @@
 			elSelect.addEventListener('click', async function (e) {
 				e.stopPropagation()
 				try {
-					const port = await navigator.serial.requestPort({
+					const port = await SerialAdapter.requestPort({
 						filters: PROTO.USB_FILTERS,
 					})
 					if (serialOwnsPort(port)) {
@@ -6375,21 +6375,19 @@
 		}
 
 		// 插拔热更新列表（不自动打开）
-		if (navigator.serial) {
-			navigator.serial.addEventListener('connect', function () {
-				refreshBluPorts({ log: true })
-			})
-			navigator.serial.addEventListener('disconnect', function (e) {
-				const gone = e && e.port
-				if (gone && bluPort === gone) {
-					if (bluOpen) {
-						bluClosePort({ manual: false })
-					}
-					bluPort = null
+		SerialAdapter.addEventListener('connect', function () {
+			refreshBluPorts({ log: true })
+		})
+		SerialAdapter.addEventListener('disconnect', function (e) {
+			const gone = e && e.port
+			if (gone && bluPort === gone) {
+				if (bluOpen) {
+					bluClosePort({ manual: false })
 				}
-				refreshBluPorts({ log: true })
-			})
-		}
+				bluPort = null
+			}
+			refreshBluPorts({ log: true })
+		})
 
 		// 页面打开/刷新：自动检测并填入
 		refreshBluPorts({ log: true })
@@ -6957,16 +6955,16 @@
 			window.BluSerialLane.attach({ track: serialLaneTrack, requestRedraw: scheduleUIUpdate })
 		}
 
-		if (!navigator.serial) {
+		if (!SerialAdapter.isSupported()) {
 			bluLog('当前浏览器不支持 Web Serial（请用 Chrome / Edge）', 'error')
 		} else {
 			bluLog('BLU 100k 就绪 · USB CDC · 选设备过滤 15A2:300A · 速率以实测为准')
 		}
 	}
 
-	if (document.readyState === 'loading') {
-		document.addEventListener('DOMContentLoaded', bind)
-	} else {
-		bind()
+	// 平台画像没有功耗分析(移动端)：视图入口已隐藏，这里不绑定、不枚举串口，免得 BLE 等后端的口被当成未知 BLU 口列出来
+	if (!window.AppPlatform || window.AppPlatform.has('view.power')) {
+		if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind)
+		else bind()
 	}
 })()

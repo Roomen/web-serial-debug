@@ -353,7 +353,9 @@
 		list.forEach(function (p, i) { (isSinglePreset(p) === !dual ? mine : other).push(i) })
 		if (!mine.length) box.appendChild(mk('div', 'dual-preset-empty', dual ? '还没有双路预设。设好两路的参数、协议与标签后，在下面起个名字保存。' : '还没有单路预设。设好参数与协议后，在下面起个名字保存。'))
 		mine.forEach(function (i) { box.appendChild(presetRow(list[i], i)) })
-		if (other.length) {
+		// 平台只有一路时不列双路预设(套不上)；存储里照留，回到桌面端仍可用
+		const canDual = !window.AppPlatform || window.AppPlatform.has('lane.dual')
+		if (other.length && (dual || canDual)) {
 			const target = dual && l ? sidLabel(l.singleTarget()) : ''
 			box.appendChild(mk('div', 'dual-preset-group', dual ? '单路预设 · 套用到主发路（' + target + '）' : '双路预设 · 套用后进入双路'))
 			other.forEach(function (i) { box.appendChild(presetRow(list[i], i)) })
@@ -374,7 +376,7 @@
 			return
 		}
 		if (b.dataset.act === 'rename') {
-			const to = window.prompt('预设新名称（最多 ' + NAME_MAX + ' 字）', p.name)
+			const to = await window.AppDialog.prompt('预设新名称（最多 ' + NAME_MAX + ' 字）', p.name, { title: '重命名预设', maxLength: NAME_MAX })
 			if (to === null) return
 			try {
 				if (savePresets(renamePreset(list, p.name, to))) render()
@@ -385,13 +387,13 @@
 			return
 		}
 		if (b.dataset.act === 'delete') {
-			if (!window.confirm('删除预设「' + p.name + '」？')) return
+			if (!await window.AppDialog.confirm('删除预设「' + p.name + '」？', { title: '删除预设', okText: '删除', danger: true })) return
 			if (savePresets(removePreset(list, p.name))) render()
 			else toast('删除失败：浏览器存储不可用', 'error')
 		}
 	}
 
-	function onSave(e) {
+	async function onSave(e) {
 		e.preventDefault()
 		const input = document.getElementById('serial-dual-preset-name')
 		const l = lanes()
@@ -406,7 +408,7 @@
 			return
 		}
 		const list = loadPresets()
-		if (indexOfName(list, preset.name) !== -1 && !window.confirm('已有预设「' + preset.name + '」，用当前' + (dual ? '两路' : '串口') + '配置覆盖它？')) return
+		if (indexOfName(list, preset.name) !== -1 && !await window.AppDialog.confirm('已有预设「' + preset.name + '」，用当前' + (dual ? '两路' : '串口') + '配置覆盖它？', { title: '覆盖预设', okText: '覆盖' })) return
 		let res
 		try {
 			res = upsertPreset(list, preset)

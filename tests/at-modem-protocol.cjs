@@ -424,10 +424,10 @@ function parseAndModel(text) {
 	assert.equal(fEmpty.found, false, "纯换行空内容不应判定为成帧")
 }
 
-// 11. 版本号校验
+// 11. 版本号格式校验(只查 SemVer，不钉具体版本，否则每次 bump 都要改这里)
 {
 	const verFile = fs.readFileSync(path.join(__dirname, "../js/version.js"), "utf8")
-	assert.ok(verFile.includes("1.67.0"), "版本号应为 1.67.0")
+	assert.match(verFile, /APP_VERSION = '\d+\.\d+\.\d+'/, "版本号应为 SemVer")
 }
 
 console.log("All cellular AT protocol regression tests passed!");

@@ -2,6 +2,8 @@
 // 版本号是唯一来源（window.APP_VERSION），所以这里直接抓源文件正则取版本，不另外生成 manifest。
 (function () {
 	'use strict'
+	// 打包客户端的本地 version.js 不代表远端版本，由原生更新服务处理。
+	if (window.AppPlatform && window.AppPlatform.runtime === 'tauri') return
 
 	var FIRST_DELAY = 60 * 1000
 	var INTERVAL = 30 * 60 * 1000
