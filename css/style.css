@@ -12343,9 +12343,33 @@ html[data-layout='modern'] .mdn-conn-btn[aria-expanded='true'] {
 	border-color: var(--accent);
 }
 
-html[data-layout='modern'] .mdn-conn-btn .bi-chevron-down {
-	font-size: 10px;
+/* 分体按钮中段：设备 / 参数菜单的开关，与左侧设备键分开 */
+html[data-layout='modern'] .mdn-conn-more {
+	display: inline-flex;
+	align-items: center;
+	height: 30px;
+	padding: 0 7px;
+	margin-left: -1px;
+	border: 1px solid var(--border-color);
+	border-radius: 0;
+	background: var(--bg-surface);
 	color: var(--text-secondary);
+	font-size: 10px;
+}
+
+html[data-layout='modern'] .mdn-conn-more:hover {
+	border-color: var(--text-muted);
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] .mdn-conn-more:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+html[data-layout='modern'] .mdn-conn-more[aria-expanded='true'] {
+	border-color: var(--accent);
+	color: var(--text-primary);
 }
 
 html[data-layout='modern'] .mdn-conn-add {

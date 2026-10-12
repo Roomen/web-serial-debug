@@ -94,7 +94,7 @@
 	}
 	// 打开某一路的连接菜单(现代布局连接栏)；没有连接栏时退回该路的「选择串口」键
 	function openLaneMenu(sid) {
-		const b = doc.querySelector('#mdn-connbar .mdn-conn[data-sid="' + sid + '"] > .mdn-conn-btn')
+		const b = doc.querySelector('#mdn-connbar .mdn-conn[data-sid="' + sid + '"] > .mdn-conn-more')
 		if (b) {
 			if (b.getAttribute('aria-expanded') !== 'true') b.click()
 			return

@@ -7272,8 +7272,8 @@
 		selectPort: selectLanePort,
 		toggle: function (sid) { return handleToggleClick(sid) },
 		forget: function (sid) { return forgetPort(sid) },
-		// 不能枚举的后端(网页版)经浏览器选择框添加设备：与点芯片一样，没选过口时选完直接连接
-		requestPort: function (sid) { return selectPortFor(sid, { openAfterSelect: !SerialHub.getPort(SerialHub.uiSid(sid)) }) },
+		// 不能枚举的后端(网页版)经浏览器选择框选设备：选完即连接(本路连着别的口时 bindSessionPort 先关旧口)
+		requestPort: function (sid) { return selectPortFor(sid, { openAfterSelect: true }) },
 		setAlias: function (port, name) {
 			return setPortAlias(port, String(name || '').trim().slice(0, 32)).then(function (ok) {
 				refreshPortDisplayNames()
