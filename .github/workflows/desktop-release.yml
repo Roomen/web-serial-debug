@@ -57,9 +57,9 @@ jobs:
           for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
             if [ -z "${!v}" ]; then apple=false; fi
           done
-          # 正式版必须带更新签名与 Apple 签名公证；预览版缺配置时照样出未签名安装包
-          if [ "$REF_NAME" = main ] && { [ "$updater" != true ] || [ "$apple" != true ]; }; then
-            echo "::error::main release requires updater signing and Apple signing/notarization secrets"; exit 1
+          # 正式版必须带更新签名(否则已装的客户端收不到这一版)；缺 Apple 签名公证时两个通道都出整包 ad-hoc 签名的 macOS 包
+          if [ "$REF_NAME" = main ] && [ "$updater" != true ]; then
+            echo "::error::main release requires updater signing secrets"; exit 1
           fi
           publish=true
           if gh release view "desktop-$REF_NAME-v$version" > /dev/null 2>&1; then
