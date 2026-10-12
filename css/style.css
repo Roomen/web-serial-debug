@@ -13432,3 +13432,30 @@ html[data-runtime='tauri'] .native-toast-act {
 	font-size: 12px;
 	white-space: nowrap;
 }
+/* 客户端应用更新：浏览器没有平台服务，不会生成这些节点。 */
+html[data-layout='modern'][data-runtime='tauri'] #serial-app-update {
+	position: fixed;
+	right: 48px;
+	bottom: 34px;
+	z-index: 1060;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	max-width: min(560px, calc(100vw - 64px));
+	padding: 10px 14px;
+	border: 1px solid var(--bs-border-color);
+	border-radius: 8px;
+	background: var(--bs-body-bg);
+	color: var(--bs-body-color);
+	box-shadow: 0 4px 20px rgba(0, 0, 0, .15);
+}
+html[data-layout='modern'][data-runtime='tauri'] #serial-app-update[hidden] { display: none; }
+html[data-layout='modern'][data-runtime='tauri'] .app-update-shield {
+	position: fixed;
+	inset: 0;
+	z-index: 20000;
+	display: grid;
+	place-items: center;
+	background: var(--bs-body-bg);
+	color: var(--bs-body-color);
+}

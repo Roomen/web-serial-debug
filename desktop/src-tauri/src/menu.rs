@@ -134,7 +134,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 	window.append_items(&[&sep()?, &PredefinedMenuItem::bring_all_to_front(app, Some("前置全部窗口"))?])?;
 	let feedback = item(app, "help-feedback", "反馈问题…", None)?;
 	let homepage = item(app, "help-homepage", "项目主页", None)?;
-	let help = Submenu::with_items(app, "帮助", true, &[&feedback, &homepage])?;
+	let update = item(app, "check-update", "检查更新…", None)?;
+	let help = Submenu::with_items(app, "帮助", true, &[&update, &sep()?, &feedback, &homepage])?;
 	#[cfg(not(target_os = "macos"))]
 	help.append_items(&[&sep()?, &about])?;
 

@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tauri::ipc::{Channel, InvokeResponseBody};
-use tauri::State;
+use tauri::{Manager, State};
 
 // 读写都用短超时轮询：读线程靠它及时看到停止标记；写由 write_all_until 按截止时间循环，
 // 不给读写两个句柄设不同超时(Windows 上复制出的句柄共用一份 COMMTIMEOUTS，会互相覆盖)
@@ -45,6 +45,120 @@ pub struct PortDesc {
 
 fn clean(s: Option<String>) -> Option<String> {
 	s.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+fn clean_product(product: Option<String>, name: &str) -> Option<String> {
+	clean(product).and_then(|product| {
+		let tail = format!(" ({})", name);
+		clean(Some(product.strip_suffix(&tail).unwrap_or(&product).to_string()))
+	})
+}
+
+#[cfg(windows)]
+mod windows_names {
+	use super::{clean, clean_product, PortDesc};
+	use std::collections::HashMap;
+	use std::mem::size_of;
+	use std::ptr::{null, null_mut};
+	use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+		SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW, SetupDiGetDeviceRegistryPropertyW, SetupDiOpenDevRegKey, DICS_FLAG_GLOBAL,
+		DIGCF_PRESENT, DIREG_DEV, GUID_DEVCLASS_MODEM, GUID_DEVCLASS_PORTS, HDEVINFO, SPDRP_DEVICEDESC, SPDRP_FRIENDLYNAME, SPDRP_MFG, SP_DEVINFO_DATA,
+	};
+	use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+	use windows_sys::Win32::System::Registry::{RegCloseKey, RegQueryValueExW, KEY_QUERY_VALUE, REG_SZ};
+
+	struct DeviceSet(HDEVINFO);
+
+	impl Drop for DeviceSet {
+		fn drop(&mut self) {
+			unsafe { SetupDiDestroyDeviceInfoList(self.0) };
+		}
+	}
+
+	fn decode(buffer: &[u16], bytes: u32) -> Option<String> {
+		if bytes % 2 != 0 || bytes as usize > size_of::<u16>() * buffer.len() {
+			return None;
+		}
+		let text = &buffer[..bytes as usize / 2];
+		let end = text.iter().position(|value| *value == 0).unwrap_or(text.len());
+		clean(Some(String::from_utf16_lossy(&text[..end])))
+	}
+
+	fn property(set: &DeviceSet, device: &SP_DEVINFO_DATA, property: u32) -> Option<String> {
+		let mut bytes = 0;
+		let mut value_type = 0;
+		unsafe {
+			SetupDiGetDeviceRegistryPropertyW(set.0, device, property, &mut value_type, null_mut(), 0, &mut bytes);
+		}
+		if bytes == 0 || bytes % 2 != 0 {
+			return None;
+		}
+		let mut buffer = vec![0u16; bytes as usize / 2];
+		let success = unsafe { SetupDiGetDeviceRegistryPropertyW(set.0, device, property, &mut value_type, buffer.as_mut_ptr().cast(), bytes, &mut bytes) };
+		if success == 0 || value_type != REG_SZ {
+			return None;
+		}
+		decode(&buffer, bytes)
+	}
+
+	fn port_name(set: &DeviceSet, device: &SP_DEVINFO_DATA) -> Option<String> {
+		let key = unsafe { SetupDiOpenDevRegKey(set.0, device, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_QUERY_VALUE) };
+		if key == INVALID_HANDLE_VALUE {
+			return None;
+		}
+		let value_name: Vec<u16> = "PortName".encode_utf16().chain(Some(0)).collect();
+		let mut bytes = 0;
+		let mut value_type = 0;
+		let result = (|| {
+			let status = unsafe { RegQueryValueExW(key, value_name.as_ptr(), null(), &mut value_type, null_mut(), &mut bytes) };
+			if status != 0 || value_type != REG_SZ || bytes == 0 || bytes % 2 != 0 {
+				return None;
+			}
+			let mut buffer = vec![0u16; bytes as usize / 2];
+			let status = unsafe { RegQueryValueExW(key, value_name.as_ptr(), null(), &mut value_type, buffer.as_mut_ptr().cast(), &mut bytes) };
+			if status != 0 || value_type != REG_SZ {
+				return None;
+			}
+			decode(&buffer, bytes)
+		})();
+		unsafe { RegCloseKey(key) };
+		result
+	}
+
+	pub(super) fn enrich(ports: &mut [PortDesc]) {
+		let mut names = HashMap::new();
+		for class in [GUID_DEVCLASS_PORTS, GUID_DEVCLASS_MODEM] {
+			let handle = unsafe { SetupDiGetClassDevsW(&class, null(), null_mut(), DIGCF_PRESENT) };
+			if handle == INVALID_HANDLE_VALUE as HDEVINFO {
+				continue;
+			}
+			let set = DeviceSet(handle);
+			let mut index = 0;
+			loop {
+				let mut device: SP_DEVINFO_DATA = unsafe { std::mem::zeroed() };
+				device.cbSize = size_of::<SP_DEVINFO_DATA>() as u32;
+				if unsafe { SetupDiEnumDeviceInfo(set.0, index, &mut device) } == 0 {
+					break;
+				}
+				index += 1;
+				if let Some(path) = port_name(&set, &device) {
+					let product = property(&set, &device, SPDRP_FRIENDLYNAME).or_else(|| property(&set, &device, SPDRP_DEVICEDESC));
+					let manufacturer = property(&set, &device, SPDRP_MFG);
+					names.insert(path.to_ascii_uppercase(), (product, manufacturer));
+				}
+			}
+		}
+		for port in ports {
+			if let Some((product, manufacturer)) = names.remove(&port.path.to_ascii_uppercase()) {
+				if product.is_some() {
+					port.product = clean_product(product, &port.name);
+				}
+				if manufacturer.is_some() {
+					port.manufacturer = manufacturer;
+				}
+			}
+		}
+	}
 }
 
 fn short_name(path: &str) -> String {
@@ -90,12 +204,7 @@ fn describe(p: serialport::SerialPortInfo, open: bool) -> PortDesc {
 		serialport::SerialPortType::Unknown => {}
 	}
 	// Windows 友好名形如「USB-SERIAL CH340 (COM3)」，口名另有一栏，去掉重复的尾巴
-	if let Some(prod) = d.product.as_mut() {
-		let tail = format!(" ({})", d.name);
-		if prod.ends_with(&tail) {
-			prod.truncate(prod.len() - tail.len());
-		}
-	}
+	d.product = clean_product(d.product, &d.name);
 	d
 }
 
@@ -190,6 +299,8 @@ pub async fn serial_list(state: State<'_, SerialState>) -> Result<Vec<PortDesc>,
 				describe(p, is_open)
 			})
 			.collect();
+		#[cfg(windows)]
+		windows_names::enrich(&mut out);
 		// 开发调试：SERIAL_EXTRA_PORTS 里列的路径(冒号或逗号分隔，如 socat 建的 /dev/ttys003)也当串口列出。
 		// 虚拟串口对不在 IOKit / SetupAPI 的串口枚举里，不这样就没法在客户端里用虚拟串口自测
 		if let Ok(extra) = std::env::var("SERIAL_EXTRA_PORTS") {
@@ -272,6 +383,7 @@ pub async fn serial_open(
 	on_data: Channel<InvokeResponseBody>,
 	on_event: Channel<serde_json::Value>,
 ) -> Result<u32, String> {
+	let _operation = crate::updater::begin_device_operation(webview.app_handle())?;
 	let p = path.clone();
 	let (port, reader) = blocking(move || {
 		let data_bits = match options.data_bits.unwrap_or(8) {
@@ -315,6 +427,7 @@ pub async fn serial_open(
 		Ok((port, reader))
 	})
 	.await?;
+	if crate::updater::frozen(webview.app_handle()) { return Err("应用正在准备升级".into()); }
 	let id = state.next.fetch_add(1, Ordering::Relaxed) + 1;
 	let stop = Arc::new(AtomicBool::new(false));
 	let s = stop.clone();
@@ -354,7 +467,8 @@ fn write_all_until(port: &mut Box<dyn serialport::SerialPort>, data: &[u8]) -> R
 }
 
 #[tauri::command]
-pub async fn serial_write(state: State<'_, SerialState>, handle: u32, data: Vec<u8>) -> Result<(), String> {
+pub async fn serial_write(app: tauri::AppHandle, state: State<'_, SerialState>, handle: u32, data: Vec<u8>) -> Result<(), String> {
+	let _operation = crate::updater::begin_device_operation(&app)?;
 	let h = state.get(handle)?;
 	blocking(move || {
 		let mut port = h.port.lock().unwrap();
@@ -364,7 +478,8 @@ pub async fn serial_write(state: State<'_, SerialState>, handle: u32, data: Vec<
 }
 
 #[tauri::command]
-pub async fn serial_set_signals(state: State<'_, SerialState>, handle: u32, signals: Signals) -> Result<(), String> {
+pub async fn serial_set_signals(app: tauri::AppHandle, state: State<'_, SerialState>, handle: u32, signals: Signals) -> Result<(), String> {
+	let _operation = crate::updater::begin_device_operation(&app)?;
 	let h = state.get(handle)?;
 	blocking(move || {
 		let mut port = h.port.lock().unwrap();

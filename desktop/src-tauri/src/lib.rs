@@ -3,6 +3,7 @@
 // 页面功能与网页版一致，平台差异只走 js/platform.js，页面侧胶水在 js/native-shell.js。
 mod menu;
 mod serial;
+mod updater;
 
 use tauri::webview::{DownloadEvent, NewWindowResponse};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -55,10 +56,18 @@ fn cascade_from(app: &AppHandle) -> Option<(LogicalPosition<f64>, LogicalSize<f6
 }
 
 fn open_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+	updater::with_window_creation(app, || build_window(app))
+}
+
+fn build_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 	let label = next_label(app);
+	build_window_with_session(app, &label, None)
+}
+
+fn build_window_with_session(app: &AppHandle, label: &str, session: Option<&std::collections::HashMap<String, String>>) -> tauri::Result<WebviewWindow> {
 	let handle = app.clone();
 	let opener = app.clone();
-	let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::default())
+	let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::default())
 		.title("Serial Debug")
 		.min_inner_size(960.0, 600.0)
 		// Tauri 的文件拖放处理会吞掉页面的 HTML5 drop(固件拖拽卡、快捷发送拖动排序)，页面不用 Tauri 的拖放事件
@@ -92,6 +101,9 @@ fn open_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 			}
 			true
 		});
+	if let Some(session) = session {
+		builder = builder.initialization_script(updater::session_script(session));
+	}
 	// main 的位置大小由 window-state 在窗口就绪时还原(没存过就居中)；其余窗口跟着参考窗口错开
 	match (label != MAIN).then(|| cascade_from(app)).flatten() {
 		Some((pos, size)) => builder = builder.position(pos.x, pos.y).inner_size(size.width, size.height),
@@ -104,7 +116,10 @@ fn open_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 			.hidden_title(true)
 			.traffic_light_position(LogicalPosition::new(TRAFFIC_LIGHTS.0, TRAFFIC_LIGHTS.1));
 	}
-	builder.build()
+	let window = builder.build()?;
+	#[cfg(target_os = "windows")]
+	window.hide_menu()?;
+	Ok(window)
 }
 
 // 双击一体化标题栏的空白处：按系统设置「连按窗口标题栏以」缩放 / 最小化 / 不动作(默认缩放)
@@ -138,6 +153,7 @@ fn titlebar_double_click(window: tauri::WebviewWindow) {
 pub fn run() {
 	let app = tauri::Builder::default()
 		.plugin(tauri_plugin_opener::init())
+		.plugin(tauri_plugin_updater::Builder::new().build())
 		// 只记 main 窗口的位置、大小与最大化：多开的窗口按 main-N 编号，每次都相对当前窗口错开，记下来反而会叠在旧位置上
 		.plugin(
 			tauri_plugin_window_state::Builder::new()
@@ -146,6 +162,7 @@ pub fn run() {
 				.build(),
 		)
 		.manage(serial::SerialState::default())
+		.manage(updater::UpdateState::default())
 		.invoke_handler(tauri::generate_handler![
 			serial::serial_list,
 			serial::serial_open,
@@ -154,6 +171,9 @@ pub fn run() {
 			serial::serial_close,
 			serial::serial_release_owned,
 			menu::menu_sync,
+			updater::app_update_check,
+			updater::app_update_install,
+			updater::app_update_ack,
 			titlebar_double_click
 		])
 		.on_window_event(|window, event| {
@@ -172,7 +192,16 @@ pub fn run() {
 		.setup(|app| {
 			let m = menu::build(app.handle())?;
 			app.set_menu(m)?;
-			open_window(app.handle())?;
+			if let Some(handoff) = updater::read_handoff(app.handle()) {
+				let mut sessions: Vec<_> = handoff.windows.into_iter().collect();
+				sessions.sort_by_key(|(label, _)| if label == MAIN { 0 } else { label[5..].parse::<u32>().unwrap_or(u32::MAX) });
+				for (label, session) in sessions {
+					updater::with_window_creation(app.handle(), || build_window_with_session(app.handle(), &label, Some(&session)))?;
+				}
+				updater::remove_handoff(app.handle());
+			} else {
+				open_window(app.handle())?;
+			}
 			Ok(())
 		})
 		.build(tauri::generate_context!())

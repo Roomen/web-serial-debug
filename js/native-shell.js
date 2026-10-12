@@ -13,6 +13,16 @@
 	const doc = document
 	const $ = function (id) { return doc.getElementById(id) }
 	const win = T.window && T.window.getCurrentWindow ? T.window.getCurrentWindow() : null
+	// 页面只认平台服务，更新插件与原生事件都封装在桌面组装点。
+	let updatePreparing = false
+	P.provide('app-update', {
+		check: function () { return T.core.invoke('app_update_check') },
+		install: function (version) { return T.core.invoke('app_update_install', { version: version }) },
+		ack: function (operationId, ready, session) { return T.core.invoke('app_update_ack', { operationId: operationId, ready: ready, session: session || {} }) },
+		listen: function (name, cb) { return T.event.listen(name, function (e) { cb(e.payload || {}) }) },
+		isPreparing: function () { return updatePreparing },
+		setPreparing: function (value) { updatePreparing = !!value },
+	})
 
 	// ---------- 提示条 ----------
 	let timer = 0
@@ -126,6 +136,7 @@
 	}
 
 	const ACTIONS = {
+		'check-update': function () { if (root.AppUpdate) root.AppUpdate.check(true) },
 		'preferences': openPrefs,
 		'save-log': function () { if (inSerial()) click($('serial-save')) },
 		'find-log': function () {
@@ -183,7 +194,7 @@
 		const dlg = root.AppDialog
 		const modal = !!(dlg && dlg.isOpen && dlg.isOpen())
 		try {
-			if (fn && !modal && !handledByPage(id)) fn()
+			if (fn && !modal && !updatePreparing && !handledByPage(id)) fn()
 		} finally {
 			// 勾选项被点后菜单自己翻了勾，以页面状态为准再报一次
 			setTimeout(function () { syncMenu(true) }, 60)
