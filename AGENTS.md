@@ -48,6 +48,7 @@ CIU 上电后只 `WOR_INIT` 一次：启动时先查 `WOR_GET_STATUS`，未初�
 - `node tests/serial-resources.cjs`：循环发送背压、间隔校验与日志字节预算/批量裁剪回归，改这些路径后必须跑。
 - `node tests/firmware-diff-worker.cjs`：真实内嵌 WASM 的双向差分与逐字节产物一致性回归，改差分 Worker 后必须跑；`js/firmware-diff-worker.js` 仅在生成差分/压缩包时加载，生成结束即释放，不要退回页面启动时初始化。
 - `node tests/ui-resource-lifecycle.cjs`：历史图表观察器释放和终端 CDN 重试终止回归，改这两个生命周期后必须跑。
+- `node tests/download-page.cjs`：客户端下载页（`download/`，部署后是 `/download/`，独立页面，不加载主站脚本）的纯函数回归：通道按域名固定（`serial.logan825.org` 只列正式版、`serial-dev.logan825.org` 只列预览版，两站同一份文件，`?channel=` 只在其它主机上生效，不要让正式站能切到预览通道）、系统与芯片识别与推荐、经 GitHub API 按 `desktop-<通道>-v<版本>` 取该通道最高版本（跳过草稿与通道清单 `desktop-<通道>`）、推荐文件名与 `desktop/scripts/tauri.mjs` 的命名一致；下载按钮指向该版本的发布页，改发布标签或包文件名时同步改 `download/download.js`，改后必须跑。
 - 其余没有自动化测试，涉及 UI 或串口逻辑的修改要在浏览器里连接真实或虚拟串口手动验证：日志相关检查 HEX、TEXT、ANSI、解析四种显示模式；发送路径检查 HEX/TEXT 输入、循环发送、CRLF 追加和快捷发送按钮；配置相关刷新页面，确认 localStorage 中的设置能正确恢复。
 
 ## 编码风格
