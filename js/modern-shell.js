@@ -396,8 +396,9 @@
 		if (!refs.paths) return
 		Object.keys(refs.paths).forEach(function (k) {
 			// 改名输入框开着就先失焦(按保存收尾)，隐藏后不一定还会派发 blur
-			const ed = refs.paths[k].ports && refs.paths[k].ports.editing
-			if (ed) ed.input.blur()
+			;[refs.paths[k].ports, refs.paths[k].quick].forEach(function (st) {
+				if (st && st.editing) st.editing.input.blur()
+			})
 			refs.paths[k].dd.hidden = true
 			refs.paths[k].pop.hidden = true
 			refs.paths[k].btn.setAttribute('aria-expanded', 'false')
