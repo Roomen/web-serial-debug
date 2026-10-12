@@ -3693,6 +3693,7 @@
 	//文案不把 NetworkError 说成"网络错误": Web Serial 里它表示设备被占用/已拔出/句柄未释放
 	const SERIAL_OPEN_FAIL_MSG = '无法打开串口：设备可能已被占用、已拔出，或上一页尚未释放。请稍后重试或重新插拔设备。'
 	async function openSerial(sid, opts) {
+		if (window.serialApi && window.serialApi.updatePreparing) return false
 		sid = sid || SerialHub.activeSendPhys()
 		opts = opts || {}
 		const reason = opts.reason || 'user'
@@ -4588,6 +4589,7 @@
 	// opts.raw: 不追加 CRLF（协议事务的整帧不能被改）；opts.logData: 日志/解析用这份字节代替真实发送字节
 	// （含密钥的帧只把脱敏副本交给日志，真实串口仍写原帧，txBytes 按真实长度计）
 	async function writeData(data, sid, sendName, opts) {
+		if (window.serialApi && window.serialApi.updatePreparing) throw new Error('正在安装应用更新，暂不能发送')
 		opts = opts || {}
 		sid = sid || SerialHub.activeSendPhys()
 		const port = SerialHub.getPort(sid)
@@ -5240,6 +5242,28 @@
 	//对外暴露的串口接口(供固件升级/协议测试等模块使用)
 	//onReceive 支持多订阅者; 旧单回调 _onReceive 仍兼容
 	window.serialApi = {
+		updatePreparing: false,
+		// 与刷新同样保留 wantOpen；等待关闭完成后才允许安装，最后一批日志也必须先落盘。
+		async prepareForAppUpdate() {
+			if (this.isPinned()) throw new Error('协议事务正在运行')
+			const all = SerialHub.allPhys()
+			if (all.some(function (sid) { return SerialHub.isOpening(sid) })) throw new Error('串口正在连接或关闭')
+			clearInterval(serialloopSendTimer)
+			for (const sid of all) SerialHub.setOpen(sid, false)
+			const released = await Promise.all(all.map(function (sid) { return releasePort(sid) }))
+			const saved = persistLogsNow()
+			for (const sid of all) {
+				serialStatuChange(false, sid)
+				updateOpenButton(sid)
+				releaseWakeLock(sid)
+			}
+			if (released.some(function (ok) { return !ok })) throw new Error('串口未确认释放，请重试关闭')
+			if (!saved) throw new Error('会话日志未能保存，请导出日志后重试')
+		},
+		resumeAfterAppUpdate() {
+			this.updatePreparing = false
+			resetLoopSend()
+		},
 		async rebuildReceive(id) {
 			return await rebuildSerialReceive(id)
 		},
@@ -5303,6 +5327,7 @@
 		},
 		// 事务钉扎: pin 期间 activeSendSid()/writeData/isOpen/RX 转发均锁定到钉扎会话
 		pinSession(sid) {
+			if (this.updatePreparing) throw new Error('正在安装应用更新，暂不能开始事务')
 			sid = sid || SerialHub.activeSendSid()
 			if (sid !== 'A' && sid !== 'B' && sid !== 'S') {
 				addLogErr('pinSession: 无效的会话 id: ' + sid)
@@ -5475,10 +5500,11 @@
 				const max = LOG_PERSIST_LEVELS[i]
 				sessionStorage.setItem(LOG_CACHE_KEY, JSON.stringify(max == null ? collectLogCache() : collectLogCache(max)))
 				logPersistLevel = i
-				return
+				return true
 			} catch (e) {}
 		}
 		try { sessionStorage.removeItem(LOG_CACHE_KEY) } catch (e3) {}
+		return false
 	}
 	// 节流而不是防抖：整份快照要序列化上万行，设备每隔几百毫秒发一行时防抖等于每行都写一次；
 	// 刷新页面靠 pagehide 里的 persistLogsNow 补最后一段

@@ -72,6 +72,7 @@
 		// 只有真正打开（或正在打开）才算占用；页面加载时自动填进下拉框的口只是「选中」，不能挡住串口调试
 		ownsPort: function (port) { return !!(port && bluPort === port && (bluOpen || bluOpening)) },
 		isOpen: function () { return !!bluOpen },
+		isBusyForUpdate: function () { return !!(bluOpen || bluOpening) },
 		getPort: function () { return bluPort },
 		// 排查样点流用：先 captureRaw() 再采样，停采后 dumpRaw() 导出 .bin + .json
 		captureRaw: function (bytes) { return rawCapArm(bytes) },

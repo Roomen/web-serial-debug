@@ -877,6 +877,10 @@
 	}
 
 	window.Workbench = {
+		// 安装更新前复用后台任务的真实运行判据，不依赖状态栏是否可见。
+		updateBlockers: function () {
+			return TASKS.filter(function (t) { return t.label !== '循环发送' && t.running() }).map(function (t) { return t.label })
+		},
 		refreshStatus: function () { if (ready) updateStatusBar() },
 		// 现代布局检查器里放结构化视图的节点(还没建过时为 null)
 		inspectorView: function () { return inspector ? inspector.view : null },
