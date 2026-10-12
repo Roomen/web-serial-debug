@@ -26,7 +26,7 @@
 
 如发布在推进通道前失败，已有通道继续指向上一版。检查草稿/已发布版本与产物后人工处理失败版本，再重跑；流程不会静默覆盖同版本资产。
 
-macOS 更新安装 `.app.tar.gz`，首次安装仍提供 `.dmg` 与 `.app.zip`。Windows 只发布 NSIS 安装器，清单使用 `windows-x86_64-nsis` 安装类型键，不提供通用 Windows 回退条目。需在 Windows 实机验收 NSIS 安装与升级路径及目录保留。
+macOS 安装包只发布 `.dmg`，不再提供 `.app.zip`；应用内更新安装的 `.app.tar.gz` 只在配了更新签名时随版本发布。Windows 只发布 NSIS 安装器，清单使用 `windows-x86_64-nsis` 安装类型键，不提供通用 Windows 回退条目。需在 Windows 实机验收 NSIS 安装与升级路径及目录保留。
 
 ## 本地验证
 
