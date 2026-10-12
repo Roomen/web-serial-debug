@@ -2,6 +2,9 @@
 ;(function (root) {
 	'use strict'
 
+	// 后台检测间隔；窗口切回前台时距上次检测超过同一间隔才补查
+	const CHECK_INTERVAL_MS = 6 * 3600000
+
 	function blockers(env) {
 		const reasons = env.Workbench && env.Workbench.updateBlockers ? env.Workbench.updateBlockers().slice() : []
 		if (env.serialApi && env.serialApi.isPinned()) reasons.push('协议事务')
@@ -228,8 +231,8 @@
 		listeners.then(function () {
 			if (!root.APP_UPDATER_CONFIGURED) return
 			setTimeout(function () { check(false) }, 60000)
-			setInterval(function () { check(false) }, 30 * 60000)
-			doc.addEventListener('visibilitychange', function () { if (!doc.hidden && Date.now() - lastCheck > 5 * 60000) check(false) })
+			setInterval(function () { check(false) }, CHECK_INTERVAL_MS)
+			doc.addEventListener('visibilitychange', function () { if (!doc.hidden && Date.now() - lastCheck > CHECK_INTERVAL_MS) check(false) })
 		}).catch(function () { /* 监听未就绪不启动后台更新检测 */ })
 	}
 	if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', init)
