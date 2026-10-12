@@ -322,6 +322,16 @@ body {
 .rail-config-menu {
   min-width: 170px;
   font-size: 0.8rem;
+  --bs-dropdown-bg: var(--bg-surface);
+  --bs-dropdown-color: var(--text-primary);
+  --bs-dropdown-border-color: var(--border-color);
+  --bs-dropdown-divider-bg: var(--border-color);
+  --bs-dropdown-link-color: var(--text-primary);
+  --bs-dropdown-link-hover-color: var(--text-primary);
+  --bs-dropdown-link-hover-bg: var(--bg-surface-hover);
+  --bs-dropdown-link-active-color: var(--text-primary);
+  --bs-dropdown-link-active-bg: var(--bg-surface-hover);
+  box-shadow: var(--shadow-lg);
 }
 
 .rail-config-menu .dropdown-item {
