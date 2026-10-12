@@ -19,7 +19,6 @@ export function createManifest({ directory, version, channel, notes = '', previo
 	const tag = `desktop-${channel}-v${version}`
 	const names = {
 		'darwin-aarch64': `Serial-Debug_${version}_macos_arm64.app.tar.gz`,
-		'darwin-x86_64': `Serial-Debug_${version}_macos_x64.app.tar.gz`,
 		'windows-x86_64-nsis': `Serial-Debug_${version}_windows_x64-setup.exe`
 	}
 	const platforms = {}
