@@ -523,11 +523,11 @@ async function tests() {
 		assert.equal(ms.records[0].empty, false)
 		assert.equal(ms.pending, null)
 		assert.equal(ms.archive.length, 1)
-		// 至少三轮会话: 令牌受理、轮询处理中、轮询终局
-		assert.ok(res.sessions.length >= 3, 'sessions ' + res.sessions.length)
-		assert.ok(res.sessions.every(s => s.ok))
+		// 一次 SEND 后会话保持，轮询与心跳都在同一条会话里，不再每次 WAKE
+		assert.equal(res.sessions.length, 1, 'sessions ' + res.sessions.length)
 		assert.equal(res.sessions[0].label, 'TOKEN')
-		assert.ok(res.sessions.slice(1).every(s => s.label === 'RESULT 轮询'))
+		assert.equal(res.sessions[0].ok, true)
+		assert.ok(t.ciu.getState().heartbeats > 0, '轮询间隔里应发会话内心跳')
 		assert.ok(t.clock.now() - t0 < 60000)
 		// 每轮会话的时间线: wake 受理 <= send <= ack <= 上行（不等终结）；首拍数据的 DACK（锚点 +1.6s）就捎带了应答
 		const tl = res.sessions[0].timeline
@@ -554,6 +554,163 @@ async function tests() {
 		assert.equal(rec.records[0].amount, 500)
 		assert.match(rec.records[0].timeText, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
 	}
+	// ---- 3.9 链路心跳: SEND 后同一会话内每 1s 发 ping，轮询也在同一条会话里 ----
+	{
+		const t = setup({ ciu: { heartbeatS: 1 }, meter: { tokenDelayS: 40 } })
+		await ready(t)
+		await t.clock.advance(15000) // 让启动时的两次会话先收尾，下面只数本次 SEND 的会话
+		const wakes0 = t.world.log.wakes
+		const ends0 = t.world.log.ends.length
+		const sess0 = t.ciu.getState().sessionCount
+		const up0 = t.world.log.uplinks.length
+		const appFrames = []
+		t.world.faults.beforeKind3 = data => appFrames.push({ at: t.clock.now(), data })
+		const opStart = t.clock.now()
+		const res = await drive(t.clock, t.ciu.token(TOKEN_A))
+		assert.equal(res.ok, true, res.message)
+		assert.equal(res.token.executed, true)
+		assert.equal(res.token.credited, 500)
+		// 心跳与轮询都不新开会话: 只有 SEND 那一次 WAKE
+		assert.equal(res.sessions.length, 1, 'sessions: ' + res.sessions.map(s => s.label).join(' | '))
+		assert.equal(res.sessions[0].label, 'TOKEN')
+		assert.equal(t.ciu.getState().sessionCount - sess0, 1, 'ping / 轮询不增加 sessionCount')
+		assert.equal(t.world.log.wakes - wakes0, 1, 'SEND 后不再 WAKE')
+		assert.ok(t.ciu.getState().heartbeats > 0)
+		const beats = appFrames.map(x => ({ at: x.at, f: S.parseRaw(x.data) })).filter(x => x.f.ok && x.f.dir === 0 && x.f.type === S.TYPE.READ && x.f.payload[0] === S.REG.PROTO_VER)
+		assert.ok(beats.length >= 2, 'heartbeats ' + beats.length)
+		assert.ok(beats.every(x => x.f.payload.length === 2 && x.f.payload[1] === 1), '心跳是 READ 0x27 n=1')
+		for (let i = 1; i < beats.length; i++) assert.ok(beats[i].at - beats[i - 1].at >= 1000, 'ping 间隔 ' + (beats[i].at - beats[i - 1].at))
+		// ping 只在首个应答到达（ACK 之后进入轮询相）后才发
+		const firstUp = t.world.log.uplinks[up0]
+		assert.ok(firstUp, '首个应答')
+		assert.ok(beats[0].at > firstUp.at, 'ping 首帧 ' + beats[0].at + ' 早于首个应答 ' + firstUp.at)
+		// 更严格: 心跳的 WOR_SEND 必须晚于本次会话的 ACK(kind=2)
+		const ackEvt = t.world.log.events.filter(e => e.role === 'ciu' && e.kind === 2 && e.at >= opStart)[0]
+		const hbSend = t.world.log.requests.filter(r => {
+			if (r.role !== 'ciu' || r.cmd !== H.CMD.WOR_SEND || r.at < opStart) return false
+			const f = S.parseRaw(Uint8Array.from(r.payload).subarray(2))
+			return f.ok && f.dir === 0 && f.type === S.TYPE.READ && f.payload.length === 2 && f.payload[0] === S.REG.PROTO_VER && f.payload[1] === 1
+		})[0]
+		assert.ok(ackEvt, '本次会话的 ACK')
+		assert.ok(hbSend, '心跳 WOR_SEND')
+		assert.ok(hbSend.at > ackEvt.at, 'ping 在 ACK 之前发出: ' + hbSend.at + ' <= ' + ackEvt.at)
+		// RESULT 轮询也在同一条会话里发出
+		assert.ok(appFrames.some(x => S.parseRaw(x.data).type === S.TYPE.RESULT), '轮询走会话内 WOR_SEND')
+		// 轮询到点抢占在飞 ping，迟到的 ping 应答被接收判定静默丢弃
+		assert.match(logText(t.logs.ciu), /轮询到点，放弃在飞心跳/)
+		assert.match(logText(t.logs.ciu), /未通过接收判定/)
+		// 心跳没有冲掉待办: 终局照常取回且只入账一次
+		const ms = t.meter.getState()
+		assert.equal(ms.remaining, 5500)
+		assert.equal(ms.recordCount, 1)
+		assert.equal(ms.records[0].amount, 500)
+		assert.equal(ms.pending, null)
+		assert.equal(ends0, t.world.log.ends.length, 'ping 不应触发会话收尾')
+		t.meter.stop(); t.ciu.stop()
+	}
+	// ---- 3.9 会话内 ping 遇到 WOR_SEND BUSY: 下一个 1s 重发同一帧，不重建会话 ----
+	{
+		const t = setup({ ciu: { heartbeatS: 1 }, meter: { tokenDelayS: 40 } })
+		await ready(t)
+		const sess0 = t.ciu.getState().sessionCount
+		const sent = []
+		const original = t.ciuLink.request
+		let injected = false
+		t.ciuLink.request = function (cmd, payload, opts) {
+			if (cmd === H.CMD.WOR_SEND) {
+				const app = Uint8Array.from(payload).subarray(2)
+				const f = S.parseRaw(app)
+				const isHb = f.ok && f.dir === 0 && f.type === S.TYPE.READ && f.payload.length === 2 && f.payload[0] === S.REG.PROTO_VER && f.payload[1] === 1
+				sent.push({ at: t.clock.now(), isHb: isHb, hex: hs(app) })
+				if (isHb && !injected) { injected = true; t.world.faults.sendBusy = 1 }
+			}
+			return original(cmd, payload, opts)
+		}
+		const res = await drive(t.clock, t.ciu.token(TOKEN_A))
+		assert.equal(res.ok, true, res.message)
+		assert.equal(injected, true, '应注入到一次会话内 ping')
+		const hb = sent.filter(x => x.isHb)
+		let pair = null
+		for (let i = 1; i < hb.length; i++) {
+			const gap = hb[i].at - hb[i - 1].at
+			if (hb[i].hex === hb[i - 1].hex && gap >= 1000 && gap <= 1010) pair = [hb[i - 1], hb[i]]
+		}
+		assert.ok(pair, 'BUSY 后应隔 1s 重发同一帧')
+		assert.equal(t.ciu.getState().sessionCount - sess0, 1, 'BUSY 重发不重建会话')
+		assert.equal(t.meter.getState().remaining, 5500)
+		assert.equal(t.meter.getState().recordCount, 1)
+		t.meter.stop(); t.ciu.stop()
+	}
+	// ---- 3.9 会话确实结束（空闲看门狗 0x0281）后才重新 WAKE 轮询 ----
+	{
+		const t = setup({ ciu: { heartbeatS: 0 }, meter: { tokenDelayS: 40 } })
+		await ready(t)
+		const wakes0 = t.world.log.wakes
+		const res = await drive(t.clock, t.ciu.token(TOKEN_A))
+		assert.equal(res.ok, true, res.message)
+		assert.equal(res.token.credited, 500)
+		assert.equal(res.sessions.length, 2, 'sessions: ' + res.sessions.map(s => s.label).join(' | '))
+		assert.equal(res.sessions[1].label, 'RESULT 轮询')
+		assert.equal(t.world.log.wakes - wakes0, 2, '一次 SEND + 一次会话结束后的重新 WAKE')
+		assert.match(logText(t.logs.ciu), /会话在轮询间隔里终结/)
+		assert.match(logText(t.logs.ciu), /上一会话已终结（reason=8 空闲看门狗/)
+		assert.equal(t.meter.getState().remaining, 5500)
+		assert.equal(t.meter.getState().recordCount, 1)
+		t.meter.stop(); t.ciu.stop()
+	}
+	// ---- 3.9 轮询到点放弃在飞心跳: 新 TXN 的轮询优先，迟到的 ping 应答静默丢弃 ----
+	{
+		const P = SIM.createCiuPolicy(METER_NO)
+		const tf = P.sendToken(TOKEN_A)
+		const acc = P.onFrame(S.buildFrame({ dir: 1, type: S.TYPE.TOKEN, txn: S.parseRaw(tf).txn, meter: METER_NO, payload: [S.TOKEN_ACCEPTED] }), 1000)
+		assert.equal(acc.kind, 'accepted')
+		const hf = P.sendRead(S.REG.PROTO_VER, 1)
+		const hbTxn = S.parseRaw(hf).txn
+		P.dropInflight() // 轮询到点，放弃在飞心跳
+		assert.equal(P.state.inflight, null)
+		const pf = P.sendPoll()
+		const pollTxn = S.parseRaw(pf).txn
+		assert.notEqual(pollTxn, hbTxn)
+		// 迟到的 ping 应答不属于当前在飞事务（TXN 不同），静默丢弃
+		assert.equal(P.accepts(S.buildFrame({ dir: 1, type: S.TYPE.READ, txn: hbTxn, meter: METER_NO, payload: hex('27 00 02') })), false)
+		assert.equal(P.hasPending(), true)
+		assert.equal(P.accepts(S.buildFrame({ dir: 1, type: S.TYPE.RESULT, txn: pollTxn, meter: METER_NO, payload: S.resultRspEncode({ pollState: 1, tgt: P.state.pending.tgt, etaS: 2 }) })), true)
+	}
+	// ---- 3.9 心跳不重置 60s 总等待 ----
+	{
+		const t = setup({ ciu: { heartbeatS: 1 }, meter: { tokenDelayS: 600 } })
+		await ready(t)
+		const t0 = t.clock.now()
+		const res = await drive(t.clock, t.ciu.token(TOKEN_A))
+		assert.equal(res.outcome, 'timeout')
+		assert.equal(res.sessions.length, 1, '心跳撑住同一条会话直到预算用完')
+		assert.ok(t.ciu.getState().heartbeats > 0)
+		assert.ok(t.clock.now() - t0 < 100000, '心跳把总等待拖过 60s 预算: ' + (t.clock.now() - t0))
+		assert.equal(t.ciu.getState().pending, false)
+		t.meter.stop(); t.ciu.stop()
+	}
+	// ---- 3.9 心跳响应（含 NAK）不推进/清除待办、不重置预算（策略层） ----
+	{
+		const P = SIM.createCiuPolicy(METER_NO)
+		const tf = P.sendToken(TOKEN_A)
+		const acc = P.onFrame(S.buildFrame({ dir: 1, type: S.TYPE.TOKEN, txn: S.parseRaw(tf).txn, meter: METER_NO, payload: [S.TOKEN_ACCEPTED] }), 1000)
+		assert.equal(acc.kind, 'accepted')
+		assert.equal(P.hasPending(), true)
+		const budget = P.budgetLeft(2000)
+		const hf = P.sendRead(S.REG.PROTO_VER, 1)
+		const hev = P.onFrame(S.buildFrame({ dir: 1, type: S.TYPE.READ, txn: S.parseRaw(hf).txn, meter: METER_NO, payload: hex('27 00 02') }), 2000)
+		assert.equal(hev.kind, 'final')
+		assert.equal(P.hasPending(), true) // 心跳应答不动待办
+		assert.equal(P.state.pending.armedAt, 1000) // 也不重置 60s 总等待
+		assert.equal(P.budgetLeft(2000), budget)
+		const nf = P.sendRead(S.REG.PROTO_VER, 1)
+		const nev = P.onFrame(S.buildFrame({ dir: 1, type: S.TYPE.NAK, txn: S.parseRaw(nf).txn, meter: METER_NO, payload: S.nakEncode(S.NAK.BUSY, S.REG.PROTO_VER) }), 3000)
+		assert.equal(nev.kind, 'nak')
+		assert.equal(P.hasPending(), true) // 心跳被 NAK 也只说明链路通
+		assert.equal(P.state.pending.armedAt, 1000)
+		assert.equal(P.state.inflight, null)
+	}
+
 	// 结果码模式: 处理状态 1 + MODE3，余额不动；旧配置 'reject' 按 REJECT
 	for (const [mode, block, msg] of [['reject', '00 03 00 00 00 FF', /令牌未执行：REJECT 错误的令牌/], ['3', '00 03 00 00 00 03', /令牌未执行：USED/], ['8', '00 03 00 00 00 08', /令牌成功（非充值）：CLEAR_CREDIT 清余额成功/]]) {
 		const t = setup({ meter: { tokenMode: mode } })
@@ -999,7 +1156,7 @@ async function tests() {
 		assert.doesNotMatch(logText(t.logs.ciu), /WOR_WAKE_CIU 回 BUSY/)
 		t.ciu.stop(); t.meter.stop(); t.ciuLink.close(); t.meterLink.close()
 	}
-	// WOR_SEND 回 BUSY（FIFO 满）: 隔 1400ms 重发同一帧
+	// WOR_SEND 回 BUSY（FIFO 满）: 下一个 1s 重发同一帧，不重建会话
 	{
 		const t = setup()
 		await ready(t)
@@ -1012,7 +1169,7 @@ async function tests() {
 		assert.equal(sends.length, 4)
 		for (let i = 1; i < sends.length; i++) {
 			const gap = sends[i].at - sends[i - 1].at
-			assert.ok(gap >= 1400 && gap <= 1410, '重发间隔 ' + gap)
+			assert.ok(gap >= 1000 && gap <= 1010, '重发间隔 ' + gap)
 			assert.equal(hs(sends[i].payload), hs(sends[0].payload), '重发的是同一帧')
 		}
 		t.ciu.stop(); t.meter.stop(); t.ciuLink.close(); t.meterLink.close()
@@ -1104,7 +1261,7 @@ async function tests() {
 		assert.equal(t.meter.getState().remaining, 5500, '重发令牌不重复执行')
 		assert.equal(t.meter.getState().recordCount, 1)
 		assert.match(logText(t.logs.ciu), /轮询状态 0（句柄未知或已过期）/)
-		assert.ok(res.sessions.some(s => /恢复/.test(s.label)))
+		assert.equal(res.sessions.length, 1, '恢复重发也走同一条会话')
 	}
 	// 恢复只一次 / 断开绑定不重发: 策略层直接验证
 	{
@@ -1143,7 +1300,7 @@ async function tests() {
 		assert.match(res.message, /表体并不因此停止执行/)
 		assert.equal(t.ciu.getState().pending, false) // 待办槽已清
 		assert.ok(res.durationMs < 60000 + 2 * 9000 + 30000)
-		assert.ok(res.sessions.length >= 2)
+		assert.equal(res.sessions.length, 1, '心跳撑住同一条会话直到预算用完')
 		// 表体仍在执行；放弃后 CIU 可以立刻做别的事（在飞槽没有被卡死）
 		assert.notEqual(t.meter.getState().pending, null)
 		const st = await drive(t.clock, t.ciu.status())
@@ -1221,18 +1378,16 @@ async function tests() {
 	}
 	// ---- F02: 预算约束在途会话，晚到终局不得报成功 ----
 	{
-		const t = setup({ meter: { tokenDelayS: 55 } })
+		const t = setup({ meter: { tokenDelayS: 65 } })
 		await ready(t)
 		const res = await drive(t.clock, t.ciu.token(TOKEN_A))
 		assert.equal(res.ok, false)
 		assert.equal(res.outcome, 'timeout')
 		assert.match(res.message, /表体并不因此停止执行/)
-		// 放弃发生在受理后 60s 附近，而不是等某轮会话自然结束（会话最长 ACK15s + 上行12s）
-		// 预算从受理上行到达时刻起算（不是收尾完成时刻）: rec.at 是收尾完成时刻，减去收尾耗时得到上行到达时刻
-		const tl0 = res.sessions[0].timeline
-		const accepted = res.sessions[0].at - (tl0.endMs - tl0.upMs)
+		// 放弃发生在受理后 60s 附近；会话内轮询很快，终局必须晚于预算才能触发
+		const accepted = res.sessions[0].at
 		const gaveUp = res.startedAt + res.durationMs
-		assert.ok(gaveUp - accepted <= 60000 + 200, 'gave up at +' + (gaveUp - accepted))
+		assert.ok(gaveUp - accepted <= 60000 + 300, 'gave up at +' + (gaveUp - accepted))
 		assert.equal(t.ciu.getState().pending, false)
 		await t.clock.advance(120000)
 		assert.equal(t.meter.getState().remaining, 5500) // 表体照常执行完
@@ -1703,12 +1858,12 @@ async function tests() {
 
 	// ---- 预算末尾模组 RSP 丢失: 事务层重发也不能把放弃拖过 60s ----
 	{
-		const t = setup({ meter: { tokenDelayS: 55 } })
+		const t = setup({ meter: { tokenDelayS: 65 } })
 		await ready(t)
 		const original = t.ciuLink.request
 		t.ciuLink.request = function (cmd, payload, opts) {
 			const left = t.ciu.getState().budgetLeftMs
-			if (cmd === H.CMD.WOR_WAKE_CIU && left != null && left < 6000) t.world.ciu.silentUntil = t.clock.now() + 3500
+			if (cmd === H.CMD.WOR_SEND && left != null && left < 6000) t.world.ciu.silentUntil = t.clock.now() + 3500
 			return original(cmd, payload, opts)
 		}
 		const res = await drive(t.clock, t.ciu.token(TOKEN_A))
