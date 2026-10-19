@@ -34,7 +34,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-      - run: node --test desktop/scripts/updater-manifest.test.mjs desktop/scripts/installer-templates.test.mjs
+      - run: node --test desktop/scripts/updater-manifest.test.mjs desktop/scripts/installer-templates.test.mjs desktop/scripts/prune-dev-releases.test.mjs
       - id: meta
         env:
           GH_TOKEN: ${{ github.token }}
@@ -237,3 +237,7 @@ jobs:
           else
             node desktop/scripts/update-channel-pointer.mjs "$CHANNEL" latest.json
           fi
+      # 预览版只保留最新 5 个版本 release；清理失败只告警，不影响已发布结果。
+      - name: Prune old dev releases
+        if: needs.prepare.outputs.publish == 'true' && needs.prepare.outputs.channel == 'dev'
+        run: node desktop/scripts/prune-dev-releases.mjs
