@@ -19,9 +19,12 @@
 
 	const INT32_MAX = 2147483647
 	const BUDGET_MS = 60000 // 应用层总等待上限，从收到受理应答起算，跨所有会话累计
+	// 4.6 轮询节奏（docs/protocol.md「轮询节奏」）: 首次轮询在收到受理应答后 1s；
+	// 后续间隔取上一次应答给出的预计剩余秒数（ETA），0xFF = 未知时取 2s，下限 1s。
+	// 节奏由表体驱动，不要按固定周期轮询；等 ETA 的间隙靠 3.9 心跳（READ 0x27 n=1）保活。
 	const POLL_FIRST_MS = 1000
-	const POLL_DEFAULT_S = 2
-	const POLL_MIN_S = 1
+	const POLL_FALLBACK_S = 2 // ETA 未知（0xFF）与未知轮询状态（规则 7）的兜底间隔
+	const POLL_MIN_S = 1 // 表体给的 ETA 再小也不超过这个频率
 	// 链路心跳（协议 3.9）: 只在待办受理到终局之间、以及已确定下一步的多步流程间隙、没有在飞事务时发 READ 0x27 n=1，撑住同一条 WorLink 会话。
 	// 间隔是调用方策略，不是协议超时；默认 1s，0 = 关闭
 	const HEARTBEAT_DEFAULT_S = 1
@@ -1293,7 +1296,7 @@
 								return ev
 							case S.POLL_WORKING: {
 								ev.kind = 'working'
-								const eta = r.etaS === S.ETA_UNKNOWN ? POLL_DEFAULT_S : r.etaS
+								const eta = r.etaS === S.ETA_UNKNOWN ? POLL_FALLBACK_S : r.etaS
 								ev.pollInMs = Math.max(POLL_MIN_S, eta) * 1000 // 节奏由表体驱动，只保留下限
 								return ev
 							}
@@ -1314,7 +1317,7 @@
 							default:
 								// 规则 7: 未知轮询状态按处理中继续，尾部整段忽略，间隔 2s
 								ev.kind = 'working'
-								ev.pollInMs = POLL_DEFAULT_S * 1000
+								ev.pollInMs = POLL_FALLBACK_S * 1000
 								return ev
 						}
 					}
@@ -1376,6 +1379,11 @@
 		function budgetLeft() { return policy.budgetLeft(clock.now()) }
 		function capBudget(ms) { const l = budgetLeft(); return l == null ? ms : Math.min(ms, l) }
 		function budgetOut() { return budgetLeft() === 0 }
+		// 3.9: 轮询到点优先。下一次轮询不足一个心跳间隔时不再插 ping，
+		// 否则短 ETA / ETA 未知的 2s 兜底会变成「读状态 → 心跳 → 读状态」的成对冗余。
+		function heartbeatAllowed(now, nextAt) {
+			return cfg.heartbeatS > 0 && nextAt - now > cfg.heartbeatS * 1000
+		}
 		// 模组请求连同事务层重发也不能越过预算: 单次超时与重发次数按剩余预算收紧
 		function reqOpt() {
 			const l = budgetLeft()
@@ -1945,7 +1953,7 @@
 							live = null; warm = false
 							continue
 						}
-						if (warm && cfg.heartbeatS > 0 && !policy.state.inflight && now - live.lastActivityAt >= cfg.heartbeatS * 1000) {
+						if (warm && heartbeatAllowed(now, nextAt) && !policy.state.inflight && now - live.lastActivityAt >= cfg.heartbeatS * 1000) {
 							st.heartbeats++
 							let hf
 							try { hf = policy.sendRead(S.REG.PROTO_VER, 1) } catch (e) { hf = null }
@@ -1984,7 +1992,7 @@
 						}
 						const budgetLeftNow = policy.budgetLeft(now)
 						let sleepMs = Math.min(left, budgetLeftNow == null ? left : Math.max(1, budgetLeftNow), 1000)
-						if (warm && cfg.heartbeatS > 0) sleepMs = Math.min(sleepMs, Math.max(1, live.lastActivityAt + cfg.heartbeatS * 1000 - now))
+						if (warm && heartbeatAllowed(now, nextAt)) sleepMs = Math.min(sleepMs, Math.max(1, live.lastActivityAt + cfg.heartbeatS * 1000 - now))
 						await waiter.sleep(sleepMs)
 					}
 					if (budgetOut()) { budgetGiveUp(res); return }
