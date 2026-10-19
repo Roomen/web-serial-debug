@@ -51,6 +51,9 @@ const vectors = [
 	['99 12 34 56 78 17 F0 04 14 05 08 01 F6', () => frame(1, T.READ, 9, tlv(0x17, 0xf0, S.alarmListEncode(['1405', '0801'])))],
 	['1A 12 34 56 78 19 01 69', () => frame(0, T.READ, 10, S.readReqEncode(0x19, 1))],
 	['9A 12 34 56 78 19 00 0C D1', () => frame(1, T.READ, 10, tlv(0x19, 0x00, [12]))],
+	// 协议 10.8 链路心跳: READ 0x27 n=1，响应编码 0x00 = u8，值 2
+	['1A 12 34 56 78 27 01 AB', () => frame(0, T.READ, 10, S.readReqEncode(0x27, 1))],
+	['9A 12 34 56 78 27 00 02 3F', () => frame(1, T.READ, 10, tlv(0x27, 0x00, [2]))],
 	['1B 12 34 56 78 30 05 07', () => frame(0, T.READ, 11, S.readReqEncode(0x30, 5))],
 	['9B 12 34 56 78 30 F0 07 35 AB A8 00 00 01 F4 31 F0 07 34 DF EB 00 00 03 E8 32 F0 07 33 F0 1C 00 00 09 C4 33 F0 07 32 D5 63 00 00 01 F4 34 F0 07 31 C0 F4 00 00 0B B8 DF', () => {
 		const w = S.createTlvWriter()
