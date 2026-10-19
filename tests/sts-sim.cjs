@@ -351,6 +351,21 @@ async function ready(t) {
 }
 const logText = arr => arr.map(e => e.text).join('\n')
 const J = x => JSON.parse(JSON.stringify(x))
+// 记录 CIU 实际调度的应用层发送时刻（WOR_SEND 请求时刻，不含空口与停等栅格的抖动）
+function recordCiuSends(t) {
+	const out = []
+	const original = t.ciuLink.request
+	t.ciuLink.request = function (cmd, payload, opts) {
+		if (cmd === H.CMD.WOR_SEND) {
+			const f = S.parseRaw(Uint8Array.from(payload).subarray(2))
+			out.push({ at: t.clock.now(), f: f })
+		}
+		return original(cmd, payload, opts)
+	}
+	return out
+}
+const isPollFrame = x => x.f.ok && x.f.dir === 0 && x.f.type === S.TYPE.RESULT
+const isPingFrame = x => x.f.ok && x.f.dir === 0 && x.f.type === S.TYPE.READ && x.f.payload.length === 2 && x.f.payload[0] === S.REG.PROTO_VER && x.f.payload[1] === 1
 
 // ============================================================================
 async function tests() {
@@ -598,9 +613,11 @@ async function tests() {
 		assert.ok(beats[0].at > firstUp.at, 'ping 首帧 ' + beats[0].at + ' 早于首个应答 ' + firstUp.at)
 		// RESULT 轮询也在同一条会话里发出
 		assert.ok(appFrames.some(x => S.parseRaw(x.data).type === S.TYPE.RESULT), '轮询走会话内 WOR_SEND')
-		// 轮询到点抢占在飞 ping，迟到的 ping 应答被接收判定静默丢弃
-		assert.match(logText(t.logs.ciu), /轮询到点，放弃在飞心跳/)
-		assert.match(logText(t.logs.ciu), /未通过接收判定/)
+		// ping 只在没有在飞事务、且下一次轮询还早时发: 每次轮询前 1s 内不应有 ping 请求
+		// （轮询到点放弃在飞 ping、迟到应答静默丢弃的行为由下面的策略层用例确定覆盖）
+		const pollsAt = appFrames.filter(x => S.parseRaw(x.data).type === S.TYPE.RESULT).map(x => x.at)
+		assert.ok(pollsAt.length >= 2)
+		beats.forEach(b => pollsAt.forEach(p => assert.ok(!(b.at < p && p - b.at < 1000), '轮询前不足一个心跳间隔不应发 ping: ' + b.at + ' -> ' + p)))
 		// 心跳没有冲掉待办: 终局照常取回且只入账一次
 		const ms = t.meter.getState()
 		assert.equal(ms.remaining, 5500)
@@ -735,33 +752,123 @@ async function tests() {
 		assert.equal(t.world.log.wakes - wakes0, 2)
 		t.ciu.stop(); t.meter.stop()
 	}
-	// ---- 待办类受理到终局之间持续 ping（开阀 25s），终局取回后立刻停 ----
+	// ---- 轮询由表体 ETA 驱动: 开阀 25s，受理后 1s 首次探询拿到 ETA，其间只发 ping，ETA 到点才再问 ----
 	{
 		const t = setup({ ciu: { heartbeatS: 1 }, meter: { valveDelayS: 25 } })
 		await ready(t)
 		await t.clock.advance(15000)
 		const sess0 = t.ciu.getState().sessionCount
 		const wakes0 = t.world.log.wakes
-		const appFrames = []
-		t.world.faults.beforeKind3 = data => appFrames.push({ at: t.clock.now(), data })
+		const sends = recordCiuSends(t)
 		const res = await drive(t.clock, t.ciu.valveTest(true))
 		assert.equal(res.ok, true, res.message)
 		assert.equal(res.write.result, S.WRITE_OK)
 		assert.equal(res.sessions.length, 1)
 		assert.equal(res.sessions[0].inSession, false)
 		assert.equal(t.ciu.getState().sessionCount - sess0, 1, '等终局期间 sessionCount 不增加')
-		assert.equal(t.world.log.wakes - wakes0, 1)
-		const beats = appFrames.map(x => ({ at: x.at, f: S.parseRaw(x.data) })).filter(x => x.f.ok && x.f.dir === 0 && x.f.type === S.TYPE.READ && x.f.payload[0] === S.REG.PROTO_VER)
-		assert.ok(beats.length >= 10, '受理到终局之间应持续 ping: ' + beats.length)
-		assert.ok(beats.every(x => x.f.payload.length === 2 && x.f.payload[1] === 1))
-		for (let i = 1; i < beats.length; i++) assert.ok(beats[i].at - beats[i - 1].at >= 1000, 'ping 间隔 ' + (beats[i].at - beats[i - 1].at))
+		assert.equal(t.world.log.wakes - wakes0, 1, '等终局期间不重新 WAKE')
+		const polls = sends.filter(isPollFrame)
+		const pings = sends.filter(isPingFrame)
+		// 受理应答本身不带 ETA，协议 4.6 要求受理后 1s 问第一次；此后只按 ETA 到点再问
+		assert.equal(polls.length, 2, '首次探询 + ETA 到点一次: ' + polls.length)
+		const wr = sends.find(x => x.f.ok && x.f.dir === 0 && x.f.type === S.TYPE.WRITE)
+		assert.ok(wr, 'WRITE 已下发')
+		assert.ok(polls[0].at > wr.at && polls[0].at - wr.at < 6000, '首次轮询在受理之后（含一次往返）')
+		const gap = polls[1].at - polls[0].at
+		assert.ok(gap >= 20000 && gap <= 30000, '第二次轮询应在表体给的 20–30s ETA 到点: ' + gap)
+		assert.ok(pings.length >= 6, 'ETA 等待期间应持续 ping: ' + pings.length)
+		assert.ok(pings.every(x => x.at > polls[0].at && x.at < polls[1].at), 'ping 只在首次探询之后、ETA 到点之前')
+		for (let i = 1; i < pings.length; i++) assert.ok(pings[i].at - pings[i - 1].at >= 1000, 'ping 间隔 ' + (pings[i].at - pings[i - 1].at))
 		// 终局后立刻停 ping: 句柄已关，之后没有新的心跳帧
 		const hbEnd = t.ciu.getState().heartbeats
-		const seen = appFrames.length
+		const sentEnd = sends.length
 		await t.clock.advance(15000)
 		assert.equal(t.ciu.getState().heartbeats, hbEnd, '终局后不应继续发 ping')
-		const late = appFrames.slice(seen).map(x => S.parseRaw(x.data)).filter(f => f.ok && f.dir === 0 && f.type === S.TYPE.READ && f.payload[0] === S.REG.PROTO_VER && f.payload[1] === 1)
-		assert.equal(late.length, 0, '终局后不应再有心跳帧')
+		assert.equal(sends.slice(sentEnd).filter(isPingFrame).length, 0, '终局后不应再有心跳帧')
+		assert.equal(sends.slice(sentEnd).filter(isPollFrame).length, 0, '终局后不应再轮询')
+		t.ciu.stop(); t.meter.stop()
+	}
+	// ---- working 带新 ETA: 下一次轮询按新 ETA 重排（3s -> 剩下的 20s），不是固定周期 ----
+	{
+		const t = setup({ ciu: { heartbeatS: 1 }, meter: { valveDelayS: 25 } })
+		await ready(t)
+		await t.clock.advance(15000)
+		const origDecode = S.resultRspDecode
+		let workingSeen = 0
+		S.resultRspDecode = function (p) {
+			const r = origDecode(p)
+			if (r && r.pollState === S.POLL_WORKING) { workingSeen++; if (workingSeen === 1) r.etaS = 3 }
+			return r
+		}
+		try {
+			const sends = recordCiuSends(t)
+			const res = await drive(t.clock, t.ciu.valveTest(true))
+			assert.equal(res.ok, true, res.message)
+			assert.equal(workingSeen, 2, '两次 working 应答')
+			const polls = sends.filter(isPollFrame)
+			assert.equal(polls.length, 3, '探询 + 两次按 ETA 重排')
+			assert.ok(polls[1].at - polls[0].at <= 6000, '首个 working 的 ETA=3s 应尽快重问: ' + (polls[1].at - polls[0].at))
+			assert.ok(polls[2].at - polls[1].at >= 15000, '新 ETA 应把下一次轮询推后: ' + (polls[2].at - polls[1].at))
+			const pings = sends.filter(isPingFrame)
+			const midPings = pings.filter(x => x.at > polls[1].at && x.at < polls[2].at)
+			assert.ok(midPings.length >= 5, '第二个 ETA 等待期间仍有 ping: ' + midPings.length)
+		} finally {
+			S.resultRspDecode = origDecode
+		}
+		t.ciu.stop(); t.meter.stop()
+	}
+	// ---- ETA 未知: 按协议兜底 2s 轮询，且不插心跳（不再出现读状态+心跳成对） ----
+	{
+		const t = setup({ ciu: { heartbeatS: 1 }, meter: { valveDelayS: 8 } })
+		await ready(t)
+		await t.clock.advance(15000)
+		const origDecode = S.resultRspDecode
+		S.resultRspDecode = function (p) {
+			const r = origDecode(p)
+			if (r && r.pollState === S.POLL_WORKING) r.etaS = S.ETA_UNKNOWN
+			return r
+		}
+		try {
+			const sends = recordCiuSends(t)
+			const res = await drive(t.clock, t.ciu.valveTest(true))
+			assert.equal(res.ok, true, res.message)
+			const polls = sends.filter(isPollFrame)
+			const pings = sends.filter(isPingFrame)
+			assert.ok(polls.length >= 3, 'ETA 未知时按兜底间隔持续问: ' + polls.length)
+			for (let i = 1; i < polls.length; i++) assert.ok(polls[i].at - polls[i - 1].at <= 7000, '兜底轮询间隔 ' + (polls[i].at - polls[i - 1].at))
+			assert.equal(pings.length, 0, '轮询到点前不足一个心跳间隔时不插 ping')
+			assert.equal(t.ciu.getState().heartbeats, 0)
+		} finally {
+			S.resultRspDecode = origDecode
+		}
+		t.ciu.stop(); t.meter.stop()
+	}
+	// ---- 短 ETA（1–2s）: 不出现「读状态 + 心跳」成对，只有轮询 ----
+	{
+		const t = setup({ ciu: { heartbeatS: 1 }, meter: { tokenDelayS: 20 } })
+		await ready(t)
+		await t.clock.advance(15000)
+		const origDecode = S.resultRspDecode
+		let workingSeen = 0
+		S.resultRspDecode = function (p) {
+			const r = origDecode(p)
+			if (r && r.pollState === S.POLL_WORKING) { workingSeen++; if (workingSeen === 1) r.etaS = 2 }
+			return r
+		}
+		try {
+			const sends = recordCiuSends(t)
+			const res = await drive(t.clock, t.ciu.token(TOKEN_A))
+			assert.equal(res.ok, true, res.message)
+			assert.equal(res.token.executed, true)
+			const polls = sends.filter(isPollFrame)
+			const pings = sends.filter(isPingFrame)
+			assert.ok(polls.length >= 2)
+			assert.ok(polls[1].at - polls[0].at <= 6000, 'ETA 2s 的下一次轮询紧随: ' + (polls[1].at - polls[0].at))
+			assert.equal(pings.filter(x => x.at > polls[0].at && x.at < polls[1].at).length, 0, '短 ETA 的间隙不插 ping')
+			assert.ok(pings.some(x => x.at > polls[1].at), '后续长 ETA 仍靠 ping 保活')
+		} finally {
+			S.resultRspDecode = origDecode
+		}
 		t.ciu.stop(); t.meter.stop()
 	}
 	// ---- ACK 前不发 ping: 新会话必须先收到 ACK 和首个应答 ----
@@ -804,17 +911,62 @@ async function tests() {
 		assert.equal(P.hasPending(), true)
 		assert.equal(P.accepts(S.buildFrame({ dir: 1, type: S.TYPE.RESULT, txn: pollTxn, meter: METER_NO, payload: S.resultRspEncode({ pollState: 1, tgt: P.state.pending.tgt, etaS: 2 }) })), true)
 	}
-	// ---- 3.9 心跳不重置 60s 总等待 ----
+	// ---- 3.9 心跳不重置 60s 总等待；ETA 远大于预算时不再追加轮询 ----
 	{
 		const t = setup({ ciu: { heartbeatS: 1 }, meter: { tokenDelayS: 600 } })
 		await ready(t)
+		await t.clock.advance(15000)
+		const sends = recordCiuSends(t)
 		const t0 = t.clock.now()
 		const res = await drive(t.clock, t.ciu.token(TOKEN_A))
 		assert.equal(res.outcome, 'timeout')
 		assert.equal(res.sessions.length, 1, '心跳撑住同一条会话直到预算用完')
 		assert.ok(t.ciu.getState().heartbeats > 0)
+		assert.equal(sends.filter(isPollFrame).length, 1, 'ETA=599s 时只问首次探询，不按固定周期轮询')
 		assert.ok(t.clock.now() - t0 < 100000, '心跳把总等待拖过 60s 预算: ' + (t.clock.now() - t0))
 		assert.equal(t.ciu.getState().pending, false)
+		t.meter.stop(); t.ciu.stop()
+	}
+	// ---- 4.6 轮询节奏（策略层）: ETA 驱动，0xFF 兜底 2s，下限 1s，未知状态 2s ----
+	{
+		const P = SIM.createCiuPolicy(METER_NO)
+		const tf = P.sendToken(TOKEN_A)
+		P.onFrame(S.buildFrame({ dir: 1, type: S.TYPE.TOKEN, txn: S.parseRaw(tf).txn, meter: METER_NO, payload: [S.TOKEN_ACCEPTED] }), 1000)
+		const tgt = P.state.pending.tgt
+		const working = eta => {
+			const pf = P.sendPoll()
+			return P.onFrame(S.buildFrame({ dir: 1, type: S.TYPE.RESULT, txn: S.parseRaw(pf).txn, meter: METER_NO, payload: S.resultRspEncode({ pollState: S.POLL_WORKING, tgt: tgt, etaS: eta }) }), 2000)
+		}
+		assert.equal(working(20).pollInMs, 20000, '按表体 ETA 排下一次轮询')
+		assert.equal(working(0).pollInMs, 1000, 'ETA 下限 1s')
+		assert.equal(working(S.ETA_UNKNOWN).pollInMs, 2000, 'ETA 未知按协议兜底 2s')
+		const pf = P.sendPoll()
+		const wx = P.onFrame(S.buildFrame({ dir: 1, type: S.TYPE.RESULT, txn: S.parseRaw(pf).txn, meter: METER_NO, payload: Uint8Array.from([9, tgt]) }), 3000)
+		assert.equal(wx.kind, 'working', '未知轮询状态按处理中')
+		assert.equal(wx.pollInMs, 2000, '规则 7: 未知状态整段忽略尾部，间隔 2s')
+	}
+	// ---- ETA 未知时按兜底间隔轮询，60s 总预算仍照旧到期放弃 ----
+	{
+		const t = setup({ ciu: { heartbeatS: 1 }, meter: { tokenDelayS: 600 } })
+		await ready(t)
+		await t.clock.advance(15000)
+		const origDecode = S.resultRspDecode
+		S.resultRspDecode = function (p) {
+			const r = origDecode(p)
+			if (r && r.pollState === S.POLL_WORKING) r.etaS = S.ETA_UNKNOWN
+			return r
+		}
+		try {
+			const sends = recordCiuSends(t)
+			const res = await drive(t.clock, t.ciu.token(TOKEN_A))
+			assert.equal(res.outcome, 'timeout')
+			assert.ok(sends.filter(isPollFrame).length >= 8, '兜底间隔持续轮询直到预算用完')
+			assert.equal(sends.filter(isPingFrame).length, 0, '兜底间隔不足一个心跳间隔，不插 ping')
+			assert.equal(t.ciu.getState().pending, false)
+			assert.ok(res.durationMs < 75000)
+		} finally {
+			S.resultRspDecode = origDecode
+		}
 		t.meter.stop(); t.ciu.stop()
 	}
 	// ---- 3.9 心跳响应（含 NAK）不推进/清除待办、不重置预算（策略层） ----
