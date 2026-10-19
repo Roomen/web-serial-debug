@@ -4,7 +4,8 @@
 // 下行排空后进入轮询相（0B 征求拍持续，表端有上行即捎带），会话由表端 END 或模组空闲看门狗（最后一次活动后约 8s）自行收尾，终结经 EVT 0x0281 通知双侧
 //   - 表端: 被唤醒时模组清空上行队列并发 kind=2 通知；收 kind=3 -> 算应答 -> WOR_SET_UPLINK 追加入队，下一个 DACK 捎带
 //   - CIU : 启动时 WOR_GET_STATUS，未初始化才 WOR_INIT(2, 本机 DRN)；先 WOR_WAKE_CIU -> WOR_SEND 一帧（槽满 BUSY 隔 1s 重发同一帧）-> 等 kind=2(ACK) -> 等 kind=4(上行)；
-//           每笔操作结束后会话都不关闭: 空闲时经 WOR_SEND 发 READ 0x27 心跳（默认 1s，连续 heartbeatIdleMaxS 默认 30s 无操作才停），RESULT 轮询也在同一条会话里发；
+//           只在待办类受理到终局之间、以及引擎内已确定下一步的多步流程间隙发 READ 0x27 心跳（默认 1s）撑住同一条会话，RESULT 轮询也在同一条会话里发；
+//           一笔操作拿到终局且没有后续步骤就立刻停 ping、关掉句柄（不做空闲保活），会话由看门狗 / 表端 END 收尾，下一次操作重新 WAKE；
 //           WAKE 回未初始化（模组中途复位）才补一次 WOR_INIT 再 WAKE；只有会话真的结束（0x0281 / 表端 END / 看门狗）才重新 WAKE；
 //           不发 FINISH / ABORT，下一轮 WAKE 前硬等上一会话的 0x0281（有上限）再冷却
 // 受理不是成功: WAKE/SEND 回 OK 只是受理，TOKEN 处理状态 0 / WRITE 结果 0xFE 只是收下，终局靠 RESULT 轮询取回
@@ -21,10 +22,9 @@
 	const POLL_FIRST_MS = 1000
 	const POLL_DEFAULT_S = 2
 	const POLL_MIN_S = 1
-	// 链路心跳（协议 3.9）: 会话建立后没有在飞事务时发 READ 0x27 n=1，撑住同一条 WorLink 会话。
+	// 链路心跳（协议 3.9）: 只在待办受理到终局之间、以及已确定下一步的多步流程间隙、没有在飞事务时发 READ 0x27 n=1，撑住同一条 WorLink 会话。
 	// 间隔是调用方策略，不是协议超时；默认 1s，0 = 关闭
 	const HEARTBEAT_DEFAULT_S = 1
-	const HEARTBEAT_IDLE_MAX_S = 30 // 操作结束后最多保活这么久；到点停发 ping，让看门狗收尾，0 = 不设上限
 	const ARCHIVE_DEPTH = 4
 	const DEDUP_DEPTH = 5
 	const RECORDS = 12
@@ -126,7 +126,7 @@
 	}
 	const CIU_DEFAULTS = {
 		targetDrn: '', pak: '',
-		ackTimeoutS: 15, upTimeoutS: 12, busyWaitS: 30, sessionRetries: 3, sendTiming: 'accept', heartbeatS: HEARTBEAT_DEFAULT_S, heartbeatIdleMaxS: HEARTBEAT_IDLE_MAX_S,
+		ackTimeoutS: 15, upTimeoutS: 12, busyWaitS: 30, sessionRetries: 3, sendTiming: 'accept', heartbeatS: HEARTBEAT_DEFAULT_S,
 	}
 	// 按产品错误码对照表预置，码表不在协议内枚举；CIU 原样送显，不认识的码走「其他码」输入。
 	// 顺序即显示优先级（从高到低），组包进寄存器 0x17 的告警码列表时保持这个顺序
@@ -205,7 +205,7 @@
 		o.sessionRetries = clampInt(o.sessionRetries, 0, 20, 3)
 		o.sendTiming = o.sendTiming === 'ack' ? 'ack' : 'accept'
 		o.heartbeatS = clampInt(o.heartbeatS, 0, 3600, HEARTBEAT_DEFAULT_S) // 0 = 不发心跳
-		o.heartbeatIdleMaxS = clampInt(o.heartbeatIdleMaxS, 0, 3600, HEARTBEAT_IDLE_MAX_S) // 0 = 不设上限
+		delete o.heartbeatIdleMaxS // 已移除的旧配置项（空闲保活上限），旧存档里可能还有
 		delete o.keepAliveMs // 已移除的旧配置项，旧存档里可能还有
 		return o
 	}
@@ -1347,10 +1347,7 @@
 		let lastAccepted = null
 		let unsubEnd = null
 		const endWaiters = [] // 正在硬等上一会话 0x0281 的等待者，CIU 级订阅收到 0x0281 时叫醒
-		// 空闲保活: 操作结束后会话不关，后台按 heartbeatS 发 ping，直到下一次操作接管或到达 heartbeatIdleMaxS
-		let idle = null // { live, gen, timer, deadlineAt }
-		let idleGen = 0
-		let currentLive = null // 本次操作复用的会话句柄
+		let currentLive = null // 本次操作正在复用的会话句柄（只在一次操作的多个步骤之间传递）
 		const C = H.CMD
 		let running = false
 		let stopped = false
@@ -1389,8 +1386,9 @@
 
 		// ---------- 会话层 ----------
 		// 一次 WAKE 建立后先 WOR_SEND 一帧（槽满 BUSY 隔 1s 重发同一帧）-> 等 ACK(kind=2) -> 等上行(kind=4)。
-		// 每笔操作（即答类与待办类）结束后会话都不关闭: 空闲保活按 heartbeatS 发 READ 0x27 ping，
-		// 下一次操作直接复用；连续 heartbeatIdleMaxS 没有新操作才停发并关掉句柄，让看门狗收尾。
+		// 会话只在两种情形保持: 待办类受理后到终局之间的轮询间隙，以及引擎内已确定紧接着要发下一步的多步流程；
+		// 两者都按 heartbeatS 发 READ 0x27 ping 撑住同一条会话。操作拿到终局且没有后续步骤就立刻停 ping、
+		// 关掉句柄（不做空闲保活），由空闲看门狗或表端 END 收尾；下一次操作按会话已结束重新 WAKE。
 		// 心跳与轮询遇到 BUSY 都等下一个 1s 重发同一帧，不重建会话。只有会话真的结束（0x0281 / 表端 END /
 		// 空闲看门狗）才重新 WAKE。
 		// 不发 FINISH / ABORT: 会话由表端 END 或模组空闲看门狗（最后一次活动后约 8s，reason=8）自行收尾；
@@ -1553,105 +1551,6 @@
 			if (sess) sess.close()
 			if (sess && currentLive === sess) currentLive = null
 			log('warn', why + '，下一轮按需重新唤醒（待办与 60s 预算保留）')
-		}
-		// ---------- 空闲保活（所有操作共用）----------
-		// 规则: 操作应答/终局后会话保持；无操作时按 heartbeatS 发 READ 0x27 ping；
-		// 连续 heartbeatIdleMaxS 没有新操作就停发并关掉句柄，让看门狗收尾，下一次操作重新 WAKE。
-		function stopIdle(why) {
-			const id = idle
-			if (!id) return
-			idle = null
-			idleGen++
-			if (id.timer != null) { clock.clearTimeout(id.timer); id.timer = null }
-			if (policy.state.inflight) policy.dropInflight() // 在飞 ping
-			if (!id.live.closed) id.live.close()
-			if (why) log('info', why + '，停止会话保活')
-		}
-		// 新操作接管空闲会话: 取消定时器、放弃在飞 ping；会话还活着就直接复用，不 WAKE
-		function takeIdleLive() {
-			const id = idle
-			if (!id) return null
-			idle = null
-			idleGen++
-			if (id.timer != null) { clock.clearTimeout(id.timer); id.timer = null }
-			if (policy.state.inflight) {
-				policy.dropInflight()
-				log('info', '新操作到来，放弃在飞心跳（迟到应答静默丢弃）')
-			}
-			if (id.live.end || id.live.closed) { id.live.close(); return null }
-			log('info', '复用空闲会话，不再 WAKE')
-			return id.live
-		}
-		function startIdle(live) {
-			if (!live || live.end || live.closed || stopped || aborted) {
-				if (live && !live.closed) live.close()
-				return
-			}
-			if (policy.state.inflight) policy.dropInflight() // 操作已结束，不应留下在飞事务
-			stopIdle('')
-			const id = {
-				live: live,
-				gen: ++idleGen,
-				timer: null,
-				deadlineAt: cfg.heartbeatIdleMaxS > 0 ? clock.now() + cfg.heartbeatIdleMaxS * 1000 : null,
-			}
-			idle = id
-			log('info', '进入空闲保活' + (cfg.heartbeatIdleMaxS > 0 ? '（上限 ' + cfg.heartbeatIdleMaxS + 's）' : '（不设上限）'))
-			scheduleIdle(id)
-		}
-		function scheduleIdle(id) {
-			if (idle !== id || id.timer != null) return
-			const now = clock.now()
-			if (id.deadlineAt != null && now >= id.deadlineAt) { stopIdle('到达保活空闲上限 ' + cfg.heartbeatIdleMaxS + 's'); return }
-			let at = now + 1000
-			if (cfg.heartbeatS > 0) at = Math.max(now + 1, id.live.lastActivityAt + cfg.heartbeatS * 1000)
-			if (id.deadlineAt != null) at = Math.min(at, id.deadlineAt)
-			id.timer = clock.setTimeout(function () { idleTick(id) }, Math.max(1, at - now))
-		}
-		function idleTick(id) {
-			if (idle !== id) return
-			id.timer = null
-			const live = id.live
-			if (live.end || live.closed) { stopIdle('') ; return }
-			const now = clock.now()
-			if (id.deadlineAt != null && now >= id.deadlineAt) { stopIdle('到达保活空闲上限 ' + cfg.heartbeatIdleMaxS + 's'); return }
-			if (stopped || aborted || busyOp) { stopIdle(''); return }
-			if (policy.state.inflight) { scheduleIdle(id); return }
-			if (cfg.heartbeatS > 0 && now - live.lastActivityAt >= cfg.heartbeatS * 1000) { idlePing(id).catch(function () { /* 停止/接管时中止等待 */ }); return }
-			scheduleIdle(id)
-		}
-		async function idlePing(id) {
-			const live = id.live
-			let hf
-			try { hf = policy.sendRead(S.REG.PROTO_VER, 1) } catch (e) { scheduleIdle(id); return }
-			const txn = S.parseRaw(hf).txn
-			st.heartbeats++
-			log('info', '会话空闲 ' + Math.round((clock.now() - live.lastActivityAt) / 100) / 10 + 's，发心跳 READ 0x27（n=1），不推进待办')
-			const sr = await live.send(hf)
-			if (idle !== id || id.gen !== idleGen) return // 被新操作接管
-			if (!sr.ok) {
-				policy.dropInflight()
-				log('warn', '心跳发送失败: ' + sr.reason + '，会话作废')
-				stopIdle('')
-				return
-			}
-			const ok = await live.waitResponse(txn, capBudget(cfg.upTimeoutS * 1000))
-			if (idle !== id || id.gen !== idleGen) return
-			const up = live.take(txn)
-			if (up) {
-				policy.dropInflight() // 响应内容不看
-				log('info', '心跳应答（链路通，内容不看）')
-			} else if (live.end) {
-				policy.dropInflight()
-				stopIdle('')
-				return
-			} else if (!ok) {
-				policy.dropInflight()
-				log('warn', '心跳等应答超时，会话作废')
-				stopIdle('')
-				return
-			}
-			scheduleIdle(id)
 		}
 		async function runSession(appFrame, accepts, keep) {
 			const frame = toU8(appFrame)
@@ -1827,7 +1726,7 @@
 				st.sessionCount++
 				const s = await runSession(frame, function (b) { return policy.accepts(b) }, keep)
 				checkAborted() // 返回后被中止: 不再采用这轮结果
-				const rec = { label: label, attempt: attempt, ok: false, reason: '', timeline: s.timeline, at: clock.now() }
+				const rec = { label: label, attempt: attempt, ok: false, reason: '', inSession: false, timeline: s.timeline, at: clock.now() }
 				sessions.push(rec)
 				st.lastTimeline = rec
 				if (!s.ok) {
@@ -2118,7 +2017,7 @@
 					}
 				}
 			} finally {
-				// 终局后不再发 ping；会话交给 runOp 的空闲保活，由它按 heartbeatS 续命或到上限停发
+				// 终局后不再发 ping；会话留着交给 runOp 收尾（同一操作还有后续步骤时继续复用）
 				currentLive = live
 			}
 		}
@@ -2149,7 +2048,8 @@
 			busyOp = op
 			aborted = false
 			st.op = op
-			currentLive = takeIdleLive()
+			if (currentLive) currentLive.close() // 不应存在；有也按已结束处理
+			currentLive = null // 上一次操作结束时已经关掉句柄，新操作按会话已结束重新 WAKE
 			const res = newResult(op)
 			try {
 				await fn(res)
@@ -2169,8 +2069,15 @@
 			} finally {
 				busyOp = null
 				st.op = null
-				// 操作结束: 会话不关，交给空闲保活；停止/中止/会话已死时 startIdle 会关掉它
-				if (currentLive) { startIdle(currentLive); currentLive = null }
+				// 操作拿到应答/终局（或失败、中止）且引擎没有后续步骤: 立刻停发心跳并关掉句柄。
+				// 不发 FINISH / ABORT，会话由空闲看门狗或表端 END 自然收尾；下一次操作重新 WAKE
+				if (currentLive) {
+					if (!currentLive.closed) {
+						currentLive.close()
+						log('info', '操作结束，停止会话心跳并释放句柄（不发收尾命令）')
+					}
+					currentLive = null
+				}
 			}
 			return finalize(res)
 		}
@@ -2295,7 +2202,7 @@
 				gen++
 				running = false
 				aborted = true
-				stopIdle('')
+				if (currentLive) { currentLive.close(); currentLive = null }
 				if (unsubEnd) { unsubEnd(); unsubEnd = null }
 				waiter.abortAll()
 				sessionWaiters.forEach(function (w) { w.abort() })
@@ -2303,8 +2210,7 @@
 				setPhase('idle')
 			},
 			abort: function () {
-				if (busyOp) aborted = true // 没有操作时只是打断空闲保活，不留下中止标志
-				stopIdle('') // 空闲保活也能被中止；操作中的会话由 runOp 的 finally 处理
+				if (busyOp) aborted = true // 没有操作时不留中止标志
 				waiter.abortAll()
 				sessionWaiters.forEach(function (w) { w.abort() })
 			},
@@ -2323,9 +2229,7 @@
 					e.code = 'busy'
 					throw e
 				}
-				// 换表前先作废空闲保活会话（可能在飞 ping），旧表的会话不再复用
-				const idleLive = takeIdleLive()
-				if (idleLive) idleLive.close()
+				// 换表只在没有操作、没有在途会话（含并行 runSession）、没有待办时生效；旧表的句柄不复用
 				if (activeSessions > 0 || policy.hasPending() || policy.state.inflight) {
 					const e = new Error('当前操作结束后再切换')
 					e.code = 'busy'
