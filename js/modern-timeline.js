@@ -1,4 +1,4 @@
-// 现代布局的双路时间线(双路视图选「气泡」时)：两列气泡 + 中间时间轴列(时间戳、距上一条的 Δ、静默分隔)。
+// 现代布局的双路时间线(双路视图选「气泡」时)：A 靠左、B 靠右，时间戳与 Δ 在气泡旁，静默分隔在气泡上方。
 // 派生数据只写成日志行上的 data-mdn-* 属性，由 css 的伪元素显示：行本身的 DOM 结构不变，容器里不插任何兄弟节点，
 // 所以裁剪行数(按子节点数)、复制/保存(逐子节点读文本)、历史重渲都不受影响。
 // 持久化：日志整份 innerHTML 会存进 sessionStorage，common.js 的 paneHtml 经 window.serialLogPersistClean 去掉全部 data-mdn-* 再存，
@@ -320,12 +320,9 @@
 		head.setAttribute('aria-hidden', 'true')
 		const a = document.createElement('span')
 		a.className = 'mdn-tl-a'
-		const m = document.createElement('span')
-		m.className = 'mdn-tl-m'
-		m.textContent = '时间 / Δ'
 		const b = document.createElement('span')
 		b.className = 'mdn-tl-b'
-		head.append(a, m, b)
+		head.append(a, b)
 		container.parentNode.insertBefore(head, container)
 		syncHead()
 		// 路标签改名没有事件可挂，每秒对一次；不在串口视图(日志区量不出宽度)或标签页在后台时不读布局
@@ -346,7 +343,7 @@
 		const tb = laneText('B')
 		if (a.textContent !== ta) a.textContent = ta
 		if (b.textContent !== tb) b.textContent = tb
-		// 列头与日志区的网格对齐：右侧让出滚动条宽度
+		// 路标与日志区的左右边缘对齐：右侧让出滚动条宽度
 		const sbw = Math.max(0, container.offsetWidth - container.clientWidth)
 		head.style.setProperty('--mdn-sbw', sbw + 'px')
 	}

@@ -25,16 +25,16 @@ const rec = (min, amt) => S.recordEncode({ minutes: min, amount: amt })
 const cat = (...parts) => Uint8Array.from(parts.flatMap(p => Array.from(p)))
 const vectors = [
 	['01 12 34 56 78 40 66 82 21 84 58 90 32 36 65 3E', () => frame(0, T.TOKEN, 1, S.tokenReqEncode('40668221845890323665'))],
-	['81 12 34 56 78 00 46', () => frame(1, T.TOKEN, 1, S.tokenRspEncode({ procStatus: 0 }))],
+	['81 12 34 56 78 00 46', () => frame(1, T.TOKEN, 1, S.tokenRspEncode({ code: 0 }))],
 	['52 12 34 56 78 01 01', () => frame(0, T.RESULT, 2, S.resultReqEncode(S.tgtOf(T.TOKEN, 1)))],
 	['D2 12 34 56 78 01 01 05 57', () => frame(1, T.RESULT, 2, S.resultRspEncode({ pollState: 1, tgt: 1, etaS: 5 }))],
 	['53 12 34 56 78 01 55', () => frame(0, T.RESULT, 3, S.resultReqEncode(1))],
 	// 协议 10.1 / 10.2: STS 结果块为 6 字节 [index u16 BE][Value u32 BE]
-	['D3 12 34 56 78 02 01 02 00 00 01 F4 00 00 01 F4 00 01 00 00 01 F4 35', () => frame(1, T.RESULT, 3, S.resultRspEncode({
-		pollState: 2, tgt: 1, tail: S.tokenRspEncode({ procStatus: 2, credited: 500, remaining: 500, stsBlock: S.stsResultEncode({ index: 1, value: 500 }) }) }))],
+	['D3 12 34 56 78 02 01 01 00 00 01 F4 00 00 01 F4 00 01 00 00 01 F4 50', () => frame(1, T.RESULT, 3, S.resultRspEncode({
+		pollState: 2, tgt: 1, tail: S.tokenRspEncode({ code: 1, credited: 500, remaining: 500, stsBlock: S.stsResultEncode({ index: 1, value: 500 }) }) }))],
 	['54 12 34 56 78 01 D6', () => frame(0, T.RESULT, 4, S.resultReqEncode(1))],
 	['D4 12 34 56 78 00 01 00', () => frame(1, T.RESULT, 4, S.resultRspEncode({ pollState: 0, tgt: 1 }))],
-	['81 12 34 56 78 01 00 03 00 00 00 01 76', () => frame(1, T.TOKEN, 1, S.tokenRspEncode({ procStatus: 1, stsBlock: S.stsResultEncode({ index: 3, value: 1 }) }))],
+	['81 12 34 56 78 81 00 00 00 00 00 00 00 00 00 03 00 00 00 01 30', () => frame(1, T.TOKEN, 1, S.tokenRspEncode({ code: 0x81, stsBlock: S.stsResultEncode({ index: 3, value: 1 }) }))],
 	['0D 12 34 56 78 40 66 82 21 84 58 90 32 36 66 F4', () => frame(0, T.TOKEN, 13, S.tokenReqEncode('40668221845890323666'))],
 	['CD 12 34 56 78 06 00 44', () => frame(1, T.NAK, 13, S.nakEncode(6, 0))],
 	['25 12 34 56 78 80 01 99', () => frame(0, T.WRITE, 5, S.writeReqEncode(0x80, [1]))],
@@ -74,9 +74,9 @@ for (const [h, rebuild] of vectors) {
 }
 
 // 关键字段抽查
-const parsed = S.parseFrame(hex('D3 12 34 56 78 02 01 02 00 00 01 F4 00 00 01 F4 03 80 80 80 00 A6'))
+const parsed = S.parseFrame(hex('D3 12 34 56 78 02 01 01 00 00 01 F4 00 00 01 F4 00 01 00 00 01 F4 50'))
 assert.match(parsed.decoded, /本次充值量 = 500/)
-assert.match(parsed.decoded, /STS 结果块\(5B/)
+assert.match(parsed.decoded, /STS 结果块\(6B/)
 assert.equal(S.recordTimeStr(3465195), '2026-08-03 09:15')
 {
 	const w = S.tlvParse(hex('30 F0 07 35 AB A8 00 00 01 F4'))
@@ -119,7 +119,7 @@ assert.equal(S.meterGate(new Uint8Array(65), METER).item, 1) // 长度 >64
 // ---- CIU 侧 1..8 ----
 {
 	const ctx = (inflight, pendingTgt) => ({ meter: METER, inflight, pendingTgt: pendingTgt == null ? null : pendingTgt })
-	const rsp = hex('D3 12 34 56 78 02 01 02 00 00 01 F4 00 00 01 F4 03 80 80 80 00 A6') // RESULT txn3 tgt1
+	const rsp = hex('D3 12 34 56 78 02 01 01 00 00 01 F4 00 00 01 F4 00 01 00 00 01 F4 50') // RESULT txn3 tgt1
 	const good = ctx({ type: T.RESULT, txn: 3 }, 1)
 	assert.equal(S.ciuGate(rsp, good).ok, true)
 	assert.equal(S.ciuGate(rsp.subarray(0, 4), good).item, 1)
@@ -149,30 +149,22 @@ assert.equal(S.meterGate(new Uint8Array(65), METER).item, 1) // 长度 >64
 }
 
 // ---- 边界 ----
-// STS 结果块 M=57（TOKEN 状态 1: 1+57=58 字节载荷，整帧 64 字节）
+// TOKEN 终局只允许 15 字节；所有码值（包括未知）共用布局。
 {
-	const block = new Uint8Array(57).map((_, i) => i)
-	const pl = S.tokenRspEncode({ procStatus: 1, stsBlock: block })
-	assert.equal(pl.length, 58)
-	const f = frame(1, T.TOKEN, 2, pl)
-	assert.equal(f.length, 64)
-	const d = S.tokenRspDecode(S.parseRaw(f).payload)
-	assert.equal(d.stsBlock.length, 57)
-	assert.deepEqual(Array.from(d.stsBlock), Array.from(block))
-	assert.throws(() => S.tokenRspEncode({ procStatus: 1, stsBlock: new Uint8Array(58) }))
-	assert.throws(() => S.tokenRspEncode({ procStatus: 2, credited: 1, remaining: 1, stsBlock: new Uint8Array(50) }))
-	assert.throws(() => S.tokenRspEncode({ procStatus: 1, stsBlock: [] })) // M >= 1
-	// 状态 2 最长 M=49
-	assert.equal(S.tokenRspEncode({ procStatus: 2, credited: 1, remaining: -1, stsBlock: new Uint8Array(49) }).length, 58)
-	assert.equal(S.ciuGate(f, { meter: METER, inflight: { type: T.TOKEN, txn: 2 }, pendingTgt: null }).ok, true)
-	// 65 字节整帧禁止
+	const block = S.stsResultEncode({ index: 1, value: 1 })
+	for (const code of [1, 2, 0x7f, 0x80, 0x81, 0xff]) {
+		const p = S.tokenRspEncode({ code, credited: code === 1 ? 1 : 0, remaining: -5, stsBlock: block })
+		assert.equal(p.length, 15)
+		assert.equal(S.tokenRspDecode(p).remaining, -5)
+		for (const n of [0, 2, 6, 14, 16, 58]) {
+			const malformed = new Uint8Array(n); malformed[0] = code
+			assert.equal(S.tokenRspDecode(malformed), null)
+			assert.equal(S.payloadLenOk(1, T.TOKEN, malformed), 'length')
+		}
+	}
+	for (const n of [0, 1, 5, 7, 49, 57]) assert.throws(() => S.tokenRspEncode({ code: 1, stsBlock: new Uint8Array(n) }))
+	assert.throws(() => S.tokenRspEncode({ code: 0x81, credited: 1, stsBlock: block }))
 	assert.throws(() => frame(1, T.TOKEN, 2, new Uint8Array(59)))
-	// 终局载荷最长 56（被 RESULT 前缀 2 字节占掉）
-	assert.equal(S.resultRspEncode({ pollState: 2, tgt: 1, tail: new Uint8Array(56) }).length, 58)
-	assert.throws(() => S.resultRspEncode({ pollState: 2, tgt: 1, tail: new Uint8Array(57) }))
-	// 负剩余量
-	const neg = S.tokenRspDecode(S.tokenRspEncode({ procStatus: 2, credited: 1, remaining: -5, stsBlock: block5 }))
-	assert.equal(neg.remaining, -5)
 }
 // TOKEN 请求：非法 BCD 半字节
 assert.equal(S.tokenReqDecode(hex('40 66 82 21 84 58 90 32 36 6A')), null)
@@ -246,12 +238,13 @@ assert.throws(() => S.nakEncode(0xff, 0))
 // RESULT 请求 bit7
 assert.throws(() => S.resultReqEncode(0x81))
 assert.equal(S.resultReqDecode(hex('81')).tgt, 0x01)
-// 未知处理状态：不锁定尾部，标 known=false
-assert.equal(S.tokenRspDecode(hex('07 11 22')).known, false)
+// 未知结果码仍解析固定布局，按最高位判定。
+for (const code of [0x7f, 0x80]) {
+	const d = S.tokenRspDecode(S.tokenRspEncode({ code, remaining: -2, stsBlock: new Uint8Array(6) }))
+	assert.equal(d.known, false)
+	assert.equal(S.tokenIsFail(code), code === 0x80)
+}
 assert.equal(S.tokenRspDecode(hex('00 01')), null)
-assert.equal(S.tokenRspDecode(hex('01')), null)
-assert.equal(S.tokenRspDecode(hex('02 00 00 00 01 00 00 00 02')), null)
-assert.equal(S.tokenRspDecode(hex('02 00 00 00 01 00 00 00 02 55')).stsBlock.length, 1)
 // 展示：串口数据里的 HTML 特殊字符必须转义
 {
 	const bad = S.parseFrame(hex('01 12 34 56 78 00')) // CRC 错
@@ -260,34 +253,24 @@ assert.equal(S.tokenRspDecode(hex('02 00 00 00 01 00 00 00 02 55')).stsBlock.len
 	for (const raw of ['<img src=x onerror=1>', '<b>', '<script>']) assert.ok(!html.includes(raw), '原样出现: ' + raw)
 	for (const escaped of ['&lt;img src=x onerror=1&gt;', '&lt;b&gt;', '&lt;script&gt;']) assert.ok(html.includes(escaped), '缺少转义: ' + escaped)
 }
-// ---- STS 结果块: [index u16 BE][Value u32 BE]，偏移 6 起保留，M<6 旧格式 ----
+// ---- STS 块映射用于诊断，码值不匹配只标记，不拒帧 ----
 {
-	assert.deepEqual(Array.from(S.stsResultEncode({ index: 1, value: 1000 })), [0, 1, 0, 0, 3, 0xe8])
-	let r = S.stsResultDecode(hex('00 01 00 00 03 E8'), 2)
-	assert.equal(r.kind, 'credit'); assert.equal(r.value, 1000); assert.equal(r.mismatch, false)
-	assert.match(r.text, /充值量 1000（原始整数/)
-	r = S.stsResultDecode(hex('00 03 00 00 00 07 AA BB'), 1)
-	assert.equal(r.kind, 'code'); assert.equal(r.code.name, 'SUCCESS'); assert.equal(r.code.ok, true); assert.equal(r.extra, 2)
-	r = S.stsResultDecode(hex('00 03 00 00 00 FF'), 2)
-	assert.equal(r.mismatch, true) // 状态 2 应配 MODE1
-	r = S.stsResultDecode(hex('00 01 00 00 00 05'), 1)
-	assert.equal(r.mismatch, true) // 状态 1 不应配 MODE1
-	r = S.stsResultDecode(hex('00 FF 00 02 00 21'), 1)
-	assert.deepEqual(J(r.bits.map(b => b.bit)), [0, 5, 17])
-	assert.match(r.bits[1].text, /预留/)
-	assert.equal(S.stsResultDecode(hex('00 02 00 00 00 01'), 1).kind, 'unknown')
-	assert.equal(S.stsResultDecode(hex('00 02 00 00 00 01'), 1).mismatch, true) // 状态 1 只配 MODE3 / MODE256
-	assert.equal(S.stsResultDecode(hex('00 FF 00 00 00 01'), 1).mismatch, false)
-	assert.equal(S.stsResultDecode(hex('12 34 00 00 00 01'), 1).kind, 'unknown')
-	assert.deepEqual(J(S.stsResultDecode(hex('03 80 80 80 00'), 2)), { parsed: false, len: 5 })
-	// 解析展示与字节提示
-	const f = S.buildFrame({ dir: 1, type: S.TYPE.TOKEN, txn: 1, meter: '12345678', payload: S.tokenRspEncode({ procStatus: 1, stsBlock: hex('00 03 00 00 00 03') }) })
-	const p = S.parseFrame(f)
+	for (const [value, code] of [[1,0x81],[2,0x82],[3,0x83],[4,2],[5,3],[6,0x84],[7,4],[8,5],[9,6],[10,7],[11,8],[12,9],[13,10],[255,0x85],[99,0xff]]) {
+		const block = S.stsResultEncode({ index: 3, value })
+		assert.equal(S.tokenCodeOf(S.stsResultDecode(block)), code)
+		assert.equal(S.stsResultDecode(block, code).mismatch, false)
+		assert.equal(S.stsResultDecode(block, 0x7f).mismatch, true)
+	}
+	assert.equal(S.tokenCodeOf(S.stsResultDecode(S.stsResultEncode({index: 1, value: 5}))), 1)
+	assert.equal(S.tokenCodeOf(S.stsResultDecode(S.stsResultEncode({index: 255, value: 5}))), 11)
+	for (const n of [0, 5, 7]) assert.equal(S.stsResultDecode(new Uint8Array(n)).parsed, false)
+	const p = S.parseFrame(frame(1, T.TOKEN, 1, S.tokenRspEncode({code: 0x83, remaining: -3, stsBlock: S.stsResultEncode({index: 1, value: 5})})))
 	assert.equal(p.ok, true)
-	assert.match(p.decoded, /MODE3 结果码 3 USED 令牌已使用/)
-	const bm = S.byteMap(p)
-	assert.match(bm[6 + 1].tip, /index/)
-	assert.match(bm[6 + 3].tip, /Value/)
-	assert.match(S.parseFrame(S.buildFrame({ dir: 1, type: S.TYPE.TOKEN, txn: 1, meter: '12345678', payload: S.tokenRspEncode({ procStatus: 1, stsBlock: hex('06 80 20 00 00') }) })).decoded, /旧格式，不足 6 字节无法解析/)
+	assert.match(p.decoded, /令牌已使用/)
+	assert.match(p.decoded, /不一致/)
+	assert.match(S.byteMap(p)[14].tip, /index/)
+	assert.match(S.byteMap(p)[16].tip, /Value/)
+	assert.match(S.parseFrame(frame(1,T.WRITE,1,[0x80,8])).decoded, /执行失败/)
+	assert.match(S.parseFrame(frame(1,T.WRITE,1,[0x80,3])).decoded, /未知/)
 }
 console.log('STS-CIU protocol checks passed')

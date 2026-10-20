@@ -30,9 +30,18 @@
 		5: '值超出范围/数量非法', 6: '表计忙(已有待办在飞)', 7: '功能未实现',
 	}
 	const TOKEN_ACCEPTED = 0
-	const TOKEN_DONE_NOEXEC = 1
-	const TOKEN_DONE_EXEC = 2
+	const TOKEN_FINAL_LEN = 15
+	const TOKEN_OK_CREDIT = 0x01
+	const TOKEN_OK_TEST = 0x0b
+	const TOKEN_CODE = {
+		0x01: '充值成功', 0x02: '换钥第一步成功', 0x03: '换钥第二步成功', 0x04: '设置参数成功',
+		0x05: '清余额成功', 0x06: '设置预付费成功', 0x07: '设置后付费成功', 0x08: '开阀成功',
+		0x09: '关阀成功', 0x0a: '清除窃水状态成功', 0x0b: '表计测试成功',
+		0x81: '余额过多', 0x82: '令牌过期', 0x83: '令牌已使用', 0x84: '密钥到期', 0x85: '错误的令牌', 0xff: '其它失败',
+	}
+	function tokenIsFail(code) { return !!(code & 0x80) }
 	const WRITE_OK = 0x00
+	const WRITE_EXEC_FAIL = 0x08
 	const WRITE_ACCEPTED = 0xfe
 	const POLL_UNKNOWN = 0
 	const POLL_WORKING = 1
@@ -195,39 +204,26 @@
 		if (p.length !== 10) return null
 		return bcdUnpack(p)
 	}
-	// TOKEN 响应: { procStatus, credited, remaining, stsBlock }
+	// TOKEN 终局统一为 code + credited u32 + remaining i32 + STS 块 6 字节。
 	function tokenRspEncode(r) {
-		const a = [r.procStatus & 0xff]
-		if (r.procStatus === TOKEN_ACCEPTED) return Uint8Array.from(a)
+		const a = [r.code & 0xff]
+		if (r.code === TOKEN_ACCEPTED) return Uint8Array.from(a)
 		const block = toU8(r.stsBlock || [])
-		if (block.length < 1) throw new Error('终局 TOKEN 响应的 STS 结果块至少 1 字节')
-		if (r.procStatus === TOKEN_DONE_EXEC) {
-			putU32(a, r.credited >>> 0)
-			putU32(a, r.remaining >>> 0)
-		}
-		if (a.length + block.length > PAYLOAD_MAX) throw new Error('TOKEN 响应超过 58 字节载荷')
-		for (let i = 0; i < block.length; i++) a.push(block[i])
-		return Uint8Array.from(a)
+		if (block.length !== STS_RESULT_LEN) throw new Error('STS 结果块必须为 6 字节')
+		if (r.code !== TOKEN_OK_CREDIT && r.credited) throw new Error('仅充值成功允许非零充值量')
+		putU32(a, r.credited >>> 0)
+		putU32(a, r.remaining >>> 0)
+		return Uint8Array.from(a.concat(Array.from(block)))
 	}
-	// 长度错返回 null；未知处理状态返回 known=false（无尾部，按规则 8 失败并显示原始字节）
 	function tokenRspDecode(p) {
 		if (p.length < 1) return null
-		const st = p[0]
-		if (st === TOKEN_ACCEPTED) return p.length === 1 ? { procStatus: st, known: true } : null
-		if (st === TOKEN_DONE_NOEXEC) {
-			if (p.length < 2) return null
-			return { procStatus: st, known: true, stsBlock: p.subarray(1) }
-		}
-		if (st === TOKEN_DONE_EXEC) {
-			if (p.length < 10) return null
-			return { procStatus: st, known: true, credited: u32(p, 1), remaining: i32(p, 5), stsBlock: p.subarray(9) }
-		}
-		return { procStatus: st, known: false }
+		const code = p[0]
+		if (code === TOKEN_ACCEPTED) return p.length === 1 ? { code: code, known: true } : null
+		if (p.length !== TOKEN_FINAL_LEN) return null
+		return { code: code, known: !!TOKEN_CODE[code], credited: u32(p, 1), remaining: i32(p, 5), stsBlock: p.subarray(9) }
 	}
 
-	// STS 结果块（4.1）: 表端 STS 库的返回值 [index u16 BE][Value u32 BE]，偏移 6 起保留（忽略但照样保留上送）。
-	// M < 6 是旧格式块（status_code/Auth/Validation/TokenResult 5 字节），解不出来按原始字节展示，不当错误帧。
-	// 处理状态 2（已执行）配 MODE1；处理状态 1（未执行充值）配 MODE3 / MODE256。对应不上只标出，不拒帧
+	// STS 块只作诊断；CIU 的成功/失败只看协议结果码。
 	const STS_RESULT_LEN = 6
 	const STS_IDX = { CREDIT: 0x0001, MODE2: 0x0002, CODE: 0x0003, TEST: 0x00ff }
 	const STS_IDX_NAME = { 0x0001: 'MODE1 充值', 0x0002: 'MODE2（库未定义语义）', 0x0003: 'MODE3 结果码', 0x00ff: 'MODE256 表计测试' }
@@ -257,9 +253,9 @@
 		return bits
 	}
 	// 返回 { parsed:false, len } 或 { parsed:true, index, value, extra, kind, code?, bits?, text, mismatch }
-	function stsResultDecode(block, procStatus) {
+	function stsResultDecode(block, code) {
 		const b = toU8(block || [])
-		if (b.length < STS_RESULT_LEN) return { parsed: false, len: b.length }
+		if (b.length !== STS_RESULT_LEN) return { parsed: false, len: b.length }
 		const index = (b[0] << 8) | b[1]
 		const value = u32(b, 2)
 		const r = { parsed: true, index: index, value: value, extra: b.length - STS_RESULT_LEN, mismatch: false }
@@ -279,17 +275,22 @@
 			r.kind = 'unknown'
 			r.text = (index === STS_IDX.MODE2 ? 'MODE2（库未定义语义）' : '未知 index 0x' + index.toString(16).toUpperCase().padStart(4, '0')) + '，Value = ' + value
 		}
-		if (procStatus === TOKEN_DONE_EXEC) r.mismatch = r.kind !== 'credit'
-		else if (procStatus === TOKEN_DONE_NOEXEC) r.mismatch = r.kind !== 'code' && r.kind !== 'test'
+		if (code != null) r.mismatch = tokenCodeOf(r) !== code
 		return r
 	}
-	function stsResultLines(block, procStatus, lines) {
-		const r = stsResultDecode(block, procStatus)
-		if (!r.parsed) { lines.push('STS 结果块(' + r.len + 'B，旧格式，不足 6 字节无法解析) = ' + hexSpaced(toU8(block))); return }
-		lines.push('STS 结果块(' + (STS_RESULT_LEN + r.extra) + 'B) = ' + hexSpaced(toU8(block)))
-		lines.push('  ' + r.text)
-		if (r.extra) lines.push('  偏移 6 起 ' + r.extra + ' 字节为保留，忽略')
-		if (r.mismatch) lines.push('  ⚠ 处理状态 ' + procStatus + ' 与结果块 ' + (STS_IDX_NAME[r.index] || 'index') + ' 对应不上（状态 2 应配 MODE1，状态 1 应配 MODE3/MODE256）')
+	function tokenCodeOf(r) {
+		if (r.kind === 'credit') return TOKEN_OK_CREDIT
+		if (r.kind === 'test') return TOKEN_OK_TEST
+		if (r.kind !== 'code') return 0xff
+		return ({ 1: 0x81, 2: 0x82, 3: 0x83, 4: 2, 5: 3, 6: 0x84, 7: 4, 8: 5, 9: 6, 10: 7, 11: 8, 12: 9, 13: 10, 255: 0x85 })[r.value] || 0xff
+	}
+	function stsResultLines(block, code, lines) {
+		const r = stsResultDecode(block, code)
+		lines.push('STS 结果块(6B，原样上送) = ' + hexSpaced(toU8(block)))
+		if (r.parsed) {
+			lines.push('  诊断: ' + r.text)
+			if (r.mismatch) lines.push('  ⚠ 协议结果码与 STS 结果块不一致（不影响终局判定）')
+		}
 	}
 
 	// ===== 模拟令牌（测试用明文格式，不是 STS 令牌，不加密）=====
@@ -639,9 +640,7 @@
 				if (len < 1) return 'length'
 				const st = payload[0]
 				if (st === TOKEN_ACCEPTED) return len === 1 ? 'ok' : 'length'
-				if (st === TOKEN_DONE_NOEXEC) return len >= 2 ? 'ok' : 'length' // M >= 1，不锁定为 5
-				if (st === TOKEN_DONE_EXEC) return len >= 10 ? 'ok' : 'length'
-				return 'ok' // 未知处理状态: 尾部布局未知，交给上层按规则 8 结束
+				return len === TOKEN_FINAL_LEN ? 'ok' : 'length'
 			}
 			case TYPE.READ: return len >= 2 ? 'ok' : 'length'
 			case TYPE.WRITE: return len === 2 ? 'ok' : 'length'
@@ -705,21 +704,18 @@
 	}
 
 	// ===== 解析 / 展示 =====
+	function writeResultText(res) {
+		return res === WRITE_OK ? '成功(终局)' : res === WRITE_ACCEPTED ? '已受理(不是成功，需 RESULT 轮询)' : res === WRITE_EXEC_FAIL ? '执行失败（阀门堵转、未到位或超时；细节读 0x11）' : '未知(按规则 8 失败)'
+	}
 	function tokenRspLines(t, lines) {
 		if (!t) { lines.push('TOKEN 响应载荷长度非法'); return }
-		if (!t.known) { lines.push('处理状态 = ' + hexByte(t.procStatus) + '（未知，按规则 8 失败结束）'); return }
-		if (t.procStatus === TOKEN_ACCEPTED) {
-			lines.push('处理状态 = 0 已受理，尚未处理（不是成功，需 RESULT 轮询）')
-			return
-		}
-		if (t.procStatus === TOKEN_DONE_NOEXEC) lines.push('处理状态 = 1 已完成，令牌未执行')
-		else lines.push('处理状态 = 2 已完成，令牌已执行')
-		if (t.procStatus === TOKEN_DONE_EXEC) {
-			lines.push('本次充值量 = ' + t.credited + '（原始整数，标度见寄存器 0x18）')
-			lines.push('剩余量 = ' + t.remaining + '（原始整数）')
-		}
-		stsResultLines(t.stsBlock, t.procStatus, lines)
+		if (t.code === TOKEN_ACCEPTED) { lines.push('结果码 = 0x00 已受理（不是成功，需 RESULT 轮询）'); return }
+		lines.push('结果码 = ' + hexByte(t.code) + ' ' + (tokenIsFail(t.code) ? '失败' : '成功') + '：' + (TOKEN_CODE[t.code] || '未知结果码'))
+		if (t.code === TOKEN_OK_CREDIT) lines.push('本次充值量 = ' + t.credited + '（原始整数，标度见寄存器 0x18）')
+		lines.push('剩余量快照 = ' + t.remaining + '（生成结果时；实时余额以 STATUS 为准）')
+		stsResultLines(t.stsBlock, t.code, lines)
 	}
+
 	function tlvValueText(t) {
 		if (t.invalid) return '无效标记(未定义或当前不可读)'
 		if (t.id >= REG.RECORD_FIRST && t.id <= REG.RECORD_LAST && t.len === RECORD_LEN) {
@@ -809,7 +805,7 @@
 				const r = writeRspDecode(p)
 				const res = r.result
 				lines.push('寄存器 = ' + hexByte(r.reg) + ' ' + regName(r.reg))
-				lines.push('结果 = ' + hexByte(res) + (res === WRITE_OK ? ' 成功(终局)' : res === WRITE_ACCEPTED ? ' 已受理(不是成功，需 RESULT 轮询)' : res >= 1 && res <= 7 ? ' 失败: ' + NAK_NAME[res] : ' 未知(按规则 8 失败)'))
+				lines.push('结果 = ' + hexByte(res) + ' ' + writeResultText(res))
 				break
 			}
 			case TYPE.STATUS: {
@@ -837,7 +833,7 @@
 					if (pt === TYPE.TOKEN) tokenRspLines(tokenRspDecode(r.tail), lines)
 					else if (pt === TYPE.WRITE) {
 						const w = r.tail.length === 2 ? writeRspDecode(r.tail) : null
-						lines.push(w ? '寄存器 ' + hexByte(w.reg) + ' 结果 ' + hexByte(w.result) : hexSpaced(r.tail))
+						lines.push(w ? '寄存器 ' + hexByte(w.reg) + ' 结果 ' + hexByte(w.result) + ' ' + writeResultText(w.result) : hexSpaced(r.tail))
 					} else lines.push(hexSpaced(r.tail))
 				}
 				break
@@ -863,9 +859,8 @@
 		}
 		switch (f.type) {
 			case TYPE.TOKEN:
-				add(0, 1, '处理状态', '状态')
-				if (p[0] === TOKEN_DONE_EXEC && p.length >= 10) { add(1, 4, '本次充值量', '充值量'); add(5, 4, '剩余量', '剩余量'); stsBlockSegs(add, 9, p.length - 9) }
-				else if (p[0] === TOKEN_DONE_NOEXEC) stsBlockSegs(add, 1, p.length - 1)
+				add(0, 1, '协议结果码', '结果码')
+				if (p[0] !== TOKEN_ACCEPTED && p.length === TOKEN_FINAL_LEN) { add(1, 4, '本次充值量', '充值量'); add(5, 4, '剩余量快照', '剩余量'); stsBlockSegs(add, 9, STS_RESULT_LEN) }
 				break
 			case TYPE.READ: {
 				const r = tlvParse(p)
@@ -888,9 +883,7 @@
 	}
 
 	function stsBlockSegs(add, off, len) {
-		if (len < STS_RESULT_LEN) { add(off, len, 'STS 结果块(旧格式，无法解析)', 'STS'); return }
 		add(off, 2, 'STS 结果 index u16 BE', 'STS index'); add(off + 2, 4, 'STS 结果 Value u32 BE', 'STS Value')
-		if (len > STS_RESULT_LEN) add(off + STS_RESULT_LEN, len - STS_RESULT_LEN, 'STS 结果块保留字节', 'STS 保留')
 	}
 
 	// 解析一段字节: 成功返回 { ok, dir, fields, decoded, errors, raw, segs, frame }
@@ -977,7 +970,7 @@
 		FRAME_MIN, FRAME_MAX, PAYLOAD_MAX, TLV_TOTAL_MAX, VARLEN_VALUE_MAX, TOKEN_DIGITS, READ_MAX_REGS, ALARM_MAX_CODES,
 		RECORD_LEN, RECORD_EPOCH_UNSET, ENC_INVALID, ETA_UNKNOWN, FINAL_PAYLOAD_MAX,
 		DIR_REQUEST, DIR_RESPONSE, TYPE, TYPE_NAME, NAK, NAK_NAME,
-		TOKEN_ACCEPTED, TOKEN_DONE_NOEXEC, TOKEN_DONE_EXEC, WRITE_OK, WRITE_ACCEPTED, POLL_UNKNOWN, POLL_WORKING, POLL_DONE,
+		TOKEN_ACCEPTED, TOKEN_FINAL_LEN, TOKEN_OK_CREDIT, TOKEN_OK_TEST, TOKEN_CODE, tokenIsFail, WRITE_OK, WRITE_EXEC_FAIL, WRITE_ACCEPTED, POLL_UNKNOWN, POLL_WORKING, POLL_DONE,
 		REG, REG_NAME, regName,
 		VALVE_POS_MASK, VALVE_POS_CLOSED, VALVE_POS_OPEN, VALVE_TEST_ACTIVE, VALVE_FAULT,
 		MST_LOW_CREDIT, MST_LOW_BATTERY, MST_MAGNETIC, MST_TAMPER, MST_REVERSE_FLOW, MST_POSTPAID, MST_ALARM_LIST,
@@ -985,7 +978,7 @@
 		crc8, bcdPack, bcdUnpack, bcdValid, meterBcd, hexToBytes, hexSpaced, equalBytes,
 		buildFrame, parseRaw, tgtOf, tgtType, tgtTxn,
 		tokenReqEncode, tokenReqDecode, tokenRspEncode, tokenRspDecode,
-		STS_RESULT_LEN, STS_IDX, STS_IDX_NAME, STS_CODE, STS_TEST_BIT, stsResultEncode, stsResultDecode,
+		STS_RESULT_LEN, STS_IDX, STS_IDX_NAME, STS_CODE, STS_TEST_BIT, stsResultEncode, stsResultDecode, tokenCodeOf,
 		SIM_TOKEN_MAGIC, SIM_TOKEN_TYPES, SIM_VOLUME_STEP_DL, simTokenEncode, simTokenDecode, simTokenText, simTokenCredit, simAmountText,
 		readReqEncode, readReqDecode, createTlvWriter, tlvParse, tlvInt, fmtScaled, qtyUnit, qtyRawText,
 		alarmListDecode, alarmListEncode, recordEncode, recordDecode, recordTimeStr,

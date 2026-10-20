@@ -370,6 +370,59 @@ const isPingFrame = x => x.f.ok && x.f.dir === 0 && x.f.type === S.TYPE.READ && 
 
 // ============================================================================
 async function tests() {
+	// 新协议：CIU 成败只依据协议码，STS 块原样上送，未知码也按最高位判断。
+	for (const code of [0x04, 0x7f, 0x80, 0x85]) {
+		const t = setup()
+		await ready(t)
+		const original = S.tokenRspEncode
+		S.tokenRspEncode = r => original(Object.assign({}, r, { code, credited: 0 }))
+		try {
+			const res = await drive(t.clock, t.ciu.token(TOKEN_A))
+			assert.equal(res.token.code, code)
+			assert.equal(res.ok, !(code & 0x80))
+			assert.equal(res.token.stsBlockHex, '00 01 00 00 01 F4') // 故意与 code 不一致，仍按 code 判定
+			assert.equal(res.token.remaining, 5500)
+			assert.equal(res.token.stsResult, undefined)
+		} finally { S.tokenRspEncode = original; t.ciu.stop(); t.meter.stop() }
+	}
+	// WRITE 已受理后的动作故障，轮询返回 0x08；故障不冒充 NAK 或成功。
+	{
+		const t = setup({ meter: { valveDelayS: 1 } })
+		await ready(t)
+		t.meter.setValveFault(true)
+		const res = await drive(t.clock, t.ciu.valveTest(false))
+		assert.equal(res.outcome, 'failed')
+		assert.equal(res.write.result, S.WRITE_EXEC_FAIL)
+		assert.match(res.message, /执行失败/)
+		assert.equal(t.meter.getState().valve, S.VALVE_POS_OPEN)
+		assert.equal(t.meter.getState().pending, null)
+		t.meter.setValveFault(false)
+		assert.equal((await drive(t.clock, t.ciu.valveTest(false))).ok, true)
+		t.ciu.stop(); t.meter.stop()
+	}
+	// 块读被 0x07 拒绝后逐个读；本次连接不再试探；换表清除能力缓存。
+	{
+		const t = setup()
+		await ready(t)
+		const original = S.meterGate
+		const counts = []
+		S.meterGate = (data, meter) => {
+			const g = original(data, meter)
+			if (g.ok && g.type === S.TYPE.READ) {
+				counts.push(g.payload[1])
+				if (g.payload[1] > 1) return { ok: false, item: 9, txn: g.txn, nak: { reason: S.NAK.UNIMPLEMENTED, echo: g.payload[0] } }
+			}
+			return g
+		}
+		try {
+			assert.equal((await drive(t.clock, t.ciu.read(1, 3))).read.length, 3)
+			assert.deepEqual(counts, [3, 1, 1, 1])
+			counts.length = 0
+			assert.equal((await drive(t.clock, t.ciu.read(4, 2))).ok, true)
+			assert.deepEqual(counts, [1, 1])
+		} finally { S.meterGate = original; t.ciu.stop(); t.meter.stop() }
+	}
+
 	// ---- 启动与核对 ----
 	{
 		const t = await setup()
@@ -538,9 +591,8 @@ async function tests() {
 		assert.equal(res.token.remaining, 5500)
 		assert.equal(res.token.remainingText, '550.0 L') // 按 0x18 标度格式化
 		assert.equal(res.token.stsBlockHex, '00 01 00 00 01 F4') // STS 结果块: MODE1，Value 与本次充值量同为 500
-		assert.equal(res.token.stsResult.kind, 'credit')
-		assert.equal(res.token.stsResult.mismatch, false)
-		assert.match(res.token.stsResultText, /MODE1 充值成功，充值量 500/)
+		assert.equal(res.token.code, S.TOKEN_OK_CREDIT)
+		assert.equal(res.token.stsResult, undefined) // CIU 显示不再解析 STS 库返回码
 		const ms = t.meter.getState()
 		assert.equal(ms.remaining, 5500)
 		assert.equal(ms.totalPurchased, 20500)
@@ -998,12 +1050,12 @@ async function tests() {
 		assert.equal(P.state.inflight, null)
 	}
 
-	// 结果码模式: 处理状态 1 + MODE3，余额不动；旧配置 'reject' 按 REJECT
-	for (const [mode, block, msg] of [['reject', '00 03 00 00 00 FF', /令牌未执行：REJECT 错误的令牌/], ['3', '00 03 00 00 00 03', /令牌未执行：USED/], ['8', '00 03 00 00 00 08', /令牌成功（非充值）：CLEAR_CREDIT 清余额成功/]]) {
+	// 结果码模式: 新协议码 + 固定终局布局，余额不动；旧配置 'reject' 按 REJECT
+	for (const [mode, block, msg] of [['reject', '00 03 00 00 00 FF', /令牌失败：错误的令牌/], ['3', '00 03 00 00 00 03', /令牌失败：令牌已使用/], ['8', '00 03 00 00 00 08', /令牌成功：清余额成功/]]) {
 		const t = setup({ meter: { tokenMode: mode } })
 		await ready(t)
 		const res = await drive(t.clock, t.ciu.token(TOKEN_A))
-		assert.equal(res.ok, true)
+		assert.equal(res.ok, mode === '8')
 		assert.equal(res.token.executed, false)
 		assert.equal(res.token.stsBlockHex, block)
 		assert.match(res.message, msg)
@@ -1016,7 +1068,7 @@ async function tests() {
 		await ready(t)
 		const res = await drive(t.clock, t.ciu.token(TOKEN_A))
 		assert.equal(res.token.stsBlockHex, '00 FF 00 02 00 01')
-		assert.match(res.message, /表计测试令牌：BIT0 水阀开关测试、BIT17 显示 DRN/)
+		assert.match(res.message, /令牌成功：表计测试成功/)
 		assert.throws(() => SIM.normalizeMeterConfig({ tokenMode: 'test', testBits: 'xyz' }), /十六进制/)
 	}
 	// 20 位以外的令牌不上线
@@ -1255,26 +1307,26 @@ async function tests() {
 		assert.match(logText(t.logs.meter), /模拟令牌: 充值，序号 100，充值量 2 × 0\.1 m³（= 0\.2 m³ = 200 L，线上 2000 dL）/)
 		// 后付费: 表计状态 bit5；预付费清掉
 		r = await run(sim('04'))
-		assert.match(r.message, /令牌成功（非充值）：SET_POSTPAY 设置后付费/)
+		assert.match(r.message, /令牌成功：设置后付费成功/)
 		assert.equal(t.meter.getState().meterStatus & S.MST_POSTPAID, S.MST_POSTPAID)
 		await run(sim('03'))
 		assert.equal(t.meter.getState().meterStatus & S.MST_POSTPAID, 0)
 		// 关阀 / 开阀: 阀门真实变化
 		r = await run(sim('06'))
-		assert.match(r.message, /VALVE_CLOSE/)
+		assert.match(r.message, /关阀成功/)
 		assert.equal(t.meter.getState().valve, S.VALVE_POS_CLOSED)
 		await run(sim('05'))
 		assert.equal(t.meter.getState().valve, S.VALVE_POS_OPEN)
-		// 换钥: 第一枚 1ST，接着第二枚 SUCCESS；单独第二枚 2ND
-		assert.match((await run(sim('10'))).message, /1ST 换钥第一步/)
-		assert.match((await run(sim('11'))).message, /SUCCESS/)
-		assert.match((await run(sim('11'))).message, /2ND 换钥第二步/)
+		// 换钥: 第一枚 1ST，接着第二枚 设置参数成功；单独第二枚 2ND
+		assert.match((await run(sim('10'))).message, /换钥第一步成功/)
+		assert.match((await run(sim('11'))).message, /设置参数成功/)
+		assert.match((await run(sim('11'))).message, /换钥第二步成功/)
 		// 表计测试位图 / 指定结果码 / 清余额
-		assert.match((await run(sim('20', 0x20001))).message, /表计测试令牌：BIT0 水阀开关测试、BIT17 显示 DRN/)
-		assert.match((await run(sim('90', 2))).message, /令牌未执行：OLD 令牌过期/)
-		assert.match((await run(sim('90', 255))).message, /REJECT/)
+		assert.match((await run(sim('20', 0x20001))).message, /令牌成功：表计测试成功/)
+		assert.match((await run(sim('90', 2))).message, /令牌失败：令牌过期/)
+		assert.match((await run(sim('90', 255))).message, /错误的令牌/)
 		r = await run(sim('02'))
-		assert.match(r.message, /CLEAR_CREDIT 清余额成功/)
+		assert.match(r.message, /清余额成功/)
 		assert.equal(t.meter.getState().remaining, 0)
 		// 去重深度内再输: 回放上次结果；超出深度（5 笔）后再输: USED
 		const tok = sim('01', 1)
@@ -1283,12 +1335,12 @@ async function tests() {
 		assert.equal(t.meter.getState().remaining, 1000)
 		for (let i = 0; i < 5; i++) await run(sim('08'))
 		r = await run(tok)
-		assert.match(r.message, /令牌未执行：USED 令牌已使用/)
+		assert.match(r.message, /令牌失败：令牌已使用/)
 		assert.equal(t.meter.getState().remaining, 1000)
 		// 余额上限另见下一段；校验对但类型未知: REJECT
 		const d18 = '77' + '55' + '0001' + '0000000000'
 		let sum = 0; for (let i = 0; i < 18; i++) sum += (d18.charCodeAt(i) - 48) * (i % 2 ? 3 : 1)
-		assert.match((await run(d18 + String(sum % 97).padStart(2, '0'))).message, /REJECT/)
+		assert.match((await run(d18 + String(sum % 97).padStart(2, '0'))).message, /错误的令牌/)
 	}
 	// ---- 余额上限: 充值后超出即 OVER（模拟令牌与「已执行」普通令牌一致），不占用、不回放 ----
 	{
@@ -1298,7 +1350,7 @@ async function tests() {
 		const over = S.simTokenEncode({ type: '01', serial: 1, data: 3 })
 		let r = await run(over)
 		assert.equal(r.token.executed, false)
-		assert.match(r.message, /令牌未执行：OVER 余额过多/)
+		assert.match(r.message, /令牌失败：余额过多/)
 		assert.equal(r.token.stsBlockHex, '00 03 00 00 00 01')
 		assert.equal(t.meter.getState().remaining, 8000)
 		assert.match(logText(t.logs.meter), /充值量 3 × 0\.1 m³（= 0\.3 m³ = 300 L，线上 3000 dL）；充值后余额超出余额上限 10000 dL/)
@@ -1307,7 +1359,7 @@ async function tests() {
 		assert.equal(t.meter.getState().remaining, 10000)
 		assert.match(logText(t.logs.meter), /已执行，余额 10000 dL（= 1000\.0 L）/)
 		r = await run('12345678901234567890') // 普通令牌按 creditAmount 200: 超上限
-		assert.match(r.message, /OVER 余额过多/)
+		assert.match(r.message, /余额过多/)
 		t.meter.setLive({ remaining: 5000 })
 		r = await run(over) // 余额降下来后同一令牌重新判定，不回放旧的 OVER
 		assert.equal(r.token.executed, true)
@@ -1660,8 +1712,8 @@ async function tests() {
 		}
 		let r = await final(1)
 		assert.equal(r.payload[0], 2) // RESULT 状态 2
-		assert.equal(r.payload[2], S.TOKEN_DONE_NOEXEC) // 越界: 未执行
-		assert.deepEqual(bytes(r.payload.subarray(3)), [0, 3, 0, 0, 0, 1]) // MODE3 OVER 余额过多
+		assert.equal(r.payload[2], 0x81) // 越界: 未执行
+		assert.deepEqual(bytes(r.payload.subarray(11)), [0, 3, 0, 0, 0, 1]) // MODE3 余额过多
 		// 余额降回可充值范围后再输同一令牌: 必须重新判定（进待办），不能回放旧失败
 		m.app.state.remaining = 5000
 		const again = S.parseRaw(m.handleApp(mk(5, TOKEN_A)))
@@ -1671,7 +1723,7 @@ async function tests() {
 		assert.equal(m.getState().dedupCount, 1) // 更新同一项，不重复占位
 		// 现在是永久的已执行结果: 再输回放，余额不动
 		const rep = S.parseRaw(m.handleApp(mk(6, TOKEN_A)))
-		assert.equal(rep.payload[0], S.TOKEN_DONE_EXEC)
+		assert.equal(rep.payload[0], S.TOKEN_OK_CREDIT)
 		assert.equal(m.getState().remaining, 5500)
 	}
 	// ---- F02: 预算约束在途会话，晚到终局不得报成功 ----
@@ -2061,10 +2113,10 @@ async function tests() {
 		const p2 = m.handleApp(mk(S.TYPE.RESULT, 6, S.resultReqEncode(S.tgtOf(0, 1))))
 		assert.deepEqual(bytes(p1), bytes(p2))
 		assert.equal(rsp(p1).payload[0], 2)
-		assert.equal(rsp(p1).payload[2], 2) // TOKEN 处理状态 2
+		assert.equal(rsp(p1).payload[2], S.TOKEN_OK_CREDIT) // TOKEN 充值成功
 		// 令牌 A 重复输入: 同步终局，回放上次结果，不进待办
 		r = rsp(m.handleApp(mk(S.TYPE.TOKEN, 9, tok('00000000000000000001'))))
-		assert.equal(r.payload[0], 2)
+		assert.equal(r.payload[0], S.TOKEN_OK_CREDIT)
 		assert.equal(m.getState().pending, null)
 		assert.equal(m.getState().remaining, 5500)
 		// 存档 4 条 FIFO: 依次再完成 4 笔（TXN 10..13 -> TGT 0x0A..0x0D），最早的 TGT 0x01 被淘汰
