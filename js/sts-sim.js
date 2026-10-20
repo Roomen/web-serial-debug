@@ -86,6 +86,22 @@
 	// 未 WOR_INIT: 新固件回 ERR_NOT_INIT(0x09)，旧固件与「无会话」共用 ERR_STATE(0x06)，两个都认
 	function notInit(r) { return r.status === H.STATUS.ERR_NOT_INIT || r.status === H.STATUS.ERR_STATE }
 	function endText(e) { return 'reason=' + e.reason + ' ' + (H.END_REASON_NAME[e.reason] || '未知') + '，下行交付 ' + e.dlDelivered + '，上行交付 ' + e.upDelivered }
+	// 面板日志里每个收到的 EVT 都要留一行（含 kind=5 信标），不能因为引擎不处理就不记
+	function worFrameText(d) {
+		return 'EVT 0x0280 kind=' + d.kind + ' ' + (H.KIND_NAME[d.kind] || '未知') + ' src=' + H.drnText(d.src) + ' seq=' + d.seq +
+			' ' + d.len + 'B rssi=' + d.rssi + ' snr=' + d.snr + (d.len ? ': ' + hexSpaced(d.data) : '')
+	}
+	function evtText(evt) {
+		if (evt.cmd === H.EVT.WOR_FRAME) {
+			const d = H.decodeWorFrame(evt.payload)
+			return d ? worFrameText(d) : 'EVT 0x0280 载荷长度异常(' + evt.payload.length + 'B): ' + hexSpaced(evt.payload)
+		}
+		if (evt.cmd === H.EVT.WOR_SESSION_END) {
+			const e = H.decodeSessionEnd(evt.payload)
+			return e ? 'EVT 0x0281 会话终结（' + endText(e) + '）' : 'EVT 0x0281 载荷长度异常(' + evt.payload.length + 'B): ' + hexSpaced(evt.payload)
+		}
+		return 'EVT ' + (evt.name || '0x' + evt.cmd.toString(16)) + ' ' + hexSpaced(evt.payload)
+	}
 
 	// 运行代际守卫: stop() 递增代际后，所有在途/后续请求都以 aborted 结束，
 	// 每个 await 返回后、发下一条命令之前都会检查，启动中途停止的引擎不会再发命令、订阅或置 running
@@ -1024,8 +1040,8 @@
 			if (d.kind === 2) onWoken(d)
 			else if (d.kind === 3) {
 				onDownlink(d).catch(function (e) { log('error', 'kind=3 处理异常: ' + (e && e.message ? e.message : e)) })
-			} else if (d.kind !== 5) { // kind=5 信标忽略
-				log('info', 'EVT 0x0280 kind=' + d.kind + ' ' + (H.KIND_NAME[d.kind] || '') + ' src=' + H.drnText(d.src) + ' ' + d.len + 'B')
+			} else {
+				log('info', worFrameText(d)) // 表端不处理的 kind（含 5 信标）也照记
 			}
 		}
 
@@ -1424,7 +1440,9 @@
 			})
 		}
 		// CIU 级 0x0281 订阅: 最近一个已受理会话的终结只记在这里。runSession 返回后订阅仍在，stop() 才退订
+		// 没有会话订阅在场时，任何 EVT（信标、迟到的上行、会话外的 0x0281）都由这里记一行；会话期间由会话订阅记
 		function onCiuEvt(evt) {
+			if (activeSessions === 0) log('info', evtText(evt))
 			if (evt.cmd !== H.EVT.WOR_SESSION_END) return
 			const e = H.decodeSessionEnd(evt.payload)
 			const rec = lastAccepted
@@ -1458,24 +1476,28 @@
 			const unsub = link.onEvt(function (evt) {
 				if (evt.cmd === H.EVT.WOR_SESSION_END) {
 					const e = H.decodeSessionEnd(evt.payload)
-					if (!e) return
+					if (!e) { log('warn', evtText(evt)); return }
 					if (!sess.accepted || sess.end) { log('info', '会话终结 0x0281 不属于本轮（' + endText(e) + '）'); return }
 					sess.end = { at: clock.now(), reason: e.reason, dl: e.dlDelivered, up: e.upDelivered }
 					log(e.reason === 2 || e.reason === 1 || e.reason === 8 ? 'info' : 'warn', '会话终结 0x0281（' + endText(e) + '），相对 WAKE 请求 ' + (sess.end.at - t0) + 'ms')
 					notify()
 					return
 				}
-				if (evt.cmd !== H.EVT.WOR_FRAME) return
+				if (evt.cmd !== H.EVT.WOR_FRAME) { log('info', evtText(evt)); return }
 				const d = H.decodeWorFrame(evt.payload)
-				if (!d) return
+				if (!d) { log('warn', evtText(evt)); return }
 				// 会话帧不带地址（隐式取自当前事务），实板固件上报捎带上行(kind=4)时 src 填 0；
 				// 所以 kind=4 不按 src 过滤，靠应用层接收判定（表号 + TXN）认领，只有 ACK 等其余事件要求来源是目标表
-				if (d.kind !== 4 && d.src !== tgt) { log('info', '忽略其他来源的 EVT src=' + H.drnText(d.src) + ' kind=' + d.kind); return }
-				if (!sess.open) { log('info', '本轮 WAKE 尚未受理时收到 kind=' + d.kind + '，属于上一会话，不占本轮接收槽'); return }
+				// 只有 kind=2/4 参与会话判定，其余（含 5 信标）照记不处理
+				if (d.kind !== 2 && d.kind !== 4) { log('info', worFrameText(d)); return }
+				if (d.kind !== 4 && d.src !== tgt) { log('info', '不属于目标表，不参与本会话: ' + worFrameText(d)); return }
+				if (!sess.open) { log('info', '本轮 WAKE 尚未受理，属于上一会话，不占本轮接收槽: ' + worFrameText(d)); return }
 				if (d.kind === 2 && !sess.ack) {
 					sess.ack = { at: clock.now() }
 					log('info', 'ACK (kind=2)，相对 WAKE 请求 ' + (sess.ack.at - t0) + 'ms')
-				} else if (d.kind === 4) {
+				} else if (d.kind === 2) {
+					log('info', '本会话已有 ACK，重复的 kind=2 不再计: ' + worFrameText(d))
+				} else {
 					// 一个会话可以捎带多片上行: 过不了接收判定的（含被放弃的心跳的迟到应答）静默丢弃，不占接收槽
 					if (accepts && !accepts(d.data)) {
 						log('warn', '上行 (kind=4) 未通过接收判定，不属于本笔请求，静默丢弃: ' + hexSpaced(d.data))
@@ -2123,6 +2145,7 @@
 		async function start() {
 			if (running || stopped) throw new Error('引擎已启动或已停止')
 			runGen = gen
+			ensureEndWatch() // 启动起就订阅：会话外到达的 EVT 也要进日志
 			await mod.echo()
 			st.fw = await mod.fwInfo()
 			st.role = await mod.ensureRole(2, cfg.pak)
