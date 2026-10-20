@@ -319,6 +319,7 @@ function makeWorld(clock, opts) {
 	return {
 		meter, meter2, ciu, faults, log, port,
 		injectKind3(data) { emit(meter, evtFrame(CIU_ADDR, 3, 1, data, -80, 7)) },
+		injectBeacon(mod, src, data) { emit(mod, evtFrame(src, 5, 9, data, -90, 3)) },
 	}
 }
 function makeLink(clock, port) {
@@ -385,6 +386,12 @@ async function tests() {
 		assert.equal(cs.protoVersion, 2) // 与 0x27
 		assert.equal(cs.pollAllowed, true)
 		assert.equal(t.world.ciu.worInit, true)
+		// 引擎不处理的 EVT（kind=5 信标）两端面板日志也必须各留一行，CIU 会话外同样要记
+		t.world.injectBeacon(t.world.meter, 77n, [0xA1, 0xB2])
+		t.world.injectBeacon(t.world.ciu, 77n, [0xC3])
+		await drive(t.clock, Promise.resolve(), 50)
+		assert.match(logText(t.logs.meter), /EVT 0x0280 kind=5 BEACON src=77 seq=9 2B rssi=-90 snr=3: A1 B2/)
+		assert.match(logText(t.logs.ciu), /EVT 0x0280 kind=5 BEACON src=77 seq=9 1B rssi=-90 snr=3: C3/)
 		t.meter.stop()
 		t.ciu.stop()
 		// 停止后不再处理 EVT，也不给模组发任何命令
