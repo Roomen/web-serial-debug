@@ -45,13 +45,13 @@
 		// kind: text / num / sel / bool；persist=false 的不落盘
 		const METER_FIELDS = [
 			{ k: 'tokenDelayS', label: '令牌处理耗时(s)', kind: 'num', min: 0, max: 3600, w: 72 },
-			{ k: 'tokenMode', label: '普通令牌结果', kind: 'sel', title: '非模拟令牌（任意 20 位）的处理结果: 已执行 = 处理状态 2 + MODE1 充值量；结果码 = 处理状态 1 + MODE3；表计测试 = 处理状态 1 + MODE256 位图。这里只回报结果码，不执行业务动作；模拟令牌按自身类型处理，不受此项影响', options: [
+			{ k: 'tokenMode', label: '普通令牌结果', kind: 'sel', title: '非模拟令牌（任意 20 位）的处理结果: 充值成功 = 协议码 0x01；其它结果按协议码与固定 6 字节 STS 块上送；终局固定 15 字节。这里只回报结果码，不执行业务动作；模拟令牌按自身类型处理，不受此项影响', options: [
 				['exec', '已执行(充值)'], ['1', 'OVER 余额过多'], ['2', 'OLD 令牌过期'], ['3', 'USED 已使用'], ['4', '1ST 换钥第一步'], ['5', '2ND 换钥第二步'],
 				['6', 'EXPIRED 密钥到期'], ['7', 'SUCCESS 设置成功'], ['8', '清余额成功'], ['9', '设置预付费'], ['10', '设置后付费'], ['11', '打开水阀'],
 				['12', '关闭水阀'], ['13', '清除窃水'], ['255', 'REJECT 错误令牌'], ['test', '表计测试(MODE256)'],
 			] },
 			{ k: 'creditAmount', label: '充值量(原始整数)', kind: 'num', min: 0, w: 96, title: '按当前计价模式的最小单位：体积 dL，金额按小数位' },
-			{ k: 'creditLimit', label: '余额上限(0=不限)', kind: 'num', min: 0, w: 96, title: '原始整数，单位同剩余量。充值后剩余量超过上限时令牌不执行，终局为处理状态 1 + MODE3 OVER 余额过多；对模拟令牌和「已执行(充值)」的普通令牌都生效。0 = 只受 i32 上限 2147483647 限制' },
+			{ k: 'creditLimit', label: '余额上限(0=不限)', kind: 'num', min: 0, w: 96, title: '原始整数，单位同剩余量。充值后剩余量超过上限时令牌不执行，终局为协议结果码 0x81 余额过多；对模拟令牌和「已执行(充值)」的普通令牌都生效。0 = 只受 i32 上限 2147483647 限制' },
 			{ k: 'testBits', label: '测试位图(HEX)', kind: 'text', maxlength: 8, w: 96, title: '结果模式为「表计测试」时 MODE256 的 Value，u32 位图：BIT0 水阀开关测试、BIT1 全屏、BIT2 总用水量、BIT3 KRN、BIT4 TI、BIT7 清除窃水、BIT9 软件版本、BIT13 EA、BIT16 KEN、BIT17 DRN' },
 			{ k: 'valveDelayS', label: '阀门动作耗时(s)', kind: 'num', min: 0, max: 600, w: 72 },
 			{ k: 'remaining', label: '初始剩余量', kind: 'num', w: 96 },
@@ -330,6 +330,7 @@
 				ui.valveBtns[x[0]] = b
 			})
 			const faultWrap = el('div', 'form-check form-switch ctl-switch')
+			faultWrap.title = '置位时阀控动作结束返回 0x08 执行失败，阀门位置保持不变；状态寄存器 0x11 同时报故障'
 			ui.valveFault = document.createElement('input')
 			ui.valveFault.type = 'checkbox'
 			ui.valveFault.className = 'form-check-input'
@@ -678,9 +679,9 @@
 			const kv = el('div', 'sts-sim-kv')
 			const add = function (k, v) { kv.appendChild(el('span', 'sts-sim-k', k)); kv.appendChild(el('span', 'sts-sim-v', v)) }
 			if (res.token) {
-				add('处理状态', '0x' + res.token.procStatus.toString(16).toUpperCase().padStart(2, '0') + (res.token.known === false ? '（未知）' : res.token.executed ? ' 已执行' : ' 未执行'))
-				if (res.token.executed) { add('充值量', res.token.creditedText); add('剩余量', res.token.remainingText) }
-				if (res.token.stsResultText) add('STS 结果', res.token.stsResultText)
+				add('协议结果码', '0x' + res.token.code.toString(16).toUpperCase().padStart(2, '0') + (res.token.known === false ? '（未知，按最高位判定）' : ''))
+				if (res.token.executed) add('充值量', res.token.creditedText)
+				if (res.token.remainingText) add('剩余量快照', res.token.remainingText + '（实时余额以 STATUS 为准）')
 				if (res.token.stsBlockHex) add('STS 结果块', res.token.stsBlockHex)
 			}
 			if (res.write) add('WRITE', '寄存器 0x' + res.write.reg.toString(16).toUpperCase() + ' 结果 0x' + res.write.result.toString(16).toUpperCase().padStart(2, '0'))

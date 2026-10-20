@@ -18,7 +18,7 @@
 
 ## 发布流程
 
-`dev` 分支上 `js/version.js` 有变化的推送（含 PR 合入）自动运行 `Desktop release`，发布预览版 `desktop-dev-v<version>`（GitHub 上标为 Pre-release）；版本号已发布过就跳过构建，所以不 bump 的推送不会出包。正式版只在 `main` 上手动运行该工作流（手动入口要等工作流文件进了 `main` 才出现），可填写更新说明，留空时预览版用触发提交的标题。工作流分别构建 macOS ARM64（Apple 芯片）与 Windows x64，不出 Intel Mac 版本；任何一项失败都不发布、不推进更新通道。
+`dev` 分支上 `js/version.js` 有变化的推送（含 PR 合入）自动运行 `Desktop release`，发布预览版 `desktop-dev-v<version>`（GitHub 上标为 Pre-release）；版本号已发布过就跳过构建，所以不 bump 的推送不会出包。正式版先通过 PR 将版本提交合入 `main`，随即创建并推送 `desktop-main-v<version>` tag 触发构建，不以 main CI 完成为前置条件；tag 必须与 `js/version.js` 一致且指向 main HEAD。工作流也保留 `main` 上的手动入口，可填写更新说明，留空时预览版用触发提交的标题。工作流使用固定的 `ubuntu-24.04`、`macos-15` 与 `windows-2025` runner；macOS 14 已进入退役期，迁移至仍受支持的 macOS 15 ARM64。分别构建 macOS ARM64（Apple 芯片）与 Windows x64，不出 Intel Mac 版本；任何一项失败都不发布、不推进更新通道。
 
 安装包及签名上传到草稿 `desktop-<channel>-v<version>`，完成后发布。该版本标签和资产按不可变发布管理，禁止替换；应递增版本重新发布。下载 URL 永远指向这个版本的资产。
 

@@ -8,7 +8,7 @@
 //           一笔操作拿到终局且没有后续步骤就立刻停 ping、关掉句柄（不做空闲保活），会话由看门狗 / 表端 END 收尾，下一次操作重新 WAKE；
 //           WAKE 回未初始化（模组中途复位）才补一次 WOR_INIT 再 WAKE；只有会话真的结束（0x0281 / 表端 END / 看门狗）才重新 WAKE；
 //           不发 FINISH / ABORT，下一轮 WAKE 前硬等上一会话的 0x0281（有上限）再冷却
-// 受理不是成功: WAKE/SEND 回 OK 只是受理，TOKEN 处理状态 0 / WRITE 结果 0xFE 只是收下，终局靠 RESULT 轮询取回
+// 受理不是成功: WAKE/SEND 回 OK 只是受理，TOKEN 结果码 0x00 / WRITE 结果 0xFE 只是收下，终局靠 RESULT 轮询取回
 // 置备（钥表、DRN、netId）由外部工具完成，这里不下发钥表、不接触主密钥，只核对，并在角色不对且填了 PAK 时定形
 // clock 约定: { now() -> 毫秒时间戳, setTimeout(fn, ms) -> 句柄, clearTimeout(句柄) }
 ;(function () {
@@ -556,7 +556,7 @@
 		function finishSimToken(w) {
 			const I = S.STS_IDX
 			const m = S.simTokenDecode(w.digits)
-			const code = function (v) { return { procStatus: S.TOKEN_DONE_NOEXEC, stsBlock: S.stsResultEncode({ index: I.CODE, value: v }) } }
+			const code = function (v) { return { code: null, stsBlock: S.stsResultEncode({ index: I.CODE, value: v }) } }
 			let rsp
 			let replayable = true
 			let executed = false
@@ -573,7 +573,7 @@
 						a.remaining += credit
 						a.totalPurchased = Math.min(4294967295, a.totalPurchased + credit)
 						recordPush(credit, w.acceptedMin)
-						rsp = { procStatus: S.TOKEN_DONE_EXEC, credited: credit, remaining: a.remaining, stsBlock: S.stsResultEncode({ index: I.CREDIT, value: credit }) }
+						rsp = { code: S.TOKEN_OK_CREDIT, credited: credit, remaining: a.remaining, stsBlock: S.stsResultEncode({ index: I.CREDIT, value: credit }) }
 						executed = true
 						break
 					}
@@ -586,7 +586,7 @@
 					case '08': rsp = code(7); break
 					case '10': a.keyStep = 1; rsp = code(4); note = '换钥第一步，等第二枚'; break
 					case '11': rsp = code(a.keyStep === 1 ? 7 : 5); note = a.keyStep === 1 ? '两枚换钥令牌齐全，换钥完成（SUCCESS）' : '单独第二枚，2ND'; a.keyStep = 0; break
-					case '20': rsp = { procStatus: S.TOKEN_DONE_NOEXEC, stsBlock: S.stsResultEncode({ index: I.TEST, value: m.data }) }; note = '表计测试位图只回报，不执行测试动作'; break
+					case '20': rsp = { code: null, stsBlock: S.stsResultEncode({ index: I.TEST, value: m.data }) }; note = '表计测试位图只回报，不执行测试动作'; break
 					default: // '90'
 						rsp = code(S.STS_CODE[m.data] ? m.data : 255)
 						replayable = m.data !== 1
@@ -595,6 +595,8 @@
 				}
 			}
 			if (consumed) a.simUsed.add(w.digits)
+			if (rsp.code == null) rsp.code = S.tokenCodeOf(S.stsResultDecode(rsp.stsBlock))
+			rsp.remaining = a.remaining
 			const payload = S.tokenRspEncode(rsp)
 			dedupStore(w.digits, payload, replayable)
 			return { kind: 'token', payload: payload, executed: executed, sim: m, action: action, note: note }
@@ -673,22 +675,24 @@
 						a.totalPurchased = Math.min(4294967295, a.totalPurchased + cfg.creditAmount)
 						recordPush(cfg.creditAmount, w.acceptedMin)
 						// MODE1 的 Value 与本次充值量同数同单位
-						rsp = { procStatus: S.TOKEN_DONE_EXEC, credited: cfg.creditAmount, remaining: a.remaining, stsBlock: S.stsResultEncode({ index: I.CREDIT, value: cfg.creditAmount }) }
+						rsp = { code: S.TOKEN_OK_CREDIT, credited: cfg.creditAmount, remaining: a.remaining, stsBlock: S.stsResultEncode({ index: I.CREDIT, value: cfg.creditAmount }) }
 					} else if (cfg.tokenMode === 'exec') {
 						// 超出余额上限（或 i32 越界）: 终局 OVER，绝不回绕成负数；取决于当前余额，用掉一些水后应当成功，不回放
-						rsp = { procStatus: S.TOKEN_DONE_NOEXEC, stsBlock: S.stsResultEncode({ index: I.CODE, value: 1 }) }
+						rsp = { code: null, stsBlock: S.stsResultEncode({ index: I.CODE, value: 1 }) }
 						replayable = false
 					} else if (cfg.tokenMode === 'test') {
-						rsp = { procStatus: S.TOKEN_DONE_NOEXEC, stsBlock: S.stsResultEncode({ index: I.TEST, value: parseInt(cfg.testBits, 16) >>> 0 }) }
+						rsp = { code: null, stsBlock: S.stsResultEncode({ index: I.TEST, value: parseInt(cfg.testBits, 16) >>> 0 }) }
 					} else {
 						// 结果码只回报，不模拟对应的业务动作（清余额、开关阀等）；OVER 取决于余额，不回放
 						const code = Number(cfg.tokenMode)
-						rsp = { procStatus: S.TOKEN_DONE_NOEXEC, stsBlock: S.stsResultEncode({ index: I.CODE, value: code }) }
+						rsp = { code: null, stsBlock: S.stsResultEncode({ index: I.CODE, value: code }) }
 						replayable = code !== 1
 					}
+					if (rsp.code == null) rsp.code = S.tokenCodeOf(S.stsResultDecode(rsp.stsBlock))
+					rsp.remaining = a.remaining
 					const payload = S.tokenRspEncode(rsp)
 					dedupStore(w.digits, payload, replayable)
-					return { kind: 'token', payload: payload, executed: rsp.procStatus === S.TOKEN_DONE_EXEC, note: replayable || cfg.tokenMode !== 'exec' ? '' : overNote() }
+					return { kind: 'token', payload: payload, executed: rsp.code === S.TOKEN_OK_CREDIT, note: replayable || cfg.tokenMode !== 'exec' ? '' : overNote() }
 				}
 				return null
 			},
@@ -704,6 +708,7 @@
 					return { kind: 'restore', pos: a.valve }
 				}
 				a.valveWorkPending = false
+				if (a.valveFault) return { kind: 'cmd', open: m.work.open, failed: true, payload: S.writeRspEncode(R.VALVE_TEST, S.WRITE_EXEC_FAIL) }
 				a.valve = m.target
 				const w = m.work
 				const info = { kind: 'cmd', open: w.open, payload: S.writeRspEncode(R.VALVE_TEST, S.WRITE_OK), holdCancelled: false, holdKept: false, newHold: false, expiredRepeat: false }
@@ -860,7 +865,8 @@
 				log('info', '恢复动作完成，阀门回到指令前状态（' + posName(r.pos) + '），保持期结束')
 			} else {
 				try { policy.pendingClose(r.payload) } catch (e) { log('error', '待办存档失败: ' + e.message) }
-				if (r.open) log('info', '开阀到位，不设保持期' + (r.holdCancelled ? '；原关阀保持期已取消，之后保持开阀' : ''))
+				if (r.failed) log('warn', '阀门动作故障，终局 0x08 执行失败，位置保持不变')
+				else if (r.open) log('info', '开阀到位，不设保持期' + (r.holdCancelled ? '；原关阀保持期已取消，之后保持开阀' : ''))
 				else if (r.holdKept) log('info', '关阀到位；保持期内的同方向重发，指令前状态与恢复截止时刻都不重设')
 				else if (r.expiredRepeat) log('warn', '关阀到位；这笔同方向指令收到时还在保持期内，但动作期间保持期已到期，按新的关阀指令处理：重新记录指令前状态并开始新的 10 分钟')
 				else log('info', '关阀到位，保持 10 分钟后自动恢复到指令前状态')
@@ -1183,14 +1189,14 @@
 			const t = S.tokenRspDecode(payload)
 			if (!t) { ev.kind = 'discard'; ev.reason = 'payload-length'; return }
 			ev.token = t
-			ev.kind = t.known && t.procStatus === S.TOKEN_ACCEPTED ? 'accepted' : 'final'
+			ev.kind = t.code === S.TOKEN_ACCEPTED ? 'accepted' : 'final'
 		}
 		function fillWrite(ev, payload) {
 			ev.type = T.WRITE
 			const w = S.writeRspDecode(payload)
 			if (!w) { ev.kind = 'discard'; ev.reason = 'payload-length'; return }
 			ev.write = w
-			ev.kind = w.result === S.WRITE_ACCEPTED ? 'accepted' : 'final' // 0x00..0x07 与 RFU 值都终结（规则 8）
+			ev.kind = w.result === S.WRITE_ACCEPTED ? 'accepted' : 'final' // 0x08 执行失败与保留结果值都终结（规则 8）
 		}
 		function arm(now) {
 			if (st.pending && !st.pending.armed) { st.pending.armed = true; st.pending.armedAt = now }
@@ -1325,7 +1331,7 @@
 								if (ev.kind === 'discard' || ev.kind === 'accepted') {
 									ev.kind = 'final'
 									ev.rawTail = Uint8Array.from(r.tail)
-									ev.token = ev.token || (ptype === T.TOKEN ? { procStatus: r.tail[0], known: false } : undefined)
+									ev.token = ev.token || (ptype === T.TOKEN ? { code: r.tail[0], known: false } : undefined)
 									ev.write = ev.write || (ptype === T.WRITE ? { reg: r.tail[0], result: r.tail[1] } : undefined)
 								}
 								pendingClear()
@@ -1814,39 +1820,28 @@
 			switch (ev.type) {
 				case S.TYPE.TOKEN: {
 					const t = ev.token
-					res.token = { procStatus: t.procStatus, known: t.known }
-					if (!t.known) {
-						res.outcome = 'failed'
-						res.message = '未知的 TOKEN 处理状态 0x' + t.procStatus.toString(16).toUpperCase().padStart(2, '0') + '，按失败结束' + (ev.rawTail ? '，原始尾部 ' + hexSpaced(ev.rawTail) : '')
-						return
-					}
-					res.outcome = 'done'
-					res.token.stsBlockHex = t.stsBlock ? hexSpaced(t.stsBlock) : ''
-					const sr = t.stsBlock ? S.stsResultDecode(t.stsBlock, t.procStatus) : { parsed: false, len: 0 }
-					res.token.stsResult = sr
-					res.token.stsResultText = sr.parsed ? sr.text + (sr.mismatch ? '（与处理状态对应不上）' : '') : '结果块 ' + sr.len + 'B 旧格式，无法解析'
-					if (t.procStatus === S.TOKEN_DONE_EXEC) {
-						res.token.executed = true
-						res.token.credited = t.credited
-						res.token.remaining = t.remaining
+					const acceptedTail = t.code === S.TOKEN_ACCEPTED
+					const failed = acceptedTail || S.tokenIsFail(t.code)
+					res.token = { code: t.code, known: t.known, executed: t.code === S.TOKEN_OK_CREDIT,
+						credited: t.credited, remaining: t.remaining, remainingText: t.remaining == null ? '' : fmtQty(t.remaining),
+						stsBlockHex: t.stsBlock ? hexSpaced(t.stsBlock) : '' }
+					res.outcome = failed ? 'failed' : 'done'
+					res.message = acceptedTail ? 'RESULT 已完成但尾部仍为受理值，按失败终结' :
+						'令牌' + (failed ? '失败' : '成功') + '：' + (S.TOKEN_CODE[t.code] || '未知结果码 0x' + t.code.toString(16).toUpperCase().padStart(2, '0'))
+					if (t.code === S.TOKEN_OK_CREDIT) {
 						res.token.creditedText = fmtQty(t.credited)
-						res.token.remainingText = fmtQty(t.remaining)
-						res.message = '令牌已执行：充值 ' + res.token.creditedText + '，剩余 ' + res.token.remainingText
-					} else {
-						res.token.executed = false
-						if (sr.parsed && sr.kind === 'code' && sr.code) res.message = (sr.code.ok ? '令牌成功（非充值）：' : '令牌未执行：') + sr.code.name + ' ' + sr.code.text
-						else if (sr.parsed && sr.kind === 'test') res.message = '表计测试令牌：' + (sr.bits.length ? sr.bits.map(function (x) { return 'BIT' + x.bit + ' ' + x.text }).join('、') : '无测试位')
-						else res.message = '令牌未执行：' + res.token.stsResultText
+						res.message += '，充值 ' + res.token.creditedText
 					}
 					return
 				}
+
 				case S.TYPE.WRITE: {
 					const w = ev.write
 					res.write = { reg: w.reg, result: w.result }
 					if (w.result === S.WRITE_OK) { res.outcome = 'done'; res.message = 'WRITE 0x' + w.reg.toString(16).toUpperCase() + ' 成功' }
 					else {
 						res.outcome = 'failed'
-						res.message = 'WRITE 0x' + w.reg.toString(16).toUpperCase() + ' 结果 0x' + w.result.toString(16).toUpperCase().padStart(2, '0') + (S.NAK_NAME[w.result] ? '（' + S.NAK_NAME[w.result] + '）' : '（未知结果，按失败）')
+						res.message = 'WRITE 0x' + w.reg.toString(16).toUpperCase() + ' 结果 0x' + w.result.toString(16).toUpperCase().padStart(2, '0') + (w.result === S.WRITE_EXEC_FAIL ? '（执行失败：阀门堵转、未到位或超时，细节读 0x11）' : '（未知结果，按失败）')
 					}
 					return
 				}
@@ -2113,20 +2108,28 @@
 		}
 
 		// READ 块读: 表体装不下会只回前 k 个，按实收数量继续请求剩余部分
+		let singleReadOnly = false
 		async function readTlvs(res, start, count, label) {
 			const all = []
 			let s = start
 			let left = count
 			while (left > 0) {
-				const n = Math.min(left, S.READ_MAX_REGS)
+				const n = singleReadOnly ? 1 : Math.min(left, S.READ_MAX_REGS)
 				const ev = await driveImmediate(res, policy.sendRead(s, n), label)
 				if (!ev) return null
-				if (ev.kind === 'nak') { applyFinal(res, ev); return null }
+				if (ev.kind === 'nak') {
+					if (n > 1 && ev.nak.reason === S.NAK.UNIMPLEMENTED) {
+						singleReadOnly = true
+						log('info', '表体不支持块读，本次连接改为逐个寄存器读取')
+						continue
+					}
+					applyFinal(res, ev); return null
+				}
 				if (ev.kind !== 'final' || !ev.read) { res.outcome = 'failed'; res.message = label + ' 得到意外事件 ' + ev.kind; return null }
 				const got = ev.read.length
 				if (got < 1) { res.outcome = 'failed'; res.message = label + ' 响应没有任何 TLV'; return null }
 				ev.read.forEach(function (t) { all.push(t) })
-				s += got
+				s = ev.read[got - 1].id + 1
 				left -= got
 				if (got < n) log('info', 'READ 只回了前 ' + got + '/' + n + ' 个，继续读剩余部分')
 			}
@@ -2270,6 +2273,7 @@
 				cfg.meterNo = n.meterNo
 				target = BigInt(n.targetDrn)
 				policy = createCiuPolicy(n.meterNo)
+				singleReadOnly = false
 				st.tariff = null
 				st.protoVersion = null
 				st.pollAllowed = true
