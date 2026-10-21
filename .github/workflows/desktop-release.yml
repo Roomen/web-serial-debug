@@ -233,8 +233,8 @@ jobs:
           TAG="desktop-$CHANNEL-v$VERSION"
           PRERELEASE=()
           if [ "$CHANNEL" = dev ]; then PRERELEASE=(--prerelease --latest=false); fi
-          TITLE="Serial Debug $VERSION"
-          if [ "$CHANNEL" = dev ]; then TITLE="$TITLE 预览版"; fi
+          TITLE="$VERSION"
+          if [ "$CHANNEL" = dev ]; then TITLE="$VERSION pre"; fi
           gh release create "$TAG" artifacts/* --target "$GITHUB_SHA" --draft "${PRERELEASE[@]}" --title "$TITLE" --notes-file release-notes.md
           gh release edit "$TAG" --draft=false
       - name: Advance updater channel pointer
