@@ -1317,9 +1317,9 @@ async function tests() {
 		assert.equal(t.meter.getState().valve, S.VALVE_POS_CLOSED)
 		await run(sim('05'))
 		assert.equal(t.meter.getState().valve, S.VALVE_POS_OPEN)
-		// 换钥: 第一枚 1ST，接着第二枚 设置参数成功；单独第二枚 2ND
+		// 换钥: 第一枚 1ST（0x02），接着第二枚补齐也报 2ND（0x03）；单独第二枚同样是 2ND
 		assert.match((await run(sim('10'))).message, /换钥第一步成功/)
-		assert.match((await run(sim('11'))).message, /设置参数成功/)
+		assert.match((await run(sim('11'))).message, /换钥第二步成功/)
 		assert.match((await run(sim('11'))).message, /换钥第二步成功/)
 		// 表计测试位图 / 指定结果码 / 清余额
 		assert.match((await run(sim('20', 0x20001))).message, /令牌成功：表计测试成功/)
