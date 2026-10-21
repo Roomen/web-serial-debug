@@ -771,8 +771,16 @@
 				}
 				case TYPE.READ: {
 					const r = readReqDecode(p)
-					if (r.error) lines.push('READ 请求非法(' + r.error + ')')
-					else lines.push('起始寄存器 = ' + hexByte(r.start) + '，数量 = ' + r.count)
+					if (r.error) {
+						lines.push('READ 请求非法(' + r.error + ')')
+					} else {
+						const name = regName(r.start)
+						lines.push('起始寄存器 = ' + hexByte(r.start) + (name ? ' (' + name + ')' : ''))
+						lines.push('数量 = ' + r.count)
+						if (r.start === REG.PROTO_VER && r.count === 1) {
+							lines.push('用途 = 协议版本 / 链路心跳')
+						}
+					}
 					break
 				}
 				case TYPE.WRITE: {

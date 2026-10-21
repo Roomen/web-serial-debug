@@ -5711,7 +5711,7 @@
 			if (p && typeof p.logView === 'function') {
 				const model = p.logView(r)
 				if (!model || (Array.isArray(model) && !model.length)) return ''
-				return window.ParseView.render(model, { collapsed: !opts.isReceive, tag: opts.sendName, dir: opts.isReceive ? 'up' : 'down' })
+				return window.ParseView.render(model, { collapsed: !!opts.collapsed, tag: opts.sendName, dir: opts.isReceive ? 'up' : 'down' })
 			}
 			if (p && typeof p.formatFrame === 'function') return window.ParseView.renderLegacy(p.formatFrame(r))
 		} catch (e) { /* 当作未识别 */ }

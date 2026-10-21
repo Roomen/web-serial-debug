@@ -47,6 +47,8 @@ assert.equal(PV.render([]), '')
 	assert.ok(folded.indexOf('</summary>') < folded.indexOf('pv-meta'))
 	assert.ok(PV.render({ title: 'T' }, { collapsed: true }).startsWith('<div class="pv">'))
 	assert.ok(PV.render(model).startsWith('<div class="pv pv-down">'))
+	assert.ok(!PV.render(model).includes('<details'), '缺省 collapsed 选项时必须默认展开，绝不可包进 details')
+	assert.ok(!PV.render(model, { dir: 'down' }).includes('<details'), '无论上下行方向，缺省 collapsed 均同等展开')
 	// 多帧: 每帧各自成块
 	assert.equal(PV.render([model, model]).split('class="pv pv-down"').length - 1, 2)
 	// 模型没给方向时用调用方兜底

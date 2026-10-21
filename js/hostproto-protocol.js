@@ -745,7 +745,13 @@
 			return 'TOKEN 充值应答'
 		}
 		if (t === S.TYPE.STATUS) return isDown ? '查询表状态' : '表状态应答'
-		if (t === S.TYPE.READ) return isDown ? '读寄存器' : '读寄存器应答'
+		if (t === S.TYPE.READ) {
+			if (isDown) {
+				if (p && p.length === 2 && p[0] === S.REG.PROTO_VER && p[1] === 1) return '协议版本 / 链路心跳'
+				return '读寄存器'
+			}
+			return '读寄存器应答'
+		}
 		if (t === S.TYPE.WRITE) return isDown ? '写寄存器/控阀' : '写寄存器应答'
 		if (t === S.TYPE.RESULT) {
 			if (isDown) return '轮询结果'
@@ -797,8 +803,15 @@
 			errors: fr.errors.slice(),
 		}
 		if (hasSts) {
+			const S = W.stsCiu
 			m.badges.push({ text: 'STS-CIU', kind: 'info', title: 'STS-CIU 应用层报文' })
 			if (fr.sts.fields.事务号 != null) m.badges.push({ text: 'TXN ' + fr.sts.fields.事务号, kind: 'info', title: '事务号' })
+			if (fr.sts.frame && fr.sts.frame.type === S.TYPE.READ && fr.sts.dir === 'down') {
+				const sp = fr.sts.raw && fr.sts.raw.length >= 6 ? Uint8Array.from(fr.sts.raw).subarray(5, fr.sts.raw.length - 1) : null
+				if (sp && sp.length === 2 && sp[0] === S.REG.PROTO_VER && sp[1] === 1) {
+					m.badges.push({ text: '协议版本 / 链路心跳', kind: 'info', title: 'READ 0x27 n=1: 协议版本查询（可作链路心跳）' })
+				}
+			}
 			m.badges.push({ text: f.命令.name, kind: 'info', title: '底层信封指令: ' + f.命令.name + ' (' + f.命令.value + ')' })
 		} else {
 			m.badges.push({ text: TYPE_NAME[fr.type] || 'TYPE ' + fr.type, kind: 'info', title: f.方向 })

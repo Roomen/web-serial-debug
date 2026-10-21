@@ -60,6 +60,73 @@ assert.equal(H.logView, registered.impl.logView)
 	const modSec = evt.sections.find(sec => /模组传输参数/.test(sec.title))
 	assert.ok(modSec, '模组传输参数节必须存在')
 	assert.ok(modSec.pairs.some(p => p[0].startsWith('来源地址') && p[1] === '1'), '来源传输地址必须完好保留')
+	assert.ok(modSec.pairs.some(p => p[0] === 'data' && p[1] === H.hexSpaced(app)), '模组层原始 data 载荷必须等于应用帧十六进制')
+
+	// 验证 WOR_SEND 包含 STS 时双层载荷与业务字段完整保留，且合法下行 READ 0x27 n=1 精确显示双用途标记
+	const req27 = S.buildFrame({ dir: 0, type: S.TYPE.READ, txn: 3, meter: '12345678', payload: S.readReqEncode(0x27, 1) })
+	const sendFrame = H.buildFrame({ type: 0, cmd: H.CMD.WOR_SEND, seq: 1, payload: Uint8Array.from([req27.length & 0xff, (req27.length >> 8) & 0xff, ...req27]) })
+	const sendEvt = J(H.logView(H.parseFrame(sendFrame)))[0]
+	assert.equal(sendEvt.title, '协议版本 / 链路心跳')
+	assert.ok(sendEvt.badges.some(b => b.text === '协议版本 / 链路心跳'))
+	const sendStsSec = sendEvt.sections.find(s => /^STS-CIU 应用帧/.test(s.title))
+	assert.ok(sendStsSec, 'STS 应用帧节必须存在')
+	assert.deepEqual(sendStsSec.pairs.find(p => p[0] === '起始寄存器'), ['起始寄存器', '0x27', '协议版本'])
+	assert.deepEqual(sendStsSec.pairs.find(p => p[0] === '数量'), ['数量', '1'])
+	assert.deepEqual(sendStsSec.pairs.find(p => p[0] === '用途'), ['用途', '协议版本 / 链路心跳'])
+	const sendModSec = sendEvt.sections.find(s => /模组传输参数/.test(s.title))
+	assert.ok(sendModSec, 'WOR_SEND 模组传输参数节必须存在')
+	assert.ok(sendModSec.pairs.some(p => p[0] === '数据' && p[1] === H.hexSpaced(req27)), 'WOR_SEND 原始数据载荷必须等于应用帧十六进制')
+	assert.ok(sendModSec.pairs.some(p => p[0] === '数据长度'), 'WOR_SEND 数据长度必须保留')
+
+	// 验证 WOR_SET_UPLINK 包含 STS 时双层载荷完整保留
+	const upFrame = H.buildFrame({ type: 0, cmd: H.CMD.WOR_SET_UPLINK, seq: 2, payload: Uint8Array.from([req27.length, ...req27]) })
+	const upEvt = J(H.logView(H.parseFrame(upFrame)))[0]
+	const upModSec = upEvt.sections.find(s => /模组传输参数/.test(s.title))
+	assert.ok(upModSec, 'WOR_SET_UPLINK 模组传输参数节必须存在')
+	assert.ok(upModSec.pairs.some(p => p[0] === '追加上行分片' && p[1] === H.hexSpaced(req27)), 'WOR_SET_UPLINK 原始分片载荷必须等于应用帧十六进制')
+	assert.ok(upModSec.pairs.some(p => p[0] === '数据长度'), 'WOR_SET_UPLINK 数据长度必须保留')
+
+	// 反例 1: 邻近寄存器 (0x26 n=1 表计固件版本号) 绝不误标为链路心跳
+	const req26 = S.buildFrame({ dir: 0, type: S.TYPE.READ, txn: 4, meter: '12345678', payload: S.readReqEncode(0x26, 1) })
+	const send26 = J(H.logView(H.parseFrame(H.buildFrame({ type: 0, cmd: H.CMD.WOR_SEND, seq: 3, payload: Uint8Array.from([req26.length & 0xff, 0, ...req26]) }))))[0]
+	assert.equal(send26.title, '读寄存器')
+	assert.ok(!send26.badges.some(b => b.text.includes('链路心跳')))
+	const sec26 = send26.sections.find(s => /^STS-CIU 应用帧/.test(s.title))
+	assert.deepEqual(sec26.pairs.find(p => p[0] === '起始寄存器'), ['起始寄存器', '0x26', '表计固件版本号'])
+	assert.ok(!sec26.pairs.some(p => p[0] === '用途'))
+
+	// 反例 2: 数量不为 1 (0x27 n=2) 绝不误标为链路心跳
+	const req27_2 = S.buildFrame({ dir: 0, type: S.TYPE.READ, txn: 5, meter: '12345678', payload: S.readReqEncode(0x27, 2) })
+	const send27_2 = J(H.logView(H.parseFrame(H.buildFrame({ type: 0, cmd: H.CMD.WOR_SEND, seq: 4, payload: Uint8Array.from([req27_2.length & 0xff, 0, ...req27_2]) }))))[0]
+	assert.equal(send27_2.title, '读寄存器')
+	assert.ok(!send27_2.badges.some(b => b.text.includes('链路心跳')))
+	const sec27_2 = send27_2.sections.find(s => /^STS-CIU 应用帧/.test(s.title))
+	assert.deepEqual(sec27_2.pairs.find(p => p[0] === '数量'), ['数量', '2'])
+	assert.ok(!sec27_2.pairs.some(p => p[0] === '用途'))
+
+	// 反例 3: 上行响应帧 (含 0x27 协议版本) 绝不误标为链路心跳
+	const rsp27 = S.buildFrame({ dir: 1, type: S.TYPE.READ, txn: 3, meter: '12345678', payload: Uint8Array.from([0x27, 0x00, 0x02]) })
+	const evtRsp = J(H.logView(H.parseFrame(H.buildFrame({ type: 2, cmd: 0x0280, seq: 0, payload: Uint8Array.from([1,0,0,0,0,0,0,0, 4, 0x2a, 0x00, rsp27.length, ...rsp27, 0x9c, 0xff, 0x05]) }))))[0]
+	assert.equal(evtRsp.title, '读寄存器应答')
+	assert.ok(!evtRsp.badges.some(b => b.text.includes('链路心跳')))
+
+	// 反例 4: 截短 READ 载荷 (1 字节) 绝不出现心跳徽标
+	const truncApp = S.buildFrame({ dir: 0, type: S.TYPE.READ, txn: 6, meter: '12345678', payload: [0x27] })
+	const sendTrunc = J(H.logView(H.parseFrame(H.buildFrame({ type: 0, cmd: H.CMD.WOR_SEND, seq: 5, payload: Uint8Array.from([truncApp.length & 0xff, 0, ...truncApp]) }))))[0]
+	assert.equal(sendTrunc.title, 'WOR_SEND')
+	assert.ok(!sendTrunc.badges.some(b => b.text.includes('链路心跳')))
+
+	// 反例 5: 超长 READ 载荷 (3 字节) 载荷长度非法，退回外层命令，绝不出现心跳徽标
+	const longApp = S.buildFrame({ dir: 0, type: S.TYPE.READ, txn: 7, meter: '12345678', payload: [0x27, 0x01, 0x00] })
+	const sendLong = J(H.logView(H.parseFrame(H.buildFrame({ type: 0, cmd: H.CMD.WOR_SEND, seq: 6, payload: Uint8Array.from([longApp.length & 0xff, 0, ...longApp]) }))))[0]
+	assert.equal(sendLong.title, 'WOR_SEND')
+	assert.ok(!sendLong.badges.some(b => b.text.includes('链路心跳')))
+	// 反例 6: 损坏内层 CRC 绝不出现心跳徽标
+	const badCrcApp = Uint8Array.from(req27)
+	badCrcApp[badCrcApp.length - 1] ^= 0xff
+	const sendBadCrc = J(H.logView(H.parseFrame(H.buildFrame({ type: 0, cmd: H.CMD.WOR_SEND, seq: 7, payload: Uint8Array.from([badCrcApp.length & 0xff, 0, ...badCrcApp]) }))))[0]
+	assert.equal(sendBadCrc.title, 'WOR_SEND')
+	assert.ok(!sendBadCrc.badges.some(b => b.text.includes('链路心跳')))
 
 	// 验证 TOKEN 0x00 已受理标题精准显示
 	const tokenAcc = S.buildFrame({ dir: 1, type: S.TYPE.TOKEN, txn: 2, meter: '12345678', payload: [0] })
