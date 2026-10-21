@@ -157,6 +157,25 @@ const tag = (t, items) => { let p = []; items.forEach(it => { p = p.concat(it) }
 	for (const junk of [[], [1, 2], hex('00 11 22 33 44')]) assert.equal(window.gzLogView(window.gzParseFrame(junk)), null)
 }
 
+// ---- 工装 gz: 0x30 应答按大端解析（状态字与电压） ----
+// 固件按大端下发（FlowLogic 2fe64af 恢复产测大端字节序）：电压 01 6E = 366 → 3.66 V，
+// 状态字 FF 7F FF DB = 0xFF7FFFDB，失败位为 阀控(bit2) / 磁开关(bit5) / 超声总线(bit23)。
+// 按小端读会得 281.61 V 与只命中 MBUS模块(bit15)，失败品被当成通过。
+{
+	const frame = hex('A5 3A 30 88 01 02 03 04 05 06 07 38 39 38 36 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30' +
+		' 38 36 30 30 30 30 30 30 30 30 30 30 30 30 30 14 01 6E F6 FF FF FF FF FF FF 7F FF DB 65')
+	const r = window.gzParseFrame(frame)
+	assert.ok(r && r.xorOk, '合成帧 XOR 应通过')
+	const m = J(window.gzLogView(r))
+	const pairs = m.sections.flatMap(s => s.pairs || [])
+	assert.equal(pairs.find(p => p[0] === '供电')[1], '3.66 V')
+	const html = m.sections.map(s => s.html || '').join('')
+	const bad = Array.from(html.matchAll(/gz-flag bad" title="([^"]+)/g), x => x[1]).sort()
+	assert.deepEqual(bad, ['磁开关', '超声总线', '阀控'].sort())
+	assert.ok(!html.includes('gz-flag bad" title="MBUS模块'), 'MBUS模块应判通过')
+	assert.ok(m.badges.some(b => b.text === '3/24 异常'), '失败项数为 3')
+}
+
 // ---- W-MBUS ----
 {
 	const down = window.wmbusBuildDownFrame({ addr: '01 02 03 04 05 06 07 08', keyId: 0, mcnt: 7, cmd: 0x10 })
