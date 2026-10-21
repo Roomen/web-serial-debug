@@ -32,7 +32,7 @@
 	const DEDUP_DEPTH = 5
 	const RECORDS = 12
 	const VALVE_HOLD_MS = 10 * 60 * 1000
-	// 令牌结果模式: exec = 执行充值（状态 2 + MODE1）；1..13 / 255 = 状态 1 + MODE3 对应结果码；test = 状态 1 + MODE256 位图
+	// 令牌结果模式: exec = 执行充值（结果码 0x01 + MODE1）；1..13 / 255 = 该 MODE3 值按协议映射表得出的结果码（终局载荷固定 15 字节）；test = 表计测试（结果码 0x0B + MODE256 位图）
 	const TOKEN_MODES = ['exec', 'test'].concat(Object.keys(S.STS_CODE))
 	const BEAT_MS = 1200 // 停等栅格一拍；表端上行队列满等一拍再补
 	const SESSION_COOLDOWN_MS = 1200 // CIU 终结后表端仍在 linger；实板表端约晚 1s 回 GRID，留一拍再唤醒
@@ -585,7 +585,9 @@
 					case '07': rsp = code(13); note = '清除窃水状态'; break
 					case '08': rsp = code(7); break
 					case '10': a.keyStep = 1; rsp = code(4); note = '换钥第一步，等第二枚'; break
-					case '11': rsp = code(a.keyStep === 1 ? 7 : 5); note = a.keyStep === 1 ? '两枚换钥令牌齐全，换钥完成（SUCCESS）' : '单独第二枚，2ND'; a.keyStep = 0; break
+					// 换钥第二步固定回 MODE3 5（KEY_2ND → 协议结果码 0x03）；不能用 7，7 在协议映射表里是「设置参数成功」，
+					// CIU 只按结果码显示，会把换钥完成报成设置参数成功
+					case '11': rsp = code(5); note = a.keyStep === 1 ? '两枚换钥令牌齐全，换钥完成' : '单独第二枚'; a.keyStep = 0; break
 					case '20': rsp = { code: null, stsBlock: S.stsResultEncode({ index: I.TEST, value: m.data }) }; note = '表计测试位图只回报，不执行测试动作'; break
 					default: // '90'
 						rsp = code(S.STS_CODE[m.data] ? m.data : 255)
