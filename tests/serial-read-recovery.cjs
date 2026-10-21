@@ -574,8 +574,9 @@ async function testLogRendering() {
 	assert.ok(html.startsWith('HEX:41 42<br/>TEXT:AB<div class="pv pv-up">'), html)
 	assert.ok(!html.includes('<script>') && !html.includes('<b>') && !html.includes('<k>'), html)
 	assert.ok(html.includes('&lt;script&gt;x&lt;/script&gt;'))
-	// TX 只留头部一行，其余折叠进 <details>
-	assert.ok(api.renderLogBody(bytes(0x41), 'parse', { isReceive: false, sendName: '读取' }).startsWith('<details class="pv pv-up pv-fold">'))
+	// TX 与 RX 默认同等展开；显式 collapsed: true 仍折叠进 <details>
+	assert.ok(api.renderLogBody(bytes(0x41), 'parse', { isReceive: false, sendName: '读取' }).startsWith('<div class="pv pv-up">'))
+	assert.ok(api.renderLogBody(bytes(0x41), 'parse', { isReceive: false, sendName: '读取', collapsed: true }).startsWith('<details class="pv pv-up pv-fold">'))
 	// 不是本协议的帧：与 HEX/TEXT 同显时只是没有解析段；只选「解析」回退 HEX 并标未识别
 	context.proto = { logView: () => null }
 	assert.equal(api.renderLogBody(bytes(0x41, 0x42), 'hex&parse', { isReceive: true }), '41 42')

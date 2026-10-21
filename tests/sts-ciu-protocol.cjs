@@ -273,4 +273,34 @@ assert.equal(S.tokenRspDecode(hex('00 01')), null)
 	assert.match(S.parseFrame(frame(1,T.WRITE,1,[0x80,8])).decoded, /执行失败/)
 	assert.match(S.parseFrame(frame(1,T.WRITE,1,[0x80,3])).decoded, /未知/)
 }
+// ---- READ 0x27 n=1 双用途标记与完整字段回归（正反例） ----
+{
+	// 正例：合法下行 READ 0x27 n=1
+	const pingReq = S.parseFrame(frame(0, T.READ, 1, S.readReqEncode(0x27, 1)))
+	assert.equal(pingReq.ok, true)
+	assert.match(pingReq.decoded, /起始寄存器 = 0x27 \(协议版本\)/)
+	assert.match(pingReq.decoded, /数量 = 1/)
+	assert.match(pingReq.decoded, /用途 = 协议版本 \/ 链路心跳/)
+
+	// 反例 1: 数量不为 1 (0x27 n=2)
+	const read2 = S.parseFrame(frame(0, T.READ, 2, S.readReqEncode(0x27, 2)))
+	assert.equal(read2.ok, true)
+	assert.match(read2.decoded, /起始寄存器 = 0x27 \(协议版本\)/)
+	assert.match(read2.decoded, /数量 = 2/)
+	assert.doesNotMatch(read2.decoded, /链路心跳/)
+
+	// 反例 2: 邻近寄存器 (0x26 n=1)
+	const readFw = S.parseFrame(frame(0, T.READ, 3, S.readReqEncode(0x26, 1)))
+	assert.equal(readFw.ok, true)
+	assert.match(readFw.decoded, /起始寄存器 = 0x26 \(表计固件版本号\)/)
+	assert.match(readFw.decoded, /数量 = 1/)
+	assert.doesNotMatch(readFw.decoded, /链路心跳/)
+
+	// 反例 3: 邻近寄存器 (0x28 n=1)
+	const readDrn = S.parseFrame(frame(0, T.READ, 4, S.readReqEncode(0x28, 1)))
+	assert.equal(readDrn.ok, true)
+	assert.match(readDrn.decoded, /起始寄存器 = 0x28 \(DRN\)/)
+	assert.match(readDrn.decoded, /数量 = 1/)
+	assert.doesNotMatch(readDrn.decoded, /链路心跳/)
+}
 console.log('STS-CIU protocol checks passed')
