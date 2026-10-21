@@ -56,6 +56,27 @@ assert.equal(PV.render([]), '')
 // ---- 复制/导出: 单元里「标签」「值」之间是真空格，innerText 不会黏在一起 ----
 assert.ok(PV.render({ title: 'T', sections: [{ pairs: [['标签', '值', 'ID9']] }] }).includes('</span> <span class="pv-v">值</span> <span class="pv-h">ID9</span></div>'))
 
+// ---- 多帧渲染与格式化上下文契约 ----
+{
+	// 1. 多帧独立容器：每个帧有独立的 .pv 容器，各帧标题与正文严格封装在各自容器内
+	const twoFrames = PV.render([
+		{ title: 'Frame1', sections: [{ title: 'Sec1' }] },
+		{ title: 'Frame2', sections: [{ title: 'Sec2' }] },
+	])
+	assert.equal((twoFrames.match(/<div class="pv">/g) || []).length, 2, '两帧必须渲染为两个独立的 .pv 容器')
+
+	// 2. 样式契约：style.css 绝不能将 .pv 或 .log-body 设为 display: contents
+	// 否则 Chrome 会将字节 span 作为 flex 项导致 innerText 导出每字节换行，以及 order 导致多帧标题与正文错位
+	const styleCss = fs.readFileSync(path.join(__dirname, '../css/style.css'), 'utf8')
+	assert.ok(!/\.pv\s*\{[^}]*display:\s*contents/i.test(styleCss), 'style.css 中绝不可对 .pv 使用 display: contents')
+	assert.ok(!/\.log-body\s*\{[^}]*display:\s*contents/i.test(styleCss), 'style.css 中绝不可对 .log-body 使用 display: contents')
+
+	// 3. 样式契约：ANSI 模式下必须维持深底亮字，浅色主题的深黑字规则必须用 :not(.ansi) 隔离
+	assert.ok(/\.ansi\s+\.pv-title\s*\{[^}]*color:\s*#f5f5f7/i.test(styleCss), 'style.css 中 .ansi .pv-title 必须强制使用亮色 #f5f5f7')
+	assert.ok(/\.ansi\s+\.pv-v\s*\{[^}]*color:\s*#f5f5f7/i.test(styleCss), 'style.css 中 .ansi .pv-v 必须强制使用亮色 #f5f5f7')
+	assert.ok(/:not\(\.ansi\)\s+\.pv-title/i.test(styleCss), 'style.css 中使用 var(--text-primary) 的 pv-title 必须限定 :not(.ansi)')
+	assert.ok(/\.ansi[^{]*\.log-body\s*\{[^}]*color:\s*var\(--bb-plate-fg/i.test(styleCss), 'style.css 中 .ansi 的 log-body 必须恢复 var(--bb-plate-fg) 亮色基色供子元素继承')
+}
 // ---- linesToPairs ----
 {
 	const r = PV.linesToPairs('devType = 1 METER  DRN = 12345\nreason = 1（台架惯例 1=读表 2=参数）\ntxOk=1  rxOk=2\n阀门状态=开 电量状态=正常\n基准时间=2026-01-01 08:00:00  采样间隔=60分钟\n（无载荷）\n\n')

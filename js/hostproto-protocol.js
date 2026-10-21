@@ -351,10 +351,11 @@
 		return { result: r, lines: ['STS-CIU 应用帧（' + r.fields.表号 + ' ' + r.fields.类型.name + ' TXN ' + r.fields.事务号 + '）:'].concat((r.decoded || '').split('\n').map(l => indent + l)) }
 	}
 
-	// 返回 { lines, segs, masked }，segs 的 off 相对载荷起点
+	// 返回 { lines, segs, masked, sts }，segs 的 off 相对载荷起点
 	function decodeReqPayload(cmd, p) {
 		const lines = []
 		const segs = []
+		let sts = null
 		const seg = (off, len, tip, grp) => { if (len > 0 && off < p.length) segs.push({ off: off, len: Math.min(len, p.length - off), tip: tip, grp: grp }) }
 		const need = (n, name) => {
 			if (p.length !== n) { lines.push(name + ' 载荷长度应为 ' + n + '，实际 ' + p.length); return false }
@@ -391,6 +392,7 @@
 				seg(0, 2, '数据长度 u16 LE', '长度'); seg(2, data.length, '下行数据', '数据')
 				const n = nestedSts(data, '  ')
 				if (n) {
+					sts = n.result
 					n.lines.forEach(l => lines.push(l))
 					nestedSegs(n.result, 2, segs)
 				}
@@ -404,6 +406,7 @@
 				seg(0, 1, '数据长度', '长度'); seg(1, data.length, '上行分片数据', '数据')
 				const n = nestedSts(data, '  ')
 				if (n) {
+					sts = n.result
 					n.lines.forEach(l => lines.push(l))
 					nestedSegs(n.result, 1, segs)
 				}
@@ -461,7 +464,7 @@
 				if (p.length) lines.push('载荷 = ' + hexSpaced(p))
 				else lines.push('（无载荷）')
 		}
-		return { lines: lines, segs: segs }
+		return { lines: lines, segs: segs, sts: sts }
 	}
 
 	// 嵌套的应用帧字节提示，平移到外层帧的偏移
@@ -561,19 +564,21 @@
 		const seg = (off, len, tip, grp) => { if (len > 0 && off < p.length) segs.push({ off: off, len: Math.min(len, p.length - off), tip: tip, grp: grp }) }
 		if (cmd === EVT.WOR_FRAME) {
 			const d = decodeWorFrame(p)
-			if (!d) { lines.push('WOR 帧事件载荷长度不足或来源地址 BCD 非法'); return { lines: lines, segs: segs } }
+			if (!d) { lines.push('WOR 帧事件载荷长度不足或来源地址 BCD 非法'); return { lines: lines, segs: segs, sts: null } }
 			lines.push('来源地址 src = ' + drnText(d.src))
 			lines.push('kind = ' + d.kind + ' ' + (KIND_NAME[d.kind] || '未知') + '  seq = ' + d.seq + '  len = ' + d.len)
 			lines.push('data = ' + hexSpaced(d.data))
 			lines.push('rssi = ' + d.rssi + ' dBm  snr = ' + d.snr + ' dB')
 			seg(0, 8, '来源地址 BCD LE', '地址'); seg(8, 1, 'kind ' + (KIND_NAME[d.kind] || ''), 'kind'); seg(9, 2, 'seq', 'seq'); seg(11, 1, 'data 长度', '长度')
 			seg(12, d.len, 'data', '数据'); seg(12 + d.len, 2, 'rssi i16', 'rssi'); seg(14 + d.len, 1, 'snr i8', 'snr')
+			let sts = null
 			const n = nestedSts(d.data, '  ')
 			if (n) {
+				sts = n.result
 				n.lines.forEach(l => lines.push(l))
 				nestedSegs(n.result, 12, segs)
 			}
-			return { lines: lines, segs: segs }
+			return { lines: lines, segs: segs, sts: sts }
 		}
 		if (cmd === EVT.WOR_SESSION_END) {
 			const d = decodeSessionEnd(p)
@@ -599,7 +604,7 @@
 			default:
 				if (p.length) lines.push('载荷 = ' + hexSpaced(p))
 		}
-		return { lines: lines, segs: segs }
+		return { lines: lines, segs: segs, sts: null }
 	}
 
 	// 解一个已通过 CRC 的帧: { fields, lines, segs, errors }
@@ -636,7 +641,7 @@
 			errors.push('TYPE ' + f.type + ' 未定义')
 		}
 		body.segs = body.segs.map(s => ({ off: base + s.off, len: s.len, tip: s.tip, grp: s.grp, nested: s.nested }))
-		return { fields: fields, lines: body.lines, segs: body.segs, errors: errors, status: f.type === TYPE_RSP && p.length ? p[0] : null }
+		return { fields: fields, lines: body.lines, segs: body.segs, errors: errors, status: f.type === TYPE_RSP && p.length ? p[0] : null, sts: body.sts || null }
 	}
 
 	// 解析一段数据（可含前导、多个帧、噪声）: 帧本体解出来，多帧依次展示
@@ -716,18 +721,87 @@
 
 	// 日志「解析」格式的视图模型（渲染与转义见 js/parse-view.js）：每帧一个模型，没有有效帧返回 null
 	const LOG_SUBJECT_KEYS = ['目标地址', 'DRN', '来源地址 src', '本机地址']
+	function stsTitle(s) {
+		if (!s || !s.fields || !s.fields.类型) return 'STS-CIU 应用帧'
+		const S = W.stsCiu
+		if (!S) return 'STS ' + (s.fields.类型.name || '')
+		const t = s.frame ? s.frame.type : null
+		const isDown = s.dir === 'down'
+		const p = s.raw && s.raw.length >= 6 ? Uint8Array.from(s.raw).subarray(5, s.raw.length - 1) : null
+
+		if (t === S.TYPE.TOKEN) {
+			if (isDown) return 'TOKEN 充值'
+			if (p) {
+				const tok = S.tokenRspDecode(p)
+				if (tok) {
+					if (tok.code === S.TOKEN_ACCEPTED) return 'TOKEN 充值已受理'
+					if (S.tokenIsFail(tok.code)) {
+						const name = S.TOKEN_CODE[tok.code] || ('0x' + tok.code.toString(16).padStart(2, '0'))
+						return 'TOKEN 充值失败 (' + name + ')'
+					}
+					return 'TOKEN 充值完成'
+				}
+			}
+			return 'TOKEN 充值应答'
+		}
+		if (t === S.TYPE.STATUS) return isDown ? '查询表状态' : '表状态应答'
+		if (t === S.TYPE.READ) return isDown ? '读寄存器' : '读寄存器应答'
+		if (t === S.TYPE.WRITE) return isDown ? '写寄存器/控阀' : '写寄存器应答'
+		if (t === S.TYPE.RESULT) {
+			if (isDown) return '轮询结果'
+			if (p) {
+				const res = S.resultRspDecode(p)
+				if (res) {
+					if (res.pollState === S.POLL_UNKNOWN) return '轮询句柄未知或已过期'
+					if (res.pollState === S.POLL_WORKING) return '轮询结果处理中'
+					if (res.pollState === S.POLL_DONE) {
+						if (res.tail && res.tail.length) {
+							const tgtT = S.tgtType(res.tgt)
+							if (tgtT === S.TYPE.TOKEN) {
+								const tok = S.tokenRspDecode(res.tail)
+								if (tok) {
+									if (tok.code === S.TOKEN_ACCEPTED) return 'TOKEN 充值未终结 (仍为受理)'
+									if (S.tokenIsFail(tok.code)) {
+										const name = S.TOKEN_CODE[tok.code] || ('0x' + tok.code.toString(16).padStart(2, '0'))
+										return 'TOKEN 充值失败 (' + name + ')'
+									}
+									return 'TOKEN 充值完成'
+								}
+							} else if (tgtT === S.TYPE.WRITE && res.tail.length === 2) {
+								return res.tail[1] === S.WRITE_OK ? '写配置完成' : '写配置失败'
+							}
+						}
+						return '轮询终局完成'
+					}
+				}
+			}
+			return '轮询结果应答'
+		}
+		if (t === S.TYPE.NAK) return '否定应答 (NAK)'
+		return 'STS ' + (s.fields.类型.name || '')
+	}
+
 	function frameModel(fr) {
 		const PV = W.ParseView
 		const f = fr.fields
+		const hasSts = !!(fr.sts && fr.sts.ok)
+		const title = hasSts ? stsTitle(fr.sts) : f.命令.name
 		const m = {
-			title: f.命令.name,
-			code: f.命令.value,
+			title: title,
+			code: hasSts ? '' : f.命令.value,
 			dir: fr.type === TYPE_REQ ? 'down' : 'up',
-			badges: [{ text: TYPE_NAME[fr.type] || 'TYPE ' + fr.type, kind: 'info', title: f.方向 }],
+			badges: [],
 			meta: [['SEQ', f.SEQ], ['载荷', f.载荷长度 + ' B']],
 			notes: [],
 			sections: [],
 			errors: fr.errors.slice(),
+		}
+		if (hasSts) {
+			m.badges.push({ text: 'STS-CIU', kind: 'info', title: 'STS-CIU 应用层报文' })
+			if (fr.sts.fields.事务号 != null) m.badges.push({ text: 'TXN ' + fr.sts.fields.事务号, kind: 'info', title: '事务号' })
+			m.badges.push({ text: f.命令.name, kind: 'info', title: '底层信封指令: ' + f.命令.name + ' (' + f.命令.value + ')' })
+		} else {
+			m.badges.push({ text: TYPE_NAME[fr.type] || 'TYPE ' + fr.type, kind: 'info', title: f.方向 })
 		}
 		if (fr.status != null) {
 			const st = STATUS_NAME[fr.status] || hexByte(fr.status)
@@ -737,22 +811,31 @@
 		const idx = fr.lines.findIndex(l => l.indexOf('STS-CIU 应用帧') === 0)
 		const mainLines = idx < 0 ? fr.lines : fr.lines.slice(0, idx)
 		const main = PV.linesToPairs(mainLines.join('\n'))
-		const si = main.pairs.findIndex(p => LOG_SUBJECT_KEYS.indexOf(p[0]) >= 0)
-		if (si >= 0) {
-			const p = main.pairs.splice(si, 1)[0]
-			m.subject = { label: p[0].replace(/\s*src$/, ''), value: p[1] + (p[2] ? ' ' + p[2] : '') }
+		if (hasSts && fr.sts.fields.表号) {
+			m.subject = { label: '表号', value: fr.sts.fields.表号 }
+		} else {
+			const si = main.pairs.findIndex(p => LOG_SUBJECT_KEYS.indexOf(p[0]) >= 0)
+			if (si >= 0) {
+				const p = main.pairs.splice(si, 1)[0]
+				m.subject = { label: p[0].replace(/\s*src$/, ''), value: p[1] + (p[2] ? ' ' + p[2] : '') }
+			}
 		}
 		main.notes.forEach(t => {
 			if (/^[（(].*[）)]$/.test(t)) return // （无载荷）之类的占位
 			m.notes.push({ text: t, kind: /应为|不足|不符|非法/.test(t) ? 'warn' : 'info' })
 		})
-		if (main.pairs.length) m.sections.push({ title: fr.type === TYPE_RSP ? '应答结果' : fr.type === TYPE_EVT ? '事件内容' : '请求载荷', pairs: main.pairs })
 		if (idx >= 0) {
 			const inner = PV.linesToPairs(fr.lines.slice(idx + 1).join('\n'))
 			m.sections.push({
 				title: fr.lines[idx].replace(/[:：]\s*$/, ''),
 				pairs: inner.pairs,
 				pre: inner.notes.length ? inner.notes.join('\n') : '',
+			})
+		}
+		if (main.pairs.length) {
+			m.sections.push({
+				title: hasSts ? '模组传输参数 (' + f.命令.name + ')' : (fr.type === TYPE_RSP ? '应答结果' : fr.type === TYPE_EVT ? '事件内容' : '请求载荷'),
+				pairs: main.pairs,
 			})
 		}
 		return m

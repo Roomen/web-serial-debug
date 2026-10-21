@@ -10038,7 +10038,7 @@ html[data-layout='modern'] #fw-pack-upgrade > #nav-firmware {
 /* ===== 现代布局 v2 · 检查器与双路时间线 ===== */
 /* 两路的路色：A 蓝、B 橙(设计稿)；-t 是落在浅/深面色上的文字色，-on 是落在路色实心底上的文字色，对比度均 >= 4.5:1 */
 html[data-layout='modern'] {
-	--mdn-ax: 112px;
+	--mdn-ax: 88px;
 	--mdn-a: #1f5fbf;
 	--mdn-a-t: #174c99;
 	--mdn-b: #c2410c;
@@ -10558,74 +10558,75 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row >
 /* A / B 的收发行：气泡 */
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) {
 	display: block;
-	max-width: calc(100% - var(--mdn-ax) - 20px);
-	min-height: 34px;
+	max-width: calc(100% - var(--mdn-ax) - 16px);
+	min-height: 30px;
 	margin-block: 3px;
-	padding: 3px 9px 4px;
+	padding: 4px 9px 5px;
 	border-width: 1.5px;
 	border-radius: 10px;
 	font-size: 0.75rem;
-	line-height: 1.5;
-	color: var(--bb-t);
+	line-height: 1.45;
+	color: var(--text-primary);
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A']:is([data-dir='tx'], [data-dir='rx']) {
 	align-self: flex-start;
-	margin-right: calc(var(--mdn-ax) + 20px);
+	margin-right: calc(var(--mdn-ax) + 16px);
 	border-top-left-radius: 2px;
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B']:is([data-dir='tx'], [data-dir='rx']) {
 	align-self: flex-end;
-	margin-left: calc(var(--mdn-ax) + 20px);
+	margin-left: calc(var(--mdn-ax) + 16px);
 	border-top-right-radius: 2px;
 }
 
-/* TX：路色实心；正文放在面色小底板里，解析块沿用主题配色 */
+/* TX：内容优先的雅致微底色 + 实体路色边框，取消刺眼纯实心底色 */
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] {
-	--bb-bg: var(--bb-c);
+	--bb-bg: color-mix(in srgb, var(--bb-c) 12%, var(--bb-surface));
 	--bb-bd: var(--bb-c);
-	color: var(--mdn-on);
+	color: var(--text-primary);
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx']:hover {
-	--bb-bg: color-mix(in srgb, var(--bb-c) 88%, var(--text-primary));
+	--bb-bg: color-mix(in srgb, var(--bb-c) 18%, var(--bb-surface));
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] > .log-body {
-	padding: 1px 7px;
-	border-radius: 6px;
-	background: var(--bb-plate);
-	color: var(--bb-plate-fg);
-}
-
-/* RX：浅底 + 路色描边 */
+/* RX：浅底 + 协调路色描边 */
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'] {
-	--bb-bg: color-mix(in srgb, var(--bb-c) 7%, var(--bb-surface));
-	--bb-bd: var(--bb-c);
+	--bb-bg: color-mix(in srgb, var(--bb-c) 6%, var(--bb-surface));
+	--bb-bd: color-mix(in srgb, var(--bb-c) 55%, var(--border-light));
+	color: var(--text-primary);
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx']:hover {
-	--bb-bg: color-mix(in srgb, var(--bb-c) 13%, var(--bb-surface));
+	--bb-bg: color-mix(in srgb, var(--bb-c) 11%, var(--bb-surface));
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'] > .log-body {
-	color: var(--bb-plate-fg);
+/* 保持独立的块/内联格式化上下文，绝不能设为 contents（否则字节 span 会变成 flex 项破坏复制与导出） */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi) .log-row:is([data-sid='A'], [data-sid='B']) > .log-body {
+	display: block;
+	max-width: 100%;
+	vertical-align: middle;
+	color: var(--text-primary);
 }
 
+/* ANSI 模式始终为深黑底色，恢复亮色基色，使表号、SEQ、提示及原始文字正确继承亮色，避免浅色主题下继承深黑/深绿字 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi .log-row:is([data-sid='A'], [data-sid='B']),
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi .log-row:is([data-sid='A'], [data-sid='B']) > .log-body {
+	display: block;
+	max-width: 100%;
+	vertical-align: middle;
+	color: var(--bb-plate-fg, #f5f5f7);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):not(:has(.pv)) > .log-body {
+	display: inline-block;
+}
 /* 选中：黄环(设计稿)，覆盖 TX / RX 各自的状态环 */
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']).selected {
 	--bb-ring: 0 0 0 3px var(--mdn-sel);
 }
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'].selected {
-	--bb-bg: var(--bb-c);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'].selected {
-	--bb-bg: color-mix(in srgb, var(--bb-c) 13%, var(--bb-surface));
-}
-
 /* 气泡首行：方向 + 路名 + 长度；时间移到气泡旁，行首的 .log-time 清成零尺寸块，只当静默胶囊的宿主 */
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-time {
 	display: block;
@@ -10638,71 +10639,124 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:i
 	line-height: 0;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > :is(.log-dir, .log-sess, .log-len) {
-	display: inline-block;
-	margin-right: 8px;
-	vertical-align: middle;
-	background: transparent;
-	color: var(--bb-t);
+/* 气泡内部直接子元素：隐藏冗余路标，让首行无缝融合成一行 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-sess {
+	display: none !important;
 }
 
-/* 长路标签在窄日志区内折行，仍保留气泡外侧的时间空间。 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-sess {
-	max-width: 100%;
-	overflow-wrap: anywhere;
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] > :is(.log-dir, .log-sess, .log-len) {
-	color: var(--mdn-on);
-}
-
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-body {
-	display: inline-block;
-	max-width: 100%;
-	margin-block: 1px;
-	vertical-align: middle;
-	overflow-x: auto;
-}
-
-/* 方向标签：文字清零，改由 ::before 显示「↑ TX / ↓ RX」，路名接在后面(复制日志读元素文本，伪元素不进剪贴板) */
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-dir {
+	display: inline-flex;
+	align-items: center;
 	min-width: 0;
-	margin-right: 4px;
+	margin: 0 6px 0 0;
 	padding: 0;
 	border: 0;
 	font-size: 0;
-	line-height: 1.45;
+	line-height: 1.25;
+	vertical-align: middle;
+	background: transparent;
 }
 
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-len {
+	display: inline-block;
+	margin: 0 8px 0 0;
+	vertical-align: middle;
+	font-family: var(--font-mono);
+	font-size: 0.68rem;
+	font-weight: 600;
+	color: var(--text-secondary);
+	opacity: 1;
+}
+
+/* 方向标签：文字清零，改由 ::before 显示「↑ TX / ↓ RX」，路名接在后面(复制日志读元素文本，伪元素不进剪贴板) */
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-dir::before {
-	font-size: 0.66rem;
-	font-weight: 700;
+	font-size: 0.68rem;
+	font-weight: 800;
 	letter-spacing: 0.03em;
+	padding: 1px 5px;
+	border-radius: 4px;
+	line-height: 1.25;
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='tx'] > .log-dir::before {
 	content: '↑ TX';
+	background: var(--bb-c);
+	color: #ffffff;
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='rx'] > .log-dir::before {
 	content: '↓ RX';
+	background: var(--success, #16a34a);
+	color: #ffffff;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='tx'] > .log-sess::before {
-	content: '· 发给 ';
-	font-weight: 400;
+/* 气泡内的解析卡片：保持各帧独立的块级容器，多帧依次排列不打散，防止标题正文错位 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .pv {
+	display: block;
+	margin-top: 2px;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='rx'] > .log-sess::before {
-	content: '· 来自 ';
-	font-weight: 400;
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .pv + .pv {
+	margin-top: 6px;
+	padding-top: 4px;
+	border-top: 1px dashed var(--border-light);
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-len {
-	font-size: 0.64rem;
-	opacity: 0.85;
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .pv-head {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 4px 6px;
 }
 
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi) .pv-title {
+	font-size: 0.90rem;
+	font-weight: 800;
+	color: var(--text-primary);
+	letter-spacing: -0.1px;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi) .pv-k {
+	color: var(--text-secondary);
+	font-weight: 600;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi) .pv-v {
+	color: var(--text-primary);
+	font-weight: 600;
+}
+
+/* ANSI 模式始终为深色黑底背景，文字恒定保持亮色，不可受浅色主题深黑字污染 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi .pv-title {
+	font-size: 0.90rem;
+	font-weight: 800;
+	color: #f5f5f7;
+	letter-spacing: -0.1px;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi .pv-k {
+	color: #9da7b3;
+	font-weight: 600;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi .pv-v {
+	color: #f5f5f7;
+	font-weight: 600;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi .log-len {
+	color: #9da7b3;
+}
+
+/* 气泡内的原生代码徽标与微标清晰度提升 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .pv-code {
+	font-size: 0.68rem;
+	font-weight: 700;
+	padding: 1px 5px;
+	border-radius: 4px;
+	background: color-mix(in srgb, currentColor 8%, transparent);
+	color: var(--text-secondary);
+}
 /* 气泡侧边：时间(::before)、Δ 或慢应答耗时(::after)。A 放右侧、B 放左侧。 */
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-t]::before,
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-d]::after {
@@ -10825,7 +10879,7 @@ html[data-layout='modern'] #mdn-tl-head .mdn-tl-b {
 
 @media (max-width: 768px) {
 	html[data-layout='modern'] {
-		--mdn-ax: 88px;
+		--mdn-ax: 72px;
 	}
 }
 
