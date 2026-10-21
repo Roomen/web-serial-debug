@@ -47,14 +47,48 @@ assert.equal(H.logView, registered.impl.logView)
 	const multi = J(H.logView(H.parseFrame(two)))
 	assert.deepEqual(multi.map(m => m.title), ['ECHO', 'UPG_ERASED'])
 	for (const junk of [[], [0xff, 0xff], hex('00 11 22 33 44'), hex('EB 90 10 01 00')]) assert.equal(H.logView(H.parseFrame(junk)), null)
-	// 嵌套的 STS-CIU 应用帧单独成节；来源地址提到头部
+	// 嵌套的 STS-CIU 应用帧提拔为主标题与表号主体；模组命令作为底层信封微标；且模组传输地址不丢失！
 	const app = S.buildFrame({ dir: 0, type: S.TYPE.STATUS, txn: 5, meter: '12345678', payload: [] })
 	const evt = J(H.logView(H.parseFrame(H.buildFrame({ type: 2, cmd: 0x0280, seq: 0, payload: Uint8Array.from([1, 0, 0, 0, 0, 0, 0, 0, 3, 0x2a, 0x00, app.length, ...app, 0x9c, 0xff, 0x05]) }))))[0]
-	assert.equal(evt.title, 'WOR_FRAME')
+	assert.equal(evt.title, '查询表状态')
 	assert.equal(evt.dir, 'up')
-	assert.deepEqual(evt.subject, { label: '来源地址', value: '1' })
+	assert.deepEqual(evt.subject, { label: '表号', value: '12345678' })
+	assert.ok(evt.badges.some(b => b.text === 'STS-CIU'))
+	assert.ok(evt.badges.some(b => b.text === 'WOR_FRAME'))
 	assert.ok(evt.sections.some(sec => /^STS-CIU 应用帧/.test(sec.title)))
-	// 设备给的字符串在模型里原样保留，渲染器负责转义
+	// 验证模组传输地址未丢失，保留在模组传输参数节中：
+	const modSec = evt.sections.find(sec => /模组传输参数/.test(sec.title))
+	assert.ok(modSec, '模组传输参数节必须存在')
+	assert.ok(modSec.pairs.some(p => p[0].startsWith('来源地址') && p[1] === '1'), '来源传输地址必须完好保留')
+
+	// 验证 TOKEN 0x00 已受理标题精准显示
+	const tokenAcc = S.buildFrame({ dir: 1, type: S.TYPE.TOKEN, txn: 2, meter: '12345678', payload: [0] })
+	const tokenEvt = J(H.logView(H.parseFrame(H.buildFrame({ type: 2, cmd: 0x0280, seq: 0, payload: Uint8Array.from([1, 0, 0, 0, 0, 0, 0, 0, 4, 0x2b, 0x00, tokenAcc.length, ...tokenAcc, 0x9c, 0xff, 0x05]) }))))[0]
+	assert.equal(tokenEvt.title, 'TOKEN 充值已受理')
+
+	// 验证 RESULT POLL_UNKNOWN 标为未知或已过期，绝不标为处理中
+	const pollUnknown = S.buildFrame({ dir: 1, type: S.TYPE.RESULT, txn: 3, meter: '12345678', payload: [0, 0] }) // pollState = 0
+	const pollEvt = J(H.logView(H.parseFrame(H.buildFrame({ type: 2, cmd: 0x0280, seq: 0, payload: Uint8Array.from([1, 0, 0, 0, 0, 0, 0, 0, 4, 0x2c, 0x00, pollUnknown.length, ...pollUnknown, 0x9c, 0xff, 0x05]) }))))[0]
+	assert.equal(pollEvt.title, '轮询句柄未知或已过期')
+
+	// 验证 RESULT 载荷 [1, 0, 255] 表示处理中且预计剩余时间未知，绝不误判为句柄失效
+	const pollWorking = S.buildFrame({ dir: 1, type: S.TYPE.RESULT, txn: 4, meter: '12345678', payload: [1, 0, 255] })
+	const pollWorkingEvt = J(H.logView(H.parseFrame(H.buildFrame({ type: 2, cmd: 0x0280, seq: 0, payload: Uint8Array.from([1, 0, 0, 0, 0, 0, 0, 0, 4, 0x2d, 0x00, pollWorking.length, ...pollWorking, 0x9c, 0xff, 0x05]) }))))[0]
+	assert.equal(pollWorkingEvt.title, '轮询结果处理中')
+
+	// 验证失败 TOKEN：终局以协议结果码为准，结果码为 0x81 (失败) 时标题绝不可误判为充值完成
+	const failTokenPayload = [0x81, 0, 0, 0, 50, 0, 0, 0, 100, 0x5a, 0x5a, 0x01, 0x02, 0x03, 0x04]
+	const failTokenFrame = S.buildFrame({ dir: 1, type: S.TYPE.TOKEN, txn: 5, meter: '12345678', payload: failTokenPayload })
+	const failTokenEvt = J(H.logView(H.parseFrame(H.buildFrame({ type: 2, cmd: 0x0280, seq: 0, payload: Uint8Array.from([1, 0, 0, 0, 0, 0, 0, 0, 4, 0x2e, 0x00, failTokenFrame.length, ...failTokenFrame, 0x9c, 0xff, 0x05]) }))))[0]
+	assert.ok(failTokenEvt.title.includes('TOKEN 充值失败'), '失败结果码必须生成失败标题，实际: ' + failTokenEvt.title)
+
+	// 验证 RESULT 载荷为 [POLL_DONE, TOKEN目标, TOKEN_ACCEPTED] 时，尾部仅为受理，绝不可误报“充值完成”
+	const doneAcceptedPayload = [S.POLL_DONE, S.tgtOf(S.TYPE.TOKEN, 5), S.TOKEN_ACCEPTED]
+	const doneAcceptedFrame = S.buildFrame({ dir: 1, type: S.TYPE.RESULT, txn: 6, meter: '12345678', payload: doneAcceptedPayload })
+	const doneAcceptedEvt = J(H.logView(H.parseFrame(H.buildFrame({ type: 2, cmd: 0x0280, seq: 0, payload: Uint8Array.from([1, 0, 0, 0, 0, 0, 0, 0, 4, 0x2f, 0x00, doneAcceptedFrame.length, ...doneAcceptedFrame, 0x9c, 0xff, 0x05]) }))))[0]
+	assert.ok(!doneAcceptedEvt.title.includes('充值完成'), 'POLL_DONE + TOKEN_ACCEPTED 绝不可误报为充值完成，实际: ' + doneAcceptedEvt.title)
+	assert.ok(doneAcceptedEvt.title.includes('未终结') || doneAcceptedEvt.title.includes('受理'), '应提示未终结或仍为受理，实际: ' + doneAcceptedEvt.title)
+
 	const html = window.ParseView.render({ title: '<script>alert(1)</script>', subject: { label: 'x', value: '"><img onerror=1>' }, sections: [{ pairs: [['<a>', '<b>']] }], errors: ['<i>'] })
 	assert.ok(!/<script|<img|<a>|<b>|<i>/i.test(html), html)
 	assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'))
