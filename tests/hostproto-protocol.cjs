@@ -86,13 +86,13 @@ assert.equal(H.logView, registered.impl.logView)
 	assert.ok(upModSec.pairs.some(p => p[0] === '追加上行分片' && p[1] === H.hexSpaced(req27)), 'WOR_SET_UPLINK 原始分片载荷必须等于应用帧十六进制')
 	assert.ok(upModSec.pairs.some(p => p[0] === '数据长度'), 'WOR_SET_UPLINK 数据长度必须保留')
 
-	// 反例 1: 邻近寄存器 (0x26 n=1 表计固件版本号) 绝不误标为链路心跳
+	// 反例 1: 邻近寄存器 (0x26 n=1 固件版本号及校验码) 绝不误标为链路心跳
 	const req26 = S.buildFrame({ dir: 0, type: S.TYPE.READ, txn: 4, meter: '12345678', payload: S.readReqEncode(0x26, 1) })
 	const send26 = J(H.logView(H.parseFrame(H.buildFrame({ type: 0, cmd: H.CMD.WOR_SEND, seq: 3, payload: Uint8Array.from([req26.length & 0xff, 0, ...req26]) }))))[0]
 	assert.equal(send26.title, '读寄存器')
 	assert.ok(!send26.badges.some(b => b.text.includes('链路心跳')))
 	const sec26 = send26.sections.find(s => /^STS-CIU 应用帧/.test(s.title))
-	assert.deepEqual(sec26.pairs.find(p => p[0] === '起始寄存器'), ['起始寄存器', '0x26', '表计固件版本号'])
+	assert.deepEqual(sec26.pairs.find(p => p[0] === '起始寄存器'), ['起始寄存器', '0x26', '固件版本号及校验码'])
 	assert.ok(!sec26.pairs.some(p => p[0] === '用途'))
 
 	// 反例 2: 数量不为 1 (0x27 n=2) 绝不误标为链路心跳
@@ -159,6 +159,44 @@ assert.equal(H.logView, registered.impl.logView)
 	const html = window.ParseView.render({ title: '<script>alert(1)</script>', subject: { label: 'x', value: '"><img onerror=1>' }, sections: [{ pairs: [['<a>', '<b>']] }], errors: ['<i>'] })
 	assert.ok(!/<script|<img|<a>|<b>|<i>/i.test(html), html)
 	assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'))
+}
+
+// ---- 0x26 复合值贯穿三种 hostProto 嵌套入口、日志模型和字节提示 ----
+{
+	const version = '<img src=x>'
+	const checksum = 0x89abcdef
+	const val = S.fwVersionEncode({ version, checksum })
+	const app = S.buildFrame({ dir: 1, type: S.TYPE.READ, txn: 7, meter: '12345678', payload: [0x26, 0xf0, 20, ...val] })
+	assert.equal(app.length, 29)
+	const envelopes = [
+		{ type: H.TYPE_EVT, cmd: H.EVT.WOR_FRAME, payload: [1, 0, 0, 0, 0, 0, 0, 0, 3, 42, 0, app.length, ...app, 0x9c, 0xff, 5] },
+		{ type: H.TYPE_REQ, cmd: H.CMD.WOR_SET_UPLINK, payload: [app.length, ...app] },
+		{ type: H.TYPE_REQ, cmd: H.CMD.WOR_SEND, payload: [app.length, 0, ...app] },
+	]
+	for (const envelope of envelopes) {
+		const parsed = H.parseFrame(H.buildFrame({ ...envelope, seq: envelope.type === H.TYPE_EVT ? 0 : 7 }))
+		assert.equal(parsed.ok, true)
+		assert.match(parsed.decoded, /STS-CIU 应用帧/)
+		assert.ok(parsed.decoded.includes(version))
+		assert.match(parsed.decoded, /89ABCDEF/)
+		const model = J(H.logView(parsed))[0]
+		const section = model.sections.find(sec => /^STS-CIU 应用帧/.test(sec.title))
+		assert.ok(section, '复合值保留在 STS 专属日志节')
+		assert.ok(JSON.stringify(section).includes(version))
+		assert.ok(JSON.stringify(section).includes('89ABCDEF'))
+		for (const html of [H.formatFrame(parsed), window.ParseView.render(model)]) {
+			assert.doesNotMatch(html, /<img\b/)
+			assert.match(html, /&lt;img src=x&gt;/)
+		}
+		const map = H.byteMap(parsed)
+		const versionBytes = map.map((c, i) => c && c.grp === 'STS 固件版本号' ? i : -1).filter(i => i >= 0)
+		const checksumBytes = map.map((c, i) => c && c.grp === 'STS 固件校验码' ? i : -1).filter(i => i >= 0)
+		assert.equal(versionBytes.length, 16)
+		assert.equal(checksumBytes.length, 4)
+		assert.equal(checksumBytes[0], versionBytes[0] + 16)
+		assert.deepEqual(bytes(parsed.raw).slice(checksumBytes[0], checksumBytes[0] + 4), [0x89, 0xab, 0xcd, 0xef])
+		assert.ok(checksumBytes.every(i => /STS-CIU:/.test(map[i].tip)))
+	}
 }
 
 // ---- FW_INFO 定长 ASCII: 空格垫齐（规范）与 \0 垫齐（实板固件）都要解出干净的字符串 ----

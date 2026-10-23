@@ -205,6 +205,10 @@ function makeWorld(options = {}) {
 				args.link.send('status')
 				return { ok: true, op: 'status', message: unsafe, durationMs: 100, read: [{ id: 1, name: unsafe, text: unsafe }] }
 			},
+			async read(start, count) {
+				args.link.send('read:' + start + ':' + count)
+				return { ok: true, op: 'read', read: [{ id: start, name: '固件版本号及校验码', text: unsafe }] }
+			},
 			setTarget(targetDrn) {
 				args.link.send('setTarget')
 				return new Promise((resolve, reject) => {
@@ -346,6 +350,28 @@ test('CIU address is read-only, ignores old saved values and is never persisted'
 	assert.equal(refreshed.panel('B').root.querySelector('#sts-sim-ciu-localAddr-B').textContent, '待读取')
 	panel.start.click()
 	assert.equal(address.textContent, '待读取')
+})
+
+test('firmware information is an explicit single-register read per lane, disabled while stopped', async () => {
+	for (const sid of ['S', 'A', 'B']) {
+		const world = makeWorld({ mode: sid === 'S' ? 'single' : 'dual', open: [sid] })
+		const panel = world.panel(sid)
+		panel.role('ciu')
+		const button = panel.root.querySelector('#sts-sim-ciu-fw-info-' + sid)
+		assert.ok(button)
+		assert.equal(button.disabled, true)
+		panel.start.click()
+		await flush()
+		assert.equal(button.disabled, false)
+		assert.equal(world.sent.some(entry => entry.operation.startsWith('read:')), false, 'startup does not read firmware')
+		button.click()
+		await flush()
+		assert.deepEqual(world.sent.filter(entry => entry.operation.startsWith('read:')), [{ sid, operation: 'read:38:1' }])
+		assert.match(panel.root.querySelector('.sts-sim-result').textContent, /固件版本号及校验码/)
+		panel.start.click()
+		await flush()
+		assert.equal(button.disabled, true)
+	}
 })
 
 test('CIU generates valid local tokens for S/A/B while disconnected and stopped, without enabling send', () => {
