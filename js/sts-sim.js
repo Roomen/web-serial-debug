@@ -514,7 +514,7 @@
 				case R.EA: return { enc: 0x00, val: Uint8Array.from([7]) }
 				case R.KEN: return { enc: 0x00, val: Uint8Array.from([255]) }
 				case R.METER_NO: return { enc: 0xb0, val: S.meterBcd(drnToMeterNo(a.drn)) } // 表号取自 DRN
-				case R.FW_VER: return { enc: 0xf0, val: Buffer_from('SIM-1.0') }
+				case R.FW_VER: return { enc: 0xf0, val: S.fwVersionEncode({ version: 'SIM-1.0', checksum: 0x12345678 }) }
 				case R.PROTO_VER: return { enc: 0x00, val: Uint8Array.from([cfg.protoVersion]) }
 				case R.DRN: return { enc: 0xb0, val: bcdDigits(a.drn, 7) } // 13 位十进制，最高半字节补 0
 				default: break
