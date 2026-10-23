@@ -47,6 +47,8 @@ assert.equal(PV.render([]), '')
 	assert.ok(folded.indexOf('</summary>') < folded.indexOf('pv-meta'))
 	assert.ok(PV.render({ title: 'T' }, { collapsed: true }).startsWith('<div class="pv">'))
 	assert.ok(PV.render(model).startsWith('<div class="pv pv-down">'))
+	assert.ok(!PV.render(model).includes('<details'), '缺省 collapsed 选项时必须默认展开，绝不可包进 details')
+	assert.ok(!PV.render(model, { dir: 'down' }).includes('<details'), '无论上下行方向，缺省 collapsed 均同等展开')
 	// 多帧: 每帧各自成块
 	assert.equal(PV.render([model, model]).split('class="pv pv-down"').length - 1, 2)
 	// 模型没给方向时用调用方兜底
@@ -56,6 +58,27 @@ assert.equal(PV.render([]), '')
 // ---- 复制/导出: 单元里「标签」「值」之间是真空格，innerText 不会黏在一起 ----
 assert.ok(PV.render({ title: 'T', sections: [{ pairs: [['标签', '值', 'ID9']] }] }).includes('</span> <span class="pv-v">值</span> <span class="pv-h">ID9</span></div>'))
 
+// ---- 多帧渲染与格式化上下文契约 ----
+{
+	// 1. 多帧独立容器：每个帧有独立的 .pv 容器，各帧标题与正文严格封装在各自容器内
+	const twoFrames = PV.render([
+		{ title: 'Frame1', sections: [{ title: 'Sec1' }] },
+		{ title: 'Frame2', sections: [{ title: 'Sec2' }] },
+	])
+	assert.equal((twoFrames.match(/<div class="pv">/g) || []).length, 2, '两帧必须渲染为两个独立的 .pv 容器')
+
+	// 2. 样式契约：style.css 绝不能将 .pv 或 .log-body 设为 display: contents
+	// 否则 Chrome 会将字节 span 作为 flex 项导致 innerText 导出每字节换行，以及 order 导致多帧标题与正文错位
+	const styleCss = fs.readFileSync(path.join(__dirname, '../css/style.css'), 'utf8')
+	assert.ok(!/\.pv\s*\{[^}]*display:\s*contents/i.test(styleCss), 'style.css 中绝不可对 .pv 使用 display: contents')
+	assert.ok(!/\.log-body\s*\{[^}]*display:\s*contents/i.test(styleCss), 'style.css 中绝不可对 .log-body 使用 display: contents')
+
+	// 3. 样式契约：ANSI 模式下必须维持深底亮字，浅色主题的深黑字规则必须用 :not(.ansi) 隔离
+	assert.ok(/\.ansi\s+\.pv-title\s*\{[^}]*color:\s*#f5f5f7/i.test(styleCss), 'style.css 中 .ansi .pv-title 必须强制使用亮色 #f5f5f7')
+	assert.ok(/\.ansi\s+\.pv-v\s*\{[^}]*color:\s*#f5f5f7/i.test(styleCss), 'style.css 中 .ansi .pv-v 必须强制使用亮色 #f5f5f7')
+	assert.ok(/:not\(\.ansi\)\s+\.pv-title/i.test(styleCss), 'style.css 中使用 var(--text-primary) 的 pv-title 必须限定 :not(.ansi)')
+	assert.ok(/\.ansi[^{]*\.log-body\s*\{[^}]*color:\s*var\(--bb-plate-fg/i.test(styleCss), 'style.css 中 .ansi 的 log-body 必须恢复 var(--bb-plate-fg) 亮色基色供子元素继承')
+}
 // ---- linesToPairs ----
 {
 	const r = PV.linesToPairs('devType = 1 METER  DRN = 12345\nreason = 1（台架惯例 1=读表 2=参数）\ntxOk=1  rxOk=2\n阀门状态=开 电量状态=正常\n基准时间=2026-01-01 08:00:00  采样间隔=60分钟\n（无载荷）\n\n')
@@ -132,6 +155,25 @@ const tag = (t, items) => { let p = []; items.forEach(it => { p = p.concat(it) }
 	bad[bad.length - 1] ^= 0xff
 	assert.ok(J(window.gzLogView(window.gzParseFrame(bad))).badges.some(b => b.text === 'XOR ✗' && b.kind === 'bad'))
 	for (const junk of [[], [1, 2], hex('00 11 22 33 44')]) assert.equal(window.gzLogView(window.gzParseFrame(junk)), null)
+}
+
+// ---- 工装 gz: 0x30 应答按大端解析（状态字与电压） ----
+// 固件按大端下发（FlowLogic 2fe64af 恢复产测大端字节序）：电压 01 6E = 366 → 3.66 V，
+// 状态字 FF 7F FF DB = 0xFF7FFFDB，失败位为 阀控(bit2) / 磁开关(bit5) / 超声总线(bit23)。
+// 按小端读会得 281.61 V 与只命中 MBUS模块(bit15)，失败品被当成通过。
+{
+	const frame = hex('A5 3A 30 88 01 02 03 04 05 06 07 38 39 38 36 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30' +
+		' 38 36 30 30 30 30 30 30 30 30 30 30 30 30 30 14 01 6E F6 FF FF FF FF FF FF 7F FF DB 65')
+	const r = window.gzParseFrame(frame)
+	assert.ok(r && r.xorOk, '合成帧 XOR 应通过')
+	const m = J(window.gzLogView(r))
+	const pairs = m.sections.flatMap(s => s.pairs || [])
+	assert.equal(pairs.find(p => p[0] === '供电')[1], '3.66 V')
+	const html = m.sections.map(s => s.html || '').join('')
+	const bad = Array.from(html.matchAll(/gz-flag bad" title="([^"]+)/g), x => x[1]).sort()
+	assert.deepEqual(bad, ['磁开关', '超声总线', '阀控'].sort())
+	assert.ok(!html.includes('gz-flag bad" title="MBUS模块'), 'MBUS模块应判通过')
+	assert.ok(m.badges.some(b => b.text === '3/24 异常'), '失败项数为 3')
 }
 
 // ---- W-MBUS ----

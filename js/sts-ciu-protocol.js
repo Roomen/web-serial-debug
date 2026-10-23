@@ -14,6 +14,9 @@
 	const TOKEN_DIGITS = 20
 	const READ_MAX_REGS = 16
 	const ALARM_MAX_CODES = 27
+	const FW_VERSION_STR_LEN = 16
+	const FW_CHECKSUM_LEN = 4
+	const FW_VERSION_VALUE_LEN = FW_VERSION_STR_LEN + FW_CHECKSUM_LEN
 	const RECORD_LEN = 7
 	const RECORD_EPOCH_UNSET = 0xffffff
 	const ENC_INVALID = 0xff
@@ -59,7 +62,7 @@
 		0x06: '最大透支量', 0x07: '低余量告警阈值', 0x08: '防囤水阈值', 0x10: '表计时间', 0x11: '阀门状态',
 		0x12: '表计状态', 0x13: '电池电压', 0x14: '水温', 0x15: '瞬时流量', 0x16: '付费模式',
 		0x17: '当前告警码列表', 0x18: '计价模式与标度', 0x19: '充值记录条数', 0x20: 'SGC', 0x21: 'KRN',
-		0x22: 'TI', 0x23: 'EA', 0x24: 'KEN', 0x25: '表号', 0x26: '表计固件版本号', 0x27: '协议版本',
+		0x22: 'TI', 0x23: 'EA', 0x24: 'KEN', 0x25: '表号', 0x26: '固件版本号及校验码', 0x27: '协议版本',
 		0x28: 'DRN', 0x80: '阀控测试', 0x81: '断开绑定',
 	}
 	function regName(id) {
@@ -509,6 +512,21 @@
 		return Uint8Array.from(out)
 	}
 
+	// 0x26 专用复合结构：16B 可见 ASCII（尾随空格）+ u32 BE 校验码。
+	function fwVersionEncode(fw) {
+		if (!fw || typeof fw.version !== 'string' || !/^[\x20-\x7e]{0,16}$/.test(fw.version)) throw new Error('固件版本需至多 16 字节可见 ASCII')
+		if (!Number.isInteger(fw.checksum) || fw.checksum < 0 || fw.checksum > 0xffffffff) throw new Error('固件校验码需 u32')
+		const a = Array.from(fw.version.padEnd(FW_VERSION_STR_LEN, ' '), c => c.charCodeAt(0))
+		putU32(a, fw.checksum)
+		return Uint8Array.from(a)
+	}
+	function fwVersionDecode(val) {
+		const v = toU8(val)
+		if (v.length !== FW_VERSION_VALUE_LEN) return null
+		// 与参考解码器一致保留填充及原始字节；校验码只送显，不判定固件有效性。
+		return { version: Array.from(v.subarray(0, FW_VERSION_STR_LEN), c => String.fromCharCode(c)).join(''), checksum: u32(v, FW_VERSION_STR_LEN) }
+	}
+
 	// 充值记录 7B: u24 分钟(自 2020-01-01) + u32 量; 未写满槽整条 0xFF
 	function recordEncode(rec) {
 		const a = []
@@ -718,6 +736,12 @@
 
 	function tlvValueText(t) {
 		if (t.invalid) return '无效标记(未定义或当前不可读)'
+		if (t.id === REG.FW_VER) {
+			const fw = t.enc === 0xf0 ? fwVersionDecode(t.val) : null
+			if (!fw) return '固件版本号及校验码结构非法（需 0xF0 / 20 字节）: ' + hexSpaced(t.val)
+			const version = fw.version.replace(/[^\x20-\x7e]/g, '.').replace(/ +$/, '')
+			return '版本号 "' + version + '"，校验码 0x' + fw.checksum.toString(16).toUpperCase().padStart(8, '0')
+		}
 		if (t.id >= REG.RECORD_FIRST && t.id <= REG.RECORD_LAST && t.len === RECORD_LEN) {
 			const r = recordDecode(t.val)
 			if (r.empty) return '空槽(未写满)'
@@ -741,7 +765,6 @@
 		}
 		if (t.id === REG.VALVE) return hexByte(t.val[0]) + valveText(t.val[0])
 		if (t.id === REG.METER_STATUS) return hexByte(t.val[0]) + meterStatusText(t.val[0])
-		if (t.id === REG.FW_VER) return '"' + Array.from(t.val, c => (c >= 0x20 && c < 0x7f ? String.fromCharCode(c) : '.')).join('') + '"'
 		return hexSpaced(t.val)
 	}
 	function valveText(v) {
@@ -771,8 +794,16 @@
 				}
 				case TYPE.READ: {
 					const r = readReqDecode(p)
-					if (r.error) lines.push('READ 请求非法(' + r.error + ')')
-					else lines.push('起始寄存器 = ' + hexByte(r.start) + '，数量 = ' + r.count)
+					if (r.error) {
+						lines.push('READ 请求非法(' + r.error + ')')
+					} else {
+						const name = regName(r.start)
+						lines.push('起始寄存器 = ' + hexByte(r.start) + (name ? ' (' + name + ')' : ''))
+						lines.push('数量 = ' + r.count)
+						if (r.start === REG.PROTO_VER && r.count === 1) {
+							lines.push('用途 = 协议版本 / 链路心跳')
+						}
+					}
 					break
 				}
 				case TYPE.WRITE: {
@@ -867,6 +898,10 @@
 				r.tlvs.forEach(t => {
 					const total = t.invalid ? 2 : (encFixedWidth(t.enc) ? 2 + t.len : 3 + t.len)
 					add(t.off, total, hexByte(t.id) + ' ' + regName(t.id) + ' = ' + tlvValueText(t), 'TLV ' + hexByte(t.id))
+					if (t.id === REG.FW_VER && !t.invalid && t.enc === 0xf0 && t.len === FW_VERSION_VALUE_LEN) {
+						add(t.off + 3, FW_VERSION_STR_LEN, '固件版本号 ASCII（16 字节，尾随空格）', '固件版本号')
+						add(t.off + 3 + FW_VERSION_STR_LEN, FW_CHECKSUM_LEN, '固件校验码 u32 BE（仅供比对）', '固件校验码')
+					}
 				})
 				break
 			}
@@ -968,6 +1003,7 @@
 
 	W.stsCiu = {
 		FRAME_MIN, FRAME_MAX, PAYLOAD_MAX, TLV_TOTAL_MAX, VARLEN_VALUE_MAX, TOKEN_DIGITS, READ_MAX_REGS, ALARM_MAX_CODES,
+		FW_VERSION_STR_LEN, FW_CHECKSUM_LEN, FW_VERSION_VALUE_LEN,
 		RECORD_LEN, RECORD_EPOCH_UNSET, ENC_INVALID, ETA_UNKNOWN, FINAL_PAYLOAD_MAX,
 		DIR_REQUEST, DIR_RESPONSE, TYPE, TYPE_NAME, NAK, NAK_NAME,
 		TOKEN_ACCEPTED, TOKEN_FINAL_LEN, TOKEN_OK_CREDIT, TOKEN_OK_TEST, TOKEN_CODE, tokenIsFail, WRITE_OK, WRITE_EXEC_FAIL, WRITE_ACCEPTED, POLL_UNKNOWN, POLL_WORKING, POLL_DONE,
@@ -981,7 +1017,7 @@
 		STS_RESULT_LEN, STS_IDX, STS_IDX_NAME, STS_CODE, STS_TEST_BIT, stsResultEncode, stsResultDecode, tokenCodeOf,
 		SIM_TOKEN_MAGIC, SIM_TOKEN_TYPES, SIM_VOLUME_STEP_DL, simTokenEncode, simTokenDecode, simTokenText, simTokenCredit, simAmountText,
 		readReqEncode, readReqDecode, createTlvWriter, tlvParse, tlvInt, fmtScaled, qtyUnit, qtyRawText,
-		alarmListDecode, alarmListEncode, recordEncode, recordDecode, recordTimeStr,
+		alarmListDecode, alarmListEncode, fwVersionEncode, fwVersionDecode, recordEncode, recordDecode, recordTimeStr,
 		writeReqEncode, writeReqDecode, writeRspEncode, writeRspDecode,
 		statusRspEncode, statusRspDecode, nakEncode, nakDecode,
 		resultReqEncode, resultReqDecode, resultRspEncode, resultRspDecode,

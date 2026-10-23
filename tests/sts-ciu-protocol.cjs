@@ -225,6 +225,54 @@ assert.throws(() => S.readReqEncode(0xff, 2))
 	// 不认识的码原样显示，不判错
 	assert.deepEqual(J(S.alarmListDecode(hex('99 99'))), ['9999'])
 }
+// 固件信息 0x26：固定复合结构，校验码仅承载、不判定有效性。
+{
+	assert.equal(S.FW_VERSION_STR_LEN, 16)
+	assert.equal(S.FW_CHECKSUM_LEN, 4)
+	assert.equal(S.FW_VERSION_VALUE_LEN, 20)
+	const full = S.fwVersionEncode({ version: '1234567890ABCDEF', checksum: 0x12345678 })
+	assert.deepEqual(Array.from(full), Array.from(Buffer.from('1234567890ABCDEF')).concat([0x12, 0x34, 0x56, 0x78]))
+	assert.deepEqual(J(S.fwVersionDecode(full)), { version: '1234567890ABCDEF', checksum: 0x12345678 })
+	const short = S.fwVersionEncode({ version: 'V1.0.0', checksum: 0xaabbccdd })
+	assert.equal(Buffer.from(short.subarray(0, 16)).toString('ascii'), 'V1.0.0          ')
+	assert.deepEqual(Array.from(short.subarray(16)), [0xaa, 0xbb, 0xcc, 0xdd])
+	for (const val of [null, [], new Uint8Array(19), new Uint8Array(21)]) assert.equal(S.fwVersionDecode(val), null)
+	for (const version of ['x'.repeat(17), '版本', 'a\0', 'a\xff', 'a\n']) assert.throws(() => S.fwVersionEncode({ version, checksum: 0 }))
+	for (const checksum of [-1, 0x100000000, 1.5, NaN, '123']) assert.throws(() => S.fwVersionEncode({ version: 'V1', checksum }))
+	assert.throws(() => S.fwVersionEncode(null))
+	for (const checksum of [0, 1, 0x80000000, 0xffffffff]) {
+		const value = S.fwVersionEncode({ version: '', checksum })
+		assert.equal(S.fwVersionDecode(value).checksum, checksum)
+		assert.equal(S.tlvValueText(S.tlvParse(tlv(0x26, 0xf0, value)).tlvs[0]), '版本号 ""，校验码 0x' + checksum.toString(16).toUpperCase().padStart(8, '0'))
+	}
+	const payload = tlv(0x26, 0xf0, short)
+	assert.equal(payload.length, 23)
+	assert.deepEqual(Array.from(payload.subarray(0, 3)), [0x26, 0xf0, 0x14])
+	const wire = frame(1, T.READ, 12, payload)
+	assert.equal(wire.length, 29)
+	const parsed = S.parseFrame(wire)
+	assert.equal(parsed.ok, true)
+	assert.match(parsed.decoded, /版本号 "V1.0.0"，校验码 0xAABBCCDD/)
+	const map = S.byteMap(parsed)
+	for (let i = 8; i < 24; i++) assert.equal(map[i].grp, '固件版本号')
+	for (let i = 24; i < 28; i++) assert.equal(map[i].grp, '固件校验码')
+	assert.equal(map[28].grp, 'CRC')
+	// 旧布局及错误编码不能落入通用渲染并误显为正常固件信息。
+	for (const payload of [tlv(0x26, 0xf0, Buffer.from('SIM-1.0')), tlv(0x26, 0x20, [0, 0, 0, 1]), tlv(0x26, 0xb0, new Uint8Array(20))]) {
+		assert.match(S.parseFrame(frame(1, T.READ, 1, payload)).decoded, /结构非法/)
+	}
+	assert.match(S.tlvValueText({ id: 0x26, invalid: true }), /无效标记/)
+	// 接收端没有字符拒收约定：保留原值、显示替代字符，不因校验码取值拒帧。
+	const odd = new Uint8Array(20).fill(0xff)
+	assert.equal(S.fwVersionDecode(odd).version.charCodeAt(0), 255)
+	assert.match(S.parseFrame(frame(1, T.READ, 1, tlv(0x26, 0xf0, odd))).decoded, /FFFFFFFF/)
+	// 值中的可见 ASCII 也是不可信输入，HTML 渲染必须转义。
+	const hostile = S.parseFrame(frame(1, T.READ, 1, tlv(0x26, 0xf0, S.fwVersionEncode({ version: '<img src=x>', checksum: 5 }))))
+	assert.ok(!S.formatFrame(hostile).includes('<img src=x>'))
+	assert.ok(S.formatFrame(hostile).includes('&lt;img src=x&gt;'))
+	// 复合结构例外不能影响未知 id 的通用解码。
+	assert.equal(S.tlvValueText(S.tlvParse(tlv(0x29, 0x20, [0, 0, 0, 9])).tlvs[0]), '9')
+}
 // 充值记录: 空槽、RTC 未校准
 assert.equal(S.recordDecode(new Uint8Array(7).fill(0xff)).empty, true)
 assert.equal(S.recordDecode(hex('FF FF FF 00 00 00 05')).rtcUnset, true)
@@ -272,5 +320,35 @@ assert.equal(S.tokenRspDecode(hex('00 01')), null)
 	assert.match(S.byteMap(p)[16].tip, /Value/)
 	assert.match(S.parseFrame(frame(1,T.WRITE,1,[0x80,8])).decoded, /执行失败/)
 	assert.match(S.parseFrame(frame(1,T.WRITE,1,[0x80,3])).decoded, /未知/)
+}
+// ---- READ 0x27 n=1 双用途标记与完整字段回归（正反例） ----
+{
+	// 正例：合法下行 READ 0x27 n=1
+	const pingReq = S.parseFrame(frame(0, T.READ, 1, S.readReqEncode(0x27, 1)))
+	assert.equal(pingReq.ok, true)
+	assert.match(pingReq.decoded, /起始寄存器 = 0x27 \(协议版本\)/)
+	assert.match(pingReq.decoded, /数量 = 1/)
+	assert.match(pingReq.decoded, /用途 = 协议版本 \/ 链路心跳/)
+
+	// 反例 1: 数量不为 1 (0x27 n=2)
+	const read2 = S.parseFrame(frame(0, T.READ, 2, S.readReqEncode(0x27, 2)))
+	assert.equal(read2.ok, true)
+	assert.match(read2.decoded, /起始寄存器 = 0x27 \(协议版本\)/)
+	assert.match(read2.decoded, /数量 = 2/)
+	assert.doesNotMatch(read2.decoded, /链路心跳/)
+
+	// 反例 2: 邻近寄存器 (0x26 n=1)
+	const readFw = S.parseFrame(frame(0, T.READ, 3, S.readReqEncode(0x26, 1)))
+	assert.equal(readFw.ok, true)
+	assert.match(readFw.decoded, /起始寄存器 = 0x26 \(固件版本号及校验码\)/)
+	assert.match(readFw.decoded, /数量 = 1/)
+	assert.doesNotMatch(readFw.decoded, /链路心跳/)
+
+	// 反例 3: 邻近寄存器 (0x28 n=1)
+	const readDrn = S.parseFrame(frame(0, T.READ, 4, S.readReqEncode(0x28, 1)))
+	assert.equal(readDrn.ok, true)
+	assert.match(readDrn.decoded, /起始寄存器 = 0x28 \(DRN\)/)
+	assert.match(readDrn.decoded, /数量 = 1/)
+	assert.doesNotMatch(readDrn.decoded, /链路心跳/)
 }
 console.log('STS-CIU protocol checks passed')

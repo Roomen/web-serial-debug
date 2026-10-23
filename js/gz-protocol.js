@@ -291,29 +291,17 @@
 		return parts.join(' · ')
 	}
 
-	// FlowLogic factory.c: serU16/serU32 = memcpy 本机序 → Cortex-M 小端线上序
-	// 文档写「大端」与固件实现不一致, 以固件为准
-	function u16le(info, o) {
-		if (o + 1 >= info.length) return 0
-		return (info[o] & 0xff) | ((info[o + 1] & 0xff) << 8)
-	}
-	function u32leBytes(bytes) {
-		let w = 0
-		for (let i = 0; i < bytes.length && i < 4; i++) w |= (bytes[i] & 0xff) << (8 * i)
-		return w >>> 0
-	}
-	// 0.01V: batteryVolaGet()/10 以 u16 LE 下发
+	// FlowLogic factory.c 的 serU16/serU32 固定按大端（网络序）下发
+	// （2fe64af「恢复产测大端字节序」），0x30~0x34 这一组都是大端
+	// 0.01V: batteryVolaGet()/10 以 u16 BE 下发
 	function volt01(info, o) {
 		if (o + 1 >= info.length) return null
-		return u16le(info, o) / 100
-	}
-	function u16field(info, o) {
-		return u16le(info, o)
+		return u16be(info, o) / 100
 	}
 
-	// bit0 = uint32 LSB = 线上首字节 bit0（factory.h TestWorkStation1T 位域顺序）
-	function flagsFromLe(bytes, bitDefs) {
-		const word = u32leBytes(bytes)
+	// bit0 = uint32 末字节 bit0（factory.h TestWorkStation1T 位域顺序，u32 BE）
+	function flagsFromBytes(bytes, bitDefs) {
+		const word = u32be(padBytes(bytes || [], 4, 0), 0)
 		const flags = []
 		for (let i = 0; i < bitDefs.length; i++) {
 			const d = bitDefs[i]
@@ -485,7 +473,7 @@
 			if ((info[47] & 0xff) !== 0xff) v.metrics.push(metric('RS485供电', rsv.toFixed(1) + ' V'))
 		}
 		if (info.length >= 55) {
-			v.flags = v.flags.concat(flagsFromLe(info.slice(51, 55), [
+			v.flags = v.flags.concat(flagsFromBytes(info.slice(51, 55), [
 				{ bit: 23, name: '超声总线' }, { bit: 22, name: 'RS485供电检' },
 				{ bit: 21, name: '蓝牙模组' }, { bit: 20, name: '脉冲S4' },
 				{ bit: 19, name: '脉冲S3' }, { bit: 18, name: '脉冲S2' },
@@ -519,7 +507,7 @@
 		if (info.length >= 18) v.metrics.push(metric('频偏', String(u16be(info, 16))))
 		if (info.length >= 19) v.metrics.push(metric('匹配电容', String(info[18] & 0xff)))
 		if (info.length >= 28) {
-			v.flags = flagsFromLe(info.slice(24, 28), [
+			v.flags = flagsFromBytes(info.slice(24, 28), [
 				{ bit: 4, name: '电池电压' }, { bit: 3, name: '蓝牙模组' },
 				{ bit: 2, name: '磁开关' }, { bit: 1, name: 'Flash' }, { bit: 0, name: '阀控' },
 			])
@@ -546,8 +534,8 @@
 		const v = emptyView()
 		v.metrics.push(metric('唯一码', hexbytes(info.slice(0, 7))))
 		if (info.length >= 11) {
-			v.metrics.push(metric('正向流量', String(u16field(info, 7))))
-			v.metrics.push(metric('反向流量', String(u16field(info, 9))))
+			v.metrics.push(metric('正向流量', String(u16be(info, 7))))
+			v.metrics.push(metric('反向流量', String(u16be(info, 9))))
 		}
 		if (info.length >= 13) {
 			v.metrics.push(metric('无磁1', String(info[11] & 0xff)))
@@ -558,7 +546,7 @@
 			v.metrics.push(metric('供电', vv != null ? vv.toFixed(2) + ' V' : '-'))
 		}
 		if (info.length >= 25) {
-			v.flags = flagsFromLe(info.slice(21, 25), [
+			v.flags = flagsFromBytes(info.slice(21, 25), [
 				{ bit: 5, name: '模板识别' }, { bit: 4, name: '摄像头' },
 				{ bit: 3, name: 'DSP' }, { bit: 2, name: '触摸开关' },
 				{ bit: 1, name: '阀控' }, { bit: 0, name: '磁开关' },
@@ -578,8 +566,8 @@
 			v.metrics.push(metric('CSQ', String(csq), csq === 0 || csq === 0xff))
 		}
 		if (info.length >= 32) {
-			v.metrics.push(metric('正向流量', String(u16field(info, 28))))
-			v.metrics.push(metric('反向流量', String(u16field(info, 30))))
+			v.metrics.push(metric('正向流量', String(u16be(info, 28))))
+			v.metrics.push(metric('反向流量', String(u16be(info, 30))))
 		}
 		if (info.length >= 34) {
 			v.metrics.push(metric('无磁1', String(info[32] & 0xff)))
@@ -599,7 +587,7 @@
 			v.metrics.push(metric('RS485供电', ((info[37] & 0xff) / 10).toFixed(1) + ' V'))
 		}
 		if (info.length >= 46) {
-			v.flags = v.flags.concat(flagsFromLe(info.slice(42, 46), [
+			v.flags = v.flags.concat(flagsFromBytes(info.slice(42, 46), [
 				{ bit: 17, name: 'RS485供电检' }, { bit: 16, name: '脉冲S4' },
 				{ bit: 15, name: '脉冲S3' }, { bit: 14, name: '脉冲S2' },
 				{ bit: 13, name: '脉冲S1' }, { bit: 12, name: 'AD采样' },
@@ -633,7 +621,7 @@
 			v.metrics.push(metric('供电', vv != null ? vv.toFixed(2) + ' V' : '-'))
 		}
 		if (info.length >= 72) {
-			v.flags = flagsFromLe(info.slice(68, 72), [
+			v.flags = flagsFromBytes(info.slice(68, 72), [
 				{ bit: 6, name: 'RS485' }, { bit: 5, name: 'AD2' }, { bit: 4, name: 'AD1' },
 				{ bit: 3, name: '电池电压' }, { bit: 2, name: 'SIM卡' },
 				{ bit: 1, name: '磁开关' }, { bit: 0, name: '蜂窝模组' },
@@ -883,7 +871,7 @@
 					set(o, 1, 'CSQ = ' + (raw[o] & 0xff), 'csq'); o += 1
 					if (o + 1 < infoEnd) {
 						const vv = volt01(Array.from(raw.subarray(4, infoEnd)), o - 4)
-						set(o, 2, '供电电压 = ' + (vv != null ? vv.toFixed(2) + ' V' : '?') + ' (u16 LE)', 'volt')
+						set(o, 2, '供电电压 = ' + (vv != null ? vv.toFixed(2) + ' V' : '?') + ' (u16 BE)', 'volt')
 						o += 2
 					}
 					if (o < infoEnd) { set(o, 1, '使能状态字节', 'en'); o += 1 }
@@ -892,7 +880,7 @@
 					if (o + 2 < infoEnd) { set(o, 3, '预留', 'rsv'); o += 3 }
 					if (o + 3 < infoEnd) {
 						const fb = Array.from(raw.subarray(o, o + 4))
-						const fl = flagsFromLe(fb, [
+						const fl = flagsFromBytes(fb, [
 							{ bit: 0, name: '蜂窝模组' }, { bit: 1, name: 'SIM卡' }, { bit: 2, name: '阀控' },
 							{ bit: 3, name: 'I2C' }, { bit: 4, name: 'Flash' }, { bit: 5, name: '磁开关' },
 							{ bit: 6, name: '电池电压' }, { bit: 7, name: '触摸开关' }, { bit: 8, name: 'DSP' },
@@ -903,18 +891,18 @@
 							{ bit: 21, name: '蓝牙模组' }, { bit: 22, name: 'RS485供电检' }, { bit: 23, name: '超声总线' },
 						])
 						const bad = fl.filter(function (x) { return x.ok === false }).map(function (x) { return x.name })
-						const tip = '检测状态 u32 LE=0x' + u32leBytes(fb).toString(16).toUpperCase().padStart(8, '0') +
+						const tip = '检测状态 u32 BE=0x' + u32be(fb, 0).toString(16).toUpperCase().padStart(8, '0') +
 							(bad.length ? (' 异常: ' + bad.join(',')) : ' 全过')
 						set(o, 4, tip, 'flags')
 					}
 				} else if (cmd === 0x89 && infoLen >= 25) {
-					set(o, 2, '正向流量 = ' + u16le(Array.from(raw.subarray(4)), 7) + ' (u16 LE)', 'fwd')
-					set(o + 2, 2, '反向流量 = ' + u16le(Array.from(raw.subarray(4)), 9) + ' (u16 LE)', 'rev')
+					set(o, 2, '正向流量 = ' + u16be(Array.from(raw.subarray(4)), 7) + ' (u16 BE)', 'fwd')
+					set(o + 2, 2, '反向流量 = ' + u16be(Array.from(raw.subarray(4)), 9) + ' (u16 BE)', 'rev')
 					set(o + 4, 1, '无磁信号1', 's1')
 					set(o + 5, 1, '无磁信号2', 's2')
 					const vv = volt01(Array.from(raw.subarray(4)), 13)
-					set(o + 6, 2, '供电 = ' + (vv != null ? vv.toFixed(2) + ' V' : '?') + ' (u16 LE)', 'volt')
-					if (infoLen >= 25) set(o + 14, 4, '检测状态 u32 LE', 'flags')
+					set(o + 6, 2, '供电 = ' + (vv != null ? vv.toFixed(2) + ' V' : '?') + ' (u16 BE)', 'volt')
+					if (infoLen >= 25) set(o + 14, 4, '检测状态 u32 BE', 'flags')
 				} else {
 					set(4, infoLen, '信息域 ' + infoLen + 'B', 'info')
 				}

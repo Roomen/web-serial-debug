@@ -1105,6 +1105,42 @@ async function tests() {
 		assert.deepEqual(J(inv.read.map(x => x.invalid)), [true, true])
 		assert.equal(t.world.log.kind3.length > 0, true)
 	}
+	// 固件信息是固定 20 字节复合结构；只在显式读取时请求，不参与基本信息与状态刷新。
+	{
+		const t = setup()
+		const sends = recordCiuSends(t)
+		await ready(t)
+		await drive(t.clock, t.ciu.refreshBasics())
+		await drive(t.clock, t.ciu.status())
+		assert.equal(sends.some(x => x.f.type === S.TYPE.READ && x.f.payload[0] === S.REG.FW_VER), false)
+		const before = sends.length
+		const fw = await drive(t.clock, t.ciu.read(S.REG.FW_VER, 1))
+		assert.equal(fw.ok, true, fw.message)
+		assert.equal(fw.read.length, 1)
+		const raw = hex(fw.read[0].raw)
+		assert.equal(raw.length, 20)
+		assert.deepEqual(Array.from(raw.slice(0, 16)), Array.from(Buffer.from('SIM-1.0         ')))
+		assert.deepEqual(Array.from(raw.slice(16)), [0x12, 0x34, 0x56, 0x78])
+		assert.match(fw.read[0].text, /SIM-1\.0/)
+		assert.match(fw.read[0].text, /12345678/)
+		assert.deepEqual(sends.slice(before).filter(x => x.f.type === S.TYPE.READ).map(x => Array.from(x.f.payload)), [[0x26, 1]])
+		const wr = await drive(t.clock, t.ciu.write(S.REG.FW_VER, 0))
+		assert.equal(wr.ok, false)
+		assert.equal(wr.nak.reason, S.NAK.NOT_WRITABLE)
+		assert.equal(wr.nak.reason, 0x04)
+	}
+	// STS 参数 0x20..0x28 总 TLV 61 字节：第一帧停在 0x27，继续单读 0x28。
+	{
+		const t = setup()
+		await ready(t)
+		const sends = recordCiuSends(t)
+		const rd = await drive(t.clock, t.ciu.read(0x20, 9))
+		assert.equal(rd.ok, true, rd.message)
+		assert.deepEqual(J(rd.read.map(x => x.id)), [0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28])
+		assert.ok(rd.read.every(x => !x.invalid))
+		assert.deepEqual(sends.filter(x => x.f.type === S.TYPE.READ).map(x => Array.from(x.f.payload)), [[0x20, 9], [0x28, 1]])
+		assert.match(logText(t.logs.ciu), /READ 只回了前 8\/9 个/)
+	}
 	// 12 条记录装不下一帧: 只回前 k 个，CIU 按实收数量继续读（5 + 5 + 2）
 	{
 		const t = setup({ meter: { tokenDelayS: 0, creditAmount: 100 } })

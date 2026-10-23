@@ -390,10 +390,12 @@
 			const opRow = el('div', 'sts-sim-row')
 			const statusBtn = buildToggleRow('查询状态', 'sts-sim-ciu-status')
 			const recBtn = buildToggleRow('充值记录', 'sts-sim-ciu-records')
+			const fwInfoBtn = buildToggleRow('固件信息', 'sts-sim-ciu-fw-info')
+			fwInfoBtn.title = '按需单读 0x26：16 字节固件版本号与 4 字节校验码（仅显示，不校验）'
 			const valveOpenBtn = buildToggleRow('阀控测试·开', 'sts-sim-ciu-valve-open')
 			const valveCloseBtn = buildToggleRow('阀控测试·关', 'sts-sim-ciu-valve-close')
 			const unbindBtn = buildToggleRow('断开绑定', 'sts-sim-ciu-unbind')
-			opRow.append(statusBtn, recBtn, valveOpenBtn, valveCloseBtn, unbindBtn)
+			opRow.append(statusBtn, recBtn, fwInfoBtn, valveOpenBtn, valveCloseBtn, unbindBtn)
 			const readRow = el('div', 'sts-sim-row')
 			const readStart = document.createElement('input')
 			readStart.type = 'text'
@@ -433,7 +435,7 @@
 
 			Object.assign(ui.refs, {
 				root, head, body, toggle, nameEl, hint, logCard, logTitle, bMeter, bCiu, startBtn, startText, startIcon, status, cfg, meterForm, ciuForm, meterView, ciuView, kv, recTable,
-				tokenInput, tokenBtn, simType, simData, simUnit, simBtn, statusBtn, recBtn, valveOpenBtn, valveCloseBtn, unbindBtn, readStart, readCount, readBtn, abortBtn,
+				tokenInput, tokenBtn, simType, simData, simUnit, simBtn, statusBtn, recBtn, fwInfoBtn, valveOpenBtn, valveCloseBtn, unbindBtn, readStart, readCount, readBtn, abortBtn,
 				phase, resultCard, logBox, clearBtn,
 			})
 			root.querySelectorAll('[id]').forEach(function (node) { node.id += '-' + channel })
@@ -583,7 +585,7 @@
 			const r = ui.refs
 			const st = ui.engine && ui.role === 'ciu' ? ui.engine.getState() : null
 			const idle = !!(st && st.running && st.phase === 'idle' && !ui.opBusy)
-			;[r.tokenBtn, r.statusBtn, r.recBtn, r.valveOpenBtn, r.valveCloseBtn, r.unbindBtn, r.readBtn].forEach(function (b) { b.disabled = !idle })
+			;[r.tokenBtn, r.statusBtn, r.recBtn, r.fwInfoBtn, r.valveOpenBtn, r.valveCloseBtn, r.unbindBtn, r.readBtn].forEach(function (b) { b.disabled = !idle })
 			r.tokenInput.disabled = ui.role !== 'ciu'
 			r.simBtn.disabled = ui.role !== 'ciu'
 			r.abortBtn.disabled = !(ui.running && ui.opBusy)
@@ -997,6 +999,8 @@
 			})
 			r.statusBtn.addEventListener('click', function () { runCiu(function (e) { return e.status() }) })
 			r.recBtn.addEventListener('click', function () { runCiu(function (e) { return e.records() }) })
+			// 设备信息只在用户查询时读，不加入握手、STATUS 或心跳。
+			r.fwInfoBtn.addEventListener('click', function () { runCiu(function (e) { return e.read(S.REG.FW_VER, 1) }) })
 			r.valveOpenBtn.addEventListener('click', function () { runCiu(function (e) { return e.valveTest(true) }) })
 			r.valveCloseBtn.addEventListener('click', function () { runCiu(function (e) { return e.valveTest(false) }) })
 			r.unbindBtn.addEventListener('click', function () { runCiu(function (e) { return e.unbind() }) })

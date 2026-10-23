@@ -98,7 +98,7 @@ CIU 上电后只 `WOR_INIT` 一次：启动时先查 `WOR_GET_STATUS`，未初�
 
 先从最新 `main` 开 `feat/xxx` / `fix/xxx` 分支再改，不要直接改 `main`。commit message 用 Conventional Commit 前缀（`feat:`、`fix:`、`style:` 等）。
 
-PR 正文只写 **Summary**（用户可见变化、版本号变化）；涉及界面变化附截图或录屏；修复串口设备兼容性问题时关联 issue 或说明设备/浏览器环境。**不要写 Test plan。**
+PR 正文只写 **Summary**（用户可见变化、版本号变化）；提交 PR 均不上传截图；修复串口设备兼容性问题时关联 issue 或说明设备/浏览器环境。**不要写 Test plan。**
 
 ## 安全与隐私
 
