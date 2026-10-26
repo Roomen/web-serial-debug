@@ -669,9 +669,10 @@
 		splitMode: 'time',
 		//日志最大行数,超出后从顶部裁剪
 		maxLogRows: 10000,
-		//末尾加回车 \r / 换行 \n，可单选或同时勾选（旧版 addCRLF 读入时拆成这两项）
+		//末尾按序追加回车 \r / 换行 \n / NUL \0，可独立勾选（旧版 addCRLF 读入时拆成这两项）
 		addCR: false,
 		addLF: false,
+		addNUL: false,
 		//HEX发送
 		hexSend: true,
 		//循环发送
@@ -2584,6 +2585,7 @@
 	applyLogOptionsToUI()
 	document.getElementById('serial-add-cr').checked = !!toolOptions.addCR
 	document.getElementById('serial-add-lf').checked = !!toolOptions.addLF
+	document.getElementById('serial-add-nul').checked = !!toolOptions.addNUL
 	document.getElementById('serial-hex-send').checked = toolOptions.hexSend
 	document.getElementById('serial-loop-send').checked = toolOptions.loopSend
 	toolOptions.loopSendTime = normalizeLoopSendTime(toolOptions.loopSendTime)
@@ -2927,6 +2929,10 @@
 		changeOption('addLF', this.checked)
 		updateSendInfo()
 	})
+	document.getElementById('serial-add-nul').addEventListener('change', function (e) {
+		changeOption('addNUL', this.checked)
+		updateSendInfo()
+	})
 	document.getElementById('serial-hex-send').addEventListener('change', function (e) {
 		changeOption('hexSend', this.checked)
 		updateSendInfo()
@@ -2978,10 +2984,11 @@
 
 	function updateSendInfo() {
 		const hex = document.getElementById('serial-hex-send').checked
-		sendInput.placeholder = hex ? '输入 HEX，如 41 54 0D 0A' : '输入文本，如 AT+GMR'
+		sendInput.placeholder = hex ? '输入 HEX，如 41 54 0D 0A' : 'TEXT 支持 C 风格字节转义，如 AT\\r\\n；反斜杠写 \\\\'
+		sendInput.title = hex ? '按 HEX 解析输入内容' : sendInput.placeholder
 		if (!sendInfo) return
 		const v = sendInput.value
-		const crlf = (toolOptions.addCR ? 1 : 0) + (toolOptions.addLF ? 1 : 0)
+		const suffixLength = (toolOptions.addCR ? 1 : 0) + (toolOptions.addLF ? 1 : 0) + (toolOptions.addNUL ? 1 : 0)
 		let text = ''
 		let bad = false
 		if (v) {
@@ -2994,10 +3001,15 @@
 					text = 'HEX 位数为奇数'
 					bad = true
 				} else {
-					text = (clean.length / 2 + crlf) + ' 字节'
+					text = (clean.length / 2 + suffixLength) + ' 字节'
 				}
 			} else {
-				text = (new TextEncoder().encode(v).length + crlf) + ' 字节'
+				try {
+					text = (window.TextByteEncoder.encode(v).length + suffixLength) + ' 字节'
+				} catch (error) {
+					text = error.message
+					bad = true
+				}
 			}
 		}
 		sendInfo.textContent = text
@@ -4573,7 +4585,7 @@
 			for (let i = 0; i < value.length; i = i + 2) {
 				data.push(parseInt(value.substring(i, i + 2), 16))
 			}
-			await writeData(Uint8Array.from(data), null, sendName || lookupQuickSendName(hex))
+			await writeData(Uint8Array.from(data), null, sendName || lookupQuickSendName(hex), { composed: true })
 		} else {
 			addLogErr('HEX格式错误:' + hex)
 		}
@@ -4581,12 +4593,17 @@
 
 	//发送文本到串口（使用主发口）
 	async function sendText(text, sendName) {
-		const encoder = new TextEncoder()
-		await writeData(encoder.encode(text), null, sendName || lookupQuickSendName(text))
+		let bytes
+		try { bytes = window.TextByteEncoder.encode(text) } catch (error) {
+			addLogErr(error.message)
+			return
+		}
+		await writeData(bytes, null, sendName || lookupQuickSendName(text), { composed: true })
 	}
 
 	//写串口数据（走主发口 activeSendPhys）
-	// opts.raw: 不追加 CRLF（协议事务的整帧不能被改）；opts.logData: 日志/解析用这份字节代替真实发送字节
+	// opts.composed: 用户编写的 HEX/TEXT 字节允许追加 NUL；普通字节写入保留原有 CR/LF 行为
+	// opts.raw: 不追加 CR/LF/NUL（协议事务的整帧不能被改）；opts.logData: 日志/解析用这份字节代替真实发送字节
 	// （含密钥的帧只把脱敏副本交给日志，真实串口仍写原帧，txBytes 按真实长度计）
 	async function writeData(data, sid, sendName, opts) {
 		if (window.serialApi && window.serialApi.updatePreparing) throw new Error('正在安装应用更新，暂不能发送')
@@ -4616,11 +4633,15 @@
 		try {
 			writer = port.writable.getWriter()
 			session.writer = writer
-			if (!opts.raw && (toolOptions.addCR || toolOptions.addLF)) {
+			if (!opts.raw && (toolOptions.addCR || toolOptions.addLF || (opts.composed && toolOptions.addNUL))) {
 				const eol = []
 				if (toolOptions.addCR) eol.push(0x0d)
 				if (toolOptions.addLF) eol.push(0x0a)
-				data = new Uint8Array([...data, ...eol])
+				if (opts.composed && toolOptions.addNUL) eol.push(0x00)
+				const joined = new Uint8Array(data.length + eol.length)
+				joined.set(data)
+				joined.set(eol, data.length)
+				data = joined
 			}
 			flushPendingRx(sid)
 			const sendTime = new Date()
@@ -5267,10 +5288,11 @@
 		async rebuildReceive(id) {
 			return await rebuildSerialReceive(id)
 		},
-		async writeData(data) {
-			await writeData(data, SerialHub.activeSendPhys())
+		// 字节写入不解析转义；用户编写的发送显式传 composed: true 才按偏好追加 NUL
+		async writeData(data, opts) {
+			await writeData(data, SerialHub.activeSendPhys(), undefined, { composed: !!(opts && opts.composed) })
 		},
-		// 协议事务专用: 不追加 CRLF；logData 存在时日志只显示这份（已脱敏）字节
+		// 协议事务专用: 不追加 CR/LF/NUL；logData 存在时日志只显示这份（已脱敏）字节
 		async writeRaw(data, opts) {
 			await writeData(data, SerialHub.activeSendPhys(), undefined, { raw: true, logData: opts && opts.logData })
 		},
