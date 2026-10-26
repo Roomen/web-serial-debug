@@ -1,5 +1,5 @@
 // 包一层 tauri CLI：应用版本只来自 js/version.js(window.APP_VERSION)，每次经 --config 传入，tauri.conf.json 与 Cargo.toml 不写版本。
-// build 成功后把安装包复制进 desktop/release/<通道>/(每个通道只留最新一版，不入库)：macOS 只有 .dmg，Windows 是 NSIS 安装程序；配了更新签名时另带应用内更新用的包与 .sig。
+// build 成功后把安装包复制进 desktop/release/<通道>/(每个通道只留最新一版，不入库)：macOS 只有 .dmg，Windows 是便携 ZIP；配了更新签名时另带应用内更新用的包与 .sig。
 // 通道两个：main(正式版，从 main 分支构建)与 dev(最新预览，其它分支构建都算)，按构建时所在的 git 分支判定，环境变量 RELEASE_CHANNEL=main|dev 可强制指定；
 // 只清理并写入本通道的目录，另一个通道的包原样保留。
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { macSigningConfig, releaseChannel, updaterConfig } from './release-config.mjs'
+import { buildTarget, packageWindows } from './portable-windows.mjs'
 
 const desktop = join(dirname(fileURLToPath(import.meta.url)), '..')
 const src = readFileSync(join(desktop, '..', 'js', 'version.js'), 'utf8')
@@ -18,15 +19,22 @@ const channel = releaseChannel(desktop)
 process.env.RELEASE_CHANNEL = channel
 const args = process.argv.slice(2)
 const sub = args[0]
+const target = buildTarget(args)
+const windows = target ? target.includes('-windows-') : process.platform === 'win32'
+const skipPackage = args.includes('--no-bundle')
+if (sub === 'build' && windows && !skipPackage) args.push('--no-bundle')
 if (sub === 'dev' || sub === 'build') {
-	const updater = updaterConfig(channel)
+	const updater = updaterConfig(channel, process.env, windows ? 'win32' : process.platform)
 	const mac = macSigningConfig()
 	args.push('--config', JSON.stringify({ version, ...updater, bundle: { ...updater.bundle, ...mac.bundle } }))
 }
 const bin = join(desktop, 'node_modules', '@tauri-apps', 'cli', 'tauri.js')
 const started = Date.now()
 const r = spawnSync(process.execPath, [bin, ...args], { cwd: desktop, stdio: 'inherit' })
-if (r.status === 0 && sub === 'build' && args.indexOf('--no-bundle') === -1) collect()
+if (r.status === 0 && sub === 'build' && !skipPackage) {
+	if (windows) packageWindows({ desktop, version, channel, target, debug: args.includes('--debug') })
+	else collect()
+}
 process.exit(r.status == null ? 1 : r.status)
 
 // ---- 构建产物 → desktop/release/<通道> ----
@@ -71,7 +79,6 @@ function collect() {
 		const base = 'Serial-Debug_' + version + '_'
 		list(join(dir, 'dmg'), '.dmg').forEach((f) => jobs.push({ from: f, name: base + 'macos_' + arch + '.dmg' }))
 		list(join(dir, 'macos'), '.app.tar.gz').forEach((f) => jobs.push({ from: f, name: base + 'macos_' + arch + '.app.tar.gz', signature: true }))
-		list(join(dir, 'nsis'), '.exe').forEach((f) => jobs.push({ from: f, name: base + 'windows_' + arch + '-setup.exe', signature: true }))
 	}
 	if (!jobs.length) {
 		console.warn('release: 没找到本次构建的安装包，desktop/release/' + channel + ' 保持不变')

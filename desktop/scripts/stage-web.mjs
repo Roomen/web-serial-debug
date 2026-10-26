@@ -3,7 +3,7 @@
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { releaseChannel } from './release-config.mjs'
+import { releaseChannel, updaterConfig } from './release-config.mjs'
 
 const desktop = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repo = join(desktop, '..')
@@ -19,4 +19,4 @@ for (const e of ENTRIES) {
 }
 console.log('stage-web: 已复制 ' + ENTRIES.join(', ') + ' → desktop/dist')
 
-writeFileSync(join(dist, 'js', 'release-config.js'), 'window.APP_RELEASE_CHANNEL = ' + JSON.stringify(releaseChannel(desktop)) + ';\nwindow.APP_UPDATER_CONFIGURED = ' + Boolean(String(process.env.TAURI_UPDATER_PUBLIC_KEY || '').trim()) + ';\n')
+writeFileSync(join(dist, 'js', 'release-config.js'), 'window.APP_RELEASE_CHANNEL = ' + JSON.stringify(releaseChannel(desktop)) + ';\nwindow.APP_UPDATER_CONFIGURED = ' + Boolean(updaterConfig(releaseChannel(desktop)).plugins.updater.pubkey) + ';\n')
