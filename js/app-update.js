@@ -112,6 +112,35 @@
 	const service = root.AppPlatform && root.AppPlatform.service('app-update')
 	if (!service || !root.document) return
 	const doc = root.document
+	// 便携 ZIP 由用户退出程序后替换，不交给只支持安装器的原生更新插件。
+	if (service.manualDownloadUrl) {
+		function openDownload() {
+			const link = doc.createElement('a')
+			link.href = service.manualDownloadUrl
+			link.target = '_blank'
+			link.rel = 'noopener'
+			doc.body.appendChild(link)
+			link.click()
+			link.remove()
+		}
+		root.AppUpdate = { check: openDownload }
+		function initManualDownload() {
+			const menu = doc.querySelector('.rail-config-menu')
+			if (!menu) return
+			const li = doc.createElement('li')
+			const button = doc.createElement('button')
+			button.id = 'serial-check-update'
+			button.type = 'button'
+			button.className = 'dropdown-item'
+			button.textContent = '下载新版 ZIP…'
+			button.addEventListener('click', openDownload)
+			li.appendChild(button)
+			menu.appendChild(li)
+		}
+		if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', initManualDownload)
+		else initManualDownload()
+		return
+	}
 	let status, action, shield, retry = 'check', lastCheck = 0, manualChecking = false
 	let previousFocus = null
 	function showShield(on) {

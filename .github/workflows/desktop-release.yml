@@ -35,7 +35,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-      - run: node --test desktop/scripts/updater-manifest.test.mjs desktop/scripts/installer-templates.test.mjs desktop/scripts/prune-dev-releases.test.mjs
+      - run: node --test desktop/scripts/updater-manifest.test.mjs desktop/scripts/installer-templates.test.mjs desktop/scripts/prune-dev-releases.test.mjs desktop/scripts/portable-windows.test.mjs
       - id: meta
         env:
           GH_TOKEN: ${{ github.token }}
@@ -139,6 +139,9 @@ jobs:
           rm -f "$RUNNER_TEMP/desktop-certificate.p12"
       - run: npm ci
         working-directory: desktop
+      - name: Verify portable ZIP packaging
+        if: runner.os == 'Windows'
+        run: node --test desktop/scripts/portable-windows.test.mjs
       - name: Build desktop artifacts
         working-directory: desktop
         shell: bash
@@ -211,6 +214,7 @@ jobs:
             ? `预览版，构建自 dev 分支 ${e.GITHUB_SHA.slice(0, 7)}。\n\n${(e.COMMIT_MESSAGE || '').split('\n')[0]}`
             : `Serial Debug ${e.VERSION}`;
           if (e.APPLE !== 'true') notes += '\n\n> macOS 安装包未经 Apple 签名公证：首次打开被拦截时点「完成」，到「系统设置 → 隐私与安全性」底部点「仍要打开」并输入密码。若仍提示「已损坏」，在终端执行 `xattr -cr "/Applications/Serial Debug.app"` 后再打开。';
+          notes += '\n\nWindows 提供 ZIP 免安装版：解压后运行 Serial Debug.exe，需要系统已安装 Microsoft Edge WebView2 Runtime。更新时先退出程序再解压新版；Windows 不使用安装器自动更新。';
           if (e.UPDATER !== 'true') notes += '\n\n> 此版本未启用应用内更新，新版本请到 Releases 页下载。';
           writeFileSync('release-notes.md', notes + '\n');
           JS
@@ -243,7 +247,7 @@ jobs:
           PRERELEASE=()
           if [ "$CHANNEL" = dev ]; then PRERELEASE=(--prerelease); fi
           if [ "$(cat pointer-exists)" = no ]; then
-            gh release create "desktop-$CHANNEL" latest.json --target "$GITHUB_SHA" --draft "${PRERELEASE[@]}" --latest=false --title "Desktop $CHANNEL update channel" --notes "Updater channel manifest. Download installers from version releases."
+            gh release create "desktop-$CHANNEL" latest.json --target "$GITHUB_SHA" --draft "${PRERELEASE[@]}" --latest=false --title "Desktop $CHANNEL update channel" --notes "Updater channel manifest. Download desktop packages from version releases."
             gh release edit "desktop-$CHANNEL" --draft=false
           else
             node desktop/scripts/update-channel-pointer.mjs "$CHANNEL" latest.json

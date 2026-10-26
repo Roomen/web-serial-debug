@@ -8,9 +8,11 @@ const wix = read('../installers/main.wxs');
 const config = JSON.parse(read('../src-tauri/tauri.conf.json'));
 const windowsConfig = JSON.parse(read('../src-tauri/tauri.windows.conf.json'));
 
-test('Windows builds only NSIS while other platforms keep all bundle targets', () => {
+test('Windows skips installer bundling while other platforms keep all bundle targets', () => {
   assert.equal(config.bundle.targets, 'all');
-  assert.deepEqual(windowsConfig.bundle.targets, ['nsis']);
+  assert.equal(windowsConfig.bundle.active, false);
+  assert.deepEqual(windowsConfig.bundle.targets, []);
+  assert.equal(windowsConfig.bundle.createUpdaterArtifacts, false);
   assert.equal(config.bundle.windows.nsis.template, '../installers/installer.nsi');
   assert.equal(config.bundle.windows.nsis.installMode, 'currentUser');
   assert.equal(config.bundle.windows.wix.template, '../installers/main.wxs');

@@ -7,20 +7,20 @@ import { compareVersions, createManifest } from './updater-manifest.mjs'
 import { promotePointer } from './channel-pointer.mjs'
 import { macSigningConfig, updaterConfig } from './release-config.mjs'
 
-test('installer-specific manifests use immutable assets and matching signatures', () => {
+test('macOS updater manifest uses immutable assets; portable Windows has no installer update', () => {
 	const dir = mkdtempSync(join(tmpdir(), 'updater-'))
 	try {
-		for (const name of ['macos_arm64.app.tar.gz', 'windows_x64-setup.exe']) {
+		for (const name of ['macos_arm64.app.tar.gz']) {
 			writeFileSync(join(dir, 'Serial-Debug_1.71.0_' + name), 'package')
 			writeFileSync(join(dir, 'Serial-Debug_1.71.0_' + name + '.sig'), 'c2lnbmF0dXJl\n')
 		}
 		const args = { directory: dir, version: '1.71.0', channel: 'dev', previous: { version: '1.70.9' } }
 		const manifest = createManifest(args)
-		assert.equal(Object.keys(manifest.platforms).length, 2)
+		assert.equal(Object.keys(manifest.platforms).length, 1)
 		assert.equal(manifest.platforms['darwin-aarch64'].signature, 'c2lnbmF0dXJl')
 		assert.equal(manifest.platforms['windows-x86_64'], undefined)
 		assert.equal(manifest.platforms['darwin-x86_64'], undefined)
-		assert.match(manifest.platforms['windows-x86_64-nsis'].url, /desktop-dev-v1\.71\.0\/Serial-Debug_1.71.0_windows_x64-setup.exe$/)
+		assert.equal(manifest.platforms['windows-x86_64-nsis'], undefined)
 		assert.equal(manifest.platforms['windows-x86_64-msi'], undefined)
 		assert.throws(() => createManifest({ ...args, previous: { version: '1.71.0' } }), /必须高于/)
 		assert.throws(() => createManifest({ ...args, previous: { version: '2.0.0' } }), /必须高于/)
@@ -35,13 +35,13 @@ test('version comparison is numeric and malformed versions fail closed', () => {
 })
 
 test('unsigned local builds cannot generate updater artifacts', () => {
-	const localConfig = updaterConfig('dev', {})
+	const localConfig = updaterConfig('dev', {}, 'darwin')
 	assert.equal(localConfig.bundle.createUpdaterArtifacts, false)
 	assert.equal(typeof localConfig.plugins.updater, 'object')
 	assert.equal(localConfig.plugins.updater.pubkey, '')
 	assert.equal('endpoints' in localConfig.plugins.updater, false)
-	assert.equal(updaterConfig('dev', { TAURI_UPDATER_PUBLIC_KEY: 'public' }).bundle.createUpdaterArtifacts, false)
-	const config = updaterConfig('main', { TAURI_UPDATER_PUBLIC_KEY: 'public', TAURI_SIGNING_PRIVATE_KEY: 'secret' })
+	assert.equal(updaterConfig('dev', { TAURI_UPDATER_PUBLIC_KEY: 'public' }, 'darwin').bundle.createUpdaterArtifacts, false)
+	const config = updaterConfig('main', { TAURI_UPDATER_PUBLIC_KEY: 'public', TAURI_SIGNING_PRIVATE_KEY: 'secret' }, 'darwin')
 	assert.equal(config.bundle.createUpdaterArtifacts, true)
 	assert.match(config.plugins.updater.endpoints[0], /desktop-main\/latest.json$/)
 	assert.equal(config.plugins.updater.pubkey, 'public')
@@ -78,4 +78,11 @@ test('macOS builds without Developer ID are ad-hoc signed as a whole bundle', ()
 	assert.deepEqual(macSigningConfig({}, 'darwin'), { bundle: { macOS: { signingIdentity: '-' } } })
 	assert.deepEqual(macSigningConfig({ APPLE_SIGNING_IDENTITY: 'Developer ID Application: X' }, 'darwin'), {})
 	assert.deepEqual(macSigningConfig({}, 'win32'), {})
+})
+
+test('Windows ZIP never enables the installer updater even with signing keys', () => {
+	const config = updaterConfig('main', { TAURI_UPDATER_PUBLIC_KEY: 'public', TAURI_SIGNING_PRIVATE_KEY: 'secret' }, 'win32')
+	assert.equal(config.bundle.createUpdaterArtifacts, false)
+	assert.equal(config.plugins.updater.pubkey, '')
+	assert.equal(config.plugins.updater.endpoints, undefined)
 })
