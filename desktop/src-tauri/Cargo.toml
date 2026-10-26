@@ -24,7 +24,7 @@ tauri-plugin-updater = "2"
 windows-sys = { version = "0.61", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Foundation", "Win32_System_Registry"] }
 
 [profile.release]
-codegen-units = 1
-lto = true
+codegen-units = 8
+lto = "thin"
 opt-level = "s"
 strip = true
