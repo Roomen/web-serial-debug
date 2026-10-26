@@ -16,6 +16,7 @@
 	// 页面只认平台服务，更新插件与原生事件都封装在桌面组装点。
 	let updatePreparing = false
 	P.provide('app-update', {
+		manualDownloadUrl: P.os === 'windows' ? (root.APP_RELEASE_CHANNEL === 'dev' ? 'https://serial-dev.logan825.org/download/' : 'https://serial.logan825.org/download/') : null,
 		check: function () { return T.core.invoke('app_update_check') },
 		install: function (version) { return T.core.invoke('app_update_install', { version: version }) },
 		ack: function (operationId, ready, session) { return T.core.invoke('app_update_ack', { operationId: operationId, ready: ready, session: session || {} }) },

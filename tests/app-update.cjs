@@ -144,3 +144,28 @@ test('native config entry and unconfigured-build dialog use platform service', a
 	assert.match(alerts[0], /发布版客户端/)
 	assert.match(body.children[0].children[0].textContent, /更新未完成/)
 })
+
+test('portable update entry opens download page without native checks, listeners or timers', () => {
+	const opened = [], menu = { children: [], appendChild(child) { this.children.push(child) } }
+	const doc = {
+		readyState: 'complete', body: { appendChild() {} }, querySelector: () => menu,
+		createElement(tag) { return {
+			tag, children: [], appendChild(child) { this.children.push(child) },
+			addEventListener(name, cb) { this[name] = cb },
+			click() { opened.push({ href: this.href, target: this.target }) }, remove() {},
+		} },
+	}
+	const service = { manualDownloadUrl: 'https://example.com/download/' }
+	const window = { document: doc, AppPlatform: { service: () => service } }
+	vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/app-update.js'), 'utf8'), {
+		window, setTimeout() { throw new Error('installer polling started') }, setInterval() { throw new Error('installer polling started') },
+	})
+	const button = menu.children[0].children[0]
+	assert.equal(button.textContent, '下载新版 ZIP…')
+	button.click()
+	window.AppUpdate.check(true)
+	assert.deepEqual(opened, [
+		{ href: service.manualDownloadUrl, target: '_blank' },
+		{ href: service.manualDownloadUrl, target: '_blank' },
+	])
+})

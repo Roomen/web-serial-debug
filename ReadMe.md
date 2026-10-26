@@ -91,7 +91,7 @@ python3 -m http.server 8000
 
 同一套页面按平台画像裁剪功能：web 与 Windows / macOS 客户端功能一致（可多开）；Android / iOS 只保留 SEK 协议设置与下发、固件升级（自动差分 / 压缩，或直接导入升级包，不输出中间产物），单路，经蓝牙 BLE 透传连接（Android 的经典蓝牙与 USB 串口由原生客户端接入，尚未提供）。在桌面浏览器里给地址加 `?platform=android` 或 `?platform=ios` 可预览移动端画像。
 
-客户端安装包与应用更新由 GitHub Releases 分发，正式版和预览版分别检查 `main` / `dev` 通道。Windows 仅提供 NSIS EXE 安装器，允许选择安装目录，首次默认 `D:\project files\Serial Debug`，后续升级保留已有目录；没有 D 盘时回退标准目录。Windows 串口列表同时显示系统设备名称与 COM 口号，窗口顶部菜单栏隐藏，快捷键仍可使用。签名配置、发布步骤和验证限制见 [客户端分发说明](desktop/DISTRIBUTION.md)。
+客户端由 GitHub Releases 分发，正式版和预览版分别使用 `main` / `dev` 通道。Windows 提供 ZIP 免安装版，解压后运行 `Serial Debug.exe`（需要系统已安装 Microsoft Edge WebView2 Runtime）；更新时退出所有窗口，再解压新版替换程序，配置继续保存在当前用户的应用数据目录。Windows 的更新入口打开下载页，macOS 保留应用内更新。Windows 串口列表同时显示系统设备名称与 COM 口号，窗口顶部菜单栏隐藏，快捷键仍可使用。签名配置、发布步骤和验证限制见 [客户端分发说明](desktop/DISTRIBUTION.md)。
 
 ## 测试
 

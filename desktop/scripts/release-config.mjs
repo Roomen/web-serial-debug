@@ -8,9 +8,9 @@ export function releaseChannel(cwd, env = process.env) {
 	return g.status === 0 && g.stdout.trim() === 'main' ? 'main' : 'dev'
 }
 
-export function updaterConfig(channel, env = process.env) {
+export function updaterConfig(channel, env = process.env, platform = process.platform) {
 	const pubkey = String(env.TAURI_UPDATER_PUBLIC_KEY || '').trim()
-	if (!pubkey) return {
+	if (!pubkey || platform === 'win32') return {
 		bundle: { createUpdaterArtifacts: false },
 		plugins: { updater: { pubkey: '' } }
 	}
