@@ -4,7 +4,7 @@
 
 首次接入应用内更新需要手动安装包含 updater 且配置了公钥的发布版；此前客户端只有网页版本刷新检测，不能自行升级到这套机制。
 
-本地 `npm run build` 不要求更新签名。设置 `TAURI_UPDATER_PUBLIC_KEY` 后客户端启用更新检查；同时设置 `TAURI_SIGNING_PRIVATE_KEY`（以及可选的 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）才生成更新包和 `.sig`。没有公钥时构建不嵌入假的公钥、也不提供可安装的更新。公钥必须长期保持一致；轮换需另行设计迁移，不能直接替换已有客户端信任的公钥。
+本地 `npm run build` 不要求更新签名。macOS 设置 `TAURI_UPDATER_PUBLIC_KEY` 后客户端启用更新检查；同时设置 `TAURI_SIGNING_PRIVATE_KEY`（以及可选的 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）才生成更新包和 `.sig`。没有公钥时构建不嵌入假的公钥、也不提供可安装的更新。公钥必须长期保持一致；轮换需另行设计迁移，不能直接替换已有客户端信任的公钥。
 
 ## GitHub 设置
 
@@ -14,7 +14,7 @@
 - Secrets：`TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
 - macOS Secrets：`APPLE_CERTIFICATE`（P12 的 Base64）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`（公证专用密码）、`APPLE_TEAM_ID`。
 
-私钥和 Apple 凭据不要提交仓库。正式版（`main`）要求更新签名配置齐全，缺少直接失败；两个通道缺 Apple 配置时都出整包 ad-hoc 签名的 macOS 包（`release-config.mjs` 的 `macSigningConfig`，首次打开在「隐私与安全性」点「仍要打开」；不要退回只有链接器签名的包，没有封存资源会被判「已损坏」，只能 `xattr -cr`），缺更新签名时只发布安装包、不生成更新清单，客户端不会收到这一版的应用内更新。Windows 更新包有 Tauri 更新签名；Windows Authenticode 代码签名尚需另行配置，现阶段安装包可能出现系统信誉提示。
+私钥和 Apple 凭据不要提交仓库。正式版（`main`）要求更新签名配置齐全，缺少直接失败；两个通道缺 Apple 配置时都出整包 ad-hoc 签名的 macOS 包（`release-config.mjs` 的 `macSigningConfig`，首次打开在「隐私与安全性」点「仍要打开」；不要退回只有链接器签名的包，没有封存资源会被判「已损坏」，只能 `xattr -cr`），缺更新签名时只发布安装包、不生成更新清单，客户端不会收到这一版的应用内更新。Windows ZIP 不走 Tauri 安装器更新、不生成更新签名；Windows Authenticode 代码签名尚需另行配置，现阶段运行程序可能出现系统信誉提示。
 
 ## 发布流程
 
@@ -22,18 +22,22 @@
 
 安装包及签名上传到草稿 `desktop-<channel>-v<version>`，完成后发布。该版本标签和资产按不可变发布管理，禁止替换；应递增版本重新发布。下载 URL 永远指向这个版本的资产。
 
-通道清单发布在 `desktop-main/latest.json` 或 `desktop-dev/latest.json`。清单必须包含三种架构的更新包及匹配签名，且版本严格大于通道旧清单。验证通过且版本 release 发布后，最后才更新通道清单，客户端不会看到尚未发布的下载地址。已有通道先上传暂存清单并校验字节，再切换资产名；旧清单保留为备份，切换失败时尝试恢复。GitHub 不提供原子替换资产接口，名称切换期间可能短暂返回 404，应重试检查更新。工作流按分支串行执行，避免同通道发布竞态。首次发布如果通道清单不存在，创建通道 release；已有通道的读取失败会阻止发布。
+通道清单发布在 `desktop-main/latest.json` 或 `desktop-dev/latest.json`。清单只包含 macOS ARM64 的更新包及匹配签名（Windows ZIP 不交给安装器更新器），且版本严格大于通道旧清单。验证通过且版本 release 发布后，最后才更新通道清单，客户端不会看到尚未发布的下载地址。已有通道先上传暂存清单并校验字节，再切换资产名；旧清单保留为备份，切换失败时尝试恢复。GitHub 不提供原子替换资产接口，名称切换期间可能短暂返回 404，应重试检查更新。工作流按分支串行执行，避免同通道发布竞态。首次发布如果通道清单不存在，创建通道 release；已有通道的读取失败会阻止发布。
 
 预览版只保留最新 5 个 `desktop-dev-v<MAJOR>.<MINOR>.<PATCH>` 版本 release（含 tag）：整包版本发布成功、通道指针推进之后，工作流按 SemVer 数值排序删除更旧的预览版；通道指针 `desktop-dev`、`desktop-main*` 与本次刚发布的版本永不删除，版本已存在被跳过构建（`publish=false`）时不清理。清理失败（含个别删除失败）只 `::warning::` 告警，不影响已发布结果；release 列表取不到时跳过，不误删。
 
 如发布在推进通道前失败，已有通道继续指向上一版。检查草稿/已发布版本与产物后人工处理失败版本，再重跑；流程不会静默覆盖同版本资产。
 
-macOS 安装包只发布 `.dmg`，不再提供 `.app.zip`；应用内更新安装的 `.app.tar.gz` 只在配了更新签名时随版本发布。Windows 只发布 NSIS 安装器，清单使用 `windows-x86_64-nsis` 安装类型键，不提供通用 Windows 回退条目。需在 Windows 实机验收 NSIS 安装与升级路径及目录保留。
+macOS 安装包只发布 `.dmg`，不再提供 `.app.zip`；应用内更新安装的 `.app.tar.gz` 只在配了更新签名时随版本发布。Windows 只发布 `Serial-Debug_<version>_windows_x64.zip`，不生成 NSIS / MSI 安装程序。`npm run build` 在 Windows 上自动跳过 Tauri bundler，将本次目标目录的 `serial-debug.exe` 和使用说明压成 ZIP，归档到 `desktop/release/<channel>/`；显式 `--no-bundle` 时只编译、不归档。ZIP 解压后运行 `Serial Debug.exe`，无需安装或管理员权限，不创建快捷方式与卸载项。
+
+运行环境为 Windows 10/11 和 Microsoft Edge WebView2 Evergreen Runtime（ZIP 不包含该运行时，缺少时需从 Microsoft 官网安装）。配置、授权和日志仍沿用当前用户应用数据目录，便于旧安装版迁移，不随 ZIP 移动。旧安装版用户需手动下载 ZIP 并退出旧程序；可卸载旧安装器版本后使用 ZIP。新版本不再向旧 Windows 安装版提供安装器更新，旧版检查更新可能报错，需手动前往下载页。
+
+Windows 配置菜单的「下载新版 ZIP…」及原生更新菜单打开对应通道下载页，不自动检查或覆盖运行中的 EXE。更新时退出全部窗口，解压新版替换程序；macOS 的更新下载、签名与安装屏障保持原有流程。需在 Windows 实机验证 ZIP 解压启动、WebView2 缺失提示、串口功能及手动升级后的配置保留。
 
 ## 本地验证
 
 ```sh
-node --test desktop/scripts/updater-manifest.test.mjs
+node --test desktop/scripts/*.test.mjs
 cd desktop
 npm ci
 npm run build
