@@ -77,7 +77,7 @@
 							'<button class="btn btn-sm btn-primary blu-cmd-send-btn" id="blu-cmd-send-btn" title="发送选中内容">发送</button>' +
 						'</div>' +
 						'<div class="blu-cmd-row blu-cmd-custom-row">' +
-							'<input type="text" id="blu-cmd-custom" class="form-control form-control-sm" placeholder="或输入 HEX / 文本…" autocomplete="off" spellcheck="false">' +
+							'<input type="text" id="blu-cmd-custom" class="form-control form-control-sm" placeholder="或输入 HEX / TEXT…" title="TEXT 支持 C 风格字节转义；如 AT\\r\\n，字面反斜杠写 \\\\" autocomplete="off" spellcheck="false">' +
 							'<button type="button" class="blu-cmd-pill ctl-chip-btn ctl-chip--mono" id="blu-cmd-hex-mode" aria-pressed="true" title="HEX 发送">HEX</button>' +
 							'<button type="button" class="blu-cmd-pill ctl-chip-btn ctl-chip--mono" id="blu-cmd-add-crlf" aria-pressed="false" title="末尾加回车换行">CRLF</button>' +
 							'<button class="btn btn-sm btn-outline-secondary" id="blu-cmd-send-custom" title="发送自定义内容">发送</button>' +
@@ -331,10 +331,10 @@
 					arr.push(parseInt(cleaned.substring(i, i + 2), 16))
 				bytes = new Uint8Array(arr)
 			} else {
-				bytes = new TextEncoder().encode(content)
+				bytes = window.TextByteEncoder.encode(content)
 			}
-			// CRLF 不再在此追加: 串口层 writeData 统一按全局 addCRLF 追加（避免双重 0D 0A）
-			await window.serialApi.writeData(bytes)
+			// 串口层 writeData 统一按全局偏好追加 CR、LF、NUL
+			await window.serialApi.writeData(bytes, { composed: true })
 			showResult('发送成功', 'ok')
 			armAutoClose()
 		} catch (err) {

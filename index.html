@@ -513,6 +513,9 @@
                                     <label class="ctl-chip ctl-chip--mono" title="发送时在末尾追加换行 0A；与 \r 同时勾选即追加 0D 0A">
                                         <input type="checkbox" id="serial-add-lf"><span>+ \n</span>
                                     </label>
+                                    <label class="ctl-chip ctl-chip--mono" title="发送时在末尾追加 NUL 00；追加顺序为 CR、LF、NUL">
+                                        <input type="checkbox" id="serial-add-nul"><span>+ \0</span>
+                                    </label>
                                     <label class="ctl-chip ctl-chip--mono ctl-chip--run" title="勾选后立即按间隔重复发送，取消勾选即停止">
                                         <input type="checkbox" id="serial-loop-send"><span><i class="bi bi-repeat"></i> 循环</span>
                                     </label>
@@ -1777,6 +1780,7 @@
     <script src="js/platform-boot.js"></script>
     <script src="js/native-shell.js"></script>
     <script src="js/dual-config.js"></script>
+    <script src="js/text-byte-encoder.js"></script>
     <script src="js/common.js"></script>
     <script src="js/wmbus-protocol.js"></script>
     <script src="js/wmbus-transaction.js"></script>
