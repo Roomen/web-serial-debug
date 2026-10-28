@@ -301,7 +301,13 @@
 
 	function render() {
 		const view = hostView()
-		if (!view || !isModern()) return
+		if (!view) return
+		// 重画前先释放上一帧的序列图(ResizeObserver / 事件)，否则每次解析都会留下一个监听；
+		// 切回经典布局时视图被 park 走，也要在这里释放
+		if (typeof root.skDisposeSeriesCharts === 'function') {
+			try { root.skDisposeSeriesCharts(view) } catch (e) { /* ignore chart dispose */ }
+		}
+		if (!isModern()) return
 		view.textContent = ''
 		if (!cur) {
 			view.appendChild(emptyView())
@@ -355,6 +361,10 @@
 		view.appendChild(bytesView(cur.bytes, cur.byteMap))
 		const rel = relatedView(info)
 		if (rel) view.appendChild(rel)
+		// section.html 里可能有协议画的序列图(Tag5/6/9 历史曲线)，插进 DOM 后按同一套绑定逻辑绘制
+		if (typeof root.skBindSeriesCharts === 'function') {
+			try { root.skBindSeriesCharts(view) } catch (e) { /* ignore chart bind */ }
+		}
 	}
 
 	// ---- 事件 ----

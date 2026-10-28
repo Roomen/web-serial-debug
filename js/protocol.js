@@ -916,6 +916,8 @@
 			rows: serRows.map(function (r) {
 				return { t: r.label, v: r.num, s: r.value, raw: r.raw }
 			}),
+			// 多序列(如 Tag5-ID20 的正/逆/净累计)走 series；单序列仍用上面的 rows
+			series: it.seriesPlot || null,
 			daily: !!it.seriesDaily,
 			summary: it.seriesSummary || '',
 			baseLabel: W.skSession.hasBase() ? W.skSession.baseLabel : null
@@ -932,6 +934,15 @@
 			h += '<span>起 ' + escHtml(formatLiters(st.first)) + '</span>'
 			h += '<span>止 ' + escHtml(formatLiters(st.last)) + '</span>'
 			h += '<span class="sk-series-delta">Δ ' + escHtml(formatLiters(st.delta)) + '</span>'
+			h += '</div>'
+		}
+		if (it.seriesPlot && it.seriesPlot.series && it.seriesPlot.series.length) {
+			h += '<div class="sk-series-legend">'
+			for (let si = 0; si < it.seriesPlot.series.length; si++) {
+				const ps = it.seriesPlot.series[si]
+				h += '<span><i class="' + (ps.dash ? 'is-dash' : '') + '" style="--sk-series-color:' +
+					escHtml(ps.color || '#3b82f6') + '"></i>' + escHtml(ps.label || '') + '</span>'
+			}
 			h += '</div>'
 		}
 		if (chartable) {
@@ -1027,6 +1038,12 @@
 		if (intPart.length >= 4) return shiftDecimalLeft(intPart, fracPart, 3) + ' m³'
 		const f = fracPart.replace(/0+$/, '')
 		return (f ? intPart + '.' + f : intPart) + ' L'
+	}
+
+	// 净累计可能为负(逆 > 正), 负号留在最外层, 绝对值仍走精确十进制
+	function period20LitersSigned(count, code) {
+		if (count < BigInt(0)) return '-' + period20Liters(-count, code)
+		return period20Liters(count, code)
 	}
 
 	// ZigZag+varint: 低 7 位先发, 最高位 1 继续; 最多 10B 且第 10B 只允许合法 64 位内容
@@ -1165,6 +1182,10 @@
 			}
 		}
 		const rows = []
+		const plotLabels = []
+		const fVals = [], rVals = [], nVals = []
+		const fTexts = [], rTexts = [], nTexts = []
+		const plotScale = Math.pow(10, (head ? head.unitCode : 4) - 4)
 		for (let i = 0; i < d.rows.length; i++) {
 			const r = d.rows[i]
 			let label = '#' + r.idx
@@ -1174,17 +1195,33 @@
 			}
 			const fTxt = period20Liters(r.forward, head ? head.unitCode : 4)
 			const rTxt = period20Liters(r.reverse, head ? head.unitCode : 4)
+			const net = r.forward - r.reverse
 			const note = (r.reset ? '设底度事件 · ' : '') + r.note
 			rows.push({
 				label: label,
 				value: '正 ' + fTxt + ' / 逆 ' + rTxt,
 				cells: [label, fTxt, rTxt, note],
 				// 图表 y 值统一为升; BigInt 超出精度时只影响绘图, 表格与说明仍是精确值
-				num: Number(r.forward) * Math.pow(10, (head ? head.unitCode : 4) - 4),
+				num: Number(r.forward) * plotScale,
 				raw: null,
 				reset: r.reset
 			})
+			plotLabels.push(label)
+			fVals.push(Number(r.forward) * plotScale)
+			rVals.push(Number(r.reverse) * plotScale)
+			nVals.push(Number(net) * plotScale)
+			fTexts.push(fTxt)
+			rTexts.push(rTxt)
+			nTexts.push(period20LitersSigned(net, head ? head.unitCode : 4))
 		}
+		const seriesPlot = rows.length >= 2 ? {
+			labels: plotLabels,
+			series: [
+				{ key: 'forward', label: '正累计', color: '#3b82f6', vals: fVals, texts: fTexts },
+				{ key: 'reverse', label: '逆累计', color: '#f59e0b', vals: rVals, texts: rTexts },
+				{ key: 'net', label: '净累计(正-逆)', color: '#10b981', dash: true, vals: nVals, texts: nTexts }
+			]
+		} : null
 		let summary = ''
 		if (head) {
 			summary = '起始点+' + head.n + ' 后续点(实得 ' + Math.max(0, d.rows.length - 1) + ')'
@@ -1207,6 +1244,7 @@
 			decoded: lines.join('\n'),
 			summary: summary,
 			rows: rows,
+			seriesPlot: seriesPlot,
 			cols: cols,
 			consumed: d.consumed,
 			error: d.error,
@@ -1264,6 +1302,7 @@
 					seriesSummary: p20.summary,
 					seriesRows: p20.rows,
 					seriesCols: p20.cols,
+					seriesPlot: p20.seriesPlot,
 					seriesTimeCol: '时间',
 					seriesDaily: false,
 					seriesStats: null,
@@ -2624,8 +2663,44 @@
 		if (!canvas || canvas._skBound) return
 		let data
 		try { data = JSON.parse(canvas.getAttribute('data-sk-series') || '{}') } catch (e) { return }
-		const rows = (data.rows || []).filter(function (r) { return r.v != null && isFinite(r.v) })
-		if (rows.length < 2) return
+		// 单序列沿用 rows；多序列(ID20 正/逆/净累计)走 series: { labels, series: [{ label, color, dash, vals, texts }] }
+		let labels = []
+		let seriesList = []
+		if (data.series && Array.isArray(data.series.series) && data.series.series.length) {
+			labels = Array.isArray(data.series.labels) ? data.series.labels.slice() : []
+			for (let si = 0; si < data.series.series.length; si++) {
+				const s = data.series.series[si]
+				if (!s || !Array.isArray(s.vals)) continue
+				const pts = []
+				let valid = 0
+				for (let i = 0; i < s.vals.length; i++) {
+					const v = s.vals[i]
+					if (v != null && isFinite(v)) valid++
+					pts.push({
+						t: labels[i] != null ? labels[i] : ('#' + i),
+						v: v,
+						s: (s.texts && s.texts[i] != null) ? s.texts[i] : ''
+					})
+				}
+				if (valid < 2) continue
+				seriesList.push({ label: s.label || '', color: s.color || '#3b82f6', dash: !!s.dash, pts: pts })
+			}
+			if (!seriesList.length) return
+		} else {
+			const rows = (data.rows || []).filter(function (r) { return r.v != null && isFinite(r.v) })
+			if (rows.length < 2) return
+			labels = rows.map(function (r) { return r.t })
+			seriesList = [{
+				label: '', color: '#3b82f6', dash: false,
+				pts: rows.map(function (r) { return { t: r.t, v: r.v, s: r.s, raw: r.raw } })
+			}]
+		}
+		let count = labels.length
+		for (let si = 0; si < seriesList.length; si++) {
+			if (seriesList[si].pts.length > count) count = seriesList[si].pts.length
+		}
+		if (count < 2) return
+		const multi = seriesList.length > 1
 		canvas._skBound = true
 		for (let n = canvas.parentElement; n; n = n.parentElement) n._skHasSeriesCharts = true
 		const box = canvas.parentElement
@@ -2658,15 +2733,21 @@
 			ctx.fillStyle = 'rgba(127,127,127,0.06)'
 			ctx.fillRect(pad.l, pad.t, pw, ph)
 
-			let min = rows[0].v, max = rows[0].v
-			for (let i = 0; i < rows.length; i++) {
-				if (rows[i].v < min) min = rows[i].v
-				if (rows[i].v > max) max = rows[i].v
+			let min = null, max = null
+			for (let si = 0; si < seriesList.length; si++) {
+				const pts = seriesList[si].pts
+				for (let i = 0; i < count; i++) {
+					const p = pts[i]
+					if (!p || p.v == null || !isFinite(p.v)) continue
+					if (min == null || p.v < min) min = p.v
+					if (max == null || p.v > max) max = p.v
+				}
 			}
+			if (min == null) return
 			if (min === max) { min -= 1; max += 1 }
 			const span = max - min
 
-			function xAt(i) { return pad.l + (pw * i) / (rows.length - 1) }
+			function xAt(i) { return pad.l + (pw * i) / (count - 1) }
 			function yAt(v) { return pad.t + ph - ((v - min) / span) * ph }
 
 			// 网格
@@ -2691,35 +2772,48 @@
 				ctx.fillText(formatLiters(v).replace(' ', ''), pad.l - 4, y)
 			}
 
-			// 折线
-			ctx.strokeStyle = '#3b82f6'
-			ctx.lineWidth = 2
-			ctx.beginPath()
-			for (let i = 0; i < rows.length; i++) {
-				const x = xAt(i), y = yAt(rows[i].v)
-				if (i === 0) ctx.moveTo(x, y)
-				else ctx.lineTo(x, y)
+			// 折线(单序列带面积，多序列只画线，避免遮挡)
+			for (let si = 0; si < seriesList.length; si++) {
+				const s = seriesList[si]
+				ctx.strokeStyle = s.color
+				ctx.lineWidth = 2
+				if (s.dash) ctx.setLineDash([5, 4])
+				ctx.beginPath()
+				let started = false
+				for (let i = 0; i < count; i++) {
+					const p = s.pts[i]
+					if (!p || p.v == null || !isFinite(p.v)) { started = false; continue }
+					const x = xAt(i), y = yAt(p.v)
+					if (!started) { ctx.moveTo(x, y); started = true }
+					else ctx.lineTo(x, y)
+				}
+				ctx.stroke()
+				ctx.setLineDash([])
+				if (!multi) {
+					ctx.lineTo(xAt(count - 1), pad.t + ph)
+					ctx.lineTo(xAt(0), pad.t + ph)
+					ctx.closePath()
+					ctx.fillStyle = 'rgba(59,130,246,0.12)'
+					ctx.fill()
+				}
 			}
-			ctx.stroke()
-			// 面积
-			ctx.lineTo(xAt(rows.length - 1), pad.t + ph)
-			ctx.lineTo(xAt(0), pad.t + ph)
-			ctx.closePath()
-			ctx.fillStyle = 'rgba(59,130,246,0.12)'
-			ctx.fill()
 
 			// 点
-			for (let i = 0; i < rows.length; i++) {
-				const x = xAt(i), y = yAt(rows[i].v)
-				const active = hi === i
-				ctx.beginPath()
-				ctx.arc(x, y, active ? 4.5 : 2.5, 0, Math.PI * 2)
-				ctx.fillStyle = active ? '#ef4444' : '#3b82f6'
-				ctx.fill()
-				if (active) {
-					ctx.strokeStyle = '#fff'
-					ctx.lineWidth = 1.5
-					ctx.stroke()
+			for (let si = 0; si < seriesList.length; si++) {
+				const s = seriesList[si]
+				for (let i = 0; i < count; i++) {
+					const p = s.pts[i]
+					if (!p || p.v == null || !isFinite(p.v)) continue
+					const active = hi === i
+					ctx.beginPath()
+					ctx.arc(xAt(i), yAt(p.v), active ? 4.5 : 2.5, 0, Math.PI * 2)
+					ctx.fillStyle = active ? '#ef4444' : s.color
+					ctx.fill()
+					if (active) {
+						ctx.strokeStyle = '#fff'
+						ctx.lineWidth = 1.5
+						ctx.stroke()
+					}
 				}
 			}
 
@@ -2727,27 +2821,33 @@
 			ctx.fillStyle = 'rgba(120,120,120,0.95)'
 			ctx.textAlign = 'center'
 			ctx.textBaseline = 'top'
-			const ticks = [0, Math.floor((rows.length - 1) / 2), rows.length - 1]
+			const ticks = [0, Math.floor((count - 1) / 2), count - 1]
 			const seen = {}
 			for (let ti = 0; ti < ticks.length; ti++) {
 				const idx = ticks[ti]
 				if (seen[idx]) continue
 				seen[idx] = 1
-				const lab = String(rows[idx].t || '')
+				const lab = labels[idx] != null ? String(labels[idx]) : ('#' + idx)
 				ctx.fillText(lab.length > 10 ? lab.slice(5) : lab, xAt(idx), pad.t + ph + 6)
 			}
 
-			// 悬停十字
-			if (hi != null && hi >= 0 && hi < rows.length) {
-				const x = xAt(hi), y = yAt(rows[hi].v)
+			// 悬停十字: 竖线总是画；单序列再画一条横向参考线
+			if (hi != null && hi >= 0 && hi < count) {
+				const x = xAt(hi)
 				ctx.strokeStyle = 'rgba(239,68,68,0.45)'
 				ctx.lineWidth = 1
 				ctx.setLineDash([3, 3])
 				ctx.beginPath()
 				ctx.moveTo(x, pad.t)
 				ctx.lineTo(x, pad.t + ph)
-				ctx.moveTo(pad.l, y)
-				ctx.lineTo(pad.l + pw, y)
+				if (!multi) {
+					const p = seriesList[0].pts[hi]
+					if (p && p.v != null && isFinite(p.v)) {
+						const y = yAt(p.v)
+						ctx.moveTo(pad.l, y)
+						ctx.lineTo(pad.l + pw, y)
+					}
+				}
 				ctx.stroke()
 				ctx.setLineDash([])
 			}
@@ -2759,8 +2859,8 @@
 			const padL = 44, padR = 12
 			const pw = rect.width - padL - padR
 			let best = 0, bestD = 1e9
-			for (let i = 0; i < rows.length; i++) {
-				const px = padL + (pw * i) / (rows.length - 1)
+			for (let i = 0; i < count; i++) {
+				const px = padL + (pw * i) / (count - 1)
 				const d = Math.abs(px - x)
 				if (d < bestD) { bestD = d; best = i }
 			}
@@ -2771,11 +2871,23 @@
 			const i = nearest(ev)
 			draw(i)
 			if (!tip) return
-			const r = rows[i]
+			const label = labels[i] != null ? String(labels[i]) : ('#' + i)
+			let body = ''
+			if (multi) {
+				for (let si = 0; si < seriesList.length; si++) {
+					const s = seriesList[si]
+					const p = s.pts[i]
+					if (!p || p.v == null || !isFinite(p.v)) continue
+					body += '<span class="sk-tip-series"><i style="background:' + escHtml(s.color) + '"></i>' +
+						escHtml(s.label) + ' ' + escHtml(p.s || formatLiters(p.v)) + '</span>'
+				}
+			} else {
+				const p = seriesList[0].pts[i]
+				body = escHtml(p.s || formatLiters(p.v)) +
+					(p.raw != null ? '<br/><span class="sk-tip-raw">原始 ' + escHtml(String(p.raw)) + ' 单位</span>' : '')
+			}
 			tip.hidden = false
-			tip.innerHTML = '<b>' + escHtml(String(r.t)) + '</b><br/>' +
-				escHtml(r.s || formatLiters(r.v)) +
-				(r.raw != null ? '<br/><span class="sk-tip-raw">原始 ' + escHtml(String(r.raw)) + ' 单位</span>' : '')
+			tip.innerHTML = '<b>' + escHtml(label) + '</b><br/>' + body
 			const rect = canvas.getBoundingClientRect()
 			const boxR = box.getBoundingClientRect()
 			let left = ev.clientX - boxR.left + 12
