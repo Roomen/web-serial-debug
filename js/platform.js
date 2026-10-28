@@ -24,7 +24,6 @@
 		'transport.serial',
 		'transport.ble',
 		'transport.bt-classic',
-		'auth.expiry', // 登录 3 天过期(由运行时推出：只在浏览器里开，客户端登录一次长期有效)
 		'shell.browser', // 网页外壳入口(GitHub / 反馈链接等，由运行时推出：只在浏览器里开，客户端里没有意义)
 	]
 
@@ -96,7 +95,7 @@
 			if (f.indexOf('transport.') === 0) enabled[f] = transports.indexOf(f.slice(10)) !== -1
 			else if (f === 'lane.dual') enabled[f] = prof.lanes > 1
 			else if (f === 'layout.switch') enabled[f] = layouts.length > 1
-			else if (f === 'auth.expiry' || f === 'shell.browser') enabled[f] = runtime !== 'tauri'
+			else if (f === 'shell.browser') enabled[f] = runtime !== 'tauri'
 			else enabled[f] = prof.features === '*' || prof.features.indexOf(f) !== -1
 		})
 		return {

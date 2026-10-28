@@ -1,7 +1,6 @@
 ;(function () {
 	var _h = [175, 162, 62, 223, 78, 252, 150, 80, 91, 159, 27, 96, 16, 146, 189, 84, 217, 75, 48, 212, 59, 7, 164, 221, 109, 225, 249, 252, 98, 153, 110, 18]
 	var _k = [75, 114, 31, 142, 58, 213, 103, 201]
-	var _expiry = 3 * 24 * 60 * 60 * 1000
 
 	function _d() {
 		var r = ''
@@ -34,10 +33,8 @@
 		var p = v.indexOf('.')
 		if (p < 0) return false
 		var t = parseInt(v.substring(0, p), 36)
+		// 只拒绝未来时间戳(容忍 1 天时钟偏差)；登录一次后不再按时间过期
 		if (!t || t > Date.now() + 86400000) return false
-		// 客户端(平台画像关掉 auth.expiry)登录一次长期有效；网页版按 _expiry 过期
-		var expires = !window.AppPlatform || window.AppPlatform.has('auth.expiry')
-		if (expires && Date.now() - t > _expiry) return false
 		var s = parseInt(v.substring(p + 1), 36)
 		var x = (_h[0] << 24) | (_h[1] << 16) | (_h[2] << 8) | _h[3]
 		return s === (t ^ x)
