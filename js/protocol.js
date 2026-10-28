@@ -2708,6 +2708,9 @@
 		const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1
 		let ro = null
 		let disposed = false
+		// draw() 按最宽纵轴标签算出的边距；nearest() 必须用同一组值，否则悬停点会偏
+		let axisPadL = 44
+		let axisPadR = 12
 
 		function layout() {
 			const w = Math.max(280, (box && box.clientWidth) || canvas.clientWidth || 560)
@@ -2725,13 +2728,7 @@
 			const ctx = canvas.getContext('2d')
 			if (!ctx) return
 			ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-			const pad = { l: 44, r: 12, t: 12, b: 28 }
-			const pw = sz.w - pad.l - pad.r
-			const ph = sz.h - pad.t - pad.b
 			ctx.clearRect(0, 0, sz.w, sz.h)
-			// 背景
-			ctx.fillStyle = 'rgba(127,127,127,0.06)'
-			ctx.fillRect(pad.l, pad.t, pw, ph)
 
 			let min = null, max = null
 			for (let si = 0; si < seriesList.length; si++) {
@@ -2747,6 +2744,25 @@
 			if (min === max) { min -= 1; max += 1 }
 			const span = max - min
 
+			// 纵轴标签先量宽: m³ 大数比固定 44px 宽，左边距按实际最宽标签走
+			ctx.font = '10px ui-monospace, Menlo, monospace'
+			const yLabels = []
+			let labelW = 0
+			for (let g = 0; g <= 4; g++) {
+				const text = formatLiters(max - (span * g) / 4).replace(' ', '')
+				yLabels.push(text)
+				const w = ctx.measureText(text).width
+				if (w > labelW) labelW = w
+			}
+			const pad = { l: Math.max(44, Math.ceil(labelW) + 8), r: 12, t: 12, b: 28 }
+			axisPadL = pad.l
+			axisPadR = pad.r
+			const pw = sz.w - pad.l - pad.r
+			const ph = sz.h - pad.t - pad.b
+			// 背景
+			ctx.fillStyle = 'rgba(127,127,127,0.06)'
+			ctx.fillRect(pad.l, pad.t, pw, ph)
+
 			function xAt(i) { return pad.l + (pw * i) / (count - 1) }
 			function yAt(v) { return pad.t + ph - ((v - min) / span) * ph }
 
@@ -2761,15 +2777,13 @@
 			}
 			ctx.stroke()
 
-			// Y 轴刻度
+			// Y 轴刻度(文本已在上面量过宽度)
 			ctx.fillStyle = 'rgba(120,120,120,0.9)'
-			ctx.font = '10px ui-monospace, Menlo, monospace'
 			ctx.textAlign = 'right'
 			ctx.textBaseline = 'middle'
 			for (let g = 0; g <= 4; g++) {
-				const v = max - (span * g) / 4
 				const y = pad.t + (ph * g) / 4
-				ctx.fillText(formatLiters(v).replace(' ', ''), pad.l - 4, y)
+				ctx.fillText(yLabels[g], pad.l - 4, y)
 			}
 
 			// 折线(单序列带面积，多序列只画线，避免遮挡)
@@ -2817,9 +2831,8 @@
 				}
 			}
 
-			// X 轴: 首/中/尾
+			// X 轴: 首/中/尾；首尾分别左/右对齐，避免居中时被画布边缘截掉
 			ctx.fillStyle = 'rgba(120,120,120,0.95)'
-			ctx.textAlign = 'center'
 			ctx.textBaseline = 'top'
 			const ticks = [0, Math.floor((count - 1) / 2), count - 1]
 			const seen = {}
@@ -2828,7 +2841,17 @@
 				if (seen[idx]) continue
 				seen[idx] = 1
 				const lab = labels[idx] != null ? String(labels[idx]) : ('#' + idx)
-				ctx.fillText(lab.length > 10 ? lab.slice(5) : lab, xAt(idx), pad.t + ph + 6)
+				const text = lab.length > 10 ? lab.slice(5) : lab
+				if (idx === 0) {
+					ctx.textAlign = 'left'
+					ctx.fillText(text, pad.l, pad.t + ph + 6)
+				} else if (idx === count - 1) {
+					ctx.textAlign = 'right'
+					ctx.fillText(text, pad.l + pw, pad.t + ph + 6)
+				} else {
+					ctx.textAlign = 'center'
+					ctx.fillText(text, xAt(idx), pad.t + ph + 6)
+				}
 			}
 
 			// 悬停十字: 竖线总是画；单序列再画一条横向参考线
@@ -2856,7 +2879,8 @@
 		function nearest(ev) {
 			const rect = canvas.getBoundingClientRect()
 			const x = ev.clientX - rect.left
-			const padL = 44, padR = 12
+			// 与 draw() 用同一组边距(纵轴标签宽度会变，不能写死 44)
+			const padL = axisPadL, padR = axisPadR
 			const pw = rect.width - padL - padR
 			let best = 0, bestD = 1e9
 			for (let i = 0; i < count; i++) {
