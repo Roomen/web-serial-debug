@@ -11770,12 +11770,15 @@ html[data-layout='modern'] #view-blu .mp-page .blu-log-last {
 /* ===== 现代布局 v2 · 外壳与串口页 ===== */
 /* js/modern-shell.js 启动时新建的宿主(#mdn-connbar / #mdn-logbar / #mdn-quickrow 等)与搬进去的原控件 */
 
-/* ---------- 左栏：68px 窄栏，图标 + 短标签；主题、反馈、GitHub 收进「配置」菜单，下载客户端留在一级 ---------- */
+/* ---------- 左栏：68px 窄栏，图标 + 短标签 ----------
+   窗口够高时主题三档与反馈 / GitHub 是一级入口(见本段末尾的高度断点)，矮窗口才收进「配置」菜单；
+   下载客户端与版本号总在一级 */
 html[data-layout='modern'] #activity-rail {
 	width: 68px;
 	padding: 10px 0;
 }
 
+/* 矮窗口：主题与反馈 / GitHub 收进「配置」菜单(菜单项由 js/modern-shell.js 带 mdn-cfg-extra 标出) */
 html[data-layout='modern'] #activity-rail #theme-switch,
 html[data-layout='modern'] #activity-rail .rail-bottom > a.rail-item:not(#rail-download) {
 	display: none;
@@ -11800,6 +11803,44 @@ html[data-layout='modern'] #activity-rail .rail-item {
 
 html[data-layout='modern'] #activity-rail .rail-item i {
 	font-size: 20px;
+}
+
+/* 主题三档：竖排三个小图标按钮，宽度与 .rail-item 对齐；选中项浅底 + 强调色图标，与导航项的实心底按下态区分 */
+html[data-layout='modern'] #activity-rail .theme-switch {
+	flex-direction: column;
+	gap: 2px;
+	width: 56px;
+	margin: 0 auto;
+}
+
+html[data-layout='modern'] #activity-rail .theme-switch button {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 24px;
+	padding: 0;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--mdn-rail-fg);
+	font-size: 15px;
+	line-height: 1;
+	transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+html[data-layout='modern'] #activity-rail .theme-switch button:hover {
+	background: var(--mdn-rail-hi);
+	color: #fff;
+}
+
+html[data-layout='modern'] #activity-rail .theme-switch button:focus-visible {
+	outline: 2px solid var(--mdn-rail-accent);
+	outline-offset: 1px;
+}
+
+html[data-layout='modern'] #activity-rail .theme-switch button.active {
+	background: var(--mdn-bar-hi);
+	color: #1f5fbf;
 }
 
 /* 短标签：原文保留为无障碍名称，视觉上换成两字(不改 DOM) */
@@ -11836,6 +11877,24 @@ html[data-layout='modern'] .rail-config-menu {
 
 html[data-layout='modern'] .mdn-cfg-theme .ctl-seg > button {
 	padding: 4px 10px;
+}
+
+/* 高度断点：左栏一级内容(上部三项 + 底部配置 / 主题 / 反馈 / GitHub / 客户端 / 版本号)量下来要 516px，
+   断点取 600px 再留出桌面客户端 macOS 一体化标题栏占的 36px，客户端最小窗口(600px 高)时也放得下且不挤。
+   够高就把主题与反馈 / GitHub 放回一级，菜单里只留导入 / 导出 / 重置；矮窗口维持上面的收拢形态。
+   功能门控的 !important 隐藏照旧优先，客户端里反馈 / GitHub 不出现 */
+@media (min-height: 600px) {
+	html[data-layout='modern'] #activity-rail #theme-switch {
+		display: flex;
+	}
+
+	html[data-layout='modern'] #activity-rail .rail-bottom > a.rail-item:not(#rail-download) {
+		display: flex;
+	}
+
+	html[data-layout='modern'] .rail-config-menu .mdn-cfg-extra {
+		display: none;
+	}
 }
 
 /* ---------- 全局连接栏 ---------- */
@@ -12760,7 +12819,8 @@ html[data-layout='modern'] #serial-log-panes:has(.serial-log-mode:not([hidden]) 
 		width: 56px;
 	}
 
-	html[data-layout='modern'] #activity-rail .rail-item {
+	html[data-layout='modern'] #activity-rail .rail-item,
+	html[data-layout='modern'] #activity-rail .theme-switch {
 		width: 48px;
 	}
 
