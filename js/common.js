@@ -7296,7 +7296,7 @@
 					const idt = strongIdentity(want, identKeys[i])
 					if (idt.conflict) continue
 					if (!anyShared(want, identKeys[i])) continue
-					cand.push({ port: ports[i], sn: idt.snMatch, path: anyShared(keyPaths(want), keyPaths(identKeys[i])) })
+					cand.push({ port: ports[i], keys: identKeys[i], sn: idt.snMatch, path: anyShared(keyPaths(want), keyPaths(identKeys[i])) })
 				}
 				// 序列号优先(换 USB 口后路径会变)，其次路径；候选剩多台时认不出哪台是原设备，
 				// 不自动连(返回 null，restoreSid 按找不到口处理：会话记着的身份保留，不打开)
@@ -7307,8 +7307,19 @@
 				}
 				if (best.length > 1) return null
 				if (best.length === 1) return best[0].port
-				// 两边都没有强身份(网页版只有 VID/PID)：唯一候选才认
-				return cand.length === 1 ? cand[0].port : null
+				// 两边都没有强身份(网页版只有 VID/PID)：先按 VID/PID 收窄(产品名、标签相同的另一型号不算)，
+				// 同型号多口再按 slot 收窄，唯一候选才认
+				const shares = function (c, pred) {
+					return c.keys.some(function (k) { return pred(k) && want.indexOf(k) !== -1 })
+				}
+				let weak = cand
+				const byUsb = weak.filter(function (c) { return shares(c, function (k) { return k.indexOf('usb:') === 0 }) })
+				if (byUsb.length) weak = byUsb
+				if (weak.length > 1) {
+					const bySlot = weak.filter(function (c) { return shares(c, function (k) { return k.indexOf(':slot:') !== -1 }) })
+					if (bySlot.length) weak = bySlot
+				}
+				return weak.length === 1 ? weak[0].port : null
 			}
 			// ===== reload 自动重连按已存身份找口到此为止（别删）
 			const used = []
