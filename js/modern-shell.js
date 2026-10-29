@@ -177,7 +177,9 @@
 	}
 
 	// ========== 1. 左栏「配置」菜单：主题三档 + 反馈 / GitHub ==========
+	// 这几项与左栏一级入口重复：窗口够高时它们在左栏显示，菜单里带 mdn-cfg-extra 的项由 CSS 断点隐藏，只剩导入 / 导出 / 重置
 	const THEMES = [['auto', '跟随系统'], ['light', '浅色'], ['dark', '深色']]
+	const CFG_EXTRA = 'mdn-cfg-extra'
 
 	function mountRail() {
 		const menu = document.querySelector('.rail-config-menu')
@@ -185,12 +187,12 @@
 		if (!menu) return
 		const items = []
 		const divider = function () {
-			const li = mk('li')
+			const li = mk('li', CFG_EXTRA)
 			li.appendChild(mk('hr', 'dropdown-divider'))
 			return li
 		}
 		if (sw) {
-			const li = mk('li', 'rail-config-layout mdn-cfg-theme')
+			const li = mk('li', 'rail-config-layout mdn-cfg-theme ' + CFG_EXTRA)
 			li.appendChild(mk('span', 'rail-config-layout-title', '主题'))
 			const seg = mk('div', 'ctl-seg')
 			seg.setAttribute('role', 'group')
@@ -222,7 +224,7 @@
 			div.setAttribute('data-feature', 'shell.browser')
 			items.push(div)
 			links.forEach(function (a) {
-				const li = mk('li')
+				const li = mk('li', CFG_EXTRA)
 				li.setAttribute('data-feature', 'shell.browser')
 				const item = mk('a', 'dropdown-item')
 				item.href = a.href
