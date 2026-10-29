@@ -126,25 +126,20 @@
 		let queueLimit = MIN_READ_QUEUE
 		let rs = null
 		let rsCtl = null
-		// 打开期间暂存溢出留下的报错流：先交给页面一次(它读到 BufferOverrunError 后重新取 readable 就会换新流)
-		let rsErrored = null
 		let ws = null
 		// 打开期间驱动推来的数据：原生读线程在 open 返回前就开始推，丢掉的话这一段就没了。
 		// 先暂存，open 成功后按序先交付暂存再接后续；open 失败、设备丢失、关闭、换代次时清空丢弃。
-		// 上限与读队列一致，超了按同样的溢出语义报 BufferOverrunError
-		const pending = { chunks: [], bytes: 0, overrun: false, lost: null }
+		// 上限与读队列一致，超了丢最早的块、留最新的(页面此时还没拿 reader，报错流交不到它手里，见 AGENTS.md)
+		const pending = { chunks: [], bytes: 0, lost: null }
 
 		function resetPending() {
 			pending.chunks = []
 			pending.bytes = 0
-			pending.overrun = false
 			pending.lost = null
-			rsErrored = null
 		}
 
 		function dropReadable(stream) {
 			if (rs === stream) { rs = null; rsCtl = null }
-			if (rsErrored === stream) rsErrored = null
 		}
 		function newReadable() {
 			let ctl = null
@@ -156,44 +151,23 @@
 		}
 		function ensureReadable() {
 			if (state !== 'opened') return null
-			// 打开期间暂存溢出留下的报错流页面还没拿到：这次要收数据，直接丢掉它换新流
-			rsErrored = null
 			if (rs) return rs
 			const made = newReadable()
 			rs = made.stream
 			rsCtl = made.ctl
 			return rs
 		}
-		// 页面取 readable：打开期间暂存溢出留下的报错流先交给它一次，之后重新取就是新流
-		function takeReadable() {
-			if (state !== 'opened') return null
-			if (rsErrored) {
-				const stream = rsErrored
-				rsErrored = null
-				return stream
-			}
-			return ensureReadable()
-		}
 		function errorReadable(err) {
 			const ctl = rsCtl
 			rs = null
 			rsCtl = null
-			rsErrored = null
 			if (ctl) { try { ctl.error(err) } catch (e) {} }
 		}
 		// open 成功后先把打开期间暂存的数据按序放进读队列，之后到的数据照常直接入队。
-		// 溢出过就与已打开时一样让当前流报 BufferOverrunError：页面第一次读就读到它，重新取 readable 时换新流
 		function deliverPending() {
 			const chunks = pending.chunks
 			pending.chunks = []
 			pending.bytes = 0
-			if (pending.overrun) {
-				pending.overrun = false
-				const made = newReadable()
-				try { made.ctl.error(makeError('BufferOverrunError', '接收缓冲溢出')) } catch (e) {}
-				rsErrored = made.stream
-				return
-			}
 			if (!chunks.length) return
 			ensureReadable()
 			for (let i = 0; i < chunks.length; i++) {
@@ -234,14 +208,9 @@
 					const u8 = toBytes(bytes)
 					if (!u8.byteLength) return
 					if (state === 'opening') {
-						if (pending.overrun || pending.lost) return
-						// 与读队列同一判据：暂存里已有积压且这块放不下才算溢出，空着时的单个大块照收
-						if (pending.chunks.length && pending.bytes + u8.byteLength > queueLimit) {
-							pending.overrun = true
-							pending.chunks = []
-							pending.bytes = 0
-							return
-						}
+						if (pending.lost) return
+						// 超上限丢最早的块；单个大块照收
+						while (pending.chunks.length && pending.bytes + u8.byteLength > queueLimit) pending.bytes -= pending.chunks.shift().byteLength
 						pending.chunks.push(u8)
 						pending.bytes += u8.byteLength
 						return
@@ -287,7 +256,7 @@
 
 		const port = {
 			getInfo() { return driver.getInfo ? Object.assign({}, driver.getInfo()) : {} },
-			get readable() { return takeReadable() },
+			get readable() { return ensureReadable() },
 			get writable() { return ensureWritable() },
 			async open(options) {
 				if (state !== 'closed') throw makeError('InvalidStateError', '串口已打开')
