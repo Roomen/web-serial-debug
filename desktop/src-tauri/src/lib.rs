@@ -184,7 +184,7 @@ pub fn run() {
 		])
 		.on_window_event(|window, event| {
 			if let tauri::WindowEvent::Destroyed = event {
-				serial::release_owner(&window.state::<serial::SerialState>(), window.label());
+				serial::release_destroyed(&window.state::<serial::SerialState>(), window.label());
 			}
 			// 只记 main 的大小位置：多开的 main-N 每次都相对当前窗口错开，记下来反而会叠在旧位置上
 			if window.label() == MAIN && matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_) | tauri::WindowEvent::CloseRequested { .. }) {
