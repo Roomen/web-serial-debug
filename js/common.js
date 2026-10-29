@@ -276,8 +276,10 @@
 		},
 
 		// 热插拔认领新插入的口：只在当前可见模式里找（不要误绑到隐藏模式），
-		// 先接回同型号的已拔出口，再找空会话；用户选着但关着的口(isLost 为假)不顶替。
-		// Web Serial 不给序列号，同型号只能按 VID/PID 判
+		// 先接回已拔出的口，再找空会话；用户选着但关着的口(isLost 为假)不顶替。
+		// 口带路径/序列号(原生后端)时按强身份认领：对不上的是同型号的另一台设备，这样的会话不能认领；
+		// 两边都没有强身份(网页版 Web Serial 只有 VID/PID)才退回按 VID/PID 判。同步身份就够：
+		// 原生 getInfo 直接带路径与序列号，网页版本来就没有
 		findRebindSession(port, isLost) {
 			const sids = this.mode === 'single' ? ['S'] : ['A', 'B']
 			const free = sids.filter((sid) => !this.isOpen(sid) && !this.isOpening(sid) && !this.isReleaseFailed(sid) && !this._sess(sid).releaseTask)
@@ -290,9 +292,30 @@
 				}
 			}
 			const want = usbId(port)
+			const newKeys = syncPortIdentity(port).keys
+			// 认领对象只有收到过 disconnect 的会话；强身份冲突(序列号或路径两边都有却对不上)的不能接回
+			const cand = []
 			for (let i = 0; i < free.length; i++) {
 				const old = this.getPort(free[i])
-				if (old && isLost(old) && usbId(old) === want) return free[i]
+				if (!old || !isLost(old)) continue
+				const oldKeys = syncPortIdentity(old).keys
+				const idt = strongIdentity(oldKeys, newKeys)
+				if (idt.conflict) continue
+				cand.push({ sid: free[i], sn: idt.snMatch, path: anyShared(keyPaths(oldKeys), keyPaths(newKeys)) })
+			}
+			// 序列号优先(重插后路径可能变)，其次路径；对得上的不止一路时认不出是哪台，不自动接回
+			let best = cand.filter(function (c) { return c.sn })
+			if (best.length !== 1) {
+				const pool = best.length ? best : cand
+				best = pool.filter(function (c) { return c.path })
+			}
+			if (best.length === 1) return best[0].sid
+			// 两边都没有强身份：照旧按 VID/PID 接回第一台
+			if (best.length === 0 && !cand.some(function (c) { return c.sn || c.path })) {
+				for (let i = 0; i < cand.length; i++) {
+					const old = this.getPort(cand[i].sid)
+					if (old && usbId(old) === want) return cand[i].sid
+				}
 			}
 			for (let i = 0; i < free.length; i++) {
 				if (!this.getPort(free[i])) return free[i]
@@ -7263,16 +7286,31 @@
 				identKeys.push(ident ? ident.keys : [])
 			}
 			// 按已存身份 key 匹配对应口；无身份 key（旧 sessionStorage 用户）按位置一次性兼容
+			// ===== reload 自动重连按已存身份找口（tests/serial-hotplug.cjs 按此锚点截取，别删）
 			function findPortByKey(sid) {
 				const want = getSerialWantPortKey(sid)
 				if (!want || !want.length) return null
+				// 强身份冲突(序列号或路径两边都有却对不上)的是同型号的另一台设备：产品名/VID:PID/标签命中再多也不算
+				const cand = []
 				for (let i = 0; i < ports.length; i++) {
-					for (let j = 0; j < identKeys[i].length; j++) {
-						if (want.indexOf(identKeys[i][j]) !== -1) return ports[i]
-					}
+					const idt = strongIdentity(want, identKeys[i])
+					if (idt.conflict) continue
+					if (!anyShared(want, identKeys[i])) continue
+					cand.push({ port: ports[i], sn: idt.snMatch, path: anyShared(keyPaths(want), keyPaths(identKeys[i])) })
 				}
-				return null
+				// 序列号优先(换 USB 口后路径会变)，其次路径；候选剩多台时认不出哪台是原设备，
+				// 不自动连(返回 null，restoreSid 按找不到口处理：会话记着的身份保留，不打开)
+				let best = cand.filter(function (c) { return c.sn })
+				if (best.length !== 1) {
+					const pool = best.length ? best : cand
+					best = pool.filter(function (c) { return c.path })
+				}
+				if (best.length > 1) return null
+				if (best.length === 1) return best[0].port
+				// 两边都没有强身份(网页版只有 VID/PID)：唯一候选才认
+				return cand.length === 1 ? cand[0].port : null
 			}
+			// ===== reload 自动重连按已存身份找口到此为止（别删）
 			const used = []
 			// 位置回退取第一个尚未被占用的口。不能用"前面成功了几个"累加序号:
 			// 身份匹配可能命中 ports 里的任意位置, 把它也算成占用了对应序号会跳过真正空闲的口,
