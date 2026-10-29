@@ -410,7 +410,7 @@ const tick = () => new Promise((r) => setTimeout(r, 0))
 		await port.close()
 	}
 
-	// ---- 打开期间暂存积压放不下：与读队列溢出同一判据，open 成功后当前流报 BufferOverrunError，重新取 readable 换新流 ----
+	// ---- 打开期间暂存积压放不下：丢最早的块、留最新的，不另造报错流(页面此时没有 reader，报错交不到它；先取 readable 判空再取流也不会吞数据) ----
 	{
 		const d = fakeDriver({})
 		let finishOpen = null
@@ -426,16 +426,17 @@ const tick = () => new Promise((r) => setTimeout(r, 0))
 		const opening = port.open({})
 		finishOpen()
 		await opening
+		assert.ok(port.readable, '页面先判 readable 存在')
 		const first = port.readable
+		assert.equal(port.readable, first, '多次取 readable 是同一条流')
 		const r = first.getReader()
-		await assert.rejects(r.read(), { name: 'BufferOverrunError' })
-		r.releaseLock()
-		assert.notEqual(port.readable, first, '页面重新取 readable 时换新流')
-		const r2 = port.readable.getReader()
+		assert.deepEqual(Array.from((await r.read()).value), [1], '最早的大块被丢掉，后面的按序交付')
+		assert.deepEqual(Array.from((await r.read()).value), [2])
 		d.sink.data(new Uint8Array([3]))
-		assert.deepEqual(Array.from((await r2.read()).value), [3], '换流后照常收')
-		await r2.cancel()
-		r2.releaseLock()
+		assert.deepEqual(Array.from((await r.read()).value), [3], '之后照常收')
+		await assert.rejects(port.close(), '流被锁时关闭仍拒绝')
+		await r.cancel()
+		r.releaseLock()
 		await port.close()
 	}
 
