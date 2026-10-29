@@ -375,6 +375,15 @@ test('reload：只剩弱键命中且不止一台(歧义)，不自动连', async 
 	assert.equal(h.match('S'), null, '认不出是哪台，保持会话记着的身份不连')
 })
 
+test('reload：不同 VID/PID 只共享产品名 / 标签时按 VID/PID 认回，不算歧义', async () => {
+	const p0 = makePort(0x1a86, 0x7523)
+	const p1 = makePort(0x10c4, 0xea60)
+	const h = reloadHarness([p1, p0], [['usb:10c4:ea60', 'label:usb serial'], ['usb:1a86:7523', 'label:usb serial']])
+	await h.ready
+	h.setWant(['usb:1a86:7523', 'label:usb serial'])
+	assert.equal(h.match('S'), p0)
+})
+
 ;(async () => {
 	let failed = 0
 	for (const [name, fn] of tests) {
