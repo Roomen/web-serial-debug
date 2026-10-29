@@ -1,7 +1,7 @@
 /**
- * 功耗分析页的现代布局（仅 html[data-layout='modern']）
+ * 功耗分析页的布局
  *
- * 不复制任何业务逻辑：经典布局的控件节点原样搬进新结构（原位置留注释占位，切回经典按占位放回），
+ * 不复制任何业务逻辑：index.html 里的控件节点在启动时一次性原样搬进新结构（不克隆），
  * 新增的只有分组外壳、记录/触发两个弹出层的入口、右栏标签条和「命令表」入口，它们只驱动原控件（click/读值）。
  * 读数、统计、分析面板的刷新仍由 js/blu-power.js 按原节奏写进被搬走的原节点，这里不另起定时器，
  * 也不碰采样数据路径；切标签、显隐画布只调用原有的重绘入口（原分析标签的 click、窗口 resize）。
@@ -22,7 +22,7 @@
 		{ id: 'log', label: '日志' },
 	]
 	const EDGE = { off: '关', rise: '↑', fall: '↓', either: '↕' }
-	// 静态文案按设计稿改名；blu-power.js 不改写这些按钮，切回经典时按原文还原
+	// 静态文案按设计稿改名；blu-power.js 不改写这些按钮
 	const RENAME = {
 		'blu-cursor-snap-a': '吸附 A',
 		'blu-cursor-snap-b': '吸附 B',
@@ -31,16 +31,9 @@
 	}
 
 	let mounted = false
-	let parked = []
-	let hosts = []
-	let renamed = []
-	let observers = []
-	let docListeners = []
 	let ui = null
 
 	function E(id) { return document.getElementById(id) }
-
-	function isModern() { return document.documentElement.dataset.layout === 'modern' }
 
 	function mk(tag, cls, text) {
 		const n = document.createElement(tag)
@@ -63,28 +56,17 @@
 
 	function park(node, parent, before) {
 		if (!node || !node.parentNode || !parent) return null
-		const ph = document.createComment('layout-origin:' + (node.id || node.className))
-		node.parentNode.insertBefore(ph, node)
-		parked.push([node, ph])
 		parent.insertBefore(node, before || null)
-		return node
-	}
-
-	function host(node) {
-		hosts.push(node)
 		return node
 	}
 
 	function onDoc(type, fn, cap) {
 		document.addEventListener(type, fn, !!cap)
-		docListeners.push([type, fn, !!cap])
 	}
 
 	function observe(target, opts, fn) {
 		if (!target) return
-		const mo = new MutationObserver(fn)
-		mo.observe(target, opts)
-		observers.push(mo)
+		new MutationObserver(fn).observe(target, opts)
 	}
 
 	function group(label, cls) {
@@ -171,7 +153,7 @@
 	}
 
 	function buildToolbar(bar) {
-		const tb = host(mk('div', 'mp-toolbar'))
+		const tb = mk('div', 'mp-toolbar')
 		tb.id = 'mp-toolbar'
 		tb.setAttribute('role', 'toolbar')
 		tb.setAttribute('aria-label', '功耗采集')
@@ -294,7 +276,6 @@
 		Object.keys(RENAME).forEach(function (id) {
 			const b = E(id)
 			if (!b) return
-			renamed.push([b, b.innerHTML])
 			b.textContent = RENAME[id]
 		})
 	}
@@ -463,7 +444,7 @@
 		try { saved = localStorage.getItem(ASIDE_KEY) } catch (e) { /* 忽略 */ }
 		const t = TABS.find(function (x) { return x.id === saved })
 		if (!t) return 'measure'
-		// 进入现代布局不能改分析面板的状态：保存的分析页与原面板当前标签不一致时退回「测量」
+		// 挂载时不能改分析面板的状态：保存的分析页与原面板当前标签不一致时退回「测量」
 		if (t.an) {
 			const b = origTab(t.an)
 			if (!b || b.getAttribute('aria-selected') !== 'true') return 'measure'
@@ -471,7 +452,7 @@
 		return t.id
 	}
 
-	// ---------- 挂载 / 卸载 ----------
+	// ---------- 挂载 ----------
 
 	function mount() {
 		if (mounted) return
@@ -482,7 +463,7 @@
 		mounted = true
 
 		const tb = buildToolbar(bar)
-		const body = host(mk('div', 'mp-body'))
+		const body = mk('div', 'mp-body')
 		body.id = 'mp-body'
 		wrapper.insertBefore(body, wrapper.firstChild)
 		const main = mk('div', 'mp-main')
@@ -528,31 +509,10 @@
 		selectTab(initialTab(), false)
 	}
 
-	function unmount() {
-		if (!mounted) return
-		observers.forEach(function (o) { o.disconnect() })
-		observers = []
-		docListeners.forEach(function (l) { document.removeEventListener(l[0], l[1], l[2]) })
-		docListeners = []
-		renamed.forEach(function (r) { r[0].innerHTML = r[1] })
-		renamed = []
-		parked.reverse().forEach(function (pair) { pair[1].replaceWith(pair[0]) })
-		parked = []
-		hosts.forEach(function (n) { n.remove() })
-		hosts = []
-		ui = null
-		mounted = false
-		// 画布回到经典布局的容器：已展开的分析面板按经典尺寸重画一次(不改任何状态)
-		const cur = document.querySelector('.blu-analysis-tab[aria-selected="true"]')
-		if (cur && analysisOpen()) cur.click()
-	}
-
 	function init() {
-		if (isModern()) mount()
-		document.addEventListener('serial-layout-move', function (e) {
-			if (e.detail && e.detail.layout === 'modern') mount()
-			else unmount()
-		})
+		// 平台没有功耗视图(移动端)时不搭：视图整页被门控隐藏，blu-power.js 也不启动
+		if (window.AppPlatform && !window.AppPlatform.has('view.power')) return
+		mount()
 	}
 
 	window.ModernPower = {

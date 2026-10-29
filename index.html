@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-layout="modern">
 
 <head>
     <meta charset="UTF-8">
@@ -29,16 +29,11 @@
                 t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
             }
             document.documentElement.setAttribute('data-theme', t)
-            // 界面布局(经典/现代)与双路视图(列表/气泡)：同样首屏前定下；缺省即经典、列表
-            var layout = 'classic'
+            // 双路视图(列表/气泡)：同样首屏前定下；缺省即列表。界面布局只有一套，html 上的 data-layout 固定为 modern
             var dualView = 'list'
             try {
-                if (localStorage.getItem('serial-debug-layout') === 'modern') layout = 'modern'
                 if (localStorage.getItem('serial-debug-dual-view') === 'bubble') dualView = 'bubble'
             } catch (e) { /* 存储不可用时按默认 */ }
-            // 平台画像不提供的布局退回画像允许的第一个(桌面客户端只有现代、移动端只有经典)，不改存储
-            if (window.AppPlatform && !window.AppPlatform.allowsLayout(layout)) layout = window.AppPlatform.fallbackLayout()
-            document.documentElement.dataset.layout = layout
             document.documentElement.dataset.dualView = dualView
         })()
     </script>
@@ -97,9 +92,6 @@
     <div id="app-shell" class="d-flex">
         <!--最左侧工具导航栏-->
         <nav id="activity-rail">
-            <div class="rail-brand" title="Web Serial Debug">
-                <img src="imgs/logo.svg" width="26" height="21" alt="Web Serial">
-            </div>
             <div class="rail-top">
                 <button class="rail-item active" data-view="view-serial" title="串口调试">
                     <i class="bi bi-terminal"></i>
@@ -122,21 +114,12 @@
                         <span class="rail-label">配置</span>
                     </button>
                     <ul class="dropdown-menu rail-config-menu" aria-labelledby="rail-config-btn">
-                        <li class="rail-config-layout" data-feature="layout.switch">
-                            <span class="rail-config-layout-title">界面布局</span>
-                            <div class="ctl-seg" id="serial-layout-seg" role="group" aria-label="界面布局">
-                                <button type="button" id="serial-layout-classic" aria-pressed="true">经典</button>
-                                <button type="button" id="serial-layout-modern" aria-pressed="false">现代</button>
-                            </div>
-                        </li>
-                        <li><hr class="dropdown-divider"></li>
                         <li><button class="dropdown-item" type="button" id="serial-import"><i class="bi bi-folder-plus"></i> 导入配置…</button></li>
                         <li><button class="dropdown-item" type="button" id="serial-export"><i class="bi bi-folder-symlink"></i> 导出配置</button></li>
                         <li><hr class="dropdown-divider"></li>
                         <li><button class="dropdown-item text-danger" type="button" id="serial-reset"><i class="bi bi-arrow-counterclockwise"></i> 重置所有参数…</button></li>
                     </ul>
                 </div>
-                <div class="rail-divider"></div>
                 <div class="theme-switch" id="theme-switch" role="radiogroup" aria-label="主题">
                     <button type="button" role="radio" data-theme-choice="auto" title="主题：跟随系统" aria-label="跟随系统"><i class="bi bi-circle-half"></i></button>
                     <button type="button" role="radio" data-theme-choice="light" title="主题：浅色" aria-label="浅色"><i class="bi bi-sun"></i></button>
@@ -155,7 +138,7 @@
                     <span class="rail-label">客户端</span>
                 </a>
                 <script>
-                    // 预览站(serial-dev)下载预览版客户端，其余(正式站、本地)下载正式版；现代布局的配置菜单抄这里的地址，所以要在它挂载前定好
+                    // 预览站(serial-dev)下载预览版客户端，其余(正式站、本地)下载正式版
                     if (/^serial-dev\./.test(location.hostname)) document.getElementById('rail-download').href = 'https://serial-dev.logan825.org/download/'
                 </script>
                 <div class="rail-version" id="app-version" title="应用版本"></div>
@@ -176,12 +159,12 @@
                         </div>
                     </div>
 
-                    <!-- 串口参数：单/双路共享（不可放在 display:none 的单路区内） -->
+                    <!-- 串口参数卡：启动时由 js/modern-shell.js 搬进连接栏的每路菜单(双路两路参数各自独立)；摘要键本身不显示，只作命令面板入口 -->
                     <div class="connect-bar-section connect-bar-params">
                         <div class="dropdown" id="serial-params-dropdown">
                             <button type="button" class="serial-params-summary" id="serial-params-summary"
                                 data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false"
-                                title="串口参数（单路/双路共用）">
+                                title="串口参数">
                                 <i class="bi bi-sliders2"></i>
                                 <span id="serial-params-summary-text">115200 8-N-1</span>
                                 <i class="bi bi-chevron-down serial-params-summary-arrow"></i>
@@ -190,20 +173,6 @@
                                 <div class="serial-settings-card">
                                     <div class="serial-settings-title">
                                         <i class="bi bi-sliders2"></i> 串口参数
-                                    </div>
-                                    <!-- 仅双路：A/B 两路的参数与协议各自独立，这里选正在设置哪一路(现代布局由每路菜单决定，不显示) -->
-                                    <div class="serial-lane-head" id="serial-params-lane" hidden>
-                                        <div class="ctl-seg serial-lane-seg" id="serial-params-lane-seg" role="group" aria-label="设置哪一路">
-                                            <button type="button" data-sid="A" aria-pressed="true">A路</button>
-                                            <button type="button" data-sid="B" aria-pressed="false">B路</button>
-                                        </div>
-                                        <span class="serial-lane-hint">两路参数、协议各自独立</span>
-                                    </div>
-                                    <div class="serial-lane-proto" id="serial-lane-proto-row" hidden>
-                                        <label class="serial-field-label" for="serial-lane-protocol"><i class="bi bi-diagram-3"></i> 协议</label>
-                                        <select class="form-select serial-field-input" id="serial-lane-protocol" aria-label="本路协议">
-                                            <option value="sek">SEK（默认）</option>
-                                        </select>
                                     </div>
                                     <div class="serial-field">
                                         <label class="serial-field-label"><i class="bi bi-speedometer2"></i> 波特率</label>
@@ -363,12 +332,9 @@
                 <div id="main">
                     <!--中间串口日志-->
                     <div id="log-main">
-                        <!-- 按日志列自身宽度（容器查询）分档换行/紧凑，不按视口断点：右栏打开时视口宽但日志列窄 -->
+                        <!-- 日志标题行本身不显示：里面的控件启动时由 js/modern-shell.js 搬进日志工具条 #mdn-logbar -->
                         <div class="serial-log-header d-flex justify-content-between flex-wrap align-items-center pt-1 pb-1 mb-1 flex-shrink-0">
                             <div class="serial-log-headline">
-                                <h1 class="h4 serial-log-title">
-                                    <i class="bi bi-journal-text"></i> 串口日志
-                                </h1>
                                 <div class="ctl-seg" id="serial-log-view-seg" role="group" aria-label="日志视图">
                                     <button type="button" id="serial-log-view-row" aria-pressed="true">行日志</button>
                                     <button type="button" id="serial-log-view-term" aria-pressed="false">终端</button>
@@ -377,7 +343,7 @@
                                     <span class="serial-log-legend-item" data-leg="left" id="serial-log-legend-left">TX</span>
                                     <span class="serial-log-legend-item" data-leg="right" id="serial-log-legend-right">RX</span>
                                 </span>
-                                <!-- 仅现代布局 + 双路 + 行日志时显示(见 css 末尾)：双路合流的显示方式 -->
+                                <!-- 仅双路 + 行日志时显示(见 css 日志工具条段)：双路合流的显示方式 -->
                                 <div class="ctl-seg" id="serial-dual-view-seg" role="group" aria-label="双路显示方式">
                                     <button type="button" id="serial-dual-view-list" aria-pressed="true">列表</button>
                                     <button type="button" id="serial-dual-view-bubble" aria-pressed="false">时间线</button>
@@ -390,7 +356,6 @@
                                         data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false"
                                         title="日志设置（格式 / 分包 / 行数）">
                                         <i class="bi bi-sliders2"></i>
-                                        <span id="serial-log-settings-text">Hex · 200ms · 10000行</span>
                                         <i class="bi bi-chevron-down serial-log-settings-arrow"></i>
                                     </button>
                                     <div class="dropdown-menu" id="serial-log-settings-popover">
@@ -502,7 +467,6 @@
                                 <span class="serial-send-title">
                                     <i class="bi bi-chevron-down serial-send-chevron"></i>
                                     <i class="bi bi-send"></i> 串口发送
-                                    <span class="serial-send-target" id="serial-send-target" hidden></span>
                                 </span>
                             </div>
                             <div id="serial-send-body">

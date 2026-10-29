@@ -83,7 +83,7 @@
 		await w.close()
 	}
 
-	// 只读事件：现代布局的升级流水线(js/modern-firmware.js)据此显示选文件、生成结果与错误，不影响打包流程
+	// 只读事件：固件页的升级流水线(js/modern-firmware.js)据此显示选文件、生成结果与错误，不影响打包流程
 	function emit(detail) {
 		try { document.dispatchEvent(new CustomEvent('fw-pack', { detail: detail })) } catch (e) { /* 事件只供界面使用 */ }
 	}

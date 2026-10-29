@@ -54,7 +54,7 @@
 		libraryClear: document.getElementById('fw-library-clear'),
 	}
 
-	// 只读事件：现代布局的升级流水线(js/modern-firmware.js)据此显示进度、分块与校验，不影响升级流程与时序
+	// 只读事件：固件页的升级流水线(js/modern-firmware.js)据此显示进度、分块与校验，不影响升级流程与时序
 	function emit(detail) {
 		try { document.dispatchEvent(new CustomEvent('fw-upgrade', { detail: detail })) } catch (e) { /* 事件只供界面使用 */ }
 	}

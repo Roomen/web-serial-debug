@@ -5149,7 +5149,7 @@
 		drawSerialLane(plotLayout, rect)
 	}
 
-	/** 现代布局的串口事件道跟随波形同一次重绘；经典布局下 draw 立即返回 */
+	/** 串口事件道跟随波形同一次重绘 */
 	function drawSerialLane(layout, canvasRect) {
 		const lane = window.BluSerialLane
 		if (!lane || typeof lane.draw !== 'function') return
