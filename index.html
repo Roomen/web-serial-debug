@@ -401,10 +401,21 @@
                                             <div class="serial-field">
                                                 <span class="serial-field-label">格式</span>
                                                 <div class="serial-log-format-controls">
-                                                    <button type="button" class="ctl-chip-btn" id="serial-log-fmt-hex" aria-pressed="true">HEX</button>
-                                                    <button type="button" class="ctl-chip-btn" id="serial-log-fmt-text" aria-pressed="false">TEXT</button>
-                                                    <button type="button" class="ctl-chip-btn" id="serial-log-ansi" aria-pressed="false">ANSI 彩色</button>
-                                                    <button type="button" class="ctl-chip-btn" id="serial-log-fmt-parse" aria-pressed="false" title="按当前协议解析每一帧，可与 HEX/TEXT 同时显示或单独显示">解析</button>
+                                                    <!-- 每路一行：上面一行是单路 / 双路 A，B 行与路名只在双路显示 -->
+                                                    <div class="serial-log-fmt-row" id="serial-log-fmt-row-a" role="group" aria-label="日志格式">
+                                                        <span class="serial-log-fmt-lane" id="serial-log-fmt-lane-a" hidden>A</span>
+                                                        <button type="button" class="ctl-chip-btn" id="serial-log-fmt-hex" aria-pressed="true">HEX</button>
+                                                        <button type="button" class="ctl-chip-btn" id="serial-log-fmt-text" aria-pressed="false">TEXT</button>
+                                                        <button type="button" class="ctl-chip-btn" id="serial-log-ansi" aria-pressed="false">ANSI 彩色</button>
+                                                        <button type="button" class="ctl-chip-btn" id="serial-log-fmt-parse" aria-pressed="false" title="按当前协议解析每一帧，可与 HEX/TEXT 同时显示或单独显示">解析</button>
+                                                    </div>
+                                                    <div class="serial-log-fmt-row" id="serial-log-fmt-row-b" role="group" aria-label="B 路日志格式" hidden>
+                                                        <span class="serial-log-fmt-lane" id="serial-log-fmt-lane-b">B</span>
+                                                        <button type="button" class="ctl-chip-btn" id="serial-log-fmt-b-hex" aria-pressed="true">HEX</button>
+                                                        <button type="button" class="ctl-chip-btn" id="serial-log-fmt-b-text" aria-pressed="false">TEXT</button>
+                                                        <button type="button" class="ctl-chip-btn" id="serial-log-fmt-b-ansi" aria-pressed="false">ANSI 彩色</button>
+                                                        <button type="button" class="ctl-chip-btn" id="serial-log-fmt-b-parse" aria-pressed="false" title="按 B 路协议解析每一帧，可与 HEX/TEXT 同时显示或单独显示">解析</button>
+                                                    </div>
                                                 </div>
                                             </div>
                                             <div class="serial-field">

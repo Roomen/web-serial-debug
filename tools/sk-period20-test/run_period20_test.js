@@ -149,6 +149,14 @@ function cells(it) { return (it.seriesRows || []).map(r => r.cells) }
 	eq('第2点正累计', c[2][1], '1.005 m³')
 	eq('第3点逆累计', c[3][2], '23 L')
 	eq('第4点正累计换算 m³', c[4][1], '21.01 m³')
+	// 图表数据: 正/逆/净三条线，净累计 = 正 - 逆
+	check('三条曲线', !!(it.seriesPlot && it.seriesPlot.series.length === 3), JSON.stringify(it.seriesPlot))
+	eq('曲线标签', it.seriesPlot.series.map(x => x.label).join(','), '正累计,逆累计,净累计(正-逆)')
+	eq('曲线时间轴', it.seriesPlot.labels.join(','), c.map(x => x[0]).join(','))
+	eq('正累计首点', it.seriesPlot.series[0].vals[0], 1000)
+	eq('逆累计首点', it.seriesPlot.series[1].vals[0], 20)
+	eq('净累计首点', it.seriesPlot.series[2].vals[0], 980)
+	eq('净累计末点文本', it.seriesPlot.series[2].texts[4], '20.987 m³')
 	check('摘要含当量', /当量1L/.test(it.seriesSummary), it.seriesSummary)
 	check('摘要含点数', /起始点\+4 后续点\(实得 4\)/.test(it.seriesSummary), it.seriesSummary)
 	check('摘要含间隔', /间隔30分钟/.test(it.seriesSummary), it.seriesSummary)
@@ -175,6 +183,10 @@ function cells(it) { return (it.seriesRows || []).map(r => r.cells) }
 	const it = id20(frame)
 	eq('负差后读数', cells(it)[1][1], '995 L')
 	eq('负差说明', cells(it)[1][3], '正-5 逆不变')
+	// 净累计允许为负(逆 > 正)，图表与悬停文本都保留负号
+	const neg = id20(buildTag5Id20([[0n, 5n], [0n, 5n]]))
+	eq('净累计负值数值', neg.seriesPlot.series[2].vals[0], -5)
+	eq('净累计负值文本', neg.seriesPlot.series[2].texts[0], '-5 L')
 	check('未伪造设底度', !/设底度/.test(it.seriesSummary + cells(it)[1][3]), it.seriesSummary)
 }
 

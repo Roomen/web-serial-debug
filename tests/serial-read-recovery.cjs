@@ -621,7 +621,7 @@ async function testParseRerenderIsolation() {
 	}
 	Object.assign(context, {
 		Date: FakeDate, setTimeout: fn => timers.push(fn), AnsiUp: function () {},
-		PARSE_RERENDER_SYNC_ROWS: 150, PARSE_RERENDER_SLICE_MS: 12, rerenderGen: 0,
+		PARSE_RERENDER_SYNC_ROWS: 150, PARSE_RERENDER_SLICE_MS: 12, rerenderGen: 0, rerenderPending: false,
 		logOptionsSingle: { autoScroll: false }, logOptionsDual: { autoScroll: false },
 		// B0 xx 帧在解析时设置会话基准，其余帧只是读出当前基准，与 SEK 的 Tag2/3-ID29 行为一致
 		skParseFrame: data => { clock += 5; if (data[0] === 0xB0) session.setBase(data[1]); return {} },
@@ -712,7 +712,7 @@ async function testDualLaneParseIsolation() {
 	}
 	let ansiSeq = 0
 	Object.assign(context, {
-		setTimeout: fn => fn(), PARSE_RERENDER_SYNC_ROWS: 150, PARSE_RERENDER_SLICE_MS: 12, rerenderGen: 0,
+		setTimeout: fn => fn(), PARSE_RERENDER_SYNC_ROWS: 150, PARSE_RERENDER_SLICE_MS: 12, rerenderGen: 0, rerenderPending: false,
 		logOptionsSingle: { autoScroll: false }, logOptionsDual: { autoScroll: false },
 		AnsiUp: function () { const id = ++ansiSeq; this.ansi_to_html = t => 'ansi' + id + ':' + t },
 		skParseFrame: data => { if (data[0] === 0xB0) session.setBase(data[1]); return {} },
@@ -761,6 +761,72 @@ async function testDualLaneParseIsolation() {
 	api.addLog(Uint8Array.of(0x45), true, new Date(5), 'A')
 	assert.ok(rows[3].innerHTML.includes('PB basenull'), rows[3].innerHTML)
 	assert.ok(rows[4].innerHTML.includes('PA base1'), rows[4].innerHTML)
+}
+
+// 双路两路各用一套日志格式：rerenderLogBodies 第二参数传按路格式时，A/B 的行各按自己的格式渲染，
+// ansi 流式状态只交给 ANSI 的那一路；带 opts.sids 时只重渲指定的那一路，另一路的行与状态不动
+async function testDualLaneLogFormat() {
+	const { context } = renderHarness()
+	let ansiSeq = 0
+	Object.assign(context, {
+		setTimeout: fn => fn(), PARSE_RERENDER_SYNC_ROWS: 150, PARSE_RERENDER_SLICE_MS: 12, rerenderGen: 0, rerenderPending: false,
+		logOptionsSingle: { autoScroll: false }, logOptionsDual: { autoScroll: false },
+		AnsiUp: function () { const id = ++ansiSeq; this.ansi_to_html = t => 'ansi' + id + ':' + t },
+	})
+	function makeRow(sid, hex) {
+		const body = { innerHTML: '' }
+		return { attrs: { 'data-hex': hex, 'data-dir': 'rx', 'data-sid': sid }, classList: { contains: c => c === 'log-row' },
+			getAttribute(k) { return k in this.attrs ? this.attrs[k] : null }, querySelector: () => body, body }
+	}
+	const children = [makeRow('A', '41 42'), makeRow('B', '1B 5B 33 31 6D 41'), makeRow('A', '43'), makeRow('B', '44')]
+	const box = { children, get lastElementChild() { return children[children.length - 1] } }
+	context.SerialHub.getLogContainerFor = m => (m === 'dual' ? box : null)
+	const liveA = new context.AnsiUp()
+	const liveB = new context.AnsiUp()
+	context.laneLive = { A: { sess: null, ansi: liveA }, B: { sess: null, ansi: liveB } }
+	const vmApi = vm.runInContext('({ rerenderLogBodies })', context)
+
+	// A 用 HEX、B 用 ANSI：同一容器里各按自己的格式渲染，ansi 重放末态只交给 ANSI 的那一路
+	vmApi.rerenderLogBodies(box, { A: 'hex', B: 'ansi' })
+	assert.equal(children[0].body.innerHTML, '41 42')
+	assert.equal(children[2].body.innerHTML, '43')
+	const bPrefix = /^ansi(\d+):/.exec(children[1].body.innerHTML)
+	assert.ok(bPrefix, children[1].body.innerHTML)
+	assert.equal(children[3].body.innerHTML, 'ansi' + bPrefix[1] + ':D')
+	assert.equal(context.laneLive.A.ansi, liveA, '非 ANSI 的 A 路不交接 ansi 状态')
+	assert.notEqual(context.laneLive.B.ansi, liveB)
+	assert.equal(context.laneLive.B.ansi.ansi_to_html('x'), 'ansi' + bPrefix[1] + ':x')
+
+	// 只改 B：带 sids 时只重渲 B 的行，A 的行与 A 的实时状态都不动
+	context.proto = { logView: () => ({ title: 'PV' }) }
+	const aBody = children[0].body.innerHTML
+	context.laneLive.B.ansi = new context.AnsiUp()
+	const liveBAnsi = context.laneLive.B.ansi
+	vmApi.rerenderLogBodies(box, { A: 'hex', B: 'parse' }, { sids: ['B'] })
+	assert.equal(children[0].body.innerHTML, aBody)
+	assert.equal(children[2].body.innerHTML, '43')
+	assert.ok(children[1].body.innerHTML.includes('class="pv'), children[1].body.innerHTML)
+	assert.ok(children[3].body.innerHTML.includes('class="pv'), children[3].body.innerHTML)
+	assert.equal(context.laneLive.A.ansi, liveA)
+	assert.equal(context.laneLive.B.ansi, liveBAnsi, '不是 ANSI 的格式不交接 ansi 状态')
+
+	// 上一轮分批重渲还没做完时只改 B：新一轮让旧批次作废，必须改成两路都重渲，否则 A 的行停在一半新一半旧
+	const many = []
+	for (let i = 0; i < 400; i++) many.push(makeRow(i % 2 ? 'B' : 'A', '41'))
+	const bigBox = { children: many, get lastElementChild() { return many[many.length - 1] } }
+	context.SerialHub.getLogContainerFor = m => (m === 'dual' ? bigBox : null)
+	const queued = []
+	context.setTimeout = fn => { queued.push(fn) }
+	let fakeNow = 0
+	context.Date = { now: () => (fakeNow += 1) }
+	vmApi.rerenderLogBodies(bigBox, { A: 'text', B: 'text' })
+	assert.ok(queued.length > 0, '行数多时应分批')
+	assert.equal(many[many.length - 2].body.innerHTML, '', 'A 的末尾行还没轮到')
+	context.Date = Date
+	vmApi.rerenderLogBodies(bigBox, { A: 'text', B: 'hex' }, { sids: ['B'] })
+	while (queued.length) queued.shift()()
+	assert.equal(many[many.length - 2].body.innerHTML, 'A', '被打断的整体重渲由新一轮补完 A 的行')
+	assert.equal(many[many.length - 1].body.innerHTML, '41')
 }
 
 async function testStatusBar() {
@@ -998,6 +1064,7 @@ async function run() {
 	await testLogRendering()
 	await testParseRerenderIsolation()
 	await testDualLaneParseIsolation()
+	await testDualLaneLogFormat()
 	await testStatusBar()
 	console.log('serial read recovery: passed')
 }

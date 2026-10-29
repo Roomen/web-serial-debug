@@ -10,7 +10,8 @@ const source = name => fs.readFileSync(path.join(__dirname, '../js', name), 'utf
 	const observers = []
 	let paints = 0
 	const listeners = new Map()
-	const ctx = new Proxy({}, { get: (target, key) => target[key] || (() => {}) })
+	// 真实 canvas 2d 上下文有 measureText；图表按纵轴标签宽度算左边距时会用到
+	const ctx = new Proxy({ measureText: () => ({ width: 20 }) }, { get: (target, key) => target[key] || (() => {}) })
 	const tip = { hidden: true }
 	const output = { parentElement: null, querySelectorAll: () => [canvas] }
 	const row = { parentElement: output, querySelectorAll: () => [canvas] }

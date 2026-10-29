@@ -39,15 +39,13 @@ const P = require('../js/platform.js')
 		assert.equal(d.protocols, '*')
 		assert.deepEqual(d.transports, ['serial'])
 		assert.equal(d.multiInstance, true)
-		P.FEATURES.filter((f) => f.indexOf('transport.') !== 0 && f !== 'auth.expiry' && f !== 'shell.browser' && f !== 'layout.switch').forEach((f) => assert.equal(P.hasFeature(d, f), true, os + ' ' + f))
-		// 登录过期只在浏览器里：客户端登录一次长期有效
-		assert.equal(P.hasFeature(d, 'auth.expiry'), os === 'web')
+		P.FEATURES.filter((f) => f.indexOf('transport.') !== 0 && f !== 'shell.browser' && f !== 'layout.switch').forEach((f) => assert.equal(P.hasFeature(d, f), true, os + ' ' + f))
 		// 网页外壳入口(GitHub / 反馈链接)同样只在浏览器里
 		assert.equal(P.hasFeature(d, 'shell.browser'), os === 'web')
 		assert.equal(P.hasFeature(d, 'transport.serial'), true)
 		assert.equal(P.hasFeature(d, 'transport.ble'), false)
 		assert.equal(P.hasFeature(d, 'panel.some-future-tool'), true, '目录外的新功能在桌面默认开启')
-		assert.equal(P.gatingCss(d), (os === 'web' ? '' : '[data-feature~="layout.switch"]{display:none !important}\n') + '[data-feature~="transport.ble"]{display:none !important}\n[data-feature~="transport.bt-classic"]{display:none !important}' + (os === 'web' ? '' : '\n[data-feature~="auth.expiry"]{display:none !important}\n[data-feature~="shell.browser"]{display:none !important}'))
+		assert.equal(P.gatingCss(d), (os === 'web' ? '' : '[data-feature~="layout.switch"]{display:none !important}\n') + '[data-feature~="transport.ble"]{display:none !important}\n[data-feature~="transport.bt-classic"]{display:none !important}' + (os === 'web' ? '' : '\n[data-feature~="shell.browser"]{display:none !important}'))
 	})
 }
 
