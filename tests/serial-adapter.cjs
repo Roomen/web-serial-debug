@@ -345,5 +345,100 @@ const tick = () => new Promise((r) => setTimeout(r, 0))
 		w.releaseLock()
 	}
 
+	// ---- 打开期间驱动就开始推数据(原生读线程在 open 返回前就推)：先暂存，open 成功后按序先交付再接后续 ----
+	{
+		const d = fakeDriver({})
+		let finishOpen = null
+		d.open = function (o, sink) {
+			this.opens++
+			this.sink = sink
+			// 驱动的读线程在 open 兑现之前就推了数据
+			sink.data(new Uint8Array([1, 2, 3]))
+			return new Promise((r) => { finishOpen = r })
+		}
+		const port = A.createStreamPort(d)
+		const opening = port.open({})
+		assert.equal(port.readable, null, '打开中仍然没有流')
+		finishOpen()
+		await opening
+		const r = port.readable.getReader()
+		d.sink.data(new Uint8Array([4]))
+		assert.deepEqual(Array.from((await r.read()).value), [1, 2, 3], '打开期间推的数据按序先交付')
+		assert.deepEqual(Array.from((await r.read()).value), [4], '打开后推的数据接在后面')
+		await r.cancel()
+		r.releaseLock()
+		await port.close()
+	}
+
+	// ---- open 失败时清掉打开期间暂存的字节：不泄漏到下一次打开，失败那次的 sink 也注不进新一次 ----
+	{
+		const d = fakeDriver({})
+		let fail = true
+		let oldSink = null
+		d.open = async function (o, sink) {
+			this.opens++
+			this.sink = sink
+			if (fail) { sink.data(new Uint8Array([9, 9])); oldSink = sink; throw new Error('busy') }
+		}
+		const port = A.createStreamPort(d)
+		await assert.rejects(port.open({}), /busy/)
+		assert.equal(port.readable, null)
+		fail = false
+		const opening = port.open({})
+		// 失败那次留下的 sink 还在，代次已经变了，它推的数据不能落进这次打开的暂存
+		oldSink.data(new Uint8Array([7]))
+		await opening
+		const r = port.readable.getReader()
+		d.sink.data(new Uint8Array([1]))
+		assert.deepEqual(Array.from((await r.read()).value), [1], '上一次失败时暂存的字节不会带进这次打开')
+		await r.cancel()
+		r.releaseLock()
+		await port.close()
+	}
+
+	// ---- 打开期间暂存的上限与读队列一致：暂存空着时的单个大块照收 ----
+	{
+		const d = fakeDriver({})
+		const big = new Uint8Array((1 << 20) + 10)
+		d.open = async function (o, sink) { this.opens++; this.sink = sink; sink.data(big) }
+		const port = A.createStreamPort(d)
+		await port.open({})
+		const r = port.readable.getReader()
+		assert.equal((await r.read()).value.byteLength, big.byteLength, '空暂存时的单个大块照收，不算溢出')
+		await r.cancel()
+		r.releaseLock()
+		await port.close()
+	}
+
+	// ---- 打开期间暂存积压放不下：丢最早的块、留最新的，不另造报错流(页面此时没有 reader，报错交不到它；先取 readable 判空再取流也不会吞数据) ----
+	{
+		const d = fakeDriver({})
+		let finishOpen = null
+		d.open = function (o, sink) {
+			this.opens++
+			this.sink = sink
+			sink.data(new Uint8Array(1 << 20))
+			sink.data(new Uint8Array([1]))
+			sink.data(new Uint8Array([2]))
+			return new Promise((r) => { finishOpen = r })
+		}
+		const port = A.createStreamPort(d)
+		const opening = port.open({})
+		finishOpen()
+		await opening
+		assert.ok(port.readable, '页面先判 readable 存在')
+		const first = port.readable
+		assert.equal(port.readable, first, '多次取 readable 是同一条流')
+		const r = first.getReader()
+		assert.deepEqual(Array.from((await r.read()).value), [1], '最早的大块被丢掉，后面的按序交付')
+		assert.deepEqual(Array.from((await r.read()).value), [2])
+		d.sink.data(new Uint8Array([3]))
+		assert.deepEqual(Array.from((await r.read()).value), [3], '之后照常收')
+		await assert.rejects(port.close(), '流被锁时关闭仍拒绝')
+		await r.cancel()
+		r.releaseLock()
+		await port.close()
+	}
+
 	console.log('serial-adapter: ok')
 })().catch((e) => { console.error(e); process.exit(1) })

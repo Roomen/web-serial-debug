@@ -26,6 +26,7 @@ function boot(storage, ports, backend) {
 		window: {},
 		console,
 		localStorage: storage,
+		WeakMap,
 		showToast() {},
 		SerialHub: { allPhys: () => [], getPort: () => null },
 		SerialAdapter: {
@@ -35,7 +36,7 @@ function boot(storage, ports, backend) {
 		},
 	}
 	vm.createContext(ctx)
-	vm.runInContext(aliasSrc + '\nthis.api = { setPortAlias, getPortDisplayName, getPortAlias, resolvePortIdentity, lookupAlias }', ctx)
+	vm.runInContext(aliasSrc + '\nthis.api = { setPortAlias, getPortDisplayName, getPortAlias, resolvePortIdentity, lookupAlias, get _portIdentityCache() { return _portIdentityCache } }', ctx)
 	return ctx.api
 }
 
@@ -227,6 +228,24 @@ test('网页版同型号多 CDC(没有路径与序列号)：照旧按授权顺�
 	await resolveAll(a2, [q0, q1])
 	assert.equal(a2.getPortAlias(q0), '口 1')
 	assert.equal(a2.getPortAlias(q1), '口 2')
+})
+
+// 热插拔重插每次都产生新的端口对象：身份缓存必须是 WeakMap，否则旧的端口对象与它们的身份永远攒在缓存里
+test('身份缓存是 WeakMap：按端口对象缓存身份，不把旧端口对象强引用攒住', async () => {
+	const storage = memStorage()
+	const a = boot(storage, [])
+	const p = nativePort(CP_A)
+	const ident = await a.resolvePortIdentity(p)
+	assert.ok(a._portIdentityCache instanceof WeakMap, '弱引用缓存，端口对象回收后条目跟着没')
+	assert.equal(a._portIdentityCache.get(p), ident, '同一端口对象的身份缓存照旧命中')
+	assert.equal(typeof a._portIdentityCache.clear, 'undefined', 'WeakMap 没有 clear，清空靠整体换新')
+	assert.equal(a._portIdentityCache.size, undefined, '不维护强引用条目计数')
+	// 重插给的是新对象：新对象自己算身份，旧对象的条目不会被复用或删除
+	const q = nativePort(Object.assign({}, CP_A, { path: '/dev/cu.usbserial-0009', name: 'cu.usbserial-0009' }))
+	const qIdent = await a.resolvePortIdentity(q)
+	assert.notEqual(qIdent, ident, '不同端口对象各算各的')
+	assert.equal(a._portIdentityCache.get(q), qIdent)
+	assert.equal(a._portIdentityCache.get(p), ident, '旧对象的条目还在，不影响本会话里的旧引用')
 })
 
 ;(async () => {

@@ -351,17 +351,6 @@
 				run: function () { if (window.setThemeChoice) window.setThemeChoice(t[0]) }
 			})
 		})
-		const layoutNow = typeof window.getLayoutChoice === 'function' ? window.getLayoutChoice() : 'classic'
-		;[['classic', '经典', 'jingdian classic'], ['modern', '现代', 'xiandai modern']].forEach(function (t) {
-			list.push({
-				group: '视图',
-				title: '界面布局：' + t[1],
-				feature: 'layout.switch',
-				detail: layoutNow === t[0] ? '当前' : '',
-				alias: 'jiemian buju layout ' + t[2],
-				run: function () { if (window.setLayoutChoice) window.setLayoutChoice(t[0]) }
-			})
-		})
 		const main = el('main')
 		const rightCollapsed = !!(main && main.classList.contains('right-collapsed'))
 		list.push({
@@ -369,21 +358,6 @@
 			title: rightCollapsed ? '展开右侧工具栏' : '折叠右侧工具栏',
 			alias: 'youlan sidebar tools zhedie',
 			run: function () { clickSel('.toggle-button[data-pane="right"]') }
-		})
-		const parsePanel = el('serial-parse-panel')
-		const parseCollapsed = !!(parsePanel && parsePanel.classList.contains('collapsed'))
-		// 现代布局的协议解析是右栏「检查器」，开合走下面工作台面板的条目
-		if (layoutNow !== 'modern') list.push({
-			group: '视图',
-			title: parseCollapsed ? '展开协议解析面板' : '折叠协议解析面板',
-			alias: 'jiexi mianban parse panel',
-			run: function () {
-				if (parseCollapsed && typeof window.expandParsePanel === 'function') {
-					window.expandParsePanel()
-					return
-				}
-				clickEl('serial-parse-header')
-			}
 		})
 		const sendPanel = el('serial-send-panel')
 		const sendCollapsed = !!(sendPanel && sendPanel.classList.contains('collapsed'))

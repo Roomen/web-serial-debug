@@ -263,26 +263,6 @@ body {
   z-index: 20;
 }
 
-.rail-brand {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 0 10px;
-  margin-bottom: 4px;
-}
-
-.rail-brand img {
-  opacity: 0.8;
-  width: 22px;
-  height: auto;
-}
-
-/* logo 是纯白填充，亮色主题下反相，否则与底色融为一体 */
-:root:not([data-theme="dark"]) .rail-brand img {
-  filter: invert(1);
-  opacity: 0.75;
-}
-
 .rail-top {
   display: flex;
   flex-direction: column;
@@ -306,13 +286,6 @@ body {
 
 .rail-bottom .rail-item i {
   font-size: 1rem;
-}
-
-.rail-divider {
-  width: 50%;
-  height: 1px;
-  margin: 4px 0;
-  background: var(--border-light);
 }
 
 .rail-config {
@@ -389,45 +362,6 @@ body {
 .rail-label {
   line-height: 1;
   letter-spacing: 0.2px;
-}
-
-/* 主题三档：跟随系统 / 浅色 / 深色 */
-.theme-switch {
-  display: inline-flex;
-  margin: 4px 0;
-  padding: 2px;
-  border-radius: 999px;
-  background: var(--bg-sidebar-toggle);
-}
-
-.theme-switch button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 9px;
-  transition: background var(--transition-fast), color var(--transition-fast);
-}
-
-.theme-switch button:hover {
-  color: var(--text-primary);
-}
-
-.theme-switch button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.theme-switch button.active {
-  background: var(--bg-surface);
-  color: var(--accent);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
 .rail-version {
@@ -1037,14 +971,6 @@ body {
 [data-theme='dark'] .serial-logs.is-dual .log-row[data-sid='B'].selected {
   background-color: color-mix(in srgb, #fbbf24 24%, transparent);
   box-shadow: inset 0 0 0 1.5px #fbbf24;
-}
-
-#serial-connect-bar {
-  overflow: visible;
-}
-
-.connect-bar-params {
-  flex: 0 0 auto;
 }
 
 .log-row[data-dir='rx'],
@@ -2363,9 +2289,6 @@ pre, code {
 }
 
 /* ========== Toolbar ========== */
-.btn-toolbar {
-  gap: 4px;
-}
 
 /* ========== Links ========== */
 a {
@@ -3183,132 +3106,7 @@ hr {
   background-color: var(--bg-surface) !important;
 }
 
-/* ========== Serial Connect Bar ========== */
-#serial-connect-bar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  height: auto;
-  padding: 0 10px;
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--border-color);
-  transition: background-color var(--transition-normal), border-color var(--transition-normal);
-  position: relative;
-  z-index: 30;
-  flex-wrap: wrap;
-}
-
-.connect-bar-section {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.connect-bar-main {
-  flex: 0 1 auto;
-  gap: 6px;
-}
-
-#serial-connect-bar .serial-port-btn,
-#serial-connect-bar .serial-open-btn {
-  white-space: nowrap;
-  padding: 5px 12px;
-}
-
-#serial-connect-bar .serial-port-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 220px;
-}
-
-#serial-connect-bar .serial-port-btn .serial-port-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-#serial-connect-bar .serial-status-indicator {
-  padding: 5px 10px;
-  white-space: nowrap;
-}
-
-/* Serial params summary */
-.serial-params-summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 100%;
-  padding: 5px 12px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  font-family: var(--font-mono);
-  color: var(--text-primary);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  transition: all var(--transition-fast);
-}
-
-.serial-params-summary:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.serial-params-summary > i {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-}
-
-.serial-params-summary:hover > i,
-.serial-params-summary[aria-expanded='true'] > i {
-  color: var(--accent);
-}
-
-.serial-params-summary[aria-expanded='true'] {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-#serial-params-summary-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.serial-params-summary-arrow {
-  transition: transform var(--transition-fast);
-}
-
-.serial-params-summary[aria-expanded='true'] .serial-params-summary-arrow {
-  transform: rotate(180deg);
-}
-
-#serial-params-popover.dropdown-menu {
-  width: 300px;
-  max-width: calc(100vw - 40px);
-  padding: 10px;
-  margin-top: 6px;
-  color: var(--text-primary);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  z-index: 60;
-}
-
-#serial-params-popover .serial-settings-card {
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  padding: 0;
-  margin-bottom: 0;
-}
-
-/* Serial Settings Card */
+/* ========== Serial Settings Card ========== */
 .serial-settings-card {
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
@@ -3378,40 +3176,6 @@ hr {
 .serial-field-input:focus {
   border-color: var(--accent) !important;
   box-shadow: 0 0 0 3px var(--accent-light) !important;
-}
-
-/* 参数卡里只属于双路的两项(js/common.js 按模式切 hidden)：正在设置哪一路 + 本路协议 */
-.serial-lane-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.serial-lane-head[hidden],
-.serial-lane-proto[hidden] {
-  display: none;
-}
-
-.serial-lane-seg > button {
-  padding: 3px 12px;
-  font-size: 0.72rem;
-}
-
-.serial-lane-hint {
-  min-width: 0;
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.serial-lane-proto {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
 }
 
 /* 分包方式与超时同一行，分段组压小一号给输入框留位置 */
@@ -3487,91 +3251,6 @@ hr {
   font-weight: 600;
 }
 
-/* Log settings popover (type / timeout / max rows) */
-.serial-log-settings-summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  padding: 4px 10px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  font-family: var(--font-sans);
-  color: var(--text-primary);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  transition: all var(--transition-fast);
-}
-
-.serial-log-settings-summary:hover,
-.serial-log-settings-summary[aria-expanded='true'] {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.serial-log-settings-summary > i {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
-
-.serial-log-settings-summary:hover > i,
-.serial-log-settings-summary[aria-expanded='true'] > i {
-  color: var(--accent);
-}
-
-#serial-log-settings-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-.serial-log-settings-arrow {
-  font-size: 0.68rem;
-  transition: transform var(--transition-fast);
-}
-
-.serial-log-settings-summary[aria-expanded='true'] .serial-log-settings-arrow {
-  transform: rotate(180deg);
-}
-
-#serial-log-settings-popover.dropdown-menu {
-  width: 280px;
-  max-width: calc(100vw - 40px);
-  padding: 10px;
-  margin-top: 6px;
-  color: var(--text-primary);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  z-index: 60;
-}
-
-#serial-log-settings-popover .serial-settings-card {
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  padding: 0;
-  margin-bottom: 0;
-}
-
-/* 双路每路一行格式键：路名 + 四个键排一行放不进 280px，加宽到一行放得下(窄屏仍受 max-width 约束、换行兜底) */
-#serial-log-settings-popover.dropdown-menu:has(#serial-log-fmt-row-b:not([hidden])) {
-  width: 460px;
-}
-
-/* 日志设置里的「格式」行：ctl-seg + ANSI chip 挤在一起，允许换行 */
-.serial-log-format-controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-  flex-wrap: wrap;
-}
-
 /* 每路一行格式键：单路只有一行，排版与原来平铺的四个键一致；双路每行前加路名徽标(与日志行同路色) */
 .serial-log-fmt-row {
   display: flex;
@@ -3615,7 +3294,7 @@ hr {
   user-select: none;
 }
 
-/* 双路标签可编辑（最长 8 字），最后一档压缩时截断（见 data-compact），全名在 title 里 */
+/* 双路标签可编辑（最长 8 字），过长时截断，全名在 title 里 */
 .serial-log-legend-item {
   display: inline-block;
   overflow: hidden;
@@ -3993,52 +3672,9 @@ hr {
   line-height: 1;
 }
 
-/* Serial Log Header */
-/* 不能用 flex-md-nowrap 这类视口断点：右栏打开时视口很宽、日志列却只剩几百 px，nowrap 会让右侧工具栏叠到左侧的视图切换和图例上。
-   压缩档由 common.js fitLogHeader 实测决定（data-compact），左右两块都不收缩，收到底还放不下就整块换行兜底 */
-.serial-log-header {
-  row-gap: 6px;
-  column-gap: 12px;
-}
-
-/* 标题 + 视图切换 + TX/RX 图例：视图 seg 紧跟固定宽度的标题，右侧工具栏文案变长变短都不会推着它跑 */
-.serial-log-headline {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 8px;
-  min-width: 0;
-}
-
-.serial-log-header > .btn-toolbar {
-  flex-wrap: nowrap;
-  gap: 8px;
-}
-
-.serial-log-header #serial-log-settings {
-  margin-right: 0 !important;
-}
-
 /* 宽档只显示文字，紧凑档只显示图标；按钮自身带 aria-label/title */
 .serial-log-actions .btn > i {
   display: none;
-}
-
-.serial-log-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  white-space: nowrap;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: 0;
-  font-size: 1rem !important;
-}
-
-.serial-log-title i {
-  color: var(--accent);
-  font-size: 1.05rem;
 }
 
 /* Serial Log Actions */
@@ -4046,32 +3682,6 @@ hr {
   font-size: 0.72rem;
   padding: 4px 12px;
   font-weight: 500;
-}
-
-/* 压缩档按顺序累加（data-compact="1 2 3 4"）：设置摘要缩成图标 → 去掉与导航重复的「串口日志」标题 → 操作按钮只留图标 → 截断双路标签。
-   高频操作始终一键可达，不收进折叠菜单 */
-.serial-log-header[data-compact~='1'] #serial-log-settings-text {
-  display: none;
-}
-
-.serial-log-header[data-compact~='2'] .serial-log-title {
-  display: none;
-}
-
-.serial-log-header[data-compact~='3'] .serial-log-actions .btn {
-  padding: 4px 10px;
-}
-
-.serial-log-header[data-compact~='3'] .serial-log-actions .btn > i {
-  display: inline;
-}
-
-.serial-log-header[data-compact~='3'] .serial-log-action-text {
-  display: none;
-}
-
-.serial-log-header[data-compact~='4'] .serial-log-legend-item {
-  max-width: 4.5em;
 }
 
 /* Send Area */
@@ -4089,42 +3699,6 @@ hr {
 
 #serial-send-panel.collapsed #serial-send-body {
   display: none;
-}
-
-#serial-send-header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 28px;
-  padding: 4px 10px;
-  user-select: none;
-  border-bottom: 1px solid var(--border-color);
-  color: var(--text-secondary);
-  font-size: 0.78rem;
-  line-height: 1.2;
-}
-
-#serial-send-panel.collapsed #serial-send-header {
-  border-bottom: 0;
-}
-
-.serial-send-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.serial-send-chevron {
-  transition: transform var(--transition-fast);
-}
-
-#serial-send-panel.collapsed .serial-send-chevron {
-  transform: rotate(-90deg);
 }
 
 #serial-send-body {
@@ -6489,34 +6063,6 @@ body.blu-wave-fullscreen-open {
     height: auto !important;
   }
 
-  #serial-connect-bar {
-    flex-wrap: wrap;
-    height: auto;
-    min-height: 0;
-    padding: 8px 10px;
-    row-gap: 8px;
-  }
-
-  .connect-bar-section {
-    flex: 1 1 100%;
-    min-width: 0;
-    flex-wrap: wrap;
-  }
-
-  #serial-params-dropdown {
-    flex: 1 1 160px;
-  }
-
-  .serial-params-summary {
-    width: 100%;
-  }
-
-  #serial-params-popover.dropdown-menu {
-    width: auto;
-    min-width: 240px;
-    max-width: calc(100vw - 80px);
-  }
-
   .serial-open-btn {
     flex: 1 1 auto;
   }
@@ -6640,22 +6186,8 @@ body.blu-wave-fullscreen-open {
     min-height: 220px;
   }
 
-  .btn-toolbar {
-    flex-wrap: wrap;
-  }
-
   #serial-loop-send-time {
     width: auto !important;
-  }
-
-  #serial-log-settings {
-    max-width: 100%;
-  }
-
-  #serial-log-settings-popover.dropdown-menu {
-    width: auto;
-    min-width: 240px;
-    max-width: calc(100vw - 80px);
   }
 
   #serial-send {
@@ -6774,29 +6306,6 @@ body.blu-wave-fullscreen-open {
 
 
 /* ========== Dual Serial Monitor ========== */
-
-/* Mode Toggle：容器与基础按钮样式来自 .ctl-seg */
-
-/* Connect bar: single/dual toggling */
-#serial-connect-bar #serial-single-ctrl.serial-hidden,
-#serial-connect-bar #serial-dual-ctrl.serial-hidden {
-  display: none !important;
-}
-
-/* Dual Session Rows: A/B 单行并排 + 主发口靠右（窄屏自然换行） */
-.connect-bar-dual {
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  min-width: 0;
-}
-
-.dual-session-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
 
 .dual-session-label {
   width: 48px;
@@ -6971,7 +6480,7 @@ body.blu-wave-fullscreen-open {
   background: color-mix(in srgb, #fbbf24 18%, transparent);
 }
 
-/* 串口预设：连接条上单独一节，单路 / 双路都显示(js/dual-config.js)，现代布局搬进连接栏 */
+/* 串口预设：单路 / 双路都显示(js/dual-config.js)，启动时搬进连接栏 #mdn-connbar */
 .dual-preset {
   flex-shrink: 0;
 }
@@ -8028,31 +7537,6 @@ body.blu-wave-fullscreen-open {
   content: '选择串口并连接后，收发数据会显示在这里';
 }
 
-/* 顶栏右侧：协议快捷切换 + 命令面板 */
-.connect-bar-tools {
-  margin-left: auto;
-  gap: 8px;
-}
-
-.connect-bar-proto {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-}
-
-.connect-bar-proto-label {
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-#serial-protocol-select {
-  width: 150px;
-  font-size: 0.75rem;
-}
-
 .connect-bar-palette {
   display: inline-flex;
   align-items: center;
@@ -8298,15 +7782,6 @@ body.blu-wave-fullscreen-open {
     width: 1px;
     height: 20px;
     margin: 0 4px;
-  }
-
-  .connect-bar-proto {
-    flex: 1 1 auto;
-  }
-
-  #serial-protocol-select {
-    flex: 1 1 auto;
-    width: auto;
   }
 
   .connect-bar-palette-text {
@@ -8630,25 +8105,6 @@ summary {
 
 .send-history-empty {
   color: var(--text-muted);
-}
-
-.serial-send-target {
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  background: var(--accent-light);
-  color: var(--accent);
-  font-size: 0.7rem;
-  font-weight: 600;
-}
-
-.serial-send-target[data-sid="A"] {
-  background: color-mix(in srgb, #10b981 15%, transparent);
-  color: #059669;
-}
-
-.serial-send-target[data-sid="B"] {
-  background: color-mix(in srgb, #f59e0b 15%, transparent);
-  color: #d97706;
 }
 
 /* 循环发送进行中：输入框描边 + 发送键角标，避免忘了关 */
@@ -9525,13 +8981,12 @@ details.sts-sim-alarm-picker {
 }
 
 /* ======================================
-   界面布局：经典 / 现代
-   经典布局不动。现代布局的全部样式都挂在 html[data-layout='modern'] 下；
-   此段只有两处基础规则作用于经典布局：「配置」菜单里的布局选择行(可见)、
-   双路视图切换这个新元素(display:none，不占位)
+   界面布局
+   只有一套布局：html 上固定 data-layout='modern'，布局样式都挂在 html[data-layout='modern'] 下，
+   覆盖前面各段的基础样式。index.html 里的节点是来源，启动时由各 js 搬进新宿主(见各段说明)
    ============================================= */
 
-/* 「配置」菜单顶部的布局选择行 */
+/* 「配置」菜单里的一行：标题 + 分段(主题三档，js/modern-shell.js 建) */
 .rail-config-layout {
 	display: flex;
 	align-items: center;
@@ -9547,7 +9002,7 @@ details.sts-sim-alarm-picker {
 	white-space: nowrap;
 }
 
-/* 新增元素：经典布局下不可见、不占位，现代布局才打开 */
+/* 双路视图切换：默认不占位，双路 + 行日志时由日志工具条的规则打开 */
 #serial-dual-view-seg {
 	display: none;
 }
@@ -9624,11 +9079,6 @@ html[data-layout='modern'] #activity-rail {
 	border-right-color: var(--mdn-bar-edge);
 }
 
-html[data-layout='modern'][data-theme] .rail-brand img {
-	filter: none;
-	opacity: 0.92;
-}
-
 html[data-layout='modern'] #activity-rail .rail-item {
 	width: calc(100% - 8px);
 	margin: 0 4px;
@@ -9650,31 +9100,6 @@ html[data-layout='modern'] .rail-bottom {
 	border-top-color: var(--mdn-rail-hi);
 }
 
-html[data-layout='modern'] .rail-divider {
-	background: var(--mdn-rail-hi);
-}
-
-html[data-layout='modern'] .theme-switch {
-	background: var(--mdn-rail-hi);
-}
-
-html[data-layout='modern'] .theme-switch button {
-	color: var(--mdn-rail-fg);
-}
-
-html[data-layout='modern'] .theme-switch button:hover {
-	color: #fff;
-}
-
-html[data-layout='modern'] .theme-switch button.active {
-	background: #f1f4f8;
-	color: #1f5fbf;
-}
-
-html[data-layout='modern'] .theme-switch button:focus-visible {
-	outline-color: var(--mdn-rail-accent);
-}
-
 html[data-layout='modern'] .rail-version {
 	color: var(--mdn-rail-muted);
 	font-size: 0.55rem;
@@ -9689,9 +9114,6 @@ html[data-layout='modern'] .rail-version-dot {
 }
 
 /* ---------- 现代布局：顶部条 / 日志头 / 发送区 / 状态栏 ---------- */
-html[data-layout='modern'] #serial-connect-bar {
-	box-shadow: none;
-}
 
 html[data-layout='modern'] #log-main > div:first-child {
 	background: var(--mdn-subtle);
@@ -9798,18 +9220,8 @@ html[data-layout='modern'] #wb-right-title {
 	font-size: 0.78rem;
 }
 
-/* ---------- 现代布局：双路视图切换(列表 / 气泡) ---------- */
-/* 仅 现代布局 + 双路 + 行日志视图 时显示：双路由图例的 is-dual 判断，行日志由视图切换的按下态判断 */
-html[data-layout='modern'] .serial-log-headline:has(#serial-log-legend.is-dual):has(#serial-log-view-row[aria-pressed='true']) #serial-dual-view-seg {
-	display: inline-flex;
-}
-
-/* ========== 功耗分析：串口事件道（仅现代布局） ========== */
-/* 经典布局下整条道不进布局流；TX/RX 颜色由 JS 画布按这里的变量取，图例共用 */
-.blu-serial-lane {
-	display: none;
-}
-
+/* ========== 功耗分析：串口事件道 ========== */
+/* TX/RX 颜色由 JS 画布按这里的变量取，图例共用 */
 html[data-layout='modern'] .blu-serial-lane {
 	--blu-lane-tx: #c2410c;
 	--blu-lane-rx: #15803d;
@@ -9926,8 +9338,8 @@ html[data-layout='modern'] .blu-serial-lane-tip-hint {
 	color: var(--text-muted);
 }
 
-/* ========== 现代布局：全局连接条 / 状态栏、检查器、固件页合并 ========== */
-/* 节点由 js/workbench.js 的 mountModern 原样搬进下面这些宿主；宿主只在现代布局下存在，经典布局没有对应 DOM */
+/* ========== 全局连接条 / 状态栏、检查器、固件页合并 ========== */
+/* 节点由 js/workbench.js 的 mountShell 原样搬进下面这些宿主(启动时建) */
 
 /* 全局顶栏 / 底栏：#app-shell 变成网格，导航栏占满左列，右列自上而下是连接条、视图、状态栏 */
 html[data-layout='modern'] #app-shell {
@@ -10026,7 +9438,7 @@ html[data-layout='modern'] .wb-inspector .sk-hex-dump {
 	max-height: 160px;
 }
 
-/* 解析为空(与经典布局同一判据：底栏外壳上的 is-empty，由 syncParsePanelEmpty 维护)：结果区不占位 */
+/* 解析为空(判据是底栏外壳上的 is-empty，由 syncParsePanelEmpty 维护)：结果区不占位 */
 html[data-layout='modern']:has(#serial-parse-panel.is-empty) .wb-inspector #serial-protocol-output {
 	display: none;
 }
@@ -11698,8 +11110,8 @@ html[data-layout='modern'] .mdn-fw-card[data-step='4'] > .btn {
 }
 
 /* ===== 现代布局 v2 · 功耗页 ===== */
-/* 结构由 js/modern-power.js 在进入现代布局时建立：原控件节点搬进 #mp-toolbar(仍在 .blu-connect-bar 里，沿用原控件尺寸规则)
-   与 .blu-wrapper 里的 #mp-body(左主区 + 右栏标签页)；经典布局下这些宿主不存在 */
+/* 结构由 js/modern-power.js 启动时建立：原控件节点搬进 #mp-toolbar(仍在 .blu-connect-bar 里，沿用原控件尺寸规则)
+   与 .blu-wrapper 里的 #mp-body(左主区 + 右栏标签页) */
 
 html[data-layout='modern'] #view-blu .blu-connect-bar {
 	margin: 0;
@@ -12356,17 +11768,17 @@ html[data-layout='modern'] #view-blu .mp-page .blu-log-last {
 }
 
 /* ===== 现代布局 v2 · 外壳与串口页 ===== */
-/* js/modern-shell.js 在现代布局下新建的宿主(#mdn-connbar / #mdn-logbar / #mdn-quickrow 等)与搬进去的原控件；
-   经典布局没有这些宿主，原控件按占位放回 */
+/* js/modern-shell.js 启动时新建的宿主(#mdn-connbar / #mdn-logbar / #mdn-quickrow 等)与搬进去的原控件 */
 
-/* ---------- 左栏：68px 窄栏，图标 + 短标签；主题、反馈、GitHub 收进「配置」菜单，下载客户端留在一级 ---------- */
+/* ---------- 左栏：68px 窄栏，图标 + 短标签 ----------
+   窗口够高时主题三档与反馈 / GitHub 是一级入口(见本段末尾的高度断点)，矮窗口才收进「配置」菜单；
+   下载客户端与版本号总在一级 */
 html[data-layout='modern'] #activity-rail {
 	width: 68px;
 	padding: 10px 0;
 }
 
-html[data-layout='modern'] #activity-rail .rail-brand,
-html[data-layout='modern'] #activity-rail .rail-divider,
+/* 矮窗口：主题与反馈 / GitHub 收进「配置」菜单(菜单项由 js/modern-shell.js 带 mdn-cfg-extra 标出) */
 html[data-layout='modern'] #activity-rail #theme-switch,
 html[data-layout='modern'] #activity-rail .rail-bottom > a.rail-item:not(#rail-download) {
 	display: none;
@@ -12393,7 +11805,45 @@ html[data-layout='modern'] #activity-rail .rail-item i {
 	font-size: 20px;
 }
 
-/* 短标签：原文保留为无障碍名称，视觉上换成两字(不改 DOM，切回经典无需还原) */
+/* 主题三档：竖排三个小图标按钮，宽度与 .rail-item 对齐；选中项浅底 + 强调色图标，与导航项的实心底按下态区分 */
+html[data-layout='modern'] #activity-rail .theme-switch {
+	flex-direction: column;
+	gap: 2px;
+	width: 56px;
+	margin: 0 auto;
+}
+
+html[data-layout='modern'] #activity-rail .theme-switch button {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 24px;
+	padding: 0;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--mdn-rail-fg);
+	font-size: 15px;
+	line-height: 1;
+	transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+html[data-layout='modern'] #activity-rail .theme-switch button:hover {
+	background: var(--mdn-rail-hi);
+	color: #fff;
+}
+
+html[data-layout='modern'] #activity-rail .theme-switch button:focus-visible {
+	outline: 2px solid var(--mdn-rail-accent);
+	outline-offset: 1px;
+}
+
+html[data-layout='modern'] #activity-rail .theme-switch button.active {
+	background: var(--mdn-bar-hi);
+	color: #1f5fbf;
+}
+
+/* 短标签：原文保留为无障碍名称，视觉上换成两字(不改 DOM) */
 html[data-layout='modern'] #activity-rail .rail-item[data-view] .rail-label {
 	font-size: 0;
 	letter-spacing: 0;
@@ -12429,8 +11879,26 @@ html[data-layout='modern'] .mdn-cfg-theme .ctl-seg > button {
 	padding: 4px 10px;
 }
 
+/* 高度断点：左栏一级内容(上部三项 + 底部配置 / 主题 / 反馈 / GitHub / 客户端 / 版本号)量下来要 516px，
+   断点取 600px 再留出桌面客户端 macOS 一体化标题栏占的 36px，客户端最小窗口(600px 高)时也放得下且不挤。
+   够高就把主题与反馈 / GitHub 放回一级，菜单里只留导入 / 导出 / 重置；矮窗口维持上面的收拢形态。
+   功能门控的 !important 隐藏照旧优先，客户端里反馈 / GitHub 不出现 */
+@media (min-height: 600px) {
+	html[data-layout='modern'] #activity-rail #theme-switch {
+		display: flex;
+	}
+
+	html[data-layout='modern'] #activity-rail .rail-bottom > a.rail-item:not(#rail-download) {
+		display: flex;
+	}
+
+	html[data-layout='modern'] .rail-config-menu .mdn-cfg-extra {
+		display: none;
+	}
+}
+
 /* ---------- 全局连接栏 ---------- */
-html[data-layout='modern'] #app-topbar > #serial-connect-bar {
+html[data-layout='modern'] #serial-connect-bar {
 	display: none;
 }
 
@@ -12505,9 +11973,8 @@ html[data-layout='modern'] .mdn-conn-proto:hover {
 	color: var(--text-primary);
 }
 
-/* 协议已在每路的协议键上，顶栏那枚(各协议模块仍只听它的 change)与参数卡里的「本路协议」不再显示 */
-html[data-layout='modern'] .mdn-conn-tools .connect-bar-proto,
-html[data-layout='modern'] .mdn-pop #serial-lane-proto-row {
+/* 协议已在每路的协议键上，顶栏那枚(各协议模块仍只听它的 change)隐藏但保留 */
+html[data-layout='modern'] .mdn-conn-tools .connect-bar-proto {
 	display: none !important;
 }
 
@@ -12681,7 +12148,7 @@ html[data-layout='modern'] .mdn-pop .serial-device-chip {
 
 /* 设备名可能很长：选口按钮在菜单里排成两行网格，设备名独占第一行(可折行，连续长串也按字符折)，
    改名 / 清除别名 / 取消选择三枚小键落到第二行靠右，不被名字挤出芯片；全名同时在按钮 title 里。
-   接管经典布局里写给单路(#serial-connect-bar 下)与双路(.dual-port-btn)的宽度、省略号规则 */
+   接管基础段里写给双路(.dual-port-btn)的宽度、省略号规则 */
 html[data-layout='modern'] .mdn-pop .serial-device-chip > #serial-status,
 html[data-layout='modern'] .mdn-pop .serial-device-chip > .dual-status {
 	flex: 0 0 auto;
@@ -12769,21 +12236,6 @@ html[data-layout='modern'] .mdn-conn-send .dual-active-send {
 	margin: 0;
 }
 
-html[data-layout='modern'] .mdn-conn-tools .connect-bar-proto {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	margin: 0;
-	color: var(--text-secondary);
-}
-
-html[data-layout='modern'] .mdn-conn-tools #serial-protocol-select {
-	height: 30px;
-	min-width: 140px;
-	border-radius: 6px;
-	font-size: 12px;
-}
-
 html[data-layout='modern'] .mdn-connbar #wb-palette-btn {
 	height: 30px;
 	border: 1px solid var(--border-color);
@@ -12791,12 +12243,7 @@ html[data-layout='modern'] .mdn-connbar #wb-palette-btn {
 	font-size: 12px;
 }
 
-/* 双路：参数卡由打开的那一路菜单决定设置哪一路，卡内的 A/B 分段不显示 */
-html[data-layout='modern'] .mdn-pop #serial-params-lane {
-	display: none;
-}
-
-/* 双路预设(从经典双路控件区原样搬来)：与每路连接按钮同高同款 */
+/* 串口预设(从原连接条原样搬来)：与每路连接按钮同高同款 */
 html[data-layout='modern'] .mdn-conn-preset {
 	display: inline-flex;
 	align-items: center;
@@ -13208,8 +12655,7 @@ html[data-layout='modern'] #serial-send-panel.collapsed #serial-send-body {
 	display: none;
 }
 
-/* 发送键在现代布局里被搬到开关一排的末尾(js/modern-shell.js)；这里不用 order / display: contents 重排：
-   Chrome 切回经典时偶发沿用旧的网格摆放，把经典发送区的输入框和发送键排反 */
+/* 发送键被搬到开关一排的末尾(js/modern-shell.js)，不靠 order / display: contents 重排 */
 html[data-layout='modern'] #serial-send-body > .send-compose {
 	display: block;
 	flex: 1 1 280px;
@@ -13226,7 +12672,7 @@ html[data-layout='modern'] #serial-send-body > .send-options {
 	padding: 0;
 }
 
-/* 默认单行，拖右下角可拉高(不用 field-sizing: content，同样有切回经典后样式残留的问题) */
+/* 默认单行，拖右下角可拉高 */
 html[data-layout='modern'] #serial-send-content {
 	display: block;
 	width: 100%;
@@ -13373,7 +12819,8 @@ html[data-layout='modern'] #serial-log-panes:has(.serial-log-mode:not([hidden]) 
 		width: 56px;
 	}
 
-	html[data-layout='modern'] #activity-rail .rail-item {
+	html[data-layout='modern'] #activity-rail .rail-item,
+	html[data-layout='modern'] #activity-rail .theme-switch {
 		width: 48px;
 	}
 
@@ -13397,7 +12844,7 @@ html[data-layout='modern'] #serial-log-panes:has(.serial-log-mode:not([hidden]) 
 	}
 }
 
-/* ========== 页内对话框(js/app-dialog.js)：替代 window.alert / confirm / prompt，两套布局共用 ========== */
+/* ========== 页内对话框(js/app-dialog.js)：替代 window.alert / confirm / prompt ========== */
 /* 最上层模态：高于命令面板(9000)与登录遮罩(10000) */
 .app-dlg-mask {
 	position: fixed;
@@ -13445,7 +12892,7 @@ html[data-layout='modern'] #serial-log-panes:has(.serial-log-mode:not([hidden]) 
 	margin-top: 16px;
 }
 
-/* 功耗仪已连接：左侧导航「功耗」项图标右上角的绿色对勾角标(经典与现代共用同一个导航，不挪图标、不加动画) */
+/* 功耗仪已连接：左侧导航「功耗」项图标右上角的绿色对勾角标(不挪图标、不加动画) */
 .rail-item[data-view='view-blu'][data-conn='open']::after {
 	content: '\2713';
 	position: absolute;
@@ -13694,7 +13141,7 @@ html[data-layout='modern'][data-theme='dark'] .mdn-port[data-kind='open'] .mdn-p
 }
 
 /* ===== 桌面客户端(Tauri)外壳 ===== */
-/* 只在 html[data-runtime='tauri'] 下生效(客户端只有现代布局)，网页版不受影响；标题栏拖动、右键菜单与下载提示的行为在 js/native-shell.js */
+/* 只在 html[data-runtime='tauri'] 下生效，网页版不受影响；标题栏拖动、右键菜单与下载提示的行为在 js/native-shell.js */
 
 /* 整页不回弹、不随触控捏合缩放(日志缩放另有 Ctrl/⌘ + 滚轮) */
 html[data-runtime='tauri'],
@@ -13704,7 +13151,7 @@ html[data-runtime='tauri'] body {
 }
 
 /* 界面框架(导航栏、顶栏、状态栏、工具条、按钮、标签)不可选中；日志、输入框、解析输出等内容区照常可选 */
-html[data-runtime='tauri'] :is(#activity-rail, #app-topbar, #app-statusbar, #mdn-logbar, #mdn-quickrow, .wb-dock-bar, .wb-right-head, .wb-dock-head, #serial-parse-header, #serial-send-header, .view-bar, .blu-connect-bar, button, .btn, label, [role='tab'], .nav-link, .dropdown-item, .serial-toast, .native-ctx) {
+html[data-runtime='tauri'] :is(#activity-rail, #app-topbar, #app-statusbar, #mdn-logbar, #mdn-quickrow, .wb-dock-bar, .wb-right-head, .wb-dock-head, #serial-parse-header, .view-bar, .blu-connect-bar, button, .btn, label, [role='tab'], .nav-link, .dropdown-item, .serial-toast, .native-ctx) {
 	-webkit-user-select: none;
 	user-select: none;
 }

@@ -127,27 +127,53 @@
 		let rs = null
 		let rsCtl = null
 		let ws = null
+		// 打开期间驱动推来的数据：原生读线程在 open 返回前就开始推，丢掉的话这一段就没了。
+		// 先暂存，open 成功后按序先交付暂存再接后续；open 失败、设备丢失、关闭、换代次时清空丢弃。
+		// 上限与读队列一致，超了丢最早的块、留最新的(页面此时还没拿 reader，报错流交不到它手里，见 AGENTS.md)
+		const pending = { chunks: [], bytes: 0, lost: null }
+
+		function resetPending() {
+			pending.chunks = []
+			pending.bytes = 0
+			pending.lost = null
+		}
 
 		function dropReadable(stream) {
 			if (rs === stream) { rs = null; rsCtl = null }
 		}
-		function ensureReadable() {
-			if (state !== 'opened') return null
-			if (rs) return rs
+		function newReadable() {
 			let ctl = null
 			const stream = new ReadableStream({
 				start(c) { ctl = c },
 				cancel() { dropReadable(stream) },
 			}, { highWaterMark: queueLimit, size(chunk) { return chunk.byteLength } })
-			rs = stream
-			rsCtl = ctl
-			return stream
+			return { stream, ctl }
+		}
+		function ensureReadable() {
+			if (state !== 'opened') return null
+			if (rs) return rs
+			const made = newReadable()
+			rs = made.stream
+			rsCtl = made.ctl
+			return rs
 		}
 		function errorReadable(err) {
 			const ctl = rsCtl
 			rs = null
 			rsCtl = null
 			if (ctl) { try { ctl.error(err) } catch (e) {} }
+		}
+		// open 成功后先把打开期间暂存的数据按序放进读队列，之后到的数据照常直接入队。
+		function deliverPending() {
+			const chunks = pending.chunks
+			pending.chunks = []
+			pending.bytes = 0
+			if (!chunks.length) return
+			ensureReadable()
+			for (let i = 0; i < chunks.length; i++) {
+				if (!rsCtl) return
+				rsCtl.enqueue(chunks[i])
+			}
 		}
 		function ensureWritable() {
 			if (state !== 'opened') return null
@@ -172,14 +198,23 @@
 			return stream
 		}
 
-		// pending：这次 open 的暂存，打开中报的设备丢失记在 pending.lost，由 open 收尾时处理
-		function makeSink(g, pending) {
+		// pending：这次 open 的暂存(打开中报的设备丢失记在 pending.lost，由 open 收尾时处理)
+		function makeSink(g) {
 			const live = function () { return g === gen && state === 'opened' }
 			return {
 				data(bytes) {
-					if (!live()) return
+					if (g !== gen) return
+					if (state !== 'opening' && state !== 'opened') return
 					const u8 = toBytes(bytes)
 					if (!u8.byteLength) return
+					if (state === 'opening') {
+						if (pending.lost) return
+						// 超上限丢最早的块；单个大块照收
+						while (pending.chunks.length && pending.bytes + u8.byteLength > queueLimit) pending.bytes -= pending.chunks.shift().byteLength
+						pending.chunks.push(u8)
+						pending.bytes += u8.byteLength
+						return
+					}
 					ensureReadable()
 					// 队列里已有积压且这一块放不下才算溢出；没人读时的单个大块照收
 					const room = rsCtl.desiredSize
@@ -197,6 +232,9 @@
 					// 打开中丢失(如 BLE 开通知时断开)：驱动的 open 可能照样兑现，不能让 open 报成功
 					if (g === gen && state === 'opening') {
 						if (!pending.lost) pending.lost = err || makeError('NetworkError', '设备已断开')
+						// 这次 open 注定失败，暂存的数据随失败一起丢弃
+						pending.chunks = []
+						pending.bytes = 0
 						return
 					}
 					if (!live()) return
@@ -204,6 +242,7 @@
 					const e = err || makeError('NetworkError', '设备已断开')
 					gen++
 					state = 'closing'
+					resetPending()
 					errorReadable(e)
 					const w = ws
 					ws = null
@@ -222,6 +261,7 @@
 			async open(options) {
 				if (state !== 'closed') throw makeError('InvalidStateError', '串口已打开')
 				state = 'opening'
+				resetPending()
 				if (staleHandle) {
 					try {
 						await driver.close()
@@ -234,21 +274,24 @@
 				const g = ++gen
 				const buf = options && Number(options.bufferSize)
 				queueLimit = Math.max(buf > 0 ? buf : 0, MIN_READ_QUEUE)
-				const pending = { lost: null }
 				try {
-					await driver.open(options || {}, makeSink(g, pending))
+					await driver.open(options || {}, makeSink(g))
 				} catch (e) {
+					resetPending()
 					state = 'closed'
 					throw e
 				}
 				if (pending.lost) {
 					// 驱动已打开但设备在途中丢失：替页面释放句柄，open 报失败，端口回到关闭
+					const lost = pending.lost
+					resetPending()
 					gen++
 					try { await driver.close() } catch (e) { staleHandle = true }
 					state = 'closed'
-					throw pending.lost
+					throw lost
 				}
 				state = 'opened'
+				deliverPending()
 			},
 			// 只有已打开才能关：打开中关闭会与驱动的 open 赛跑，后完成的 open 留下没人释放的句柄。
 			// 与 Chromium 一致，打开中两条流都是 null，页面本就不会在这时调 close
@@ -261,6 +304,7 @@
 				rsCtl = null
 				ws = null
 				state = 'closing'
+				resetPending()
 				if (r) { try { await r.cancel() } catch (e) {} }
 				if (w) { try { await w.abort() } catch (e) {} }
 				// 驱动没关掉就回到已打开：句柄仍在，流照常可取，页面重试 close 会再调驱动，不能报成已释放、放行重新打开
