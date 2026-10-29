@@ -51,60 +51,10 @@
 		if (themeChoice() === 'auto') applyTheme()
 	})
 
-	/* ========== Layout: 经典 / 现代 ========== */
-	// 与主题一样是纯界面偏好：不进导出配置、不被「重置所有参数」清掉；缺省(含存储不可用)为经典。
-	// data-layout 只改样式作用域，切换不刷新页面、不碰串口与日志状态；index.html 首屏前已按同一规则预置
-	const LAYOUT_KEY = 'serial-debug-layout'
+	/* ========== 双路视图(列表 / 气泡时间线) ========== */
+	// 与主题一样是纯界面偏好：不进导出配置、不被「重置所有参数」清掉；只在双路行日志里有入口。
+	// 气泡是纯 CSS 对现有行的重排，这里只存偏好；会话内以内存值为准，存储写失败时本次会话照常切换
 	const DUAL_VIEW_KEY = 'serial-debug-dual-view'
-
-	// 会话内以这份为准，持久化只是尽力保存：存储写失败时也不能让 data-layout 与已搬好的 DOM、分布局状态键对不上
-	let sessionLayout = (function () {
-		let v = 'classic'
-		try { v = localStorage.getItem(LAYOUT_KEY) === 'modern' ? 'modern' : 'classic' } catch (e) {}
-		return platform && !platform.allowsLayout(v) ? platform.fallbackLayout() : v
-	})()
-
-	function layoutChoice() {
-		return sessionLayout
-	}
-
-	function applyLayout() {
-		const choice = sessionLayout
-		document.documentElement.dataset.layout = choice
-		;['classic', 'modern'].forEach((c) => {
-			const btn = document.getElementById('serial-layout-' + c)
-			if (btn) btn.setAttribute('aria-pressed', String(c === choice))
-		})
-	}
-
-	window.getLayoutChoice = layoutChoice
-	// 停靠区开合/宽高、工作台面板分布按布局各存一份：现代布局的调整只写带 Modern 后缀的键，经典布局的键原样不动
-	function layoutStateKey(key) {
-		return document.documentElement.dataset.layout === 'modern' ? key + 'Modern' : key
-	}
-	window.layoutStateKey = layoutStateKey
-	window.setLayoutChoice = function (choice) {
-		const next = choice === 'modern' ? 'modern' : 'classic'
-		// 平台画像不提供的布局不切、不写存储(桌面客户端只有现代、移动端只有经典)
-		if (platform && !platform.allowsLayout(next)) return
-		sessionLayout = next
-		try {
-			if (next === 'modern') localStorage.setItem(LAYOUT_KEY, 'modern')
-			else localStorage.removeItem(LAYOUT_KEY)
-		} catch (e) { /* 存储不可用时本次会话内仍生效，下次回到默认 */ }
-		if (document.documentElement.dataset.layout === next) return
-		applyLayout()
-		// 先搬 DOM(全局连接条/状态栏、检查器、固件页合并，js/workbench.js)，再让各停靠区按新布局的键重放开合与宽高；
-		// 两步都同步做完才量尺寸，重放时量到的已是新布局下的 DOM
-		document.dispatchEvent(new CustomEvent('serial-layout-move', { detail: { layout: next } }))
-		document.dispatchEvent(new CustomEvent('serial-layout-change', { detail: { layout: next } }))
-		// 两套布局的尺寸不同：日志头压缩档要重量，波形等依赖容器尺寸的画布也监听 resize
-		fitLogHeader()
-		window.dispatchEvent(new Event('resize'))
-	}
-
-	// 双路视图(列表/气泡)只在现代布局的双路行日志里有入口；气泡是纯 CSS 对现有行的重排，这里只存偏好
-	// 与布局一样会话内以内存值为准，存储写失败时本次会话照常切换
 	let sessionDualView = (function () {
 		try { return localStorage.getItem(DUAL_VIEW_KEY) === 'bubble' ? 'bubble' : 'list' } catch (e) { return 'list' }
 	})()
@@ -135,10 +85,8 @@
 		const auto = document.getElementById('serial-auto-scroll')
 		const logs = document.getElementById('serial-logs-dual')
 		if (logs && auto && auto.getAttribute('aria-pressed') === 'true') logs.scrollTop = logs.scrollHeight
-		fitLogHeader()
 	}
 
-	applyLayout()
 	applyDualView()
 	function bindSeg(segId, prefix, apply) {
 		const seg = document.getElementById(segId)
@@ -148,7 +96,6 @@
 			if (btn && seg.contains(btn)) apply(btn.id.slice(prefix.length))
 		})
 	}
-	bindSeg('serial-layout-seg', 'serial-layout-', (c) => window.setLayoutChoice(c))
 	bindSeg('serial-dual-view-seg', 'serial-dual-view-', (c) => window.setDualViewChoice(c))
 	// 事务钉扎: 升级/批量配置等事务进行中锁定主发口, 防止中途切换把后续帧发到另一台设备
 	let pinSid = null
@@ -395,7 +342,7 @@
 	function persistLaneOptions() {
 		try { localStorage.setItem(SERIAL_OPTIONS_LANES_KEY, JSON.stringify(laneOptions)) } catch (e) {}
 	}
-	// 双路下参数卡正在设置哪一路（经典布局卡内的 A/B 分段、现代布局打开的那一路菜单决定），单路下恒为 S
+	// 双路下参数卡正在设置哪一路（由连接栏打开的那一路菜单决定，经 serialLanes.setParamsTarget），单路下恒为 S
 	let paramsTarget = 'A'
 	function paramsSid() {
 		return SerialHub.mode === 'dual' ? paramsTarget : 'S'
@@ -430,36 +377,12 @@
 		set('serial-parity', opts.parity)
 		set('serial-buffer-size', opts.bufferSize)
 		set('serial-flow-control', opts.flowControl)
-		syncLaneParamsUi()
 		if (updateSerialParamsSummary) updateSerialParamsSummary()
-	}
-	// 参数卡里只属于双路的两项：A/B 分段与本路协议。单路下整块隐藏，卡片与改动前一致
-	function syncLaneParamsUi() {
-		const dual = SerialHub.mode === 'dual'
-		const head = document.getElementById('serial-params-lane')
-		const protoRow = document.getElementById('serial-lane-proto-row')
-		if (head) head.hidden = !dual
-		if (protoRow) protoRow.hidden = !dual
-		if (!dual) return
-		const seg = document.getElementById('serial-params-lane-seg')
-		if (seg) {
-			seg.querySelectorAll('button[data-sid]').forEach(function (b) {
-				const sid = b.getAttribute('data-sid')
-				b.setAttribute('aria-pressed', String(sid === paramsTarget))
-				b.title = (sid === 'B' ? SerialHub.getLabelB() : SerialHub.getLabelA()) + ' 的串口参数与协议'
-			})
-		}
-		const sel = document.getElementById('serial-lane-protocol')
-		const want = protocolIdForSid(paramsTarget)
-		if (sel && sel.value !== want && Array.prototype.some.call(sel.options, function (o) { return o.value === want })) sel.value = want
 	}
 	// 双路参数卡切到另一路：只换显示，不派发 change(不触发重连)
 	function setParamsTarget(sid) {
 		if (sid !== 'A' && sid !== 'B') return
-		if (paramsTarget === sid) {
-			syncLaneParamsUi()
-			return
-		}
+		if (paramsTarget === sid) return
 		paramsTarget = sid
 		if (SerialHub.mode === 'dual') applySerialParamsToUI()
 	}
@@ -816,64 +739,6 @@
 		'hex&text&parse': 'Hex和Text+解析',
 		'hex&ansi&parse': 'Hex和Ansi+解析',
 	}
-	function updateLogSettingsSummary() {
-		const text = document.getElementById('serial-log-settings-text')
-		const timeoutEl = document.getElementById('serial-timer-out')
-		const rowsEl = document.getElementById('serial-max-rows')
-		if (!text) return
-		const logType = activeLogOptions().logType
-		// 双路两路格式不同时写成压缩形式「A路 Hex · B路 解析」，相同时照旧
-		let typeLabel = LOG_TYPE_LABELS[logType] || 'Hex'
-		if (logType !== 'term' && SerialHub.mode === 'dual') {
-			const a = getLogTypeForSid('A')
-			const b = getLogTypeForSid('B')
-			if (a !== b) {
-				typeLabel = (SerialHub.getLabelA() || 'A') + ' ' + (LOG_TYPE_LABELS[a] || 'Hex') + ' · ' +
-					(SerialHub.getLabelB() || 'B') + ' ' + (LOG_TYPE_LABELS[b] || 'Hex')
-			}
-		}
-		const timeout = timeoutEl ? parseInt(timeoutEl.value, 10) : 0
-		// 按换行时超时只兜底残行，不是分包依据，摘要里不写，免得读成「换行再加超时」
-		const timeoutTxt = activeLogOptions().splitMode === 'line'
-			? '按换行'
-			: (!timeout ? '不分包' : timeout + 'ms')
-		// 终端不走分包与行数裁剪,拼上去是在说假话
-		if (logType === 'term') {
-			text.textContent = LOG_TYPE_LABELS.term
-		} else {
-			let rows = rowsEl ? parseInt(rowsEl.value, 10) : 10000
-			if (isNaN(rows)) rows = 10000
-			text.textContent = typeLabel + ' · ' + timeoutTxt + ' · ' + rows + '行'
-		}
-		fitLogHeader()
-	}
-	// 标题行逐级压缩：先全展开排一次，换行了才多收一级，直到一行放得下或收到底（再放不下靠 flex-wrap 换行兜底）。
-	// 不用容器查询定死阈值：摘要文案、双路标签长度都会变，固定阈值只能按最坏情况留余量，空位还很多就提前收了
-	function logHeaderWrapped(header) {
-		let top = Infinity
-		let bottom = -Infinity
-		let tallest = 0
-		header.querySelectorAll('.serial-log-title, #serial-log-view-seg, #serial-log-legend, #serial-dual-view-seg, #serial-log-settings-btn, .serial-log-actions').forEach(function (el) {
-			const r = el.getBoundingClientRect()
-			if (!r.width) return
-			top = Math.min(top, r.top)
-			bottom = Math.max(bottom, r.bottom)
-			tallest = Math.max(tallest, r.height)
-		})
-		return bottom - top > tallest + 2
-	}
-	function fitLogHeader() {
-		const header = document.querySelector('.serial-log-header')
-		// 视图隐藏时量不出宽度，回到视图时 ResizeObserver 会再触发
-		if (!header || !header.clientWidth) return
-		const levels = []
-		header.removeAttribute('data-compact')
-		// 共 4 档，对应 css 里 data-compact~='1'..'4'
-		while (levels.length < 4 && logHeaderWrapped(header)) {
-			levels.push(levels.length + 1)
-			header.dataset.compact = levels.join(' ')
-		}
-	}
 	function updateLogLegend() {
 		const legend = document.getElementById('serial-log-legend')
 		const left = document.getElementById('serial-log-legend-left')
@@ -893,8 +758,6 @@
 		right.title = right.textContent
 		// 路标签改了：格式行与每路胶囊、摘要里的路名跟着刷新
 		syncLogFmtRows()
-		updateLogSettingsSummary()
-		fitLogHeader()
 	}
 	// logType 拆成「视图」(行日志/终端) + 「格式」(HEX/TEXT 复选 + ANSI 修饰) 两组控件的 UI 同步。
 	// logType 仍是唯一状态源,这里只是把它拆开点亮;视图=终端时格式、分包、行数整体禁用(term 不走 addLog,
@@ -985,7 +848,6 @@
 			el.disabled = isTerm
 			el.setAttribute('aria-disabled', isTerm ? 'true' : 'false')
 		})
-		updateLogSettingsSummary()
 	}
 	// logType 的统一写入口:校验 + 落盘 + 同步控件 + 应用视图 + 重渲历史日志正文。
 	// 第二参数是路(单路 S、双路 A/B)：界面按钮总带当前分段选中的那一路；省略时单路改 S，
@@ -1063,7 +925,6 @@
 		if (m) m.value = opts.maxLogRows
 		toolOptions.logType = opts.logType
 		applyLogTypeUi(opts.logType)
-		updateLogSettingsSummary()
 		applyLogView()
 		// 切 mode 同样会让 UI 上的格式和容器里已有的行脱钩(双路首次进来会把单路的 logType 拷过去),补渲一次
 		rerenderLogBodies(SerialHub.getLogContainer(), activeLaneLogTypes())
@@ -1194,14 +1055,11 @@
 		}
 		if (!writeLaneProtocol(sid, id)) return
 		if (SerialHub.logModeOf(sid) === logModeKey()) rerenderParseRows()
-		syncLaneParamsUi()
-		updateProtoLabel()
 		notifyLaneConfig()
 	}
 	// 顶栏跟随当前模式：单路是单路协议，双路是主发那一路的协议。值变了才派发 change，各协议模块据此切面板
 	function syncTopProtocol() {
 		const want = SerialHub.mode === 'dual' ? protocolIdForSid(SerialHub.activeSendId) : singleProtocolId
-		updateProtoLabel()
 		if (!want) return
 		const sel = document.getElementById('serial-protocol-select')
 		window._activeProtocol = want
@@ -1210,31 +1068,12 @@
 		sel.value = want
 		sel.dispatchEvent(new Event('change'))
 	}
-	// 双路下顶栏「协议」的提示说明它是主发那一路的协议(文案不变：紧挨着「主发」，读作主发那一路的协议，加字会把双路连接条挤成两行)；单路恢复原提示
-	const protoLabelBox = document.querySelector('.connect-bar-proto')
-	const protoTitleOrig = protoLabelBox ? protoLabelBox.getAttribute('title') : ''
-	function updateProtoLabel() {
-		if (!protoLabelBox) return
-		const title = SerialHub.mode !== 'dual'
-			? protoTitleOrig
-			: '主发路（' + sidName(SerialHub.activeSendId) + '）的协议：决定协议下发与测试面板；日志解析按每行所属那一路的协议，另一路在串口参数里设置'
-		if (protoLabelBox.getAttribute('title') !== title) protoLabelBox.setAttribute('title', title)
-	}
-
 	window.registerProtocol = function (id, impl) {
 		// 平台画像外的协议不进注册表与下拉框(移动端只有 SEK)；各协议模块照常加载，只是选不到
 		if (!platformAllowsProtocol(id)) return
 		window._protocols[id] = impl
 		// 当前协议晚于日志恢复才注册(启动时 gz/wmbus 等脚本在 common.js 之后加载): 已有的解析段按它重渲
 		if (id === window._activeProtocol || (laneProtocols && (laneProtocols.A === id || laneProtocols.B === id))) scheduleParseRerender()
-		const laneSel = document.getElementById('serial-lane-protocol')
-		if (laneSel && !protocolExists(laneSel, id)) {
-			const o = document.createElement('option')
-			o.value = id
-			o.textContent = impl.name || id
-			laneSel.appendChild(o)
-			syncLaneParamsUi()
-		}
 		if (!document.getElementById('serial-protocol-select')) return
 		var sel = document.getElementById('serial-protocol-select')
 		var exists = Array.from(sel.options).some(function (o) { return o.value === id })
@@ -1330,8 +1169,6 @@
 				window._activeProtocol = this.value
 				const sid = SerialHub.activeSendId
 				if (writeLaneProtocol(sid, this.value) && SerialHub.logModeOf(sid) === 'dual') rerenderParseRows()
-				syncLaneParamsUi()
-				updateProtoLabel()
 				notifyLaneConfig()
 			} else {
 				window._activeProtocol = this.value
@@ -2724,20 +2561,6 @@
 	// 双路两路协议：新键缺失时先取刚恢复出来的全局协议，首次进入双路时再按那一刻的单路协议定下并落盘(switchToDualUI)
 	singleProtocolId = window._activeProtocol
 	laneProtocols = DualCfg.migrateLaneProtocols(lsGet(LANE_PROTOCOLS_KEY), window._activeProtocol)
-	// 参数卡里的 A/B 分段与本路协议(仅双路显示)
-	const laneSeg = document.getElementById('serial-params-lane-seg')
-	if (laneSeg) {
-		laneSeg.addEventListener('click', function (e) {
-			const b = e.target.closest('button[data-sid]')
-			if (b && laneSeg.contains(b)) setParamsTarget(b.getAttribute('data-sid'))
-		})
-	}
-	const laneProtoSel = document.getElementById('serial-lane-protocol')
-	if (laneProtoSel) {
-		laneProtoSel.addEventListener('change', function () {
-			if (SerialHub.mode === 'dual') setLaneProtocol(paramsTarget, this.value)
-		})
-	}
 	// 启动时 applyLogOptionsToUI 先于协议恢复执行,历史行的解析段要按恢复后的协议重渲
 	scheduleParseRerender()
 	{
@@ -2887,12 +2710,11 @@
 		})
 	})()
 
-	// 右栏当前面板的记忆与恢复由 js/workbench.js 负责(旧 activeTab 键在那里迁移)
+	// 右栏当前面板的记忆与恢复由 js/workbench.js 负责
 
 	//实时修改选项
 	document.getElementById('serial-timer-out').addEventListener('change', (e) => {
 		changeOption('timeOut', parseInt(e.target.value))
-		updateLogSettingsSummary()
 	})
 	// 分包方式：超时只看字节间隔；换行按 \n 立即成行，超时只兜底没有换行的残行
 	function applySplitModeUi(mode) {
@@ -2911,7 +2733,6 @@
 		document.getElementById('serial-split-' + mode).addEventListener('click', function () {
 			changeOption('splitMode', mode)
 			applySplitModeUi(mode)
-			updateLogSettingsSummary()
 		})
 	})
 	document.getElementById('serial-max-rows').addEventListener('change', (e) => {
@@ -2923,7 +2744,6 @@
 		changeOption('maxLogRows', max)
 		trimLogRows(SerialHub.getLogContainerFor('single'))
 		trimLogRows(SerialHub.getLogContainerFor('dual'))
-		updateLogSettingsSummary()
 	})
 	// 视图/格式/ANSI 按钮统一走 setLogType,由它负责校验、落盘、同步 UI、重渲历史。
 	// HEX/TEXT/解析 是复选,读这一行当前 aria-pressed 算出这一路下一个 logType;三个都不选时忽略这次点击
@@ -2985,44 +2805,6 @@
 			setLogType(composeLogType(s.hasHex, s.hasText, hasAnsi, s.hasParse), sid)
 		})
 	})
-	updateLogSettingsSummary()
-	;(function () {
-		const header = document.querySelector('.serial-log-header')
-		if (!header) return
-		// 只在宽度变化时重排；压缩档改变的是高度，不会自激
-		let lastWidth = -1
-		if (typeof ResizeObserver !== 'undefined') {
-			new ResizeObserver(function () {
-				if (header.clientWidth === lastWidth) return
-				lastWidth = header.clientWidth
-				fitLogHeader()
-			}).observe(header)
-		}
-		// 网页字体晚到会改变文字宽度
-		if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitLogHeader)
-	})()
-	;(function () {
-		const popover = document.getElementById('serial-log-settings-popover')
-		if (popover) {
-			popover.addEventListener('keydown', function (e) {
-				if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.stopPropagation()
-			})
-		}
-		const ddRoot = document.getElementById('serial-log-settings')
-		const ddToggle = document.getElementById('serial-log-settings-btn')
-		if (ddRoot && ddToggle && typeof bootstrap !== 'undefined' && bootstrap.Dropdown) {
-			const dd = bootstrap.Dropdown.getOrCreateInstance(ddToggle, { autoClose: 'outside' })
-			let leaveT = 0
-			ddRoot.addEventListener('mouseenter', function () {
-				clearTimeout(leaveT)
-				leaveT = setTimeout(function () { dd.show() }, 80)
-			})
-			ddRoot.addEventListener('mouseleave', function () {
-				clearTimeout(leaveT)
-				leaveT = setTimeout(function () { dd.hide() }, 180)
-			})
-		}
-	})()
 	document.getElementById('serial-auto-scroll').addEventListener('click', function (e) {
 		const autoScroll = this.getAttribute('aria-pressed') !== 'true'
 		setAutoScrollUi(this, autoScroll)
@@ -3566,7 +3348,7 @@
 		}
 	}
 
-	// 把选定的口绑定到会话(经典布局选择框选中后、现代布局串口列表单击 / 双击都走这里)：拒绝蓝牙 RFCOMM 口与功耗仪口、
+	// 把选定的口绑定到会话(选择框选中后、串口列表单击都走这里)：拒绝蓝牙 RFCOMM 口与功耗仪口、
 	// 正被别的会话占着的口；选用即记为已授权(能枚举的后端列出的口未必授权过，授权后 getPorts、插拔认领、刷新后自动重连才认它)；
 	// 换口前会话开着就关掉、换上新口后重开(一步完成「换设备」)，否则按 opts.open 决定是否打开。
 	// 调用方必须已持有 setOpening 锁。opts.quiet：不弹「串口已选择」(列表里单击选用很频繁)。
@@ -6357,7 +6139,9 @@
 	;(function () {
 		const main = document.getElementById('main')
 		if (!main) return
-		const WIDTH_KEY = 'sidebarWidths'
+		// 右栏宽度与折叠存带 Modern 后缀的键(沿用现代布局原来的键，升级后状态不丢；不带后缀的旧键不再读写)
+		const WIDTH_KEY = 'sidebarWidthsModern'
+		const COLLAPSED_KEY = 'sidebarCollapsedModern'
 		//左栏已被顶部连接条取代，这里只剩右栏；left 分支保留但会安全退化
 		const DEFAULTS = { right: 428 }
 		//拖拽宽度上下限，避免被拖成不可用的窄条或吃掉整个日志区
@@ -6391,14 +6175,14 @@
 				const v = parseInt(cs.getPropertyValue('--pane-' + p), 10)
 				if (!isNaN(v)) o[p] = v
 			}
-			localStorage.setItem(layoutStateKey(WIDTH_KEY), JSON.stringify(o))
+			localStorage.setItem(WIDTH_KEY, JSON.stringify(o))
 		}
 		function saveSidebarState() {
 			const state = {}
 			document.querySelectorAll('.sidebar .collapse').forEach(function (el) {
 				state[el.parentElement.id || ''] = el.classList.contains('show')
 			})
-			localStorage.setItem(layoutStateKey('sidebarCollapsed'), JSON.stringify(state))
+			localStorage.setItem(COLLAPSED_KEY, JSON.stringify(state))
 		}
 		function setCollapsed(pane, collapsed) {
 			const sidebar = sidebarOf(pane)
@@ -6475,68 +6259,15 @@
 
 		//恢复上次的宽度与折叠状态
 		try {
-			const w = JSON.parse(localStorage.getItem(layoutStateKey(WIDTH_KEY)) || '{}')
+			const w = JSON.parse(localStorage.getItem(WIDTH_KEY) || '{}')
 			for (const p of PANES) {
 				if (w[p]) applyWidth(p, w[p])
 			}
 		} catch (e) {}
 		try {
-			const state = JSON.parse(localStorage.getItem(layoutStateKey('sidebarCollapsed')) || '{}')
+			const state = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '{}')
 			if (state['serial-tools'] === false) setCollapsed('right', true)
 		} catch (e) {}
-
-		//切换布局：各布局的宽度与折叠互不影响。本次会话里去过的布局按离开时的原样(内联宽度、折叠暂存)还回去，
-		//没去过的按该布局自己的键重放(现代布局没存过就沿用当前状态)，不把另一套布局的调整带过来
-		const layoutMem = {}
-		let memLayout = document.documentElement.dataset.layout === 'modern' ? 'modern' : 'classic'
-		function cleanStyleAttr() {
-			if (!main.getAttribute('style')) main.removeAttribute('style')
-		}
-		document.addEventListener('serial-layout-change', function () {
-			const next = document.documentElement.dataset.layout === 'modern' ? 'modern' : 'classic'
-			layoutMem[memLayout] = {
-				width: main.style.getPropertyValue('--pane-right'),
-				stashed: stashedWidth.right || '',
-				collapsed: isCollapsed('right'),
-			}
-			memLayout = next
-			const mem = layoutMem[next]
-			if (mem) {
-				if (isCollapsed('right') !== mem.collapsed) setCollapsed('right', mem.collapsed)
-				if (mem.width) main.style.setProperty('--pane-right', mem.width)
-				else main.style.removeProperty('--pane-right')
-				stashedWidth.right = mem.stashed
-				cleanStyleAttr()
-				return
-			}
-			let w = null
-			let state = null
-			try { w = JSON.parse(localStorage.getItem(layoutStateKey(WIDTH_KEY)) || 'null') } catch (e) {}
-			try { state = JSON.parse(localStorage.getItem(layoutStateKey('sidebarCollapsed')) || 'null') } catch (e) {}
-			//经典布局没存过就是页面初始状态(展开、默认宽度)
-			if (next === 'classic') {
-				w = w || {}
-				state = state || {}
-			}
-			if (w) {
-				for (const p of PANES) {
-					stashedWidth[p] = ''
-					main.style.removeProperty('--pane-' + p)
-					if (w[p]) applyWidth(p, w[p])
-				}
-				cleanStyleAttr()
-			}
-			if (state) {
-				const collapsed = state['serial-tools'] === false
-				if (isCollapsed('right') !== collapsed) setCollapsed('right', collapsed)
-				else if (collapsed) {
-					//已经是折叠态时重放的宽度要按折叠规则让位
-					stashedWidth.right = main.style.getPropertyValue('--pane-right')
-					main.style.removeProperty('--pane-right')
-					cleanStyleAttr()
-				}
-			}
-		})
 	})()
 
 	// 协议解析面板：顶缝拖高度，header 只负责点击折叠(与串口发送一致)
@@ -6547,7 +6278,8 @@
 		const resizer = document.getElementById('serial-parse-resizer')
 		const lockBtn = document.getElementById('serial-parse-lock')
 		if (!logMain || !panel || !header) return
-		const STATE_KEY = 'parsePanelState'
+		// 同右栏：沿用现代布局原来的键
+		const STATE_KEY = 'parsePanelStateModern'
 		const DEFAULT_H = 220
 		//面板最矮 120px；上限保证日志区不被压到 120px 以下(按 #log-main 实际高度动态算)
 		const MIN_H = 120
@@ -6594,7 +6326,7 @@
 		}
 		function saveState() {
 			const v = parseInt(logMain.style.getPropertyValue('--parse-h'), 10)
-			localStorage.setItem(layoutStateKey(STATE_KEY), JSON.stringify({
+			localStorage.setItem(STATE_KEY, JSON.stringify({
 				height: isNaN(v) ? DEFAULT_H : v,
 				collapsed: isCollapsed(),
 				locked: isLocked()
@@ -6674,15 +6406,6 @@
 				e.stopPropagation()
 				setLocked(!isLocked())
 				saveState()
-				//锁定是行为偏好，不分布局：另一套布局存过状态的话一并改掉
-				const other = layoutStateKey(STATE_KEY) === STATE_KEY ? STATE_KEY + 'Modern' : STATE_KEY
-				try {
-					const o = JSON.parse(localStorage.getItem(other) || 'null')
-					if (o && typeof o === 'object') {
-						o.locked = isLocked()
-						localStorage.setItem(other, JSON.stringify(o))
-					}
-				} catch (err) {}
 			})
 		}
 
@@ -6700,7 +6423,7 @@
 
 		//恢复上次的高度与折叠状态；无记录时默认折叠，把空间留给日志
 		let saved = {}
-		try { saved = JSON.parse(localStorage.getItem(layoutStateKey(STATE_KEY)) || '{}') } catch (e) {}
+		try { saved = JSON.parse(localStorage.getItem(STATE_KEY) || '{}') } catch (e) {}
 		if (saved.height) restoreHeight(saved.height)
 		setLocked(saved.locked === true)
 		if (typeof saved.collapsed === 'boolean') {
@@ -6709,28 +6432,6 @@
 			setCollapsed(true)
 		}
 		syncParsePanelEmpty()
-
-		//切换布局：底栏高度与折叠同样各布局一份(锁定是行为偏好，保持当前)。本次会话去过的布局原样还回去，
-		//不经 applyHeight 重新钳位：视图隐藏时量不出高度，钳位会把高度压到下限
-		const layoutMem = {}
-		let memLayout = document.documentElement.dataset.layout === 'modern' ? 'modern' : 'classic'
-		document.addEventListener('serial-layout-change', function () {
-			const next = document.documentElement.dataset.layout === 'modern' ? 'modern' : 'classic'
-			layoutMem[memLayout] = { height: logMain.style.getPropertyValue('--parse-h'), collapsed: isCollapsed() }
-			memLayout = next
-			let mem = layoutMem[next]
-			logMain.style.removeProperty('--parse-h')
-			if (mem) {
-				if (mem.height) logMain.style.setProperty('--parse-h', mem.height)
-			} else {
-				let st = null
-				try { st = JSON.parse(localStorage.getItem(layoutStateKey(STATE_KEY)) || 'null') } catch (e) {}
-				if (st && st.height) restoreHeight(st.height)
-				mem = { collapsed: st && typeof st.collapsed === 'boolean' ? st.collapsed : true }
-			}
-			if (!logMain.getAttribute('style')) logMain.removeAttribute('style')
-			setCollapsed(mem.collapsed)
-		})
 	})()
 
 	// 串口发送面板：点击标题栏折叠/展开（对齐协议解析面板）
@@ -6804,7 +6505,8 @@
 
 	// ===== 双路模式 UI 设置 =====
 
-	// 切换 UI 到双路模式（同步；与 switchToSingleUI 通过 modeSwitching 串行化）
+	// 切换 UI 到双路模式（同步；与 switchToSingleUI 通过 modeSwitching 串行化）。
+	// 单路口交给 A 由 addLaneB 先做完，这里只换界面与按路配置
 	function switchToDualUI() {
 		// 平台画像只有一路(移动端)时不进双路；所有进双路的入口(模式键、刷新恢复、双路预设)都经这里或 addLaneB
 		if (!platformHas('lane.dual')) return
@@ -6842,15 +6544,9 @@
 			document.getElementById('serial-mode-single').classList.remove('active')
 			document.getElementById('serial-mode-dual').classList.add('active')
 
-			// 隐藏单路控件，显示双路控件（参数 dropdown 在共享区，始终可见）
-			const singleCtrl = document.getElementById('serial-single-ctrl')
-			const dualCtrl = document.getElementById('serial-dual-ctrl')
-			if (singleCtrl) singleCtrl.style.display = 'none'
-			if (dualCtrl) dualCtrl.style.display = ''
-
 			applyLogView()
 
-			// 更新按钮文案（单路口保持后台打开，不在这里关）
+			// 更新按钮文案
 			updateOpenButton('A')
 			updateOpenButton('B')
 
@@ -6871,7 +6567,7 @@
 		}
 	}
 
-	// 切换 UI 到单路模式：双路 A/B 保持独立打开，只换界面
+	// 切换 UI 到单路模式：只换界面；B 的关闭与 A 交回单路由 removeLaneB 先做完
 	async function switchToSingleUI() {
 		if (modeSwitching) return
 		modeSwitching = true
@@ -6885,11 +6581,6 @@
 
 			document.getElementById('serial-mode-single').classList.add('active')
 			document.getElementById('serial-mode-dual').classList.remove('active')
-
-			const singleCtrl = document.getElementById('serial-single-ctrl')
-			const dualCtrl = document.getElementById('serial-dual-ctrl')
-			if (singleCtrl) singleCtrl.style.display = ''
-			if (dualCtrl) dualCtrl.style.display = 'none'
 
 			applyLogView()
 
@@ -6917,8 +6608,7 @@
 			showToast('事务进行中，暂不能切换串口模式', 2000)
 			return
 		}
-		if (isModernLayout()) removeLaneB().catch(function () {})
-		else switchToSingleUI().catch(function () {})
+		removeLaneB().catch(function () {})
 	})
 	document.getElementById('serial-mode-dual').addEventListener('click', function () {
 		if (SerialHub.mode === 'dual') return
@@ -6926,15 +6616,11 @@
 			showToast('事务进行中，暂不能切换串口模式', 2000)
 			return
 		}
-		if (isModernLayout()) addLaneB().catch(function () {})
-		else switchToDualUI()
+		addLaneB().catch(function () {})
 	})
 
-	// 现代布局的连接栏是「在第一路旁边再加一路」：进双路时单路(S)的口、参数、协议、连接状态整体交给 A，
-	// 移除 B 路时 A 原样交回单路、B 关闭(仍记着口)。经典布局仍是单/双两套会话切换、隐藏的一套在后台开着
-	function isModernLayout() {
-		return document.documentElement.getAttribute('data-layout') === 'modern'
-	}
+	// 连接栏是「在第一路旁边再加一路」：进双路时单路(S)的口、参数、协议、连接状态整体交给 A，
+	// 移除 B 路时 A 原样交回单路、B 关闭(仍记着口)；不在后台留一套看不见却开着的会话
 	let laneMoving = false
 	// 把 from 这一路的口交给 to：from 开着就先关，再清空 from 的口与重连意图，免得两路记着同一台设备。返回 from 原来是否开着
 	async function handOverPort(from, to) {
@@ -7301,8 +6987,8 @@
 			applyingPreset = false
 		}
 	}
-	// 套用预设：单路预设套给单路(双路下套给主发路)；双路预设在单路下先进入双路再套用，
-	// 现代布局按「加 B 路」交接，A 在重新打开前就换成预设参数，不必连两次
+	// 套用预设：单路预设套给单路(双路下套给主发路)；双路预设在单路下先进入双路再套用：
+	// 按「加 B 路」交接，A 在重新打开前就换成预设参数，不必连两次
 	async function applySerialPreset(preset) {
 		if (DualCfg.isSinglePreset(preset)) return applySingleConfig(preset)
 		if (SerialHub.mode === 'dual') return applyDualConfig(preset)
@@ -7315,15 +7001,11 @@
 			showToast('事务进行中，暂不能套用预设', 2000)
 			return { ok: false }
 		}
-		if (!isModernLayout()) {
-			switchToDualUI()
-			return applyDualConfig(preset)
-		}
 		let res = { ok: false }
 		await addLaneB({ beforeOpen: async function () { res = await applyDualConfig(preset) } })
 		return res
 	}
-	// ===== 现代布局连接栏的串口列表(js/modern-shell.js)：选用、连接、改名都走这里，复用经典布局选择框之后的同一套绑定与打开路径 =====
+	// ===== 现代布局连接栏的串口列表(js/modern-shell.js)：选用、连接、改名都走这里，复用选择框之后的同一套绑定与打开路径 =====
 	// 某个口能不能进这一路：被别的会话占着(开着 / 未确认释放)、被功耗分析占着，或者当前模式里另一路已选着它(哪怕关着：
 	// 同一个口对象挂在两路上，热插拔与刷新后重连按口找会话会让 A/B 串台)
 	// 正在换上的口(端口对象 → sid)：bindSessionPort 关旧口(异步)之前预留、结束释放。关旧口期间本路的 port 还是旧口，

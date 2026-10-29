@@ -1,7 +1,6 @@
-// 现代布局 · 固件页：把「固件打包」与「固件升级」重建为一条四步流水线（选择固件 → 生成升级包 → 升级 → 校验）。
+// 固件页：把「固件打包」与「固件升级」重建为一条四步流水线（选择固件 → 生成升级包 → 升级 → 校验）。
 // 打包与升级的业务逻辑仍在 firmware-packager.js / firmware-upgrade.js：这里只订阅它们派发的只读事件
-// （document 上的 fw-pack / fw-upgrade）维护一份界面模型，并把原控件节点原样搬进新结构（不克隆，搬之前留注释占位，
-// 切回经典布局按占位放回、新建的 DOM 全部删掉）。新增的控件（结果列表、下载、「用此包升级」、校验页的查询键）
+// （document 上的 fw-pack / fw-upgrade）维护一份界面模型，并在启动时把原控件节点一次性原样搬进新结构（不克隆）。新增的控件（结果列表、下载、「用此包升级」、校验页的查询键）
 // 只驱动现有逻辑：window.setFwUpgradeFile、FirmwarePackager.downloadBlob、点击原 #fw-query。
 // 纯函数（版本识别、分块状态、阶段推导、统计）同时导出给 node 回归测试，不碰 DOM。
 ;(function () {
@@ -397,12 +396,7 @@
 	const STATE_MARK = { done: '✓', failed: '!', active: '', waiting: '' }
 
 	let ui = null
-	let parked = []
-	let added = []
-	let timer = 0
 	let raf = 0
-	let ro = null
-	let themeMo = null
 
 	function chunkInputValue() {
 		const i = $('fw-chunk-size')
@@ -418,9 +412,6 @@
 
 	function park(node, parent, before) {
 		if (!node || !node.parentNode || !parent) return false
-		const ph = document.createComment('layout-origin:mdn-fw:' + (node.id || node.className))
-		node.parentNode.insertBefore(ph, node)
-		parked.push([node, ph])
 		parent.insertBefore(node, before || null)
 		return true
 	}
@@ -513,7 +504,6 @@
 				ver = h('span', 'mdn-fw-ver')
 				ver.hidden = true
 				detail.appendChild(ver)
-				added.push(ver)
 			}
 			slots[pair[0]] = { ver: ver }
 			c1.el.appendChild(slot)
@@ -655,19 +645,12 @@
 		const onVer = function () {
 			if (model.up.parsed && model.up.parsed.raw && !model.up.running) { model.up.parsed.version = verIn.value.trim(); render() }
 		}
-		if (verIn) {
-			verIn.addEventListener('input', onVer)
-			ui_cleanup.push(function () { verIn.removeEventListener('input', onVer) })
-		}
+		if (verIn) verIn.addEventListener('input', onVer)
 		const chunkIn = $('fw-chunk-size')
 		const onChunk = function () { previewPlan(model, chunkInputValue()); render() }
 		if (chunkIn) {
 			chunkIn.addEventListener('input', onChunk)
 			chunkIn.addEventListener('change', onChunk)
-			ui_cleanup.push(function () {
-				chunkIn.removeEventListener('input', onChunk)
-				chunkIn.removeEventListener('change', onChunk)
-			})
 		}
 		canvas.addEventListener('mousemove', function (e) {
 			const t = cellTitle(e)
@@ -681,8 +664,6 @@
 			packSig: '',
 		}
 	}
-
-	let ui_cleanup = []
 
 	// ---------- 渲染 ----------
 
@@ -947,7 +928,7 @@
 		return L.per === 1 ? '块 #' + from + ' · ' + name : '块 #' + from + '–#' + (to - 1) + ' · ' + name
 	}
 
-	// ---------- 挂载 / 撤销 ----------
+	// ---------- 挂载 ----------
 
 	function mount() {
 		if (ui || !$('view-fw-pack')) return
@@ -957,9 +938,8 @@
 		if (viewVisible()) renderAll(Date.now())
 		// 事件始终归约到 model；页面再次显示时补一次完整视图(含产物列表)。
 		document.addEventListener('visibilitychange', render)
-		ui_cleanup.push(function () { document.removeEventListener('visibilitychange', render) })
 		// 速率、剩余时间与端口标签随时间变；产物列表只在事件到来时重建，免得键盘焦点被每秒重绘打掉
-		timer = setInterval(function () {
+		setInterval(function () {
 			// 固件页没显示时不刷新：分块格子每秒都要整段统计；切回固件页后下一拍(1 秒内)补上
 			if (!viewVisible()) return
 			const now = Date.now()
@@ -968,34 +948,12 @@
 			renderVerify()
 		}, 1000)
 		if (typeof ResizeObserver === 'function') {
-			ro = new ResizeObserver(function () { if (viewVisible()) drawGrid() })
-			ro.observe(ui.gridWrap)
+			new ResizeObserver(function () { if (viewVisible()) drawGrid() }).observe(ui.gridWrap)
 		}
 		if (typeof MutationObserver === 'function') {
-			themeMo = new MutationObserver(function () { if (viewVisible()) drawGrid() })
-			themeMo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-			const viewMo = new MutationObserver(render)
-			viewMo.observe(view, { attributes: true, attributeFilter: ['class'] })
-			ui_cleanup.push(function () { viewMo.disconnect() })
+			new MutationObserver(function () { if (viewVisible()) drawGrid() }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+			new MutationObserver(render).observe(view, { attributes: true, attributeFilter: ['class'] })
 		}
-	}
-
-	function unmount() {
-		if (!ui) return
-		clearInterval(timer)
-		timer = 0
-		if (ro) { ro.disconnect(); ro = null }
-		if (themeMo) { themeMo.disconnect(); themeMo = null }
-		if (raf) { cancelAnimationFrame(raf); raf = 0 }
-		ui_cleanup.forEach(function (fn) { fn() })
-		ui_cleanup = []
-		parked.reverse().forEach(function (pair) { pair[1].replaceWith(pair[0]) })
-		parked = []
-		added.forEach(function (n) { n.remove() })
-		added = []
-		ui.root.remove()
-		ui = null
-		lastLayout = null
 	}
 
 	function init() {
@@ -1009,11 +967,9 @@
 			if (d.type === 'parsed' || d.type === 'file-set') previewPlan(model, chunkInputValue())
 			render()
 		})
-		document.addEventListener('serial-layout-move', function (e) {
-			if (e.detail && e.detail.layout === 'modern') mount()
-			else unmount()
-		})
-		if (document.documentElement.dataset.layout === 'modern') mount()
+		// 平台没有固件打包视图(移动端)时不搭流水线：固件升级面板留在串口视图的停靠区(js/workbench.js)
+		if (window.AppPlatform && !window.AppPlatform.has('view.firmware-pack')) return
+		mount()
 	}
 
 	root.ModernFirmware.model = model

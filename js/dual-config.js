@@ -251,7 +251,7 @@
 	root.DualConfig = api
 	if (typeof document === 'undefined') return
 
-	// ---------- 预设菜单(经典布局在双路控件区，现代布局由 js/modern-shell.js 原样搬进连接栏) ----------
+	// ---------- 预设菜单(由 js/modern-shell.js 原样搬进连接栏) ----------
 	const PRESETS_KEY = 'serialDualPresets'
 	function loadPresets() {
 		try { return normalizePresets(localStorage.getItem(PRESETS_KEY)) } catch (e) { return [] }

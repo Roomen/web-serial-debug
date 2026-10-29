@@ -1,8 +1,8 @@
-// 现代布局的双路时间线(双路视图选「气泡」时)：A 靠左、B 靠右，时间戳与 Δ 在气泡旁，静默分隔在气泡上方。
+// 双路时间线(双路视图选「气泡」时)：A 靠左、B 靠右，时间戳与 Δ 在气泡旁，静默分隔在气泡上方。
 // 派生数据只写成日志行上的 data-mdn-* 属性，由 css 的伪元素显示：行本身的 DOM 结构不变，容器里不插任何兄弟节点，
 // 所以裁剪行数(按子节点数)、复制/保存(逐子节点读文本)、历史重渲都不受影响。
 // 持久化：日志整份 innerHTML 会存进 sessionStorage，common.js 的 paneHtml 经 window.serialLogPersistClean 去掉全部 data-mdn-* 再存，
-// 刷新后恢复的行没有这些属性，进入本模块时整体重算。切回经典布局时把属性清干净，DOM 与进入前一致。
+// 刷新后恢复的行没有这些属性，启动时整体重算。
 // 纯函数(时间格式、Δ/静默/慢应答/应答区间)同时导出给 node 回归测试，不碰 DOM。
 ;(function () {
 	'use strict'
@@ -144,12 +144,9 @@
 	// ---- 界面：只在浏览器里挂 ----
 	if (typeof document === 'undefined') return
 
-	const ATTRS = ['data-mdn-t', 'data-mdn-d', 'data-mdn-slow', 'data-mdn-gap', 'data-mdn-band']
 	let container = null
 	let observer = null
 	let head = null
-	let headTimer = 0
-	let sizeObserver = null
 	let active = false
 	// 增量计算的进度：处理到哪一行、当时的跨行状态
 	let tailRow = null
@@ -159,10 +156,6 @@
 	let bandSelectedRow = null
 	let bandSid = ''
 	let raf = 0
-
-	function isModern() {
-		return document.documentElement.dataset.layout === 'modern'
-	}
 
 	function laneRows() {
 		const out = []
@@ -194,22 +187,6 @@
 		// 静默文本挂在行首的 .log-time 上：它的 ::before 在气泡上方的轴列里画分隔胶囊(伪元素只能读自己宿主的属性)
 		const tm = row.firstElementChild
 		if (tm && tm.classList.contains('log-time')) setAttr(tm, 'data-mdn-gap', r.gap)
-	}
-
-	function clearRow(row) {
-		ATTRS.forEach(function (a) { row.removeAttribute(a) })
-		const tm = row.firstElementChild
-		if (tm) tm.removeAttribute('data-mdn-gap')
-	}
-
-	function clearAll() {
-		if (!container) return
-		for (let i = 0; i < container.children.length; i++) clearRow(container.children[i])
-		tailRow = null
-		tailState = null
-		bandRows.clear()
-		bandSelectedRow = null
-		bandOpen = false
 	}
 
 	function fullCompute() {
@@ -326,13 +303,10 @@
 		container.parentNode.insertBefore(head, container)
 		syncHead()
 		// 路标签改名没有事件可挂，每秒对一次；不在串口视图(日志区量不出宽度)或标签页在后台时不读布局
-		headTimer = setInterval(function () {
+		setInterval(function () {
 			if (!document.hidden && container && container.offsetParent) syncHead()
 		}, 1000)
-		if (typeof ResizeObserver !== 'undefined') {
-			sizeObserver = new ResizeObserver(syncHead)
-			sizeObserver.observe(container)
-		}
+		if (typeof ResizeObserver !== 'undefined') new ResizeObserver(syncHead).observe(container)
 	}
 
 	function syncHead() {
@@ -348,16 +322,7 @@
 		head.style.setProperty('--mdn-sbw', sbw + 'px')
 	}
 
-	function destroyHead() {
-		clearInterval(headTimer)
-		headTimer = 0
-		if (sizeObserver) sizeObserver.disconnect()
-		sizeObserver = null
-		if (head) head.remove()
-		head = null
-	}
-
-	// ---- 启停：只在现代布局里工作 ----
+	// ---- 启动 ----
 
 	function start() {
 		if (active) return
@@ -371,26 +336,7 @@
 		observer.observe(container, { childList: true })
 	}
 
-	function stop() {
-		if (!active) return
-		active = false
-		if (observer) observer.disconnect()
-		observer = null
-		if (raf) cancelAnimationFrame(raf)
-		raf = 0
-		clearAll()
-		destroyHead()
-		container = null
-	}
-
-	function sync() {
-		if (isModern()) start()
-		else stop()
-	}
-
-	// serial-layout-move 在 DOM 搬运阶段派发，此时 data-layout 已是新值
-	document.addEventListener('serial-layout-move', sync)
 	document.addEventListener('serial-log-select', function () { if (active) scheduleBand() })
-	if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', sync)
-	else sync()
+	if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start)
+	else start()
 })()

@@ -1,7 +1,7 @@
 // 平台层：识别运行环境(系统 × 运行时)，给出功能画像，页面与各模块只经 window.AppPlatform 问「这里能不能用某功能」，
 // 不要自己嗅探 UA、navigator.serial 或 Tauri 全局量。在 <head> 里第一个加载(首屏前定下 data-* 与功能门控样式)，不依赖任何模块。
-// 画像：desktop(web / Windows / macOS / Linux，全部功能、双路、可多开；浏览器里两套布局，桌面客户端只有现代布局)；mobile(Android / iOS，只留 SEK 协议设置与下发、
-// 固件升级，单路，只用经典布局，传输按系统取 BLE / 经典蓝牙 / 串口)。功能 id 见 FEATURES；画像外的功能在 DOM 上用
+// 画像：desktop(web / Windows / macOS / Linux，全部功能、双路、可多开)；mobile(Android / iOS，只留 SEK 协议设置与下发、
+// 固件升级，单路，传输按系统取 BLE / 经典蓝牙 / 串口)。界面只有一套(现代布局)，各画像只在功能门控上不同。功能 id 见 FEATURES；画像外的功能在 DOM 上用
 // data-feature="id"(多个以空格分隔，须全部开启)标注，由这里注入的样式隐藏，模块代码用 AppPlatform.has(id) 判断。
 // 预览其它平台：URL 加 ?platform=android|ios|windows|macos|linux|web(只换系统，运行时仍按实际识别)。
 // 纯逻辑可在 node 里跑(tests/platform.cjs)。
@@ -13,7 +13,6 @@
 		'view.firmware-pack', // 固件打包视图(原始包 / 压缩包 / 双向差分)
 		'view.power', // 功耗分析视图(BLU 电流计)
 		'lane.dual', // 双路 A/B(由画像的 lanes 推出)
-		'layout.switch', // 经典 / 现代布局切换(由画像的 layouts 推出)
 		'panel.quick-send',
 		'panel.protocol', // 协议设置与下发
 		'panel.rw', // 随机读写测试
@@ -45,14 +44,12 @@
 			features: '*',
 			protocols: '*',
 			lanes: 2,
-			layouts: ['classic', 'modern'],
 		},
 		mobile: {
 			// 不开固件打包视图：移动端不输出中间产物，原始固件在固件升级面板里按设备版本自动差分 / 压缩后直接升级
 			features: ['view.serial', 'panel.protocol', 'panel.parse', 'panel.firmware'],
 			protocols: ['sek'],
 			lanes: 1,
-			layouts: ['classic'],
 		},
 	}
 
@@ -87,14 +84,11 @@
 		const runtime = info.runtime === 'tauri' ? 'tauri' : 'browser'
 		const profileId = MOBILE_OS.indexOf(os) !== -1 ? 'mobile' : 'desktop'
 		const prof = PROFILES[profileId]
-		// 桌面客户端只做现代布局：画像的 layouts 由运行时收窄，layout.switch 随之关闭
-		const layouts = profileId === 'desktop' && runtime === 'tauri' ? ['modern'] : prof.layouts.slice()
 		const transports = OS_TRANSPORTS[os].slice()
 		const enabled = {}
 		FEATURES.forEach(function (f) {
 			if (f.indexOf('transport.') === 0) enabled[f] = transports.indexOf(f.slice(10)) !== -1
 			else if (f === 'lane.dual') enabled[f] = prof.lanes > 1
-			else if (f === 'layout.switch') enabled[f] = layouts.length > 1
 			else if (f === 'shell.browser') enabled[f] = runtime !== 'tauri'
 			else enabled[f] = prof.features === '*' || prof.features.indexOf(f) !== -1
 		})
@@ -104,7 +98,6 @@
 			profile: profileId,
 			mobile: profileId === 'mobile',
 			lanes: prof.lanes,
-			layouts,
 			transports,
 			protocols: prof.protocols === '*' ? '*' : prof.protocols.slice(),
 			// 桌面浏览器多开就是多标签页；桌面客户端允许多窗口 / 多进程；移动端单实例
@@ -173,7 +166,6 @@
 			profile: desc.profile,
 			mobile: desc.mobile,
 			lanes: desc.lanes,
-			layouts: desc.layouts,
 			transports: desc.transports,
 			protocols: desc.protocols,
 			multiInstance: desc.multiInstance,
@@ -181,9 +173,6 @@
 			features: FEATURES.slice(),
 			has(id) { return hasFeature(desc, id) },
 			allowsProtocol(id) { return desc.protocols === '*' || desc.protocols.indexOf(id) !== -1 },
-			allowsLayout(id) { return desc.layouts.indexOf(id) !== -1 },
-			// 请求的布局不被画像允许时退回的布局：画像允许的第一个(客户端 modern，移动端 classic)
-			fallbackLayout() { return desc.layouts[0] },
 			provide(name, impl) {
 				if (!name || !impl) throw new TypeError('平台服务缺少 name 或实现')
 				services[name] = impl

@@ -1,4 +1,4 @@
-// 现代布局右栏「检查器」的结构化视图：头部(方向、帧标题、协议·时间·长度·应答耗时·校验徽标)、键值表、字节视图、
+// 右栏「检查器」的结构化视图：头部(方向、帧标题、协议·时间·长度·应答耗时·校验徽标)、键值表、字节视图、
 // 「从请求到应答」相关行。数据来自 common.js 解析完一帧后派发的 serial-parse-frame 事件(detail: { bytes, result, byteMap, dir, note, protocol }，
 // null 表示已清空)，字段用 detail.protocol(解析这一帧时那一路的协议)的 logView(r) 视图模型，没有 logView 或不识别的帧不在这里重画，改为展开下方「原始输出」
 // (就是原来的协议解析面板 #serial-parse-body：HEX 输入区 + formatFrame 输出)。
@@ -111,10 +111,6 @@
 	function hostView() {
 		const wb = root.Workbench
 		return wb && typeof wb.inspectorView === 'function' ? wb.inspectorView() : null
-	}
-
-	function isModern() {
-		return document.documentElement.dataset.layout === 'modern'
 	}
 
 	function hex2(b) {
@@ -302,12 +298,10 @@
 	function render() {
 		const view = hostView()
 		if (!view) return
-		// 重画前先释放上一帧的序列图(ResizeObserver / 事件)，否则每次解析都会留下一个监听；
-		// 切回经典布局时视图被 park 走，也要在这里释放
+		// 重画前先释放上一帧的序列图(ResizeObserver / 事件)，否则每次解析都会留下一个监听
 		if (typeof root.skDisposeSeriesCharts === 'function') {
 			try { root.skDisposeSeriesCharts(view) } catch (e) { /* ignore chart dispose */ }
 		}
-		if (!isModern()) return
 		view.textContent = ''
 		if (!cur) {
 			view.appendChild(emptyView())
@@ -381,21 +375,16 @@
 		}
 		render()
 	})
-	// 切到现代布局后补画一次(宿主是现代布局才建的)；原始输出展开状态按用户偏好
-	document.addEventListener('serial-layout-move', function () {
-		render()
-		bindRaw()
-	})
-
+	// 原始输出展开状态按用户偏好
 	function bindRaw() {
 		const raw = document.getElementById('wb-insp-raw')
 		if (!raw || raw.dataset.miBound) return
 		raw.dataset.miBound = '1'
-		try { raw.open = localStorage.getItem(RAW_OPEN_KEY) === '1' } catch (e) { /* 默认收起 */ }
+		raw.open = true
+		try { raw.open = localStorage.getItem(RAW_OPEN_KEY) !== '0' } catch (e) { /* 默认展开 */ }
 		raw.addEventListener('toggle', function () {
 			try {
-				if (raw.open) localStorage.setItem(RAW_OPEN_KEY, '1')
-				else localStorage.removeItem(RAW_OPEN_KEY)
+				localStorage.setItem(RAW_OPEN_KEY, raw.open ? '1' : '0')
 			} catch (err) { /* 仅本次会话 */ }
 		})
 	}

@@ -1,5 +1,5 @@
-// 现代布局 v2 外壳：左栏「配置」菜单、全局连接栏(每路一个连接按钮)、日志工具条、快捷行 + 发送条、日志过滤与缩放。
-// 只在现代布局下挂载；经典布局的 DOM 是基准：要用的原控件一律原样搬过来(原位置留注释占位，切回时放回)，
+// 外壳：左栏「配置」菜单、全局连接栏(每路一个连接按钮)、日志工具条、快捷行 + 发送条、日志过滤与缩放。
+// index.html 里的原控件是来源：启动时一次性原样搬进新结构(不克隆)，
 // 新控件只驱动原控件(派发 click/change)或调用现有全局 API，状态以原控件为准、经 MutationObserver 跟随。
 // 过滤的纯函数在文件顶部，node 测试(tests/modern-shell.cjs)直接 require
 ;(function (root) {
@@ -139,35 +139,23 @@
 	}
 
 	let mounted = false
-	let parked = []
-	let hosts = []
-	let observers = []
-	let cleanups = []
-	let timer = 0
 	let refs = {}
 
 	function park(node, parent, before) {
 		if (!node || !node.parentNode || !parent) return
-		const ph = document.createComment('mdn-shell-origin:' + (node.id || node.className))
-		node.parentNode.insertBefore(ph, node)
-		parked.push([node, ph])
 		parent.insertBefore(node, before || null)
 	}
 	function hostEl(n, parent, before) {
-		hosts.push(n)
 		if (parent) parent.insertBefore(n, before || null)
 		return n
 	}
 	function observe(target, opts, fn) {
 		if (!target) return
-		const mo = new MutationObserver(fn)
-		mo.observe(target, opts)
-		observers.push(mo)
+		new MutationObserver(fn).observe(target, opts)
 	}
 	function listen(target, type, fn, opts) {
 		if (!target) return
 		target.addEventListener(type, fn, opts)
-		cleanups.push(function () { target.removeEventListener(type, fn, opts) })
 	}
 	// 短时间内多次触发只刷新一次
 	function batched(fn) {
@@ -409,7 +397,7 @@
 	}
 
 	// ---------- 每路菜单里的串口列表 ----------
-	// 现代布局选口的主路径：直接列出串口(桌面客户端是在位的全部串口，网页版是浏览器里授权过的口)，单击或回车即选为本路设备并连接
+	// 选口的主路径：直接列出串口(桌面客户端是在位的全部串口，网页版是浏览器里授权过的口)，单击或回车即选为本路设备并连接
 	// (本路正连着别的口就先断开再连；本路当前设备那一行没连着就连上，连着就不动作，断开走芯片上的按钮)，行内改名。选用、连接、改名一律经 window.serialLanes
 	// 走 common.js 原有的绑定与打开路径，这里不碰会话。设备字符串(产品名、序列号、别名)一律 textContent
 	function makePortList(key, quick) {
@@ -758,7 +746,6 @@
 		if (A) {
 			;['change', 'connect', 'disconnect'].forEach(function (type) {
 				A.addEventListener(type, onPortsChanged)
-				cleanups.push(function () { A.removeEventListener(type, onPortsChanged) })
 			})
 		}
 		park($('serial-session-a-label'), main.lab)
@@ -769,6 +756,8 @@
 		main.par.appendChild(refs.paramsBox)
 
 		const addB = btn('mdn-conn-btn mdn-conn-add mdn-single-only', '+ B 路', '进入双路：再接一路串口')
+		// 只有一路的平台(移动端)不给加 B 路的入口
+		addB.setAttribute('data-feature', 'lane.dual')
 		listen(addB, 'click', function () {
 			closePops()
 			const m = $('serial-mode-dual')
@@ -804,7 +793,7 @@
 			p.btn.focus()
 		})
 
-		// 命令面板的「串口参数」点的是原参数摘要键：现代布局下它连同空掉的浮层一起隐藏，转成打开当前路的菜单
+		// 命令面板的「串口参数」点的是原参数摘要键：它连同空掉的浮层一起隐藏，转成打开当前路的菜单
 		listen($('serial-params-summary'), 'click', function (e) {
 			e.preventDefault()
 			e.stopPropagation()
@@ -951,7 +940,7 @@
 		const act = grp('mdn-grp-act')
 		park(header.querySelector('.serial-log-actions'), act)
 		mountFilter()
-		// 命令面板的「日志设置」点的是原设置键(现代布局下随标题行隐藏)：设置已平铺在工具条上，转成聚焦到格式胶囊
+		// 命令面板的「日志设置」点的是原设置键(随标题行隐藏)：设置已平铺在工具条上，转成聚焦到格式胶囊
 		listen($('serial-log-settings-btn'), 'click', function (e) {
 			e.preventDefault()
 			e.stopPropagation()
@@ -1080,7 +1069,6 @@
 				applyAll()
 			}, 120)
 		})
-		cleanups.push(function () { clearTimeout(t) })
 		// 新行、重渲(解析格式切换会改行体)、裁剪：只重算变动的行；行数变化刷新计数
 		const pending = new Set()
 		let full = false
@@ -1105,7 +1093,6 @@
 				if (mounted) updateFilterCount()
 			}, 500)
 		}
-		cleanups.push(function () { clearTimeout(countTimer); countTimer = 0 })
 		logBoxes().forEach(function (box) {
 			observe(box, { childList: true, subtree: true, characterData: true }, function (muts) {
 				for (let i = 0; i < muts.length; i++) {
@@ -1161,9 +1148,10 @@
 		const fold = btn('mdn-fold', '', '')
 		fold.appendChild(icon('bi-chevron-down'))
 		listen(fold, 'click', function () { if (header) header.click() })
+		// 快捷按钮只镜像右栏「快捷发送」面板：平台没有该面板(移动端)时分组、按钮与管理入口一起隐藏，折叠键照留
+		;[sel, list, manage].forEach(function (n) { n.setAttribute('data-feature', 'panel.quick-send') })
 		row.append(sel, list, manage, grow)
-		// 发往哪一路：原来只是显示「→ A路」的指示(#serial-send-target，经典布局由 workbench.js 写，原样留在被隐藏的标题行里)，
-		// 现代布局换成可选的分段，只在双路显示
+		// 发往哪一路：可选的分段，只在双路显示；与连接栏「主发」是同一状态
 		const sendTo = hostEl(mk('span', 'mdn-send-to mdn-dual-only'), row)
 		sendTo.appendChild(mk('span', 'mdn-send-to-cap', '发往'))
 		const seg = mk('div', 'ctl-seg mdn-send-seg')
@@ -1293,7 +1281,6 @@
 		q.more.textContent = more > 0 ? '管理…（另 ' + more + ' 条）' : '管理…'
 	}
 
-	// ========== 挂载 / 卸载 ==========
 	// ========== 6. 日志缩放(列表与时间线共用) ==========
 	// 控件半透明浮在日志窗右下角，指针移上去或键盘聚焦时才显实，不挡日志；Ctrl/⌘ + 滚轮(触控板双指捏合)也能缩放。
 	// 缩放是给日志容器设 CSS zoom(经 #serial-log-panes 上的变量)，不改行内容，复制、导出、持久化都不受影响
@@ -1338,10 +1325,6 @@
 			apply(stepZoom(zoom, acc < 0 ? 1 : -1))
 			acc = 0
 		}, { passive: false })
-		cleanups.push(function () {
-			panes.style.removeProperty('--mdn-log-zoom')
-			if (!panes.getAttribute('style')) panes.removeAttribute('style')
-		})
 	}
 
 	function mount() {
@@ -1354,53 +1337,14 @@
 		mountLogZoom()
 		mountSendBar()
 		if (refs.connbar) refreshConn()
-		restyleTextareas()
-		timer = setInterval(function () {
+		setInterval(function () {
 			if (!document.hidden && refs.refreshConn) refs.refreshConn()
 		}, 1000)
 	}
 
-	function unmount() {
-		if (!mounted) return
-		mounted = false
-		clearInterval(timer)
-		observers.forEach(function (mo) { mo.disconnect() })
-		observers = []
-		cleanups.forEach(function (fn) { fn() })
-		cleanups = []
-		closePops()
-		parked.reverse().forEach(function (pair) { pair[1].replaceWith(pair[0]) })
-		parked = []
-		hosts.forEach(function (n) { n.remove() })
-		hosts = []
-		// 过滤只是现代布局里的视图状态：切回经典时把隐藏类全部摘掉
-		logBoxes().forEach(function (box) {
-			box.querySelectorAll('.' + FLT_CLS).forEach(function (n) { n.classList.remove(FLT_CLS) })
-		})
-		refs = {}
-		restyleTextareas()
-	}
-
-	// Chrome 偶发不给 <textarea> 重算样式：切回经典后它还留着现代布局的 min-height 等，发送区矮一截。
-	// 摘下再放回渲染树逼它重算；内联 style 原来没有就删掉属性，DOM 与进入前一致
-	function restyleTextareas() {
-		document.querySelectorAll('#app-shell textarea').forEach(function (t) {
-			const had = t.hasAttribute('style')
-			const prev = t.style.display
-			t.style.display = 'none'
-			void t.offsetHeight
-			t.style.display = prev
-			if (!had && !t.getAttribute('style')) t.removeAttribute('style')
-		})
-	}
-
+	// workbench.js 先注册(先建好 #app-topbar 宿主)，这里后注册，搬运顺序跟着走
 	function init() {
-		if (document.documentElement.dataset.layout === 'modern') mount()
-		// workbench.js 先注册(先建好 #app-topbar 宿主)，这里后注册，搬运顺序跟着走
-		document.addEventListener('serial-layout-move', function (e) {
-			if (e.detail && e.detail.layout === 'modern') mount()
-			else unmount()
-		})
+		mount()
 	}
 
 	if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init)

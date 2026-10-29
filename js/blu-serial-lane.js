@@ -1,4 +1,4 @@
-// 功耗分析的串口事件道（仅现代布局）：把串口日志行按墙钟时间画到电流波形下方，与波形共用视窗。
+// 功耗分析的串口事件道：把串口日志行按墙钟时间画到电流波形下方，与波形共用视窗。
 // 时间对齐：blu-power.js 在入库时经 createAnchorTrack().note(样点下标, tMs) 稀疏记录「样点下标 ↔ performance 时间」锚点
 // (另记当时的墙钟偏移)。日志行进 DOM 时按当下偏移把 data-ts 换成 performance 时间记下(stamps)，事件按它二分锚点
 // 插值成小数样点下标，再走波形的 toX；系统时钟回拨/跳变不影响实时行的对齐。页面加载前就有的行(会话恢复)没有
@@ -357,7 +357,6 @@
 	}
 
 	function E(id) { return document.getElementById(id) }
-	function isModern() { return document.documentElement.dataset.layout === 'modern' }
 
 	function currentContainer() {
 		const dual = !!(window.SerialHub && window.SerialHub.mode === 'dual')
@@ -444,11 +443,6 @@
 
 	/** blu-power.js 每次重绘波形后调用；layout 为 null 表示当前没有可画的波形 */
 	function draw(layout) {
-		if (!isModern()) {
-			lastLayout = null
-			hits = []
-			return
-		}
 		lastLayout = layout || null
 		paint()
 	}
@@ -458,7 +452,7 @@
 		lanePending = true
 		requestAnimationFrame(function () {
 			lanePending = false
-			if (isModern()) paint()
+			paint()
 		})
 	}
 
@@ -697,7 +691,6 @@
 		const canvas = E('blu-serial-lane-canvas')
 		if (!canvas) return
 		canvas.addEventListener('mousemove', function (ev) {
-			if (!isModern()) return
 			const p = localPos(canvas, ev)
 			const hb = hitAt(p.x, p.y)
 			if (hb) showTip(hb, ev.clientX, ev.clientY)
@@ -705,30 +698,20 @@
 		})
 		canvas.addEventListener('mouseleave', hideTip)
 		canvas.addEventListener('click', function (ev) {
-			if (!isModern()) return
 			const p = localPos(canvas, ev)
 			const hb = hitAt(p.x, p.y)
 			if (!hb) return
 			hideTip()
 			jumpToRow(hb.lane.items[hb.first])
 		})
-		// 布局切换不刷新页面：显隐靠 CSS，这里只负责让波形按新高度重绘
-		new MutationObserver(function () {
-			hideTip()
-			if (!isModern()) {
-				lastLayout = null
-				hits = []
-			}
-			if (requestWaveRedraw) requestWaveRedraw()
-		}).observe(document.documentElement, { attributes: true, attributeFilter: ['data-layout'] })
 		// 停采后日志仍在增减：只重画事件道（rAF 合并），不重画波形
 		const onLogs = function () {
-			if (!isModern() || !lastLayout) return
+			if (!lastLayout) return
 			const wrap = E('blu-serial-lane')
 			if (!wrap || !wrap.offsetWidth) return
 			scheduleLanePaint()
 		}
-		// 先记时间戳再重画：观察器始终开着(经典布局、别的视图也记)，否则之后切到现代布局时实时行没有 performance 时间
+		// 先记时间戳再重画：观察器始终开着(别的视图也记)，否则之后切到功耗视图时实时行没有 performance 时间
 		const mo = new MutationObserver(function (records) {
 			stampRows(records)
 			onLogs()
