@@ -923,6 +923,8 @@
 		const fmt = grp('mdn-grp-fmt')
 		fmt.setAttribute('role', 'group')
 		fmt.setAttribute('aria-label', '显示格式')
+		// 双路的 A/B 分段排在最前：它决定后面四个格式键在改哪一路
+		park($('serial-log-fmt-lane-seg'), fmt)
 		;['serial-log-fmt-hex', 'serial-log-fmt-text', 'serial-log-fmt-parse', 'serial-log-ansi'].forEach(function (id) { park($(id), fmt) })
 		const split = grp('mdn-grp-split', '分包')
 		park(document.querySelector('#serial-log-settings-popover .serial-split-seg'), split)
