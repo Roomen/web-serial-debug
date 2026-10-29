@@ -3557,6 +3557,11 @@ hr {
   margin-bottom: 0;
 }
 
+/* 双路每路一行格式键：路名 + 四个键排一行放不进 280px，加宽到一行放得下(窄屏仍受 max-width 约束、换行兜底) */
+#serial-log-settings-popover.dropdown-menu:has(#serial-log-fmt-row-b:not([hidden])) {
+  width: 460px;
+}
+
 /* 日志设置里的「格式」行：ctl-seg + ANSI chip 挤在一起，允许换行 */
 .serial-log-format-controls {
   display: flex;
@@ -3565,6 +3570,40 @@ hr {
   flex: 1;
   min-width: 0;
   flex-wrap: wrap;
+}
+
+/* 每路一行格式键：单路只有一行，排版与原来平铺的四个键一致；双路每行前加路名徽标(与日志行同路色) */
+.serial-log-fmt-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 100%;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.serial-log-fmt-lane {
+  flex: 0 0 auto;
+  max-width: 5.5em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#serial-log-fmt-lane-a {
+  color: #059669;
+  background: color-mix(in srgb, #10b981 14%, transparent);
+}
+
+#serial-log-fmt-lane-b {
+  color: #d97706;
+  background: color-mix(in srgb, #f59e0b 16%, transparent);
 }
 
 /* TX / RX (or dual A/B) color legend next to the log title */
@@ -8866,9 +8905,9 @@ summary {
   outline-offset: -2px;
 }
 
-/* 双路才显示的日志格式 A/B 分段与它在弹出层里的那一行：hidden 要压过 .ctl-seg / .serial-field 的 display */
-#serial-log-fmt-lane-field[hidden],
-#serial-log-fmt-lane-seg[hidden] {
+/* 日志格式每路一行：B 行与路名只在双路显示，hidden 要压过下面的 display */
+.serial-log-fmt-row[hidden],
+.serial-log-fmt-lane[hidden] {
   display: none !important;
 }
 
@@ -12826,6 +12865,98 @@ html[data-layout='modern'] .mdn-logbar #serial-log-legend:not(.is-dual) {
 html[data-layout='modern'] .mdn-logbar .ctl-chip-btn {
 	height: 26px;
 	font-size: 12px;
+}
+
+/* 日志格式：单路时 A 行平铺在工具条上、胶囊隐藏；双路每路一枚胶囊，点开是该路那一行格式键 */
+html[data-layout='modern'] .mdn-fmt-lane {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+}
+
+html[data-layout='modern'] .mdn-fmt-lane[data-lane='B'],
+html[data-layout='modern'] .mdn-fmt-cap,
+html[data-layout='modern'] .mdn-fmt-pop .serial-log-fmt-lane {
+	display: none;
+}
+
+html[data-layout='modern'] .mdn-fmt-pop {
+	display: inline-flex;
+}
+
+html[data-layout='modern'] .mdn-fmt-pop .serial-log-fmt-row {
+	flex: 0 0 auto;
+	flex-wrap: nowrap;
+}
+
+html[data-layout='modern'] .mdn-grp-fmt.is-dual .mdn-fmt-lane[data-lane='B'] {
+	display: inline-flex;
+}
+
+html[data-layout='modern'] .mdn-grp-fmt.is-dual .mdn-fmt-cap {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 26px;
+	padding: 0 8px 0 3px;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	background: var(--bg-surface);
+	color: var(--text-primary);
+	font-size: 12px;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .mdn-grp-fmt.is-dual .mdn-fmt-cap[aria-expanded='true'] {
+	border-color: var(--accent);
+}
+
+html[data-layout='modern'] .mdn-fmt-cap-lane {
+	max-width: 5.5em;
+	padding: 1px 6px;
+	border-radius: 4px;
+	font-size: 11px;
+	font-weight: 700;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+html[data-layout='modern'] .mdn-fmt-lane[data-lane='A'] .mdn-fmt-cap-lane {
+	color: #059669;
+	background: color-mix(in srgb, #10b981 14%, transparent);
+}
+
+html[data-layout='modern'] .mdn-fmt-lane[data-lane='B'] .mdn-fmt-cap-lane {
+	color: #d97706;
+	background: color-mix(in srgb, #f59e0b 16%, transparent);
+}
+
+html[data-layout='modern'] .mdn-fmt-cap-val {
+	max-width: 10em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+html[data-layout='modern'] .mdn-fmt-cap .bi {
+	font-size: 10px;
+	color: var(--text-secondary);
+}
+
+html[data-layout='modern'] .mdn-grp-fmt.is-dual .mdn-fmt-pop {
+	display: none;
+	position: absolute;
+	top: calc(100% + 6px);
+	left: 0;
+	z-index: 1050;
+	padding: 8px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: 10px;
+	box-shadow: 0 8px 24px rgba(28, 35, 48, 0.16);
+}
+
+html[data-layout='modern'] .mdn-grp-fmt.is-dual .mdn-fmt-pop.is-open {
+	display: flex;
 }
 
 html[data-layout='modern'] .mdn-logbar .ctl-seg > button {

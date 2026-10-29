@@ -923,9 +923,7 @@
 		const fmt = grp('mdn-grp-fmt')
 		fmt.setAttribute('role', 'group')
 		fmt.setAttribute('aria-label', '显示格式')
-		// 双路的 A/B 分段排在最前：它决定后面四个格式键在改哪一路
-		park($('serial-log-fmt-lane-seg'), fmt)
-		;['serial-log-fmt-hex', 'serial-log-fmt-text', 'serial-log-fmt-parse', 'serial-log-ansi'].forEach(function (id) { park($(id), fmt) })
+		mountLogFormat(fmt)
 		const split = grp('mdn-grp-split', '分包')
 		park(document.querySelector('#serial-log-settings-popover .serial-split-seg'), split)
 		const tw = mk('span', 'mdn-num')
@@ -961,9 +959,70 @@
 			setTimeout(function () {
 				if (typeof bootstrap !== 'undefined' && bootstrap.Dropdown) bootstrap.Dropdown.getOrCreateInstance(t).hide()
 			}, 0)
-			const first = $('serial-log-fmt-hex')
+			const lf = window.serialLogFormat
+			const first = lf && lf.isDual() ? fmt.querySelector('.mdn-fmt-cap') : $('serial-log-fmt-hex')
 			if (first) first.focus()
 		})
+	}
+
+	// ---------- 日志格式：单路把那一行四个键平铺在工具条上；双路每路一枚「A路 · Hex ▾」胶囊，点开是该路那一行 ----------
+	// 两行格式键(#serial-log-fmt-row-a / -b)整行原样搬进各自的弹出层，节点在单双路之间不再挪动：
+	// 单路时 A 的弹出层由 CSS 改成工具条上的内联排布、胶囊隐藏，双路时才是浮层
+	function mountLogFormat(fmt) {
+		const lanes = {}
+		;['A', 'B'].forEach(function (sid) {
+			const wrap = mk('span', 'mdn-fmt-lane')
+			wrap.dataset.lane = sid
+			const cap = mk('button', 'mdn-fmt-cap')
+			cap.type = 'button'
+			cap.setAttribute('aria-haspopup', 'true')
+			cap.setAttribute('aria-expanded', 'false')
+			const name = mk('span', 'mdn-fmt-cap-lane')
+			const val = mk('span', 'mdn-fmt-cap-val')
+			cap.append(name, val, icon('bi-chevron-down'))
+			const pop = mk('div', 'mdn-fmt-pop')
+			pop.id = 'mdn-fmt-pop-' + sid.toLowerCase()
+			cap.setAttribute('aria-controls', pop.id)
+			wrap.append(cap, pop)
+			fmt.appendChild(wrap)
+			park($('serial-log-fmt-row-' + sid.toLowerCase()), pop)
+			lanes[sid] = { wrap: wrap, cap: cap, name: name, val: val, pop: pop }
+			listen(cap, 'click', function () { setOpen(lanes[sid].pop.classList.contains('is-open') ? null : sid) })
+		})
+		function setOpen(sid) {
+			Object.keys(lanes).forEach(function (k) {
+				const on = k === sid
+				lanes[k].pop.classList.toggle('is-open', on)
+				lanes[k].cap.setAttribute('aria-expanded', on ? 'true' : 'false')
+			})
+		}
+		function refresh() {
+			const lf = window.serialLogFormat
+			if (!lf) return
+			const dual = lf.isDual()
+			fmt.classList.toggle('is-dual', dual)
+			if (!dual) setOpen(null)
+			Object.keys(lanes).forEach(function (sid) {
+				const info = lf.lane(sid)
+				const l = lanes[sid]
+				l.name.textContent = info.label
+				l.val.textContent = info.format
+				l.cap.title = info.label + ' 日志格式：' + info.format + (info.term ? '（终端视图下不生效）' : '')
+			})
+		}
+		listen(document, 'serial-log-format-change', refresh)
+		// 点外面或 Esc 收起；点格式键本身不收，方便连着勾几项
+		listen(document, 'pointerdown', function (e) {
+			if (!e.target.closest || !e.target.closest('.mdn-fmt-lane')) setOpen(null)
+		}, true)
+		listen(document, 'keydown', function (e) {
+			if (e.key !== 'Escape') return
+			const open = Object.keys(lanes).filter(function (k) { return lanes[k].pop.classList.contains('is-open') })[0]
+			if (!open) return
+			setOpen(null)
+			lanes[open].cap.focus()
+		})
+		refresh()
 	}
 
 	// ---------- 日志过滤：纯视图，只给不匹配的行加隐藏类，不删行 ----------
