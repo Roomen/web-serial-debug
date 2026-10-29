@@ -715,6 +715,8 @@
 	const PARSE_RERENDER_SYNC_ROWS = 150
 	const PARSE_RERENDER_SLICE_MS = 12
 	let rerenderGen = 0
+	//上一轮分批重渲还没做完：新一轮会让它的剩余批次作废，这时只重渲某一路会把另一路留成一半新一半旧
+	let rerenderPending = false
 	//各路连接重置 SEK 会话的次数，历史重渲收尾时据此判断能否把该路的重放末态交给实时会话
 	const sessionResetSeq = { S: 0, A: 0, B: 0 }
 	// ---- 按路隔离的流式解析状态 ----
@@ -734,7 +736,8 @@
 		const m = parseInt(src.maxLogRows, 10)
 		if (!isNaN(m) && m >= 100) out.maxLogRows = m
 		if (isValidLogType(src.logType)) out.logType = src.logType
-		if (typeof src.logTypeB === 'string' && src.logTypeB) out.logTypeB = src.logTypeB
+		// 双路 B 路只存行格式(终端是整模式共用的)，非法值(含旧版透传进来的 term)丢掉，用时跟随 A
+		if (isRowLogType(src.logTypeB)) out.logTypeB = src.logTypeB
 		if (typeof src.autoScroll === 'boolean') out.autoScroll = src.autoScroll
 		return out
 	}
@@ -765,7 +768,22 @@
 		return activeLogOptions().logType || 'hex'
 	}
 	function getLogTypeForSid(sid) {
-		return (logOptionsForSid(sid).logType) || 'hex'
+		const t = logOptionsForSid(sid).logType || 'hex'
+		// 终端是整个模式共用的视图开关：双路 A 切到终端时两路都走终端；logTypeB 只存行格式
+		if (t === 'term') return 'term'
+		if (SerialHub.logModeOf(sid) === 'dual' && sid === 'B') return dualLogTypeB()
+		return t
+	}
+	// 双路 B 路的行格式：缺失或非法时跟随 A 的行格式(A 在终端时用记住的上一次行格式)
+	function dualLogTypeB() {
+		if (isRowLogType(logOptionsDual.logTypeB)) return logOptionsDual.logTypeB
+		const a = logOptionsDual.logType
+		return isRowLogType(a) ? a : (lastRowLogType.dual || 'hex')
+	}
+	// 当前模式各路自己的行格式，给 rerenderLogBodies 按路重渲用
+	function activeLaneLogTypes() {
+		if (SerialHub.mode === 'dual') return { A: getLogTypeForSid('A'), B: getLogTypeForSid('B') }
+		return { S: getLogTypeForSid('S') }
 	}
 	function isRowLogType(t) {
 		return isValidLogType(t) && t !== 'term'
@@ -804,7 +822,16 @@
 		const rowsEl = document.getElementById('serial-max-rows')
 		if (!text) return
 		const logType = activeLogOptions().logType
-		const typeLabel = LOG_TYPE_LABELS[logType] || 'Hex'
+		// 双路两路格式不同时写成压缩形式「A路 Hex · B路 解析」，相同时照旧
+		let typeLabel = LOG_TYPE_LABELS[logType] || 'Hex'
+		if (logType !== 'term' && SerialHub.mode === 'dual') {
+			const a = getLogTypeForSid('A')
+			const b = getLogTypeForSid('B')
+			if (a !== b) {
+				typeLabel = (SerialHub.getLabelA() || 'A') + ' ' + (LOG_TYPE_LABELS[a] || 'Hex') + ' · ' +
+					(SerialHub.getLabelB() || 'B') + ' ' + (LOG_TYPE_LABELS[b] || 'Hex')
+			}
+		}
 		const timeout = timeoutEl ? parseInt(timeoutEl.value, 10) : 0
 		// 按换行时超时只兜底残行，不是分包依据，摘要里不写，免得读成「换行再加超时」
 		const timeoutTxt = activeLogOptions().splitMode === 'line'
@@ -864,19 +891,53 @@
 		// 图例窄时会截断，全名放 title
 		left.title = left.textContent
 		right.title = right.textContent
+		// 路标签改了：日志格式分段与摘要里的路名跟着刷新
+		syncLogFmtLaneSeg()
+		updateLogSettingsSummary()
 		fitLogHeader()
 	}
 	// logType 拆成「视图」(行日志/终端) + 「格式」(HEX/TEXT 复选 + ANSI 修饰) 两组控件的 UI 同步。
 	// logType 仍是唯一状态源,这里只是把它拆开点亮;视图=终端时格式、分包、行数整体禁用(term 不走 addLog,
-	// 这些开关对它无效),但记住切走前的行格式,切回行日志时按记忆恢复,所以要记两份内存(不持久化):
-	// 每种 mode 的上一次行格式 + 上一次 ansi 开关(TEXT 取消勾选时记住 ANSI 意愿,重新勾上 TEXT 时恢复)
+	// 这些开关对它无效),但记住切走前的行格式,切回行日志时按记忆恢复,所以每种 mode 各记一份(不持久化):
+	// 每种 mode 的上一次行格式 + 每路上一次 ansi 开关(TEXT 取消勾选时记住 ANSI 意愿,重新勾上 TEXT 时恢复)。
+	// 双路 B 的行格式存在 logOptionsDual.logTypeB 里，不需要另记
 	const lastRowLogType = { single: 'hex', dual: 'hex' }
-	const lastAnsiOn = { single: false, dual: false }
+	const lastAnsiOn = { S: false, A: false, B: false }
+	// 双路两路可以各用一套日志格式：格式按钮组前的 A/B 分段决定这四个键在改哪一路(单路隐藏，恒为 S)。
+	// 只存内存，默认 A；终端是整模式共用的视图，不分路
+	let logFmtLane = 'A'
+	function logFmtSid() {
+		return SerialHub.mode === 'dual' ? logFmtLane : 'S'
+	}
+	function syncLogFmtLaneSeg() {
+		const seg = document.getElementById('serial-log-fmt-lane-seg')
+		if (!seg) return
+		const dual = SerialHub.mode === 'dual'
+		seg.hidden = !dual
+		const field = document.getElementById('serial-log-fmt-lane-field')
+		if (field) field.hidden = !dual
+		if (!dual) return
+		const a = document.getElementById('serial-log-fmt-lane-a')
+		const b = document.getElementById('serial-log-fmt-lane-b')
+		if (a) {
+			a.textContent = SerialHub.getLabelA() || 'A'
+			a.setAttribute('aria-pressed', logFmtLane === 'A' ? 'true' : 'false')
+		}
+		if (b) {
+			b.textContent = SerialHub.getLabelB() || 'B'
+			b.setAttribute('aria-pressed', logFmtLane === 'B' ? 'true' : 'false')
+		}
+	}
 	let applyLogTypeUi = function (val) {
 		const modeKey = logModeKey()
+		const dual = SerialHub.mode === 'dual'
 		const isTerm = val === 'term'
 		if (!isTerm) lastRowLogType[modeKey] = val
-		const rowType = isTerm ? (lastRowLogType[modeKey] || 'hex') : val
+		// 四个格式键显示并修改分段选中的那一路的格式
+		syncLogFmtLaneSeg()
+		const rowType = dual && logFmtLane === 'B'
+			? dualLogTypeB()
+			: (isTerm ? (lastRowLogType[modeKey] || 'hex') : val)
 		const fmt = parseLogType(rowType)
 		const hasHex = fmt.hex
 		const hasAnsi = fmt.ansi
@@ -915,12 +976,29 @@
 		updateLogSettingsSummary()
 	}
 	// logType 的统一写入口:校验 + 落盘 + 同步控件 + 应用视图 + 重渲历史日志正文。
-	// 按钮点击和(以后任何)代码路径改 logType 都应该走这里,不要绕过去直接 changeOption('logType', ...)
-	window.setLogType = async function (v) {
+	// 第二参数是路(单路 S、双路 A/B)：界面按钮总带当前分段选中的那一路；省略时单路改 S，
+	// 双路改终端(整模式共用的视图)或两路一起改(命令面板)
+	window.setLogType = async function (v, lane) {
 		if (!isValidLogType(v)) return
+		const dual = SerialHub.mode === 'dual'
 		const cur = activeLogOptions().logType
-		if (cur === v) {
-			applyLogTypeUi(v)
+		const lanes = !dual ? ['S'] : (v === 'term' ? ['A', 'B'] : ((lane === 'A' || lane === 'B') ? [lane] : ['A', 'B']))
+		const snap = function () {
+			return dual ? { A: getLogTypeForSid('A'), B: getLogTypeForSid('B') } : { S: getLogTypeForSid('S') }
+		}
+		const stored = function (sid) {
+			return dual ? (sid === 'B' ? logOptionsDual.logTypeB : logOptionsDual.logType) : logOptionsSingle.logType
+		}
+		const before = snap()
+		// 终端是整模式共用的视图：已经是终端就什么都不做(不要再清一次日志)
+		if (v === 'term') {
+			if (cur === 'term') {
+				applyLogTypeUi(cur)
+				return
+			}
+		} else if (!lanes.some(function (sid) { return stored(sid) !== v })) {
+			// 显式设过的值总要落盘(双路 B 缺失时跟随 A，点一下 B 的格式就是把它定下来)，完全没变化才提前返回
+			applyLogTypeUi(cur)
 			return
 		}
 		if (v === 'term') {
@@ -937,10 +1015,24 @@
 			// 用户刚点了"确认清空",这里不丢掉就会在终端里看到上一次会话的旧内容
 			if (pendingTermRestore) pendingTermRestore[logModeKey()] = ''
 		}
-		changeOption('logType', v)
-		applyLogTypeUi(v)
+		if (dual) {
+			// A 的格式沿用 logType(兼容旧存档)，B 只存行格式 logTypeB
+			if (v === 'term') logOptionsDual.logType = 'term'
+			else {
+				if (lanes.indexOf('A') !== -1) logOptionsDual.logType = v
+				if (lanes.indexOf('B') !== -1) logOptionsDual.logTypeB = v
+			}
+			persistLogOptionsBag('dual')
+		} else {
+			changeOption('logType', v)
+		}
+		// B 缺失时跟随 A：改 A 等于两路一起改，受影响的路按改后的实际格式算
+		const after = snap()
+		const affected = Object.keys(after).filter(function (sid) { return after[sid] !== before[sid] })
+		applyLogTypeUi(activeLogOptions().logType)
 		applyLogView()
-		rerenderLogBodies(SerialHub.getLogContainer(), v)
+		if (!affected.length) return
+		rerenderLogBodies(SerialHub.getLogContainer(), after, { sids: affected })
 		persistLogsNow()
 	}
 	// 自动滚动按钮:按下态即开启。别把状态写回按钮文案,命令面板也要读同一个 aria-pressed
@@ -962,7 +1054,7 @@
 		updateLogSettingsSummary()
 		applyLogView()
 		// 切 mode 同样会让 UI 上的格式和容器里已有的行脱钩(双路首次进来会把单路的 logType 拷过去),补渲一次
-		rerenderLogBodies(SerialHub.getLogContainer(), opts.logType)
+		rerenderLogBodies(SerialHub.getLogContainer(), activeLaneLogTypes())
 		const a = document.getElementById('serial-auto-scroll')
 		// 状态只存在 aria-pressed 上,文案固定(改这里同步 command-palette.js 的同名命令)
 		if (a) setAutoScrollUi(a, opts.autoScroll)
@@ -980,8 +1072,15 @@
 		const isTerm = type === 'term'
 		if (logs) {
 			logs.hidden = isTerm
-			logs.classList.toggle('ansi', parseLogType(type).ansi)
-			logs.classList.toggle('is-dual', mode === 'dual')
+			const dual = mode === 'dual'
+			const ansiA = dual && parseLogType(getLogTypeForSid('A')).ansi
+			const ansiB = dual && parseLogType(getLogTypeForSid('B')).ansi
+			// 单路仍是容器整体的 .ansi；双路按路：两路都 ANSI 时容器也带 .ansi(与原来整体一致)，
+			// 只有一路时只给那一路加 ansi-a/ansi-b，只有它的行用深色行底
+			logs.classList.toggle('ansi', dual ? (ansiA && ansiB) : parseLogType(type).ansi)
+			logs.classList.toggle('ansi-a', ansiA)
+			logs.classList.toggle('ansi-b', ansiB)
+			logs.classList.toggle('is-dual', dual)
 		}
 		updateLogLegend()
 		if (termHost) {
@@ -2837,7 +2936,8 @@
 		return base || 'hex'
 	}
 	document.getElementById('serial-log-view-row').addEventListener('click', function () {
-		setLogType(lastRowLogType[logModeKey()] || 'hex')
+		// 视图是整个模式共用的：双路回到行日志只把 A(模式格式)切回行格式，B 仍按自己的 logTypeB
+		setLogType(lastRowLogType[logModeKey()] || 'hex', 'A')
 	})
 	document.getElementById('serial-log-view-term').addEventListener('click', function () {
 		setLogType('term')
@@ -2846,35 +2946,47 @@
 		const s = currentLogFmtState()
 		const hasHex = !s.hasHex
 		if (!hasHex && !s.hasText && !s.hasParse) return
-		setLogType(composeLogType(hasHex, s.hasText, s.hasAnsi, s.hasParse))
+		setLogType(composeLogType(hasHex, s.hasText, s.hasAnsi, s.hasParse), logFmtSid())
 	})
 	document.getElementById('serial-log-fmt-text').addEventListener('click', function () {
 		const s = currentLogFmtState()
 		const hasText = !s.hasText
 		if (!hasText && !s.hasHex && !s.hasParse) return
-		const modeKey = logModeKey()
+		const sid = logFmtSid()
 		let hasAnsi
 		if (hasText) {
-			hasAnsi = !!lastAnsiOn[modeKey]
+			hasAnsi = !!lastAnsiOn[sid]
 		} else {
-			lastAnsiOn[modeKey] = s.hasAnsi
+			lastAnsiOn[sid] = s.hasAnsi
 			hasAnsi = false
 		}
-		setLogType(composeLogType(s.hasHex, hasText, hasAnsi, s.hasParse))
+		setLogType(composeLogType(s.hasHex, hasText, hasAnsi, s.hasParse), sid)
 	})
 	document.getElementById('serial-log-fmt-parse').addEventListener('click', function () {
 		const s = currentLogFmtState()
 		const hasParse = !s.hasParse
 		if (!hasParse && !s.hasHex && !s.hasText) return
-		setLogType(composeLogType(s.hasHex, s.hasText, s.hasAnsi, hasParse))
+		setLogType(composeLogType(s.hasHex, s.hasText, s.hasAnsi, hasParse), logFmtSid())
 	})
 	document.getElementById('serial-log-ansi').addEventListener('click', function () {
 		const s = currentLogFmtState()
 		if (!s.hasText) return
 		const hasAnsi = !s.hasAnsi
-		lastAnsiOn[logModeKey()] = hasAnsi
-		setLogType(composeLogType(s.hasHex, s.hasText, hasAnsi, s.hasParse))
+		lastAnsiOn[logFmtSid()] = hasAnsi
+		setLogType(composeLogType(s.hasHex, s.hasText, hasAnsi, s.hasParse), logFmtSid())
 	})
+	// 双路：格式分段只换「四个格式键在改哪一路」，不碰日志
+	const fmtLaneSeg = document.getElementById('serial-log-fmt-lane-seg')
+	if (fmtLaneSeg) {
+		fmtLaneSeg.addEventListener('click', function (e) {
+			const b = e.target.closest('button')
+			if (!b) return
+			const sid = b.id === 'serial-log-fmt-lane-b' ? 'B' : 'A'
+			if (sid === logFmtLane) return
+			logFmtLane = sid
+			applyLogTypeUi(activeLogOptions().logType)
+		})
+	}
 	updateLogSettingsSummary()
 	;(function () {
 		const header = document.querySelector('.serial-log-header')
@@ -5811,20 +5923,33 @@
 		return newmsg + parseHtml
 	}
 	//按容器当前所有行的 data-hex 重算正文,用于历史日志随类型/协议/密钥切换重渲
+	//第二参数可以是统一格式字符串(所有路同一格式)或按路格式 { A, B, S }：双路两路可以各用一套格式，按行的 data-sid 取
 	//含解析段且行数多时按时间片顺序分批做完(必须按行序：SEK 解析带会话基准水量的状态；ansi_up 也是流式状态)，
 	//新一轮重渲会让上一轮的剩余批次作废。每行按它所属那一路(data-sid)的协议与状态重放，两路互不串味
-	function rerenderLogBodies(container, logType) {
+	//opts.sids: 只重渲这几路(只改了那一路的格式)，其余路的行与流式状态不动
+	function rerenderLogBodies(container, logType, opts) {
 		if (!container) return
 		// term 不是行日志格式,渲染出来会是空正文,会把历史行洗白,必须挡在这里
 		const gen = ++rerenderGen
-		if (!isRowLogType(logType)) return
-		const fmt = parseLogType(logType)
+		const supersedes = rerenderPending
+		rerenderPending = false
+		const dualBox = container === SerialHub.getLogContainerFor('dual')
+		const boxSids = dualBox ? ['A', 'B'] : ['S']
+		const typeOf = function (sid) {
+			if (typeof logType === 'string') return logType
+			if (!logType || typeof logType !== 'object') return 'hex'
+			const t = logType[sid]
+			if (typeof t === 'string') return t
+			return typeof logType[boxSids[0]] === 'string' ? logType[boxSids[0]] : 'hex'
+		}
+		const fmtOf = function (sid) { return parseLogType(typeOf(sid)) }
+		const only = opts && Array.isArray(opts.sids) && !supersedes ? opts.sids : null
+		const renderSids = only ? boxSids.filter(function (sid) { return only.indexOf(sid) !== -1 }) : boxSids
+		if (!renderSids.some(function (sid) { return isRowLogType(typeOf(sid)) })) return
 		// ansi_up 与 SEK 会话(基准水量/设备号)都是流式状态。重渲从头重放整段历史，必须从干净状态起步，
 		// 否则会拿上一次渲染的末态当起点(把染色点之前的行也染上色)。分批重放时批次之间会有实时收数，
 		// 所以重放在隔离的状态里做：每段换入该路的重放状态、段末换回实时状态，实时解析与重放互不覆盖。
 		// 全部重放完、期间既没来新行也没发生该路的连接重置时，重放末态就是实时路径应有的末态，才交给该路的实时状态
-		const dualBox = container === SerialHub.getLogContainerFor('dual')
-		const boxSids = dualBox ? ['A', 'B'] : ['S']
 		const replay = {}
 		const replayOf = function (sid) {
 			if (!replay[sid]) replay[sid] = newLaneState()
@@ -5837,22 +5962,24 @@
 			const row = container.children[i]
 			if (!row || !row.classList || !row.classList.contains('log-row') || !row.getAttribute('data-hex')) continue
 			const sid = row.getAttribute('data-sid')
+			const rowSid = boxSids.indexOf(sid) !== -1 ? sid : boxSids[0]
+			if (only && only.indexOf(rowSid) === -1) continue
 			rows.push(row)
-			rowSids.push(boxSids.indexOf(sid) !== -1 ? sid : boxSids[0])
+			rowSids.push(rowSid)
 		}
 		const bindCharts = typeof skBindSeriesCharts === 'function'
-		const renderRow = function (row) {
+		const renderRow = function (row, sid) {
 			const bytes = row.getAttribute('data-hex').split(' ').filter(Boolean).map(function (h) { return parseInt(h, 16) })
 			if (!bytes.length) return
 			const body = row.querySelector('.log-body')
 			if (!body) return
 			if (typeof window.skDisposeSeriesCharts === 'function') window.skDisposeSeriesCharts(body)
-			body.innerHTML = renderLogBody(bytes, logType, {
+			body.innerHTML = renderLogBody(bytes, typeOf(sid), {
 				isReceive: row.getAttribute('data-dir') === 'rx',
 				noParse: row.getAttribute('data-noparse') === '1',
 				sendName: row.getAttribute('data-name') || '',
 			})
-			if (fmt.parse && bindCharts) {
+			if (fmtOf(sid).parse && bindCharts) {
 				try { skBindSeriesCharts(body) } catch (e) { /* ignore chart bind */ }
 			}
 		}
@@ -5870,7 +5997,7 @@
 				while (j < to && rowSids[j] === sid) j++
 				const a = i
 				inLane(sid, replayOf(sid), function () {
-					for (let k = a; k < j; k++) renderRow(rows[k])
+					for (let k = a; k < j; k++) renderRow(rows[k], sid)
 				})
 				i = j
 			}
@@ -5878,26 +6005,28 @@
 		const finish = function () {
 			if (container.lastElementChild !== lastRowAtStart) return
 			const g = skSess()
-			boxSids.forEach(function (sid) {
+			renderSids.forEach(function (sid) {
 				const st = replayOf(sid)
 				const sessOk = sessionResetSeq[sid] === resetSeqAtStart[sid]
 				if (sid === 'S') {
-					if (fmt.ansi && sessOk) ansi_up = st.ansi
+					if (fmtOf(sid).ansi && sessOk) ansi_up = st.ansi
 					if (g && sessOk) g.restore(st.sess || freshSessSnap(g))
 					return
 				}
 				const live = laneLiveState(sid)
-				if (fmt.ansi && sessOk) live.ansi = st.ansi
+				if (fmtOf(sid).ansi && sessOk) live.ansi = st.ansi
 				if (sessOk) live.sess = st.sess
 			})
 		}
+		const wantParse = renderSids.some(function (sid) { return fmtOf(sid).parse })
 		if (rows.length <= PARSE_RERENDER_SYNC_ROWS) {
 			renderSlice(0, rows.length)
 			finish()
-			if (fmt.parse) pinBottom()
+			if (wantParse) pinBottom()
 			return
 		}
 		let next = 0
+		rerenderPending = true
 		const step = function () {
 			if (gen !== rerenderGen) return
 			const end = Date.now() + PARSE_RERENDER_SLICE_MS
@@ -5909,14 +6038,19 @@
 			}
 			pinBottom()
 			if (next < rows.length) setTimeout(step, 0)
-			else finish()
+			else {
+				rerenderPending = false
+				finish()
+			}
 		}
 		step()
 	}
 	//当前模式的日志含解析段时,按最新的协议/密钥等参数重渲历史行
 	function rerenderParseRows() {
-		const logType = activeLogOptions().logType
-		if (parseLogType(logType).parse) rerenderLogBodies(SerialHub.getLogContainer(), logType)
+		const types = activeLaneLogTypes()
+		if (Object.keys(types).some(function (sid) { return parseLogType(types[sid]).parse })) {
+			rerenderLogBodies(SerialHub.getLogContainer(), types)
+		}
 	}
 	function scheduleParseRerender() {
 		clearTimeout(parseRerenderTimer)
@@ -6697,6 +6831,10 @@
 			try {
 				if (!localStorage.getItem(TOOL_OPTIONS_DUAL_KEY)) {
 					logOptionsDual = pickLogOptions(logOptionsSingle)
+					// 首次进双路：B 路先取单路的行格式(单路在终端时取记住的上一次行格式)，之后两路各存各的
+					logOptionsDual.logTypeB = isRowLogType(logOptionsDual.logType)
+						? logOptionsDual.logType
+						: (lastRowLogType.single || 'hex')
 					persistLogOptionsBag('dual')
 				}
 			} catch (e) {}

@@ -398,6 +398,14 @@
                                             <div class="serial-settings-title">
                                                 <i class="bi bi-journal-text"></i> 日志设置
                                             </div>
+                                            <!-- 双路才显示：选中哪一路，下面四个格式键就改哪一路的格式 -->
+                                            <div class="serial-field" id="serial-log-fmt-lane-field" hidden>
+                                                <span class="serial-field-label">按路</span>
+                                                <div class="ctl-seg" id="serial-log-fmt-lane-seg" role="group" aria-label="日志格式设置的路" hidden>
+                                                    <button type="button" id="serial-log-fmt-lane-a" aria-pressed="true">A</button>
+                                                    <button type="button" id="serial-log-fmt-lane-b" aria-pressed="false">B</button>
+                                                </div>
+                                            </div>
                                             <div class="serial-field">
                                                 <span class="serial-field-label">格式</span>
                                                 <div class="serial-log-format-controls">

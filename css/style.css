@@ -1179,6 +1179,31 @@ body {
   box-shadow: inset 0 0 0 1.5px var(--accent);
 }
 
+/* 双路按路的 ANSI：只有一路是 ANSI 时只那一路的行用深色行底(两路都 ANSI 时容器仍带 .ansi，与单路一致)。
+   行底本身是深色，悬停与选中不能再用透明叠色(会透出浅色容器底，白字看不见)，叠到深色底上 */
+.serial-logs.ansi-a:not(.ansi-b) .log-row[data-sid='A'],
+.serial-logs.ansi-b:not(.ansi-a) .log-row[data-sid='B'] {
+  background-color: #1c1c1e;
+  color: #f5f5f7;
+}
+
+.serial-logs.ansi-a:not(.ansi-b) .log-row[data-sid='A']:hover,
+.serial-logs.ansi-b:not(.ansi-a) .log-row[data-sid='B']:hover {
+  background-color: #2a2a2d;
+}
+
+.serial-logs.ansi-a:not(.ansi-b) .log-row[data-sid='A'][data-dir='rx'].selected,
+.serial-logs.ansi-b:not(.ansi-a) .log-row[data-sid='B'][data-dir='rx'].selected {
+  background-color: color-mix(in srgb, var(--success) 28%, #1c1c1e);
+  box-shadow: inset 0 0 0 1.5px var(--success);
+}
+
+.serial-logs.ansi-a:not(.ansi-b) .log-row[data-sid='A'][data-dir='tx'].selected,
+.serial-logs.ansi-b:not(.ansi-a) .log-row[data-sid='B'][data-dir='tx'].selected {
+  background-color: color-mix(in srgb, var(--accent) 28%, #1c1c1e);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
 /* ========== Alert / Status ========== */
 .alert {
   border: 1px solid var(--border-color);
@@ -8841,6 +8866,12 @@ summary {
   outline-offset: -2px;
 }
 
+/* 双路才显示的日志格式 A/B 分段与它在弹出层里的那一行：hidden 要压过 .ctl-seg / .serial-field 的 display */
+#serial-log-fmt-lane-field[hidden],
+#serial-log-fmt-lane-seg[hidden] {
+  display: none !important;
+}
+
 /* 循环发送：进行中给 chip 运行态，区别于普通选中，免得忘了关 */
 #serial-send-panel.is-looping .ctl-chip--run input:checked + span {
   color: var(--warning);
@@ -10787,6 +10818,30 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi .pv-v
 }
 
 html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi .log-len {
+	color: #9da7b3;
+}
+
+/* 双路只有一路是 ANSI：只把那一路的气泡换成深色底板(与两路都 ANSI 时的整体深色同值)，另一路照旧 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi-a:not(.ansi-b) .log-row[data-sid='A'],
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi-b:not(.ansi-a) .log-row[data-sid='B'] {
+	--bb-surface: #2c2c30;
+	--bb-plate: #1c1c1e;
+	--bb-plate-fg: #f5f5f7;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi-a:not(.ansi-b) .log-row[data-sid='A'] > .log-body,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi-b:not(.ansi-a) .log-row[data-sid='B'] > .log-body,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi-a:not(.ansi-b) .log-row[data-sid='A'] .pv-title,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi-b:not(.ansi-a) .log-row[data-sid='B'] .pv-title,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi-a:not(.ansi-b) .log-row[data-sid='A'] .pv-v,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi-b:not(.ansi-a) .log-row[data-sid='B'] .pv-v {
+	color: #f5f5f7;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi-a:not(.ansi-b) .log-row[data-sid='A'] .pv-k,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi-b:not(.ansi-a) .log-row[data-sid='B'] .pv-k,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi-a:not(.ansi-b) .log-row[data-sid='A'] .log-len,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi-b:not(.ansi-a) .log-row[data-sid='B'] .log-len {
 	color: #9da7b3;
 }
 
