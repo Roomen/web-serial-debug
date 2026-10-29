@@ -30,6 +30,8 @@ function setup(opts) {
 		if (cmd === 'serial_open') {
 			if (state.failOpen) throw state.failOpen
 			state.channels.push({ data: args.onData, event: args.onEvent })
+			// 真实的 Rust 端在 serial_open 兑现之前读线程就开始推字节了，用 onOpen 模拟这个时序
+			if (opts.onOpen) opts.onOpen(args)
 			return state.nextHandle++
 		}
 		if (cmd === 'serial_close') {
@@ -55,15 +57,27 @@ function setup(opts) {
 	return { backend, state, events, changes, storage, setChoose(fn) { choose = fn } }
 }
 
-async function readAll(port, n) {
+// timeoutMs：超时就取消这次读、释放 reader 再报错，免得等不到数据时测试静默退出
+async function readAll(port, n, timeoutMs) {
 	const reader = port.readable.getReader()
 	const out = []
-	while (out.length < n) {
-		const { value, done } = await reader.read()
-		if (done) break
-		out.push(...value)
+	let timer = null
+	const guard = timeoutMs ? new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error('读取超时：只收到 ' + out.length + '/' + n + ' 字节')), timeoutMs) }) : null
+	try {
+		for (;;) {
+			const { value, done } = await (guard ? Promise.race([reader.read(), guard]) : reader.read())
+			if (done) break
+			out.push(...value)
+			if (out.length >= n) break
+		}
+	} catch (e) {
+		if (timer) clearTimeout(timer)
+		await reader.cancel().catch(() => {})
+		throw e
+	} finally {
+		if (timer) clearTimeout(timer)
+		try { reader.releaseLock() } catch (e) {}
 	}
-	reader.releaseLock()
 	return out
 }
 
@@ -227,6 +241,20 @@ test('打开参数映射、通道推数据、写入与控制信号', async () =>
 	assert.deepEqual(sig.args, { handle: 1, signals: { dataTerminalReady: false, requestToSend: true } })
 	await port.close()
 	assert.ok(t.state.calls.some((c) => c.cmd === 'serial_close' && c.args.handle === 1))
+})
+
+test('读线程在 serial_open 兑现前推的数据不丢：open 成功后按序先交付，之后推的接在后面', async () => {
+	const t = setup({
+		onOpen(args) {
+			// Rust 端先开始推字节，句柄后到
+			args.onData.onmessage(Uint8Array.of(1, 2, 3))
+		},
+	})
+	const port = await t.backend.requestPort()
+	await port.open({ baudRate: 9600 })
+	t.state.channels[0].data.push(Uint8Array.of(4))
+	assert.deepEqual(await readAll(port, 4, 500), [1, 2, 3, 4])
+	await port.close()
 })
 
 test('打开失败报 NetworkError 并带原因，页面走「占用 / 拔出」提示与退避重试', async () => {

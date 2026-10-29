@@ -54,7 +54,8 @@ function harness(mode) {
 		sidName: (sid) => (sid === 'S' ? '单路' : sid + '路'),
 		isBluetoothSerialPort: () => false,
 		isBluAnalyzerPort: () => false,
-		_portIdentityCache: new Map(),
+		// 身份缓存是 WeakMap(热插拔重插不断产生新端口对象)；清空靠整体换新，不要再写回 .clear()
+		_portIdentityCache: new WeakMap(),
 		getPortIdentityKey: () => Promise.resolve({ keys: ['k'], fingerprint: {} }),
 		refreshPortDisplayNames() {},
 		updateOpenButton() {},
