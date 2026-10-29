@@ -891,8 +891,8 @@
 		// 图例窄时会截断，全名放 title
 		left.title = left.textContent
 		right.title = right.textContent
-		// 路标签改了：日志格式分段与摘要里的路名跟着刷新
-		syncLogFmtLaneSeg()
+		// 路标签改了：格式行与每路胶囊、摘要里的路名跟着刷新
+		syncLogFmtRows()
 		updateLogSettingsSummary()
 		fitLogHeader()
 	}
@@ -903,67 +903,79 @@
 	// 双路 B 的行格式存在 logOptionsDual.logTypeB 里，不需要另记
 	const lastRowLogType = { single: 'hex', dual: 'hex' }
 	const lastAnsiOn = { S: false, A: false, B: false }
-	// 双路两路可以各用一套日志格式：格式按钮组前的 A/B 分段决定这四个键在改哪一路(单路隐藏，恒为 S)。
-	// 只存内存，默认 A；终端是整模式共用的视图，不分路
-	let logFmtLane = 'A'
-	function logFmtSid() {
-		return SerialHub.mode === 'dual' ? logFmtLane : 'S'
+	// 格式键每路一行：上面一行是单路 S / 双路 A(沿用原来的 id)，下面一行只在双路显示、改 B。
+	// 两路同时可见，点哪一行就改哪一路；终端是整模式共用的视图，不分路
+	const LOG_FMT_ROWS = {
+		A: { hex: 'serial-log-fmt-hex', text: 'serial-log-fmt-text', ansi: 'serial-log-ansi', parse: 'serial-log-fmt-parse' },
+		B: { hex: 'serial-log-fmt-b-hex', text: 'serial-log-fmt-b-text', ansi: 'serial-log-fmt-b-ansi', parse: 'serial-log-fmt-b-parse' },
 	}
-	function syncLogFmtLaneSeg() {
-		const seg = document.getElementById('serial-log-fmt-lane-seg')
-		if (!seg) return
-		const dual = SerialHub.mode === 'dual'
-		seg.hidden = !dual
-		const field = document.getElementById('serial-log-fmt-lane-field')
-		if (field) field.hidden = !dual
-		if (!dual) return
-		const a = document.getElementById('serial-log-fmt-lane-a')
-		const b = document.getElementById('serial-log-fmt-lane-b')
-		if (a) {
-			a.textContent = SerialHub.getLabelA() || 'A'
-			a.setAttribute('aria-pressed', logFmtLane === 'A' ? 'true' : 'false')
-		}
-		if (b) {
-			b.textContent = SerialHub.getLabelB() || 'B'
-			b.setAttribute('aria-pressed', logFmtLane === 'B' ? 'true' : 'false')
-		}
+	// 行 → 这一行当前改的是哪一路(上面一行单路是 S)
+	function logFmtRowSid(row) {
+		if (row === 'B') return 'B'
+		return SerialHub.mode === 'dual' ? 'A' : 'S'
 	}
-	let applyLogTypeUi = function (val) {
-		const modeKey = logModeKey()
+	// 某一路的行格式(终端时取记住的那一份)：格式键与现代布局的每路胶囊都按它点亮
+	function laneRowLogType(sid) {
+		if (sid === 'B') return dualLogTypeB()
+		const t = activeLogOptions().logType
+		return t === 'term' ? (lastRowLogType[logModeKey()] || 'hex') : t
+	}
+	function laneLabelOf(sid) {
+		return sid === 'B' ? (SerialHub.getLabelB() || 'B') : (SerialHub.getLabelA() || 'A')
+	}
+	// 双路显隐 B 行与两枚路名，并通知现代布局刷新每路胶囊(路名、格式都可能变了)
+	function syncLogFmtRows() {
 		const dual = SerialHub.mode === 'dual'
-		const isTerm = val === 'term'
-		if (!isTerm) lastRowLogType[modeKey] = val
-		// 四个格式键显示并修改分段选中的那一路的格式
-		syncLogFmtLaneSeg()
-		const rowType = dual && logFmtLane === 'B'
-			? dualLogTypeB()
-			: (isTerm ? (lastRowLogType[modeKey] || 'hex') : val)
-		const fmt = parseLogType(rowType)
-		const hasHex = fmt.hex
-		const hasAnsi = fmt.ansi
-		const hasText = fmt.text
-		const viewRow = document.getElementById('serial-log-view-row')
-		const viewTerm = document.getElementById('serial-log-view-term')
-		if (viewRow) viewRow.setAttribute('aria-pressed', isTerm ? 'false' : 'true')
-		if (viewTerm) viewTerm.setAttribute('aria-pressed', isTerm ? 'true' : 'false')
-		const fmtHex = document.getElementById('serial-log-fmt-hex')
-		const fmtText = document.getElementById('serial-log-fmt-text')
-		const fmtParse = document.getElementById('serial-log-fmt-parse')
-		const ansiBtn = document.getElementById('serial-log-ansi')
-		if (fmtHex) fmtHex.setAttribute('aria-pressed', hasHex ? 'true' : 'false')
-		if (fmtText) fmtText.setAttribute('aria-pressed', hasText ? 'true' : 'false')
-		if (fmtParse) fmtParse.setAttribute('aria-pressed', fmt.parse ? 'true' : 'false')
-		if (ansiBtn) ansiBtn.setAttribute('aria-pressed', hasAnsi ? 'true' : 'false');
-		[fmtHex, fmtText, fmtParse].forEach(function (b) {
+		const rowB = document.getElementById('serial-log-fmt-row-b')
+		if (rowB) rowB.hidden = !dual
+		;['A', 'B'].forEach(function (sid) {
+			const el = document.getElementById('serial-log-fmt-lane-' + sid.toLowerCase())
+			if (!el) return
+			el.hidden = !dual
+			if (!dual) return
+			el.textContent = laneLabelOf(sid)
+			el.title = el.textContent
+		})
+		document.dispatchEvent(new CustomEvent('serial-log-format-change'))
+	}
+	// 现代布局的每路胶囊读这里：路名与该路的行格式文案(文本一律由调用方 textContent)
+	window.serialLogFormat = {
+		isDual: function () { return SerialHub.mode === 'dual' },
+		lane: function (sid) {
+			const t = laneRowLogType(sid)
+			return { label: laneLabelOf(sid), format: LOG_TYPE_LABELS[t] || 'Hex', term: activeLogOptions().logType === 'term' }
+		},
+	}
+	function paintLogFmtRow(row, type, isTerm) {
+		const ids = LOG_FMT_ROWS[row]
+		const fmt = parseLogType(type)
+		const els = {}
+		Object.keys(ids).forEach(function (k) { els[k] = document.getElementById(ids[k]) })
+		;['hex', 'text', 'parse', 'ansi'].forEach(function (k) {
+			if (els[k]) els[k].setAttribute('aria-pressed', fmt[k] ? 'true' : 'false')
+		})
+		;[els.hex, els.text, els.parse].forEach(function (b) {
 			if (!b) return
 			b.disabled = isTerm
 			b.setAttribute('aria-disabled', isTerm ? 'true' : 'false')
 		})
-		if (ansiBtn) {
-			const ansiDisabled = isTerm || !hasText
-			ansiBtn.disabled = ansiDisabled
-			ansiBtn.setAttribute('aria-disabled', ansiDisabled ? 'true' : 'false')
+		if (els.ansi) {
+			const ansiDisabled = isTerm || !fmt.text
+			els.ansi.disabled = ansiDisabled
+			els.ansi.setAttribute('aria-disabled', ansiDisabled ? 'true' : 'false')
 		}
+	}
+	let applyLogTypeUi = function (val) {
+		const modeKey = logModeKey()
+		const isTerm = val === 'term'
+		if (!isTerm) lastRowLogType[modeKey] = val
+		paintLogFmtRow('A', isTerm ? (lastRowLogType[modeKey] || 'hex') : val, isTerm)
+		paintLogFmtRow('B', dualLogTypeB(), isTerm)
+		syncLogFmtRows()
+		const viewRow = document.getElementById('serial-log-view-row')
+		const viewTerm = document.getElementById('serial-log-view-term')
+		if (viewRow) viewRow.setAttribute('aria-pressed', isTerm ? 'false' : 'true')
+		if (viewTerm) viewTerm.setAttribute('aria-pressed', isTerm ? 'true' : 'false')
 		// 分包与行数裁剪只作用于行日志(flushSerialPack 的合包只喂 addLog,trimLogRows 只裁行容器),
 		// term 下都无效,禁掉别留假开关
 		const rowsEl = document.getElementById('serial-max-rows')
@@ -2914,18 +2926,14 @@
 		updateLogSettingsSummary()
 	})
 	// 视图/格式/ANSI 按钮统一走 setLogType,由它负责校验、落盘、同步 UI、重渲历史。
-	// HEX/TEXT/解析 是复选,读当前 aria-pressed 算出下一个 logType;三个都不选时忽略这次点击
-	function currentLogFmtState() {
-		const fmtHex = document.getElementById('serial-log-fmt-hex')
-		const fmtText = document.getElementById('serial-log-fmt-text')
-		const fmtParse = document.getElementById('serial-log-fmt-parse')
-		const ansiBtn = document.getElementById('serial-log-ansi')
-		return {
-			hasHex: !!fmtHex && fmtHex.getAttribute('aria-pressed') === 'true',
-			hasText: !!fmtText && fmtText.getAttribute('aria-pressed') === 'true',
-			hasParse: !!fmtParse && fmtParse.getAttribute('aria-pressed') === 'true',
-			hasAnsi: !!ansiBtn && ansiBtn.getAttribute('aria-pressed') === 'true',
+	// HEX/TEXT/解析 是复选,读这一行当前 aria-pressed 算出这一路下一个 logType;三个都不选时忽略这次点击
+	function currentLogFmtState(row) {
+		const ids = LOG_FMT_ROWS[row]
+		const on = function (k) {
+			const el = document.getElementById(ids[k])
+			return !!el && el.getAttribute('aria-pressed') === 'true'
 		}
+		return { hasHex: on('hex'), hasText: on('text'), hasParse: on('parse'), hasAnsi: on('ansi') }
 	}
 	function composeLogType(hasHex, hasText, hasAnsi, hasParse) {
 		let base = ''
@@ -2942,51 +2950,41 @@
 	document.getElementById('serial-log-view-term').addEventListener('click', function () {
 		setLogType('term')
 	})
-	document.getElementById('serial-log-fmt-hex').addEventListener('click', function () {
-		const s = currentLogFmtState()
-		const hasHex = !s.hasHex
-		if (!hasHex && !s.hasText && !s.hasParse) return
-		setLogType(composeLogType(hasHex, s.hasText, s.hasAnsi, s.hasParse), logFmtSid())
-	})
-	document.getElementById('serial-log-fmt-text').addEventListener('click', function () {
-		const s = currentLogFmtState()
-		const hasText = !s.hasText
-		if (!hasText && !s.hasHex && !s.hasParse) return
-		const sid = logFmtSid()
-		let hasAnsi
-		if (hasText) {
-			hasAnsi = !!lastAnsiOn[sid]
-		} else {
-			lastAnsiOn[sid] = s.hasAnsi
-			hasAnsi = false
+	Object.keys(LOG_FMT_ROWS).forEach(function (row) {
+		const ids = LOG_FMT_ROWS[row]
+		const bind = function (k, fn) {
+			const el = document.getElementById(ids[k])
+			if (el) el.addEventListener('click', function () { fn(currentLogFmtState(row), logFmtRowSid(row)) })
 		}
-		setLogType(composeLogType(s.hasHex, hasText, hasAnsi, s.hasParse), sid)
-	})
-	document.getElementById('serial-log-fmt-parse').addEventListener('click', function () {
-		const s = currentLogFmtState()
-		const hasParse = !s.hasParse
-		if (!hasParse && !s.hasHex && !s.hasText) return
-		setLogType(composeLogType(s.hasHex, s.hasText, s.hasAnsi, hasParse), logFmtSid())
-	})
-	document.getElementById('serial-log-ansi').addEventListener('click', function () {
-		const s = currentLogFmtState()
-		if (!s.hasText) return
-		const hasAnsi = !s.hasAnsi
-		lastAnsiOn[logFmtSid()] = hasAnsi
-		setLogType(composeLogType(s.hasHex, s.hasText, hasAnsi, s.hasParse), logFmtSid())
-	})
-	// 双路：格式分段只换「四个格式键在改哪一路」，不碰日志
-	const fmtLaneSeg = document.getElementById('serial-log-fmt-lane-seg')
-	if (fmtLaneSeg) {
-		fmtLaneSeg.addEventListener('click', function (e) {
-			const b = e.target.closest('button')
-			if (!b) return
-			const sid = b.id === 'serial-log-fmt-lane-b' ? 'B' : 'A'
-			if (sid === logFmtLane) return
-			logFmtLane = sid
-			applyLogTypeUi(activeLogOptions().logType)
+		bind('hex', function (s, sid) {
+			const hasHex = !s.hasHex
+			if (!hasHex && !s.hasText && !s.hasParse) return
+			setLogType(composeLogType(hasHex, s.hasText, s.hasAnsi, s.hasParse), sid)
 		})
-	}
+		bind('text', function (s, sid) {
+			const hasText = !s.hasText
+			if (!hasText && !s.hasHex && !s.hasParse) return
+			let hasAnsi
+			if (hasText) {
+				hasAnsi = !!lastAnsiOn[sid]
+			} else {
+				lastAnsiOn[sid] = s.hasAnsi
+				hasAnsi = false
+			}
+			setLogType(composeLogType(s.hasHex, hasText, hasAnsi, s.hasParse), sid)
+		})
+		bind('parse', function (s, sid) {
+			const hasParse = !s.hasParse
+			if (!hasParse && !s.hasHex && !s.hasText) return
+			setLogType(composeLogType(s.hasHex, s.hasText, s.hasAnsi, hasParse), sid)
+		})
+		bind('ansi', function (s, sid) {
+			if (!s.hasText) return
+			const hasAnsi = !s.hasAnsi
+			lastAnsiOn[sid] = hasAnsi
+			setLogType(composeLogType(s.hasHex, s.hasText, hasAnsi, s.hasParse), sid)
+		})
+	})
 	updateLogSettingsSummary()
 	;(function () {
 		const header = document.querySelector('.serial-log-header')
