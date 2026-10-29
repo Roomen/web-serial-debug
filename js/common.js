@@ -3388,8 +3388,8 @@
 			return false
 		}
 		SerialHub.setPort(sid, port)
-		// 多 CDC 槽位依赖 getPorts 全集：清缓存后重算
-		_portIdentityCache.clear()
+		// 多 CDC 槽位依赖 getPorts 全集：清缓存后重算(WeakMap 没有 clear，整体换新)
+		_portIdentityCache = new WeakMap()
 		const key = await getPortIdentityKey(port)
 		// 其它会话口也要刷新 slot
 		const allPhys = SerialHub.allPhys()
@@ -3837,8 +3837,9 @@
 	}
 
 	// ===== 串口设备别名 v2（多键指纹 / localStorage entries / 蓝牙过滤） =====
-	// port → 解析后的 { keys, fingerprint } 缓存（port 对象引用做 Map key）
-	const _portIdentityCache = new Map()
+	// port → 解析后的 { keys, fingerprint } 缓存（port 对象引用做 key）。用 WeakMap：热插拔重插每次都产生新的端口
+	// 对象，强引用 Map 只增不减；需要清空(多 CDC 槽位重算)时整体换成新的 WeakMap，不要改成 clear
+	let _portIdentityCache = new WeakMap()
 	// port → 内存别名（无任何持久 key 时仅本次会话有效）
 	const _sessionAliasByPort = new Map()
 	const ALIAS_STORE_KEY = 'serialPortAliases'
@@ -4984,20 +4985,25 @@
 	function drainLinePack(sid) {
 		const buf = SerialHub.getPackBuf(sid)
 		if (hostProtoIncomplete(sid, buf) || sekFrameStart(sid, buf)) return
+		// start 是已切走的边界(消费游标)：循环里只切每一行本身，剩余后缀等循环结束切一次。
+		// 每遇到换行就 buf.slice(start) 复制剩余后缀是平方级，64 KiB 全是换行时要复制约 21 亿个元素
 		let start = 0
+		// 缓冲同步成已消费的剩余部分：输出抛错时这些行不会被下次重复切出，没切的残行也不会被吃掉
+		const dropConsumed = () => {
+			if (start > 0) SerialHub.setPackBuf(sid, start >= buf.length ? [] : buf.slice(start))
+		}
 		try {
 			for (let i = 0; i < buf.length; i++) {
 				if (buf[i] !== 0x0A) continue
 				const line = buf.slice(start, i + 1)
 				const glitch = start === 0 && SerialHub.takePackGlitch(sid)
 				start = i + 1
-				// 先把已切走的行从缓冲去掉再输出：输出抛错时这些行不会被下次重复切出
-				SerialHub.setPackBuf(sid, buf.slice(start))
 				flushSerialPack(line, SerialHub.getPackStartTime(sid), sid, glitch)
 				SerialHub.setPackStartTime(sid, new Date())
 			}
 		} finally {
-			if (start > 0) SerialHub.setPackBuf(sid, buf.slice(start))
+			// 正常跑完与输出抛错走同一条路径：已切走的行不会重复输出，start 之后的残行留在缓冲里
+			dropConsumed()
 		}
 	}
 

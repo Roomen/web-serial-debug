@@ -186,4 +186,73 @@ for (const mode of ['time0', 'line']) {
 	assert.deepEqual([...Buffer.from(bRows[0], 'latin1')], sek)
 }
 
+// ---- 按换行: 64 KiB 全是换行时按消费游标线性切分（不是每行都复制剩余后缀），行数正确、耗时合理 ----
+{
+	const h = harness({ log: { splitMode: 'line', timeOut: 0, logType: 'text' } })
+	const t0 = process.hrtime.bigint()
+	h.rx(new Uint8Array(65536).fill(0x0A))
+	const ms = Number(process.hrtime.bigint() - t0) / 1e6
+	assert.equal(h.rows.length, 65536, '每个换行一行')
+	assert.ok(h.rows.every((r) => r === '\n'), '每行就是一个 \\n')
+	assert.equal(h.sess.packBuf.length, 0, '没有残行')
+	// 每行都复制剩余后缀是平方级(约 21 亿个元素)，这里给一个宽松上限，只卡住复杂度回退
+	assert.ok(ms < 200, '64 KiB 全换行应在 200 ms 内切完，实际 ' + ms.toFixed(1) + ' ms')
+}
+// ---- 按换行: 长短混合的行分多次读回，已输出的行与残行都与逐行切分的参考实现逐字一致 ----
+{
+	const parts = []
+	for (let i = 0; i < 60; i++) {
+		let body = ''
+		if (i % 5 === 0) body = 'L'.repeat(2000 + i * 7)
+		else if (i % 5 === 1) body = ''
+		else if (i % 5 === 2) body = 's' + i
+		else if (i % 5 === 3) body = 'tab\t' + i
+		else body = 'x'.repeat(9) + i
+		parts.push(body + (i % 3 === 0 ? '\r\n' : '\n'))
+	}
+	const stream = Buffer.from(parts.join(''), 'latin1')
+	const h = harness({ log: { splitMode: 'line', timeOut: 0, logType: 'text' } })
+	// 参考实现：把已收到的全部字节按 0x0A 切，行尾(含 \r\n)留在行内
+	const reference = (all) => {
+		const rows = []
+		let start = 0
+		for (let i = 0; i < all.length; i++) {
+			if (all[i] !== 0x0A) continue
+			rows.push(all.slice(start, i + 1).toString('latin1'))
+			start = i + 1
+		}
+		return { rows, rest: all.slice(start).toString('latin1') }
+	}
+	const chunks = [1, 2, 7, 1000, 3, 4096, 55, 1, 3000, 99999]
+	let fed = 0
+	let round = 0
+	while (fed < stream.length) {
+		const n = Math.min(chunks[round++ % chunks.length], stream.length - fed)
+		h.rx(stream.slice(fed, fed + n))
+		fed += n
+		const want = reference(stream.slice(0, fed))
+		assert.deepEqual(h.rows, want.rows, '第 ' + round + ' 段读回后已输出的行一致')
+		assert.equal(Buffer.from(h.sess.packBuf).toString('latin1'), want.rest, '第 ' + round + ' 段读回后残行一致')
+	}
+	assert.equal(h.rows.length, parts.length)
+	assert.equal(h.sess.packBuf.length, 0)
+}
+// ---- 按换行: 输出抛错时按游标清掉已切走的行，不重复输出也不吐掉后面的残行 ----
+{
+	const h = harness({ log: { splitMode: 'line', timeOut: 0, logType: 'text' } })
+	const realAddLog = h.ctx.addLog
+	let calls = 0
+	h.ctx.addLog = (buf, ...rest) => {
+		calls++
+		if (calls === 2) throw new Error('dom boom')
+		realAddLog(buf, ...rest)
+	}
+	assert.throws(() => h.rx('one\ntwo\nthree\nfour'), /dom boom/)
+	assert.deepEqual(h.rows, ['one\n'], '抛错那一行不算输出')
+	assert.equal(Buffer.from(h.sess.packBuf).toString('latin1'), 'three\nfour', '抛错之后的残行按游标留在缓冲里，没有重复')
+	h.ctx.addLog = realAddLog
+	h.rx('\n')
+	assert.deepEqual(h.rows.slice(1), ['three\n', 'four\n'], '后续照常输出，不重复也不丢字节')
+}
+
 console.log('serial-line-split: ok')
