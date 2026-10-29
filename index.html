@@ -35,6 +35,8 @@
                 if (localStorage.getItem('serial-debug-dual-view') === 'bubble') dualView = 'bubble'
             } catch (e) { /* 存储不可用时按默认 */ }
             document.documentElement.dataset.dualView = dualView
+            // 布局切换已移除：老用户存的布局选择不再有人读，清掉免得排查时误以为它还生效
+            try { localStorage.removeItem('serial-debug-layout') } catch (e) { /* 忽略 */ }
         })()
     </script>
     <script>
