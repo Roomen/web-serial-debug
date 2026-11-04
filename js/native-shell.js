@@ -25,6 +25,22 @@
 		setPreparing: function (value) { updatePreparing = !!value },
 	})
 
+	// 本地 MCP 服务：只把 Tauri 命令/事件包成平台服务，业务与界面在 js/mcp-bridge.js / js/mcp-service.js。
+	// 令牌只在页面显式请求(revealToken)时返回，不缓存、不落盘。
+	if (!P.has || P.has('service.mcp')) P.provide('mcp', {
+		status: function () { return T.core.invoke('mcp_status') },
+		enable: function (port) { return T.core.invoke('mcp_enable', { port: port == null ? null : port }) },
+		disable: function () { return T.core.invoke('mcp_disable') },
+		revealToken: function () { return T.core.invoke('mcp_reveal_token') },
+		regenerateToken: function () { return T.core.invoke('mcp_regenerate_token') },
+		register: function (info) { return T.core.invoke('mcp_register', info) },
+		windowState: function (info) { return T.core.invoke('mcp_window_state', info) },
+		unregister: function (bridgeEpoch) { return T.core.invoke('mcp_unregister', { bridgeEpoch: bridgeEpoch }) },
+		commit: function (info) { return T.core.invoke('mcp_commit', info) },
+		reply: function (info) { return T.core.invoke('mcp_reply', info) },
+		listen: function (name, cb) { return T.event.listen(name, function (e) { cb(e.payload || {}) }) },
+	})
+
 	// ---------- 提示条 ----------
 	let timer = 0
 	function notify(text, isError, action) {

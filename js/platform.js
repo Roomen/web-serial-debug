@@ -24,6 +24,7 @@
 		'transport.ble',
 		'transport.bt-classic',
 		'shell.browser', // 网页外壳入口(GitHub / 反馈链接等，由运行时推出：只在浏览器里开，客户端里没有意义)
+		'service.mcp', // 本地 MCP 服务(桌面客户端才有)：移动端与网页版没有入口、也没有监听
 	]
 
 	const OS_LIST = ['web', 'windows', 'macos', 'linux', 'android', 'ios']

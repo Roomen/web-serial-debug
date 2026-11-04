@@ -27,6 +27,7 @@ function harness() {
 	const hub = {
 		mode: 'single', activeSendId: 'S', activeSendPhys: () => 'S', uiSid: sid => sid, allPhys: () => ['S', 'A', 'B'], _sess: sid => sessions[sid],
 		isManualClose: sid => sessions[sid].manualClose,
+		isVisible: () => true,
 		isReleaseFailed: sid => sessions[sid].releaseFailed,
 		setManualClose: (sid, v) => { sessions[sid].manualClose = v },
 		getStats: sid => sessions[sid], resetStats: () => {}, takePackGlitch: sid => {
@@ -58,16 +59,17 @@ function harness() {
 		laneOptions: { A: {}, B: {} }, SERIAL_OPTIONS_KEY: 'synthetic-options',
 		resetLaneParseSession: () => {}, sessionResetSeq: { S: 0, A: 0, B: 0 },
 		getPortIdentityKey: async () => null, localStorage: { setItem: () => {} }, persistLaneOptions: () => {},
-		recoverDeadReadLoop: async sid => { recovered.push(sid) }, rxWatch: () => ({}), reopenAttemptBySid: {}, readData: async () => {}
+		recoverDeadReadLoop: async sid => { recovered.push(sid) }, rxWatch: () => ({}), reopenAttemptBySid: {}, readData: async () => {},
+		laneMoving: false, platformHasSid: () => true, lanePortOwner: () => null, portConflictMsg: () => 'synthetic conflict'
 	})
 	vm.runInContext(
 		section('\tfunction portHeldByOther(', '\tfunction randAliasId(') +
 		section('\tasync function releasePort(sid) {', '\t//页面销毁时释放串口句柄') +
 		section('\tasync function closeSerial(sid)', '\tfunction chipElFor(sid)') +
 		section('\tasync function writeData(data,', '\t// 接收流异常先尝试重建') +
-		section('\tasync function handleToggleClick(sid)', '\tserialToggle.addEventListener') +
+		section('\tfunction laneBlockReason(sid, port) {', '\tserialToggle.addEventListener') +
 		section('\tfunction flushSerialPack(', '\t// 发送前先把本口') +
-		'\nglobalThis.api = { releasePort, closeSerial, openSerial, writeData, writeTermBytes, handleToggleClick }', context)
+		'\nglobalThis.api = { releasePort, closeSerial, openSerial, writeData, writeTermBytes, handleToggleClick, openLane, closeLane }', context)
 	async function advance(ms) {
 		const end = now + ms
 		await settle()
@@ -264,8 +266,59 @@ async function testSharedPortAndStuckWrite() {
 	await settle()
 	assert.equal(stuck.sessions.S.releaseTask, null)
 }
+async function testOpenCancelledDuringRelease() {
+	const h = harness(), gate = deferred()
+	let opens = 0
+	// 会话状态是「未打开」，但口上还挂着流(脏状态)：releasePort 会真的去 close，这段可以卡住
+	h.sessions.S.open = false
+	h.sessions.S.port = { readable: {}, writable: {}, close: () => gate.promise, open: async () => { opens++ } }
+	let cancelled = false
+	const p = h.api.openSerial('S', { reason: 'mcp', guard: () => cancelled })
+	await settle()
+	cancelled = true
+	gate.resolve()
+	const ok = await p
+	assert.equal(ok, false)
+	assert.equal(opens, 0, '等旧口释放期间被取消，不再打开')
+}
+
+async function testOpenCancelledWhileOpening() {
+	const h = harness(), gate = deferred()
+	let opens = 0, closes = 0
+	const port = {
+		readable: null, writable: null,
+		open: async () => { opens++; await gate.promise; port.readable = {}; port.writable = {} },
+		close: async () => { closes++; port.readable = null; port.writable = null },
+	}
+	h.sessions.S.open = false
+	h.sessions.S.port = port
+	let cancelled = false
+	const p = h.api.openSerial('S', { reason: 'mcp', guard: () => cancelled })
+	await settle()
+	assert.equal(opens, 1, '已经进入 open')
+	cancelled = true
+	gate.resolve()
+	const ok = await p
+	assert.equal(ok, false)
+	assert.equal(closes, 1, '打开途中取消要把已经打开的口释放掉')
+	assert.equal(h.sessions.S.open, false, '取消后不留下「已连接」状态')
+}
+
+async function testOpenLaneCancelledIsAborted() {
+	const h = harness()
+	h.sessions.S.open = false
+	h.sessions.S.port = { readable: null, writable: null, close: async () => {}, open: async () => { throw new Error('should not open') } }
+	const r = await h.api.openLane('S', { reason: 'mcp', exact: true, guard: () => true })
+	assert.equal(r.ok, false)
+	assert.equal(r.code, 'aborted', '取消要回 aborted，而不是 open_failed')
+	assert.equal(h.sessions.S.open, false)
+}
+
 ;(async () => {
 	await testFlushAndIsolation()
+	await testOpenCancelledDuringRelease()
+	await testOpenCancelledWhileOpening()
+	await testOpenLaneCancelledIsAborted()
 	await testRejectedClose()
 	await testHangingClose()
 	await testHangingReader()

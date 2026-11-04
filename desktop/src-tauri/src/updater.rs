@@ -225,6 +225,8 @@ pub async fn app_update_install(app: AppHandle, state: State<'_, UpdateState>, v
             inner.sessions.clear();
             inner.acknowledgments = app.webview_windows().into_keys().map(|label| (label, None)).collect();
         }
+        // MCP 桥上的在飞请求一并作废(给出终态)，避免升级准备期间还有设备操作继续
+        crate::mcp::quiesce(&app, &app.state::<crate::mcp::McpState>());
         progress(&app, id, "preparing", received, Some(received));
         app.emit("app-update-prepare", serde_json::json!({ "operationId": id }))
             .map_err(|_| "无法通知窗口准备升级".to_string())?;
