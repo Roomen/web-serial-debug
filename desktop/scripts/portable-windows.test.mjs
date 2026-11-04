@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { buildTarget, cargoTargetDir, helperBinary, packageWindows } from './portable-windows.mjs'
@@ -171,10 +171,16 @@ test('Windows PowerShell produces an extractable ZIP with program, helper and RE
 })
 
 test('absolute CARGO_TARGET_DIR is used as-is, relative one hangs off src-tauri', () => {
-	// join('/a/src-tauri', '/tmp/x') 会得到 '/a/src-tauri/tmp/x'，必须用 resolve 语义
-	assert.equal(cargoTargetDir('/repo/desktop', '/tmp/absolute-target'), '/tmp/absolute-target')
-	assert.equal(cargoTargetDir('/repo/desktop', 'custom-target'), '/repo/desktop/src-tauri/custom-target')
-	assert.equal(cargoTargetDir('/repo/desktop', 'target'), '/repo/desktop/src-tauri/target')
+	// join('/a/src-tauri', '/tmp/x') 会得到 '/a/src-tauri/tmp/x'，必须用 resolve 语义。
+	// 期望值要从平台原生路径算出来：Windows 上 resolve 会把 '/tmp/x' 变成 '<盘符>:\tmp\x'，
+	// 直接写 Unix 字面量会让这条断言在 Windows runner 上必失败。
+	const desktop = resolve(tmpdir(), 'portable-target-desktop')
+	const absolute = resolve(tmpdir(), 'portable-absolute-target')
+	assert.equal(cargoTargetDir(desktop, absolute), absolute, '绝对路径原样使用')
+	assert.equal(cargoTargetDir(desktop, 'custom-target'), join(desktop, 'src-tauri', 'custom-target'))
+	assert.equal(cargoTargetDir(desktop, 'target'), join(desktop, 'src-tauri', 'target'))
+	// 相对路径必须挂在 src-tauri 下，不能变成相对 cwd 的 resolve
+	assert.equal(cargoTargetDir(desktop, 'custom-target').startsWith(join(desktop, 'src-tauri')), true)
 })
 
 test('absolute CARGO_TARGET_DIR packages the helper from that directory', () => {
@@ -234,11 +240,11 @@ test('the build wrapper compiles the helper into the directory the packager read
 	assert.match(source, /const helperTargetDir = cargoTargetDir\(desktop\)/, 'helper 编译目录必须来自 cargoTargetDir')
 	assert.doesNotMatch(source, /join\(desktop, 'src-tauri', process\.env\.CARGO_TARGET_DIR/, '不要自己拼 target 目录')
 	// 包装脚本生成的可执行文件路径与打包脚本读的路径一致（两种目录形态都覆盖）
-	for (const dir of ['/tmp/abs-target', 'custom-target']) {
+	for (const dir of [resolve(tmpdir(), 'portable-abs-target'), 'custom-target']) {
 		const previous = process.env.CARGO_TARGET_DIR
 		try {
 			process.env.CARGO_TARGET_DIR = dir
-			const desktop = '/repo/desktop'
+			const desktop = resolve(tmpdir(), 'portable-wrapper-desktop')
 			const helper = helperBinary({ desktop, target: 'x86_64-pc-windows-msvc' })
 			assert.ok(helper.startsWith(cargoTargetDir(desktop)), `${dir}: ${helper}`)
 		} finally {
