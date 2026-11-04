@@ -3,6 +3,7 @@
 // 页面功能与网页版一致，平台差异只走 js/platform.js，页面侧胶水在 js/native-shell.js。
 mod mcp;
 mod menu;
+mod portable;
 mod serial;
 mod updater;
 mod winstate;
@@ -182,6 +183,7 @@ pub fn run() {
 			updater::app_update_check,
 			updater::app_update_install,
 			updater::app_update_ack,
+			updater::app_update_result,
 			mcp::mcp_status,
 			mcp::mcp_enable,
 			mcp::mcp_disable,
@@ -215,6 +217,11 @@ pub fn run() {
 			}
 		})
 		.setup(|app| {
+			// Windows 便携版：上一次更新还没结束时不要打开窗口，免得和替换过程抢同一个 EXE
+			#[cfg(windows)]
+			if !portable::startup_gate(app.handle()) {
+				std::process::exit(0);
+			}
 			// 上次启用过本地 MCP 服务时只登记「等已登录窗口」，真正监听要等页面注册
 			app.state::<mcp::McpState>().init(app.handle());
 			let m = menu::build(app.handle())?;

@@ -27,8 +27,12 @@ tokio-util = "0.7"
 getrandom = "0.4"
 subtle = "2"
 schemars = "1"
+# Windows 便携版应用内更新：计划/结果格式、载荷读取与验签、进程查询与 helper 共用
+portable-update-common = { path = "../portable-update-common" }
 
 [dev-dependencies]
+# 测试里构造真实便携 ZIP 载荷
+zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # 真实 MCP 客户端(仅测试)：对假窗口桥做协议互通验证
 rmcp = { version = "3.8", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 reqwest = "0.13"

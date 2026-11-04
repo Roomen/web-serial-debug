@@ -161,6 +161,41 @@ jobs:
           [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
           [ -n "$TAURI_UPDATER_PUBLIC_KEY" ] || unset TAURI_UPDATER_PUBLIC_KEY
           npm run build -- --target ${{ matrix.target }}
+      - name: Verify portable update artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          UPDATER: ${{ needs.prepare.outputs.updater }}
+        run: |
+          # 便携 ZIP 就是应用内更新载荷：必须含主程序与 helper；配了更新签名时还必须带 .sig，
+          # 否则清单会缺 windows-x86_64，Windows 客户端永远收不到这一版。
+          node --input-type=module <<'JS'
+          import { readdirSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { tmpdir } from 'node:os';
+          import { spawnSync } from 'node:child_process';
+          const dir = join('desktop', 'release', process.env.RELEASE_CHANNEL);
+          const zips = readdirSync(dir).filter((n) => /^Serial-Debug_\d+\.\d+\.\d+_windows_x64\.zip$/.test(n));
+          if (zips.length !== 1) throw new Error(`expected exactly one portable ZIP, found ${zips.length}`);
+          const zip = join(dir, zips[0]);
+          if (process.env.UPDATER === 'true') {
+            const sig = readFileSync(zip + '.sig', 'utf8').trim();
+            if (!sig) throw new Error('portable ZIP has no update signature');
+            const trusted = Buffer.from(sig, 'base64').toString('utf8');
+            const version = /\bversion:(\d+\.\d+\.\d+)/.exec(trusted);
+            if (!version) throw new Error('signature does not record the app version');
+            console.log(`portable ZIP signed for version ${version[1]}`);
+          }
+          const out = mkdtempSync(join(tmpdir(), 'zip-check-'));
+          const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Expand-Archive -LiteralPath $env:Z -DestinationPath $env:D'], { env: { ...process.env, Z: zip, D: out } });
+          if (r.status !== 0) throw new Error('portable ZIP cannot be extracted');
+          const entries = readdirSync(out).sort();
+          const needed = ['Serial Debug.exe', 'README.txt', 'serial-debug-updater.exe'];
+          for (const name of needed) if (!entries.includes(name)) throw new Error(`portable ZIP is missing ${name}`);
+          if (readFileSync(join(out, 'Serial Debug.exe')).length < 1024) throw new Error('portable ZIP program looks truncated');
+          rmSync(out, { recursive: true, force: true });
+          console.log('portable ZIP contents verified: ' + entries.join(', '));
+          JS
       - name: Remove temporary signing keychain
         if: always() && runner.os == 'macOS' && needs.prepare.outputs.apple == 'true'
         run: |
@@ -214,7 +249,7 @@ jobs:
             ? `预览版，构建自 dev 分支 ${e.GITHUB_SHA.slice(0, 7)}。\n\n${(e.COMMIT_MESSAGE || '').split('\n')[0]}`
             : `Serial Debug ${e.VERSION}`;
           if (e.APPLE !== 'true') notes += '\n\n> macOS 安装包未经 Apple 签名公证：首次打开被拦截时点「完成」，到「系统设置 → 隐私与安全性」底部点「仍要打开」并输入密码。若仍提示「已损坏」，在终端执行 `xattr -cr "/Applications/Serial Debug.app"` 后再打开。';
-          notes += '\n\nWindows 提供 ZIP 免安装版：解压后运行 Serial Debug.exe，需要系统已安装 Microsoft Edge WebView2 Runtime。更新时先退出程序再解压新版；Windows 不使用安装器自动更新。';
+          notes += '\n\nWindows 提供 ZIP 免安装版：解压后运行 Serial Debug.exe，需要系统已安装 Microsoft Edge WebView2 Runtime。程序内可直接检查并安装更新(下载、验签后在退出时替换程序并自动重启)；也可以手动关闭程序后解压新版覆盖。';
           if (e.UPDATER !== 'true') notes += '\n\n> 此版本未启用应用内更新，新版本请到 Releases 页下载。';
           writeFileSync('release-notes.md', notes + '\n');
           JS
@@ -231,7 +266,9 @@ jobs:
           if [ "$(cat pointer-exists)" = yes ]; then
             gh release download "desktop-$CHANNEL" --pattern latest.json --dir previous
           fi
+          # 清单必须同时覆盖 macOS 与 Windows 便携版；任一平台缺包或缺签名，脚本直接失败
           node desktop/scripts/updater-manifest.mjs artifacts "$VERSION" "$CHANNEL" latest.json previous/latest.json release-notes.md
+          node -e "const m=require('./latest.json');for(const k of ['darwin-aarch64','windows-x86_64'])if(!m.platforms[k])throw new Error('manifest is missing '+k)"
       - name: Publish immutable version release
         run: |
           TAG="desktop-$CHANNEL-v$VERSION"

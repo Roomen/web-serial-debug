@@ -112,34 +112,6 @@
 	const service = root.AppPlatform && root.AppPlatform.service('app-update')
 	if (!service || !root.document) return
 	const doc = root.document
-	// 便携 ZIP 由用户退出程序后替换，不交给只支持安装器的原生更新插件。
-	if (service.manualDownloadUrl) {
-		function openDownload() {
-			const link = doc.createElement('a')
-			link.href = service.manualDownloadUrl
-			link.target = '_blank'
-			link.rel = 'noopener'
-			doc.body.appendChild(link)
-			link.click()
-			link.remove()
-		}
-		root.AppUpdate = { check: openDownload }
-		function initManualDownload() {
-			const menu = doc.querySelector('#activity-rail .rail-bottom')
-			if (!menu) return
-			const button = doc.createElement('button')
-			button.id = 'serial-check-update'
-			button.type = 'button'
-			button.className = 'rail-item'
-			button.innerHTML = '<i class="bi bi-arrow-down-circle"></i><span class="rail-label">更新</span>'
-			button.title = '下载新版 ZIP'
-			button.addEventListener('click', openDownload)
-			menu.insertBefore(button, doc.getElementById('app-version'))
-		}
-		if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', initManualDownload)
-		else initManualDownload()
-		return
-	}
 	let status, action, shield, retry = 'check', lastCheck = 0, manualChecking = false
 	let previousFocus = null
 	function showShield(on) {
@@ -151,7 +123,7 @@
 			shield.setAttribute('aria-modal', 'true')
 			shield.setAttribute('aria-label', '正在安装应用更新')
 			shield.tabIndex = -1
-			shield.textContent = '正在保存会话并安装更新，请稍候…'
+			shield.textContent = '正在保存会话并安装更新，应用会自动重启，请稍候…'
 			doc.body.appendChild(shield)
 			shield.focus()
 		} else if (!on && shield) {
@@ -255,6 +227,17 @@
 			version.addEventListener('keydown', function (e) { if (controller.pending && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); offerInstall() } })
 		}
 		root.addEventListener('keydown', function (e) { if (controller.frozen) { e.preventDefault(); e.stopImmediatePropagation() } }, true)
+		// 上次安装失败时 helper 留下原因(便携版是退出后才替换，那时界面已经关了)：启动后先告诉用户
+		if (service.takeResult) {
+			Promise.resolve(service.takeResult()).then(function (result) {
+				if (!result || result.success || !status) return
+				status.textContent = '上次更新未完成，当前仍是 v' + (root.APP_VERSION || '') + '：' + String(result.message || '未知原因')
+				status.parentNode.hidden = false
+				retry = 'install'
+				action.hidden = true
+				if (root.AppDialog) root.AppDialog.alert('上次更新未完成，当前仍是旧版本。\n\n' + String(result.message || '未知原因'), { title: '应用更新' }).catch(function () {})
+			}).catch(function () { /* 结果读不到不影响使用 */ })
+		}
 		listeners.then(function () {
 			if (!root.APP_UPDATER_CONFIGURED) return
 			setTimeout(function () { check(false) }, 60000)

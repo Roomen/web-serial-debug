@@ -146,28 +146,56 @@ test('native config entry and unconfigured-build dialog use platform service', a
 	assert.match(body.children[0].children[0].textContent, /更新未完成/)
 })
 
-test('portable update entry opens download page without native checks, listeners or timers', () => {
-	const opened = [], menu = { children: [], insertBefore(child) { this.children.push(child) } }
-	const doc = {
-		readyState: 'complete', body: { appendChild() {} }, querySelector: () => menu, getElementById: () => null,
-		createElement(tag) { return {
-			tag, children: [], appendChild(child) { this.children.push(child) },
-			addEventListener(name, cb) { this[name] = cb },
-			click() { opened.push({ href: this.href, target: this.target }) }, remove() {},
-		} },
+test('failed portable update result is surfaced on startup and never blocks when absent', async () => {
+	class Element {
+		constructor() { this.children = []; this.attrs = {}; this.events = {}; this.classList = { add() {}, remove() {} } }
+		appendChild(child) { child.parentNode = this; this.children.push(child); return child }
+		insertBefore(child) { return this.appendChild(child) }
+		append(...children) { children.forEach((child) => this.appendChild(child)) }
+		setAttribute(key, value) { this.attrs[key] = value }
+		removeAttribute(key) { delete this.attrs[key] }
+		addEventListener(key, value) { this.events[key] = value }
 	}
-	const service = { manualDownloadUrl: 'https://example.com/download/' }
-	const window = { document: doc, AppPlatform: { service: () => service } }
-	vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/app-update.js'), 'utf8'), {
-		window, setTimeout() { throw new Error('installer polling started') }, setInterval() { throw new Error('installer polling started') },
-	})
-	const button = menu.children[0]
-	assert.equal(button.title, '下载新版 ZIP')
-	assert.equal(button.className, 'rail-item')
-	button.click()
-	window.AppUpdate.check(true)
-	assert.deepEqual(opened, [
-		{ href: service.manualDownloadUrl, target: '_blank' },
-		{ href: service.manualDownloadUrl, target: '_blank' },
-	])
+	const menu = new Element(), body = new Element(), version = new Element(), alerts = []
+	const doc = { readyState: 'complete', body, createElement: () => new Element(), querySelector: () => menu, getElementById: () => version }
+	const result = { success: false, version: '2.0.0', message: '无法替换正在使用的程序，请先退出所有 Serial Debug 窗口' }
+	const service = { listen: async () => () => {}, check: async () => null, setPreparing() {}, takeResult: async () => result }
+	const window = { document: doc, AppPlatform: { service: () => service }, APP_VERSION: '1.0.0', APP_UPDATER_CONFIGURED: true, AppDialog: { alert: async (text, opts) => alerts.push({ text, opts }) }, addEventListener() {} }
+	vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/app-update.js'), 'utf8'), { window })
+	await new Promise((resolve) => setImmediate(resolve))
+	assert.equal(alerts.length, 1, '上次失败原因必须在启动后告诉用户')
+	assert.match(alerts[0].text, /无法替换正在使用的程序/)
+	const bar = body.children[0]
+	assert.equal(bar.hidden, false)
+	assert.match(bar.children[0].textContent, /上次更新未完成/)
+	// 服务没有 takeResult(旧版原生端)时不生成任何提示
+	const alerts2 = []
+	const legacy = { listen: async () => () => {}, check: async () => null, setPreparing() {} }
+	const window2 = { document: { ...doc, body: new Element() }, AppPlatform: { service: () => legacy }, APP_VERSION: '1.0.0', APP_UPDATER_CONFIGURED: true, AppDialog: { alert: async (text) => alerts2.push(text) }, addEventListener() {} }
+	vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/app-update.js'), 'utf8'), { window: window2 })
+	await new Promise((resolve) => setImmediate(resolve))
+	assert.equal(alerts2.length, 0)
+})
+
+test('successful update result is consumed without any prompt', async () => {
+	class Element {
+		constructor() { this.children = []; this.events = {}; this.classList = { add() {}, remove() {} } }
+		appendChild(child) { child.parentNode = this; this.children.push(child); return child }
+		insertBefore(child) { return this.appendChild(child) }
+		append(...children) { children.forEach((child) => this.appendChild(child)) }
+		setAttribute() {}
+		removeAttribute() {}
+		addEventListener() {}
+	}
+	const calls = [], alerts = []
+	const service = { listen: async () => () => {}, check: async () => null, setPreparing() {}, takeResult: async () => { calls.push(1); return { success: true, version: '2.0.0', message: '' } } }
+	const window = {
+		document: { readyState: 'complete', body: new Element(), createElement: () => new Element(), querySelector: () => null, getElementById: () => null },
+		AppPlatform: { service: () => service }, APP_VERSION: '2.0.0', APP_UPDATER_CONFIGURED: true,
+		AppDialog: { alert: async (text) => alerts.push(text) }, addEventListener() {},
+	}
+	vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/app-update.js'), 'utf8'), { window })
+	await new Promise((resolve) => setImmediate(resolve))
+	assert.equal(calls.length, 1)
+	assert.equal(alerts.length, 0)
 })
