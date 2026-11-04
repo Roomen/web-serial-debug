@@ -1,6 +1,7 @@
 // 桌面客户端外壳：加载与网页版同一份静态页面(desktop/scripts/stage-web.mjs 复制进 dist)，只补网页在 WebView 里缺的能力：
 // 原生串口(serial.rs，前端 js/transport-native-serial.js)、下载落盘、多窗口、原生菜单(menu.rs)与窗口外观。
 // 页面功能与网页版一致，平台差异只走 js/platform.js，页面侧胶水在 js/native-shell.js。
+mod mcp;
 mod menu;
 mod serial;
 mod updater;
@@ -167,6 +168,7 @@ pub fn run() {
 		.plugin(tauri_plugin_opener::init())
 		.plugin(tauri_plugin_updater::Builder::new().build())
 		.manage(serial::SerialState::default())
+		.manage(mcp::McpState::default())
 		.manage(winstate::WinState::default())
 		.manage(updater::UpdateState::default())
 		.invoke_handler(tauri::generate_handler![
@@ -180,11 +182,22 @@ pub fn run() {
 			updater::app_update_check,
 			updater::app_update_install,
 			updater::app_update_ack,
+			mcp::mcp_status,
+			mcp::mcp_enable,
+			mcp::mcp_disable,
+			mcp::mcp_reveal_token,
+			mcp::mcp_regenerate_token,
+			mcp::mcp_register,
+			mcp::mcp_window_state,
+			mcp::mcp_unregister,
+			mcp::mcp_commit,
+			mcp::mcp_reply,
 			titlebar_double_click
 		])
 		.on_window_event(|window, event| {
 			if let tauri::WindowEvent::Destroyed = event {
 				serial::release_destroyed(&window.state::<serial::SerialState>(), window.label());
+				mcp::release_window(&window.app_handle(), &window.state::<mcp::McpState>(), window.label());
 			}
 			// 只记 main 的大小位置：多开的 main-N 每次都相对当前窗口错开，记下来反而会叠在旧位置上
 			if window.label() == MAIN && matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_) | tauri::WindowEvent::CloseRequested { .. }) {
@@ -202,6 +215,8 @@ pub fn run() {
 			}
 		})
 		.setup(|app| {
+			// 上次启用过本地 MCP 服务时只登记「等已登录窗口」，真正监听要等页面注册
+			app.state::<mcp::McpState>().init(app.handle());
 			let m = menu::build(app.handle())?;
 			app.set_menu(m)?;
 			if let Some(handoff) = updater::read_handoff(app.handle()) {

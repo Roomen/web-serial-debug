@@ -23,19 +23,31 @@
 		const doc = root.document
 		const opener = doc.activeElement
 		const mask = mk('div', 'app-dlg-mask')
-		const box = mk('div', 'app-dlg')
+		const box = mk('div', 'app-dlg' + (job.kind === 'panel' ? ' app-dlg-panel' : ''))
 		box.setAttribute('role', job.kind === 'alert' ? 'alertdialog' : 'dialog')
 		box.setAttribute('aria-modal', 'true')
 		const titleId = 'app-dlg-title-' + Date.now().toString(36)
 		const msgId = titleId + '-msg'
 		box.setAttribute('aria-labelledby', titleId)
-		box.setAttribute('aria-describedby', msgId)
 		const title = mk('div', 'app-dlg-title', job.opts.title || '提示')
 		title.id = titleId
-		const msg = mk('div', 'app-dlg-msg', job.message)
-		msg.id = msgId
 		box.appendChild(title)
-		box.appendChild(msg)
+		let msg = null
+		if (job.kind === 'panel') {
+			// 自定义面板：内容由调用方建(文本一律自己用 textContent)，这里只提供模态外壳
+			const body = mk('div', 'app-dlg-body')
+			box.appendChild(body)
+			try {
+				if (job.opts.build) job.opts.build(body)
+			} catch (e) {
+				console.warn('面板内容构建失败', e)
+			}
+		} else {
+			msg = mk('div', 'app-dlg-msg', job.message)
+			msg.id = msgId
+			box.setAttribute('aria-describedby', msgId)
+			box.appendChild(msg)
+		}
 
 		let input = null
 		if (job.kind === 'prompt') {
@@ -51,21 +63,34 @@
 
 		const actions = mk('div', 'app-dlg-actions')
 		let cancelBtn = null
-		if (job.kind !== 'alert') {
-			cancelBtn = mk('button', 'btn btn-sm btn-outline-secondary', job.opts.cancelText || '取消')
-			cancelBtn.type = 'button'
-			actions.appendChild(cancelBtn)
+		let okBtn = null
+		if (job.kind === 'panel') {
+			const closeBtn = mk('button', 'btn btn-sm btn-outline-secondary', job.opts.closeText || '关闭')
+			closeBtn.type = 'button'
+			closeBtn.addEventListener('click', function () { finish(false) })
+			actions.appendChild(closeBtn)
+			cancelBtn = closeBtn
+		} else {
+			if (job.kind !== 'alert') {
+				cancelBtn = mk('button', 'btn btn-sm btn-outline-secondary', job.opts.cancelText || '取消')
+				cancelBtn.type = 'button'
+				actions.appendChild(cancelBtn)
+			}
+			okBtn = mk('button', 'btn btn-sm ' + (job.opts.danger ? 'btn-danger' : 'btn-primary'), job.opts.okText || '确定')
+			okBtn.type = 'button'
+			actions.appendChild(okBtn)
 		}
-		const okBtn = mk('button', 'btn btn-sm ' + (job.opts.danger ? 'btn-danger' : 'btn-primary'), job.opts.okText || '确定')
-		okBtn.type = 'button'
-		actions.appendChild(okBtn)
 		box.appendChild(actions)
 		mask.appendChild(box)
 
 		let done = false
 		function focusInside() {
-			const t = input || okBtn
-			try { t.focus() } catch (e) {}
+			let t = input || okBtn
+			if (!t) {
+				const items = box.querySelectorAll('input,button,select,textarea')
+				t = items.length ? items[0] : null
+			}
+			try { if (t) t.focus() } catch (e) {}
 		}
 		function finish(ok) {
 			if (done) return
@@ -74,7 +99,7 @@
 			doc.removeEventListener('focusin', onFocusIn, true)
 			mask.remove()
 			let value
-			if (job.kind === 'alert') value = undefined
+			if (job.kind === 'alert' || job.kind === 'panel') value = undefined
 			else if (job.kind === 'confirm') value = !!ok
 			else value = ok ? input.value : null
 			current = null
@@ -87,7 +112,9 @@
 		}
 		function onKey(e) {
 			const inBox = !!(e.target && e.target.nodeType === 1 && box.contains(e.target))
-			if (e.key === 'Escape' || (e.key === 'Enter' && !e.isComposing)) {
+			// 面板里的回车留给自己的控件(输入框、按钮)，不当作「确认并关闭」
+			const enterActs = job.kind !== 'panel'
+			if (e.key === 'Escape' || (enterActs && e.key === 'Enter' && !e.isComposing)) {
 				e.stopPropagation()
 				// 焦点不在对话框里：不替它确认 / 取消，也不让页面收到，焦点拉回来
 				if (!inBox) {
@@ -104,7 +131,7 @@
 				e.stopPropagation()
 			} else if (e.key === 'Tab') {
 				// 焦点困在对话框内
-				const items = Array.prototype.slice.call(box.querySelectorAll('input,button'))
+				const items = Array.prototype.slice.call(box.querySelectorAll('input,button,select,textarea'))
 				if (!items.length) return
 				const first = items[0]
 				const last = items[items.length - 1]
@@ -117,8 +144,8 @@
 				}
 			}
 		}
-		okBtn.addEventListener('click', function () { finish(true) })
-		if (cancelBtn) cancelBtn.addEventListener('click', function () { finish(false) })
+		if (okBtn) okBtn.addEventListener('click', function () { finish(true) })
+		if (cancelBtn && job.kind !== 'panel') cancelBtn.addEventListener('click', function () { finish(false) })
 		mask.addEventListener('mousedown', function (e) { if (e.target === mask && job.kind !== 'alert') finish(false) })
 		root.addEventListener('keydown', onKey, true)
 		doc.addEventListener('focusin', onFocusIn, true)
@@ -130,7 +157,7 @@
 			input.focus()
 			input.select()
 		} else {
-			okBtn.focus()
+			focusInside()
 		}
 	}
 
@@ -152,6 +179,8 @@
 		alert(message, opts) { return open('alert', message, '', opts) },
 		confirm(message, opts) { return open('confirm', message, '', opts) },
 		prompt(message, defaultValue, opts) { return open('prompt', message, defaultValue, opts) },
+		// 自定义面板：opts.build(body) 负责填内容，opts.closeText 是关闭键文案；返回的 Promise 在关闭时 resolve(undefined)
+		panel(opts) { return open('panel', '', '', opts) },
 	}
 
 	if (typeof module !== 'undefined' && module.exports) module.exports = api

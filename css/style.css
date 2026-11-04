@@ -12881,6 +12881,20 @@ html[data-layout='modern'] #serial-log-panes:has(.serial-log-mode:not([hidden]) 
 	overflow-wrap: anywhere;
 }
 
+.app-dlg-panel {
+	width: min(560px, calc(100vw - 48px));
+	max-height: min(78vh, 720px);
+	overflow: auto;
+}
+
+.app-dlg-body {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	margin-top: 4px;
+	font-size: 13px;
+}
+
 .app-dlg-input {
 	margin-top: 12px;
 }
@@ -13255,4 +13269,73 @@ html[data-layout='modern'][data-runtime='tauri'] .app-update-shield {
 	place-items: center;
 	background: var(--bs-body-bg);
 	color: var(--bs-body-color);
+}
+
+/* ===== 本地 MCP 服务面板(桌面客户端) ===== */
+html[data-layout='modern'] .mdn-mcp-status {
+	font-weight: 600;
+}
+html[data-layout='modern'] .mdn-mcp-status.is-on {
+	color: var(--bs-success);
+}
+html[data-layout='modern'] .mdn-mcp-status.is-error {
+	color: var(--bs-danger);
+}
+html[data-layout='modern'] .mdn-mcp-url {
+	font-family: var(--bs-font-monospace);
+	font-size: 12px;
+	overflow-wrap: anywhere;
+	opacity: .85;
+}
+html[data-layout='modern'] .mdn-mcp-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+html[data-layout='modern'] .mdn-mcp-label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+	font-size: 12px;
+}
+html[data-layout='modern'] .mdn-mcp-port {
+	width: 96px;
+	font-family: var(--bs-font-monospace);
+}
+html[data-layout='modern'] .mdn-mcp-token {
+	flex: 1 1 220px;
+	min-width: 0;
+	padding: 3px 6px;
+	border: 1px solid var(--bs-border-color);
+	border-radius: 6px;
+	font-family: var(--bs-font-monospace);
+	font-size: 11px;
+	overflow-wrap: anywhere;
+	background: var(--bs-tertiary-bg);
+}
+html[data-layout='modern'] .mdn-mcp-sub {
+	font-weight: 600;
+	font-size: 12px;
+	margin-top: 4px;
+}
+html[data-layout='modern'] .mdn-mcp-cfg {
+	margin: 0;
+	padding: 8px 10px;
+	border: 1px solid var(--bs-border-color);
+	border-radius: 8px;
+	background: var(--bs-tertiary-bg);
+	font-family: var(--bs-font-monospace);
+	font-size: 11px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	max-height: 220px;
+	overflow: auto;
+}
+html[data-layout='modern'] .mdn-mcp-hint {
+	font-size: 12px;
+	line-height: 1.5;
+	opacity: .8;
 }

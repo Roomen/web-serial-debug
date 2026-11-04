@@ -78,6 +78,88 @@
 		captureRaw: function (bytes) { return rawCapArm(bytes) },
 		dumpRaw: function () { return rawCapDump() },
 		streamStats: function () { return rawCapStats() },
+		// ---- MCP 用的类型化业务接口：与 UI 共用同一套函数与同一条串行队列 ----
+		powerState: function () {
+			return {
+				connected: !!bluOpen,
+				opening: !!bluOpening,
+				sampling: !!bluSampling,
+				powered: powerPayload(),
+				voltageMv: setVoltageMv,
+				recordMode: recordMode,
+				sampleRateHz: targetRateHz,
+				sampleCount: dataCount(),
+				connectionGeneration: bluConnGen(),
+			}
+		},
+		captureSummary: function () { return captureSummary() },
+		setPower: function (on, guard) {
+			const want = !!on
+			return runBluOp(async function () {
+				const g = await guardStart(guard)
+				if (g) return g
+				if (!bluOpen) return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
+				const gen = bluConnGen()
+				// 只有「上次命令」的状态才能跳过；实测/未知都不足以代替一次显式命令
+				if (bluPower.source === 'commanded' && bluPower.on === want) {
+					return { ok: true, changed: false, powered: powerPayload() }
+				}
+				const r = want ? await doPowerOn(guard) : await doPowerOff(guard)
+				if (!stillSameConn(gen) && r && r.ok) {
+					return { ok: false, code: 'disconnected', message: '操作期间设备断开，结果未知', executed: 'unknown', powered: powerPayload() }
+				}
+				return r
+			}, { failFast: !!guard })
+		},
+		setVoltage: function (millivolts, guard) {
+			const requested = Math.round(Number(millivolts))
+			return runBluOp(async function () {
+				const g = await guardStart(guard)
+				if (g) return g
+				if (!bluOpen) return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
+				if (!isFinite(requested) || requested < PROTO.VDD_LOW_MV || requested > PROTO.VDD_HIGH_MV) {
+					return { ok: false, code: 'out_of_range', message: '电压必须在 ' + PROTO.VDD_LOW_MV + '..' + PROTO.VDD_HIGH_MV + ' mV' }
+				}
+				const gen = bluConnGen()
+				const applied = await applyVoltageMv(requested, guard)
+				if (!stillSameConn(gen) || applied.stale) {
+					return { ok: false, code: 'disconnected', message: '操作期间设备断开，结果未知', executed: 'unknown' }
+				}
+				if (!applied.ok) return { ok: false, code: 'voltage_write_failed', message: '电压写入失败，未生效', voltageMv: setVoltageMv, requestedMv: requested }
+				return { ok: true, requestedMv: requested, appliedMv: setVoltageMv, clamped: setVoltageMv !== requested }
+			}, { failFast: !!guard })
+		},
+		startCapture: function (guard) {
+			return runBluOp(async function () {
+				const g = await guardStart(guard)
+				if (g) return g
+				if (!bluOpen) return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
+				if (bluSampling) {
+					return { ok: true, changed: false, sampling: true, recordMode: recordMode, sampleRateHz: targetRateHz, voltageMv: setVoltageMv }
+				}
+				const gen = bluConnGen()
+				const r = await startSampling(guard)
+				if (!stillSameConn(gen) && r && r.ok) {
+					return { ok: false, code: 'disconnected', message: '操作期间设备断开，结果未知', executed: 'unknown' }
+				}
+				if (!r || !r.ok) return r || { ok: false, code: 'capture_start_failed', message: '开始采样失败' }
+				return { ok: true, changed: true, sampling: true, recordMode: recordMode, sampleRateHz: targetRateHz, voltageMv: setVoltageMv }
+			}, { failFast: !!guard })
+		},
+		stopCapture: function (guard) {
+			return runBluOp(async function () {
+				const g = await guardStart(guard)
+				if (g) return g
+				if (!bluOpen) return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
+				if (!bluSampling) return { ok: true, changed: false, sampling: false }
+				const gen = bluConnGen()
+				const r = await stopSampling(guard)
+				if (!stillSameConn(gen) && r && r.ok) {
+					return { ok: true, changed: true, sampling: false, note: '设备在停止后断开' }
+				}
+				return r || { ok: false, code: 'stop_write_failed', message: '停止采样失败', sampling: false }
+			}, { failFast: !!guard })
+		},
 	}
 	// SerialPort → SN（WebUSB / metadata / getInfo 扩展字段）；不再展示无意义的 VID:PID
 	const bluPortSn = typeof WeakMap !== 'undefined' ? new WeakMap() : null
@@ -87,6 +169,30 @@
 	let bluManualClose = true
 	let bluSampling = false
 	let bluPowered = false
+	// DUT 供电状态：协议没有读状态命令，只区分「上次命令」「连接时实测」「未知」；未知绝不用推断跳过命令
+	let bluPower = { on: null, source: 'unknown' }
+	// 本次抓取期间是否改过源电压(改了就不能拿当前电压去解释历史样点)
+	let captureVoltageChanges = 0
+	// 电源 / 电压 / 开关机 / 采样启停共用一条串行队列：UI 与 MCP 都从这里过，队列持有到真实操作结束。
+	// MCP 用 failFast(不排在 UI 操作后面)，UI 排队但设上限；锁一直持有到操作真正结束，调用方超时不会提前释放。
+	let bluOpChain = Promise.resolve()
+	let bluOpDepth = 0
+	function runBluOp(fn, opts) {
+		opts = opts || {}
+		if (opts.failFast && bluOpDepth > 0) {
+			return Promise.resolve({ ok: false, code: 'blu_busy', message: '功耗仪正在执行另一项操作，请稍后重试' })
+		}
+		if (bluOpDepth >= 8) {
+			return Promise.resolve({ ok: false, code: 'blu_busy', message: '功耗仪操作队列已满，请稍后重试' })
+		}
+		bluOpDepth++
+		const run = bluOpChain.then(fn, fn)
+		bluOpChain = run.then(function () {}, function () {}).then(function () { bluOpDepth-- })
+		return run
+	}
+	// 连接代次：打开与关闭都会推进(读循环每次启动 +1)，迟到的写/结果据此作废
+	function bluConnGen() { return bluReadGen }
+	function stillSameConn(gen) { return !!bluOpen && bluReadGen === gen }
 	let bluReader = null
 	// 对照 Python BLU2_MP：STOP 后 / START 前丢弃串口残留样点，避免半帧与旧数据进波形
 	let dropSampleStream = false
@@ -1414,6 +1520,31 @@
 		return p
 	}
 
+	// 绑定到发起时的端口与连接代次：中途断开/换设备后不再写到新设备上
+	async function bluWriteOn(port, gen, data, note) {
+		if (!port || !bluOpen || bluPort !== port || bluReadGen !== gen || !port.writable) {
+			if (note) bluLog('写入取消（连接已变化）：' + note, 'warn')
+			return { ok: false, stale: true }
+		}
+		try {
+			const w = port.writable.getWriter()
+			try {
+				await w.write(data)
+			} finally {
+				w.releaseLock()
+			}
+		} catch (e) {
+			bluLog('写入错误' + (note ? '（' + note + '）' : '') + '：' + (e.message || e), 'error')
+			return { ok: false, stale: false }
+		}
+		// 写完之后再确认一次：期间断开/换了设备，这次写入的结果不能算到新连接头上
+		if (!bluOpen || bluPort !== port || bluReadGen !== gen) {
+			if (note) bluLog('写入完成时连接已变化：' + note, 'warn')
+			return { ok: false, stale: true }
+		}
+		return { ok: true, stale: false }
+	}
+
 	async function bluWrite(data, note) {
 		if (!bluPort || !bluOpen || !bluPort.writable) {
 			if (note) bluLog('写入失败（未打开）：' + note, 'error')
@@ -1433,8 +1564,11 @@
 		}
 	}
 
-	function markPowered(on) {
-		bluPowered = !!on
+	// on: true/false = 已知状态(命令或实测)，null = 未知
+	function markPowered(on, source) {
+		const known = on === true || on === false
+		bluPower = { on: known ? on : null, source: known ? (source || 'unknown') : 'unknown' }
+		bluPowered = on === true
 		const btn = E('blu-dut-power')
 		if (!btn) return
 		btn.setAttribute('aria-pressed', String(bluPowered))
@@ -1471,50 +1605,116 @@
 		return { on: med >= DUT_ON_THRESHOLD_UA, medianUA: med, n: vals.length }
 	}
 
+	// guard: { start: async () => err|null, step: () => err|null }，由 MCP 传入；UI 调用不传
+	async function guardStart(guard) {
+		if (!guard || typeof guard.start !== 'function') return null
+		return (await guard.start()) || null
+	}
+	function guardStep(guard) {
+		if (!guard || typeof guard.step !== 'function') return null
+		return guard.step() || null
+	}
+
+	function powerPayload() {
+		return { state: bluPower.on === true ? 'on' : (bluPower.on === false ? 'off' : 'unknown'), source: bluPower.source }
+	}
+
 	async function toggleDutPower() {
 		if (!bluOpen) {
 			bluLog('请先打开设备再上下电', 'warn')
-			return
+			return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
 		}
-		if (bluPowered) await doPowerOff()
-		else await doPowerOn()
+		return bluPowered ? await doPowerOff() : await doPowerOn()
 	}
 
-	async function applyVoltageMv(mv) {
+	// 写源电压。已连接时只有设备写入成功才算「已施加」：失败保持上一次有效值，不把请求值当成事实
+	async function applyVoltageMv(mv, guard) {
 		if (mv == null || !isFinite(mv)) {
 			bluLog('请先设定源电压 mV', 'error')
-			return false
+			return { ok: false, stale: false }
 		}
 		const clamped = Math.max(PROTO.VDD_LOW_MV, Math.min(PROTO.VDD_HIGH_MV, Math.round(mv)))
-		setVoltageMv = clamped
-		syncVoltageInput()
 		if (!bluOpen) {
+			setVoltageMv = clamped
+			syncVoltageInput()
 			bluLog('电压已设为 ' + clamped + ' mV（打开设备后写入）')
 			scheduleUIUpdate()
-			return false
+			return { ok: false, stale: false }
 		}
-		const ok = await bluWrite(PROTO.cmdRegulatorSet(clamped), 'REGULATOR ' + clamped + ' mV')
-		if (ok) bluLog('设定电压 ' + clamped + ' mV', 'success')
+		const g = guardStep(guard)
+		if (g) return { ok: false, stale: false }
+		const port = bluPort
+		const gen = bluReadGen
+		const w = await bluWriteOn(port, gen, PROTO.cmdRegulatorSet(clamped), 'REGULATOR ' + clamped + ' mV')
+		if (!w.ok) {
+			if (!w.stale) bluLog('设定电压失败：设备未确认写入，保持上一次有效电压', 'error')
+			syncVoltageInput()
+			scheduleUIUpdate()
+			return { ok: false, stale: w.stale }
+		}
+		if (setVoltageMv !== clamped && bluSampling) captureVoltageChanges++
+		setVoltageMv = clamped
+		syncVoltageInput()
+		bluLog('设定电压 ' + clamped + ' mV', 'success')
 		scheduleUIUpdate()
-		return ok
+		return { ok: true, stale: false }
 	}
 
-	async function doPowerOn() {
+	// 上电：先写电压，电压写失败绝不上电；绑定发起时的端口/代次，中途换设备不再继续
+	async function doPowerOn(guard) {
+		if (!bluOpen) return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
 		const mv = readSetVoltageMv()
 		if (mv == null || !isFinite(mv) || mv < PROTO.VDD_LOW_MV) {
 			bluLog('请先设定源电压 mV（打开设备后会从设备读取）', 'error')
-			return
+			return { ok: false, code: 'voltage_unknown', message: '尚未设定源电压' }
 		}
-		await applyVoltageMv(mv)
-		await bluWrite(PROTO.cmdDutPower(true), 'DUT 上电')
-		markPowered(true)
-		bluLog('DUT 已上电', 'success')
+		const port = bluPort
+		const gen = bluReadGen
+		const v = await applyVoltageMv(mv, guard)
+		if (!v.ok) {
+			if (v.stale) {
+				return { ok: false, code: 'disconnected', message: '写电压时连接已变化，未上电', executed: 'unknown', powered: powerPayload() }
+			}
+			bluLog('DUT 上电已中止：源电压写入失败', 'error')
+			return { ok: false, code: 'voltage_write_failed', message: '源电压写入失败，未上电', voltageMv: setVoltageMv, powered: powerPayload() }
+		}
+		if (guardStep(guard)) return { ok: false, code: 'aborted', message: '请求已取消，未上电', executed: false, powered: powerPayload() }
+		if (!port || bluPort !== port || bluReadGen !== gen) {
+			return { ok: false, code: 'disconnected', message: '电压写入后设备已变化，未上电', executed: false, powered: powerPayload() }
+		}
+		const w = await bluWriteOn(port, gen, PROTO.cmdDutPower(true), 'DUT 上电')
+		if (!w.ok) {
+			// 连接已经变了(重连/换设备)：这次结果不属于新连接，不能改它的供电状态
+			if (w.stale) {
+				return { ok: false, code: 'disconnected', message: '上电过程中连接已变化，结果未知', executed: 'unknown', powered: powerPayload() }
+			}
+			// 同一连接写失败：不知道设备到底收没收到，标记未知，别让下一次 setPower(旧值) 误跳过命令
+			markPowered(null, 'unknown')
+			bluLog('DUT 上电写入失败：状态未知', 'error')
+			return { ok: false, code: 'power_write_failed', message: '上电命令写入失败，设备状态未知', executed: 'unknown', powered: powerPayload() }
+		}
+		markPowered(true, 'commanded')
+		bluLog('DUT 已上电（命令已写入，设备无回执）', 'success')
+		return { ok: true, changed: true, powered: powerPayload(), voltageMv: setVoltageMv }
 	}
 
-	async function doPowerOff() {
-		await bluWrite(PROTO.cmdDutPower(false), 'DUT 下电')
-		markPowered(false)
-		bluLog('DUT 已下电')
+	async function doPowerOff(guard) {
+		if (!bluOpen) return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
+		if (guardStep(guard)) return { ok: false, code: 'aborted', message: '请求已取消，未执行', executed: false, powered: powerPayload() }
+		const port = bluPort
+		const gen = bluReadGen
+		const w = await bluWriteOn(port, gen, PROTO.cmdDutPower(false), 'DUT 下电')
+		if (!w.ok) {
+			if (w.stale) {
+				return { ok: false, code: 'disconnected', message: '下电过程中连接已变化，结果未知', executed: 'unknown', powered: powerPayload() }
+			}
+			markPowered(null, 'unknown')
+			bluLog('DUT 下电写入失败：状态未知', 'error')
+			return { ok: false, code: 'power_write_failed', message: '下电命令写入失败，设备状态未知', executed: 'unknown', powered: powerPayload() }
+		}
+		markPowered(false, 'commanded')
+		bluLog('DUT 已下电（命令已写入，设备无回执）')
+		return { ok: true, changed: true, powered: powerPayload() }
 	}
 
 	// 对照 API get_modifiers()：发 0x19，收文本至 END，解析 R/O/VDD
@@ -1627,18 +1827,25 @@
 		parser.reset()
 	}
 
-	async function startSampling() {
-		if (!bluOpen || bluSampling) return
+	async function startSampling(guard) {
+		if (!bluOpen) return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
+		if (bluSampling) return { ok: true, changed: false, sampling: true }
 		// API：start_measuring 要求已 set_source_voltage（current_vdd，单位 mV）
 		const mv = readSetVoltageMv()
 		if (!isFinite(mv) || mv < PROTO.VDD_LOW_MV) {
 			bluLog('请先设定源电压 mV（API 要求 current_vdd）', 'error')
-			return
+			return { ok: false, code: 'voltage_unknown', message: '尚未设定源电压' }
 		}
 		// 对照 BLU2_MP.start_measuring：先 STOP → 排空残留 → 再 START
 		dropSampleStream = true
-		try { await bluWrite(PROTO.cmdAverageStop(), 'AVERAGE_STOP') } catch (e) {}
+		const port0 = bluPort
+		const gen0 = bluReadGen
+		try { await bluWriteOn(port0, gen0, PROTO.cmdAverageStop(), 'AVERAGE_STOP') } catch (e) {}
 		await drainSampleRx(RX_DRAIN_MS)
+		if (guardStep(guard)) return { ok: false, code: 'aborted', message: '请求已取消，未开始采样', executed: false }
+		if (!port0 || bluPort !== port0 || bluReadGen !== gen0) {
+			return { ok: false, code: 'disconnected', message: '设备已变化，未开始采样', executed: false }
+		}
 
 		applyRatePreset()
 		// clearAllData 会清 deviceStreamHz，基速先记下再清会话
@@ -1656,6 +1863,11 @@
 				bluLog('初始化波形磁盘存储失败：' + (e && e.message ? e.message : e), 'warn')
 			}
 		}
+		// 磁盘存储初始化等 await 之后重新确认：取消 / 断开 / 换设备都不能继续开始采样
+		if (guardStep(guard)) return { ok: false, code: 'aborted', message: '请求已取消，未开始采样', executed: false }
+		if (!port0 || bluPort !== port0 || bluReadGen !== gen0) {
+			return { ok: false, code: 'disconnected', message: '设备已变化，未开始采样', executed: false }
+		}
 		parser.reset()
 		parser.resetStats()
 		rawCapLen = 0
@@ -1669,6 +1881,7 @@
 		warmupLeft = Math.max(0, Math.min(WARMUP_MAX_SAMPLES, Math.round(targetRateHz * WARMUP_SEC)))
 		metaCollecting = false
 		metaCollectBuf = ''
+		captureVoltageChanges = 0
 		// 每次开始采样默认 Live 滚动（贴最新波形），清掉上次暂停/平移状态
 		view.xOffset = 0
 		view.yPanOffset = 0
@@ -1691,7 +1904,22 @@
 		updateSampleBtn()
 		startStallWatch()
 		// 先发 START，再异步要 WakeLock，避免多等一拍
-		const startOk = await bluWrite(PROTO.cmdAverageStart(), 'AVERAGE_START')
+		const startW = await bluWriteOn(port0, gen0, PROTO.cmdAverageStart(), 'AVERAGE_START')
+		if (!startW.ok) {
+			if (startW.stale) {
+				// 连接已变化：新连接自己的采样状态不归这次请求清理
+				return { ok: false, code: 'disconnected', message: '开始采样过程中连接已变化，结果未知', executed: 'unknown' }
+			}
+			// 同一连接上设备没收到 START：回到未采样态，不能让界面显示正在采样
+			bluSampling = false
+			dropSampleStream = true
+			stopStallWatch()
+			updateSampleBtn()
+			releaseWakeLock()
+			bluLog('开始采样失败：START 写入失败', 'error')
+			scheduleUIUpdate()
+			return { ok: false, code: 'capture_start_failed', message: 'START 写入失败，未开始采样' }
+		}
 		// START 已下发后再接收样点（此前 drop 挡住 STOP 尾包与竞态）
 		dropSampleStream = false
 		requestWakeLock() // 不 await，不挡采样
@@ -1699,7 +1927,7 @@
 		const ramSec = estimateDurationSec(RING_CAP_MAX, targetRateHz)
 		const acqTag = (acqTrigStart !== 'off' ? ' · 等' + acqEdgeLabel(acqTrigStart) + '入库' : '') +
 			(acqTrigStop !== 'off' ? ' · 遇' + acqEdgeLabel(acqTrigStop) + '停采' : '')
-		bluLog((startOk ? 'AVERAGE_START' : 'AVERAGE_START 可能失败') +
+		bluLog('AVERAGE_START' +
 			' · 目标 ' + getRatePreset().label +
 			' · ' + (recordMode === 'long' ? '长期统计' : '波形') +
 			' · Live 滚动' +
@@ -1710,10 +1938,13 @@
 					' · 磁盘 ' + fmtGb(storageCfg.diskGB))
 				: '') +
 			(modifiersOk ? '' : ' · 默认修正参数'))
+		return { ok: true, changed: true, sampling: true }
 	}
 
-	async function stopSampling() {
-		if (!bluSampling) return
+	async function stopSampling(guard) {
+		if (!bluSampling) return { ok: true, changed: false, sampling: false }
+		const port0 = bluPort
+		const gen0 = bluReadGen
 		// 先停入库，再 STOP；对照 API stop_measuring：发 STOP 后 get_data 丢弃残留
 		bluSampling = false
 		dropSampleStream = true
@@ -1722,12 +1953,18 @@
 		acqTrigStartLatched = false
 		stopStallWatch()
 		updateSampleBtn()
-		try { await bluWrite(PROTO.cmdAverageStop(), 'AVERAGE_STOP') } catch (e) {}
+		let stopW = { ok: true, stale: false }
+		try { stopW = await bluWriteOn(port0, gen0, PROTO.cmdAverageStop(), 'AVERAGE_STOP') } catch (e) { stopW = { ok: false, stale: false } }
+		const stopOk = stopW.ok
 		parser.reset()
 		releaseWakeLock()
 		bluLog(storageStop ? '已停止采样（存储限制）' : '已停止采样')
+		if (!stopOk) bluLog('STOP 写入失败：本地已停止入库，设备可能仍在采样', 'warn')
 		updateStorageUsage()
 		scheduleUIUpdate()
+		if (stopOk) return { ok: true, changed: true, sampling: false }
+		if (stopW.stale) return { ok: false, code: 'disconnected', message: '停止采样过程中连接已变化，结果未知', executed: 'unknown', sampling: false }
+		return { ok: false, code: 'stop_write_failed', message: 'STOP 写入失败，设备可能仍在采样', sampling: false }
 	}
 
 	function acqEdgeLabel(mode) {
@@ -2081,7 +2318,7 @@
 			// 打开设备不改变设备侧供电；实测一下它现在到底带没带电，按钮照实显示
 			const probe = await probeDutPower()
 			if (probe) {
-				markPowered(probe.on)
+				markPowered(probe.on, 'probed')
 				bluLog('DUT 供电实测：' + (probe.on ? '上电' : '下电') +
 					'（探测电流中位数 ' + fmtCurrent(probe.medianUA) + '）',
 					probe.on ? 'success' : '')
@@ -2099,6 +2336,8 @@
 
 	async function bluClosePort(opts) {
 		opts = opts || {}
+		// 立刻作废旧代次：在飞的电源/电压/采样操作下一次检查就停下，不会写到重连后的新设备上
+		bluReadGen++
 		if (opts.manual !== false) bluManualClose = true
 		// 采样中关闭：先 AVERAGE_STOP 停采，再关串口；不改上下电、不改电压
 		if (bluSampling) {
@@ -2134,7 +2373,7 @@
 		clearVoltageUi()
 		// 手动点「关闭」：不碰 DUT 上下电 UI（设备侧供电状态仍由用户控制）
 		// 意外断开：连接已失，复位上电按钮避免误显示
-		if (opts.manual === false) markPowered(false)
+		if (opts.manual === false) markPowered(null, 'unknown')
 		if (opts.manual !== false) bluLog('设备已关闭')
 		scheduleUIUpdate()
 	}
@@ -4007,7 +4246,8 @@
 		overallStatDirty = true
 	}
 
-	function updateStats() {
+	// 当前记录模式的总体统计：UI 与 MCP 摘要共用同一份(波形用块级存储累加，长期模式用积分)
+	function overallStats() {
 		if (recordMode === 'long') {
 			const n = longStats.n
 			const dur = Math.max(0, longStats.tLast - longStats.t0)
@@ -4026,16 +4266,57 @@
 				st.chargeUAh = longStats.energyUAs / 3600
 				st.energyUWh = avgI * setVoltageV() * dur / 3600
 			}
-			fillStatRow('blu-stat-overall', st)
-			fillStatRow('blu-stat-window', emptyStats())
-			fillStatRow('blu-stat-cursor', emptyStats(), { showEmpty: true })
-			return
+			return st
 		}
 		if (overallStatDirty || !overallStatCache) {
 			overallStatCache = calcStats(0, ringCount)
 			overallStatDirty = false
 		}
-		fillStatRow('blu-stat-overall', overallStatCache)
+		return overallStatCache
+	}
+
+	// MCP 摘要：单位、口径与数据来源都写清楚；不另起采样、不读日志 DOM
+	function captureSummary() {
+		const st = overallStats()
+		// 长期模式样点不进波形环，数量与保留量都取 longStats；波形模式才用环计数
+		const total = recordMode === 'long' ? longStats.n : dataCount()
+		const retained = recordMode === 'long' ? longStats.n : ringCount
+		const sampleHz = targetRateHz > 0 ? targetRateHz : deviceStreamHz
+		const period = samplePeriodSec > 0 ? samplePeriodSec : (sampleHz > 0 ? 1 / sampleHz : 0)
+		const evicted = recordMode !== 'long' && retained < total
+		const out = {
+			ready: total > 0,
+			sampling: !!bluSampling,
+			mode: recordMode,
+			totalSamples: total,
+			retainedSamples: retained,
+			// 波形模式超出 RAM 后旧样点被淘汰，统计只覆盖仍保留的样点
+			span: evicted ? 'retained' : 'full_session',
+			durationSec: st.dur,
+			sampleRateHz: sampleHz,
+			samplePeriodSec: period,
+			voltageMvNow: setVoltageMv,
+			voltageChangedDuringCapture: captureVoltageChanges > 0,
+			currentUA: { avg: st.avgI, min: st.minI, max: st.maxI },
+			chargeUC: st.chargeUC,
+			chargeUAh: st.chargeUAh,
+			// 波形模式有存储的块级功率累加；长期模式只积分电流，不拿当前电压去凑能量
+			energyUWh: recordMode === 'long' ? null : (st.n ? st.energyUWh : null),
+			energySource: recordMode === 'long' ? 'unavailable' : 'stored_chunk_sums',
+			storageStop: !!storageStop,
+			powered: powerPayload(),
+		}
+		if (!out.ready) out.reason = bluOpen ? 'no_samples' : 'blu_not_connected'
+		return out
+	}
+
+	function updateStats() {
+		fillStatRow('blu-stat-overall', overallStats())
+		if (recordMode === 'long') {
+			fillStatRow('blu-stat-window', emptyStats())
+			fillStatRow('blu-stat-cursor', emptyStats(), { showEmpty: true })
+			return
+		}
 		const vr = getViewRange()
 		fillStatRow('blu-stat-window', calcStats(vr.start, vr.end + 1))
 		const sel = getSelectionRange()
@@ -6322,8 +6603,9 @@
 
 		const elSelect = E('blu-select-port')
 		if (elSelect) {
-			elSelect.addEventListener('click', async function (e) {
+			elSelect.addEventListener('click', function (e) {
 				e.stopPropagation()
+				runBluOp(async function () {
 				try {
 					const port = await SerialAdapter.requestPort({
 						filters: PROTO.USB_FILTERS,
@@ -6352,25 +6634,28 @@
 				} catch (err) {
 					if (err && err.name !== 'NotFoundError') bluLog('添加设备：' + (err.message || err), 'error')
 				}
+				})
 			})
 		}
 
 		const elOpen = E('blu-open')
 		if (elOpen) {
-			elOpen.addEventListener('click', async function () {
-				if (bluOpening) return
-				if (!bluPort) await refreshBluPorts({ log: false })
-				if (!bluPort) {
-					bluLog('未检测到设备，请点「BLU」→ 添加设备', 'error')
-					setDeviceMenuOpen(true)
-					return
-				}
-				if (bluOpen) {
-					bluOpening = true
-					try { await bluClosePort({ manual: true }) } finally { bluOpening = false }
-				} else {
-					await bluOpenPort()
-				}
+			elOpen.addEventListener('click', function () {
+				runBluOp(async function () {
+					if (bluOpening) return
+					if (!bluPort) await refreshBluPorts({ log: false })
+					if (!bluPort) {
+						bluLog('未检测到设备，请点「BLU」→ 添加设备', 'error')
+						setDeviceMenuOpen(true)
+						return
+					}
+					if (bluOpen) {
+						bluOpening = true
+						try { await bluClosePort({ manual: true }) } finally { bluOpening = false }
+					} else {
+						await bluOpenPort()
+					}
+				})
 			})
 		}
 
@@ -6394,14 +6679,16 @@
 
 		const elStart = E('blu-start')
 		if (elStart) {
-			elStart.addEventListener('click', async function () {
-				if (bluSampling) await stopSampling()
-				else await startSampling()
+			elStart.addEventListener('click', function () {
+				runBluOp(async function () {
+					if (bluSampling) await stopSampling()
+					else await startSampling()
+				})
 			})
 		}
 
 		const elDutPower = E('blu-dut-power')
-		if (elDutPower) elDutPower.addEventListener('click', function () { toggleDutPower() })
+		if (elDutPower) elDutPower.addEventListener('click', function () { runBluOp(function () { return toggleDutPower() }) })
 
 		const elVolt = E('blu-voltage-set')
 		if (elVolt) {
@@ -6415,7 +6702,7 @@
 					bluLog('请输入源电压 mV', 'warn')
 					return
 				}
-				applyVoltageMv(mv)
+				runBluOp(function () { return applyVoltageMv(mv) })
 			})
 			elVolt.addEventListener('keydown', function (e) {
 				if (e.key === 'Enter') {
@@ -6426,7 +6713,7 @@
 						bluLog('请输入源电压 mV', 'warn')
 						return
 					}
-					applyVoltageMv(mv)
+					runBluOp(function () { return applyVoltageMv(mv) })
 					elVolt.blur()
 				}
 			})
@@ -6434,7 +6721,7 @@
 
 		// 初始连接按钮态
 		setStatus('未连接', false)
-		markPowered(false)
+		markPowered(null, 'unknown')
 
 		const elRate = E('blu-sample-rate')
 		if (elRate) {

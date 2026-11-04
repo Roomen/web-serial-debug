@@ -216,6 +216,50 @@ test('command-palette 的 isPaletteKey 与 native-shell 的 PAGE_KEYS 都不认 
 	}
 })
 
+test('panel：自定义内容可构建，Enter 不关面板，Esc 关闭并 resolve', async () => {
+	const d = makeDom()
+	let built = 0
+	const res = d.api.panel({
+		title: '本地服务',
+		closeText: '关闭',
+		build(body) {
+			built++
+			const btn = new d.El('button')
+			btn.textContent = '内部按钮'
+			body.appendChild(btn)
+		},
+	})
+	assert.equal(built, 1)
+	assert.equal(d.api.isOpen(), true)
+	const mask = d.mask()
+	assert.ok(mask)
+	assert.equal(find(mask, (n) => n.className === 'app-dlg-title').textContent, '本地服务')
+	assert.equal(find(mask, (n) => n.className === 'app-dlg-msg'), null, '面板没有消息段')
+	assert.ok(find(mask, (n) => n.tagName === 'BUTTON' && n.textContent === '内部按钮'))
+	const enter = d.key(d.doc.activeElement, 'Enter')
+	assert.equal(enter.stopped, false, '面板里的回车留给自己的控件')
+	assert.equal(d.api.isOpen(), true)
+	d.key(d.doc.activeElement, 'Escape')
+	assert.equal(await res, undefined)
+	assert.equal(d.api.isOpen(), false)
+	assert.equal(d.mask(), null)
+	assert.equal(d.dialogKeyListeners(), 0)
+})
+
+test('panel 与普通对话框共用同一个模态队列', async () => {
+	const d = makeDom()
+	const panel = d.api.panel({ title: '面板', build() {} })
+	const queued = d.api.confirm('后面的确认')
+	assert.equal(d.mask().className, 'app-dlg-mask')
+	assert.equal(find(d.mask(), (n) => n.className === 'app-dlg-title').textContent, '面板')
+	d.key(d.doc.activeElement, 'Escape')
+	await panel
+	assert.equal(d.api.isOpen(), true, '排队的确认框紧接着显示')
+	assert.equal(find(d.mask(), (n) => n.className === 'app-dlg-msg').textContent, '后面的确认')
+	d.key(d.doc.activeElement, 'Enter')
+	assert.equal(await queued, true)
+})
+
 ;(async () => {
 	let failed = 0
 	for (const t of tests) {
