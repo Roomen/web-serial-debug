@@ -1,5 +1,6 @@
 // 包一层 tauri CLI：应用版本只来自 js/version.js(window.APP_VERSION)，每次经 --config 传入，tauri.conf.json 与 Cargo.toml 不写版本。
 // build 成功后把安装包复制进 desktop/release/<通道>/(每个通道只留最新一版，不入库)：macOS 只有 .dmg，Windows 是便携 ZIP；配了更新签名时另带应用内更新用的包与 .sig。
+// Windows 的便携 ZIP 里还要放更新 helper(desktop/portable-updater)，所以打包前先编译它；它内嵌的公钥必须与构建同一份配置。
 // 通道两个：main(正式版，从 main 分支构建)与 dev(最新预览，其它分支构建都算)，按构建时所在的 git 分支判定，环境变量 RELEASE_CHANNEL=main|dev 可强制指定；
 // 只清理并写入本通道的目录，另一个通道的包原样保留。
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
@@ -7,7 +8,7 @@ import { spawnSync } from 'node:child_process'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { macSigningConfig, releaseChannel, updaterConfig } from './release-config.mjs'
-import { buildTarget, packageWindows } from './portable-windows.mjs'
+import { buildTarget, cargoTargetDir, packageWindows } from './portable-windows.mjs'
 
 const desktop = join(dirname(fileURLToPath(import.meta.url)), '..')
 const src = readFileSync(join(desktop, '..', 'js', 'version.js'), 'utf8')
@@ -32,10 +33,28 @@ const bin = join(desktop, 'node_modules', '@tauri-apps', 'cli', 'tauri.js')
 const started = Date.now()
 const r = spawnSync(process.execPath, [bin, ...args], { cwd: desktop, stdio: 'inherit' })
 if (r.status === 0 && sub === 'build' && !skipPackage) {
-	if (windows) packageWindows({ desktop, version, channel, target, debug: args.includes('--debug') })
+	if (windows) {
+		buildHelper(target, args.includes('--debug'))
+		packageWindows({ desktop, version, channel, target, debug: args.includes('--debug') })
+	}
 	else collect()
 }
 process.exit(r.status == null ? 1 : r.status)
+
+// 便携版更新 helper：与主程序同 target / 同 profile 编译，公钥经环境变量注入(build.rs 编译期内嵌)。
+// 失败就让整个构建失败：没有 helper 的 ZIP 无法应用内更新，不能静默出一个半成品包。
+function buildHelper(target, debug) {
+	const args = ['build', '--manifest-path', join(desktop, 'portable-updater', 'Cargo.toml'), '--bin', 'serial-debug-updater']
+	if (target) args.push('--target', target)
+	if (!debug) args.push('--release')
+	// helper 是独立包(不在 src-tauri 的依赖图里)，但产物要和主程序放在同一个 target 目录。
+	// 必须复用 cargoTargetDir：CARGO_TARGET_DIR 是绝对路径时它原样返回，join 会拼成 src-tauri/<绝对路径>
+	// 那种无效目录，helper 编译到别处而打包脚本按 resolve 去找，构建直接报「找不到更新助手」。
+	const helperTargetDir = cargoTargetDir(desktop)
+	const r = spawnSync('cargo', args, { cwd: desktop, stdio: 'inherit', env: { ...process.env, CARGO_TARGET_DIR: helperTargetDir } })
+	if (r.error || r.status !== 0) throw new Error('构建更新助手 serial-debug-updater 失败', { cause: r.error })
+	console.log('release: 已编译更新助手 → ' + helperTargetDir)
+}
 
 // ---- 构建产物 → desktop/release/<通道> ----
 function archOf(triple) {

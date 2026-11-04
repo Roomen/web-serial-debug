@@ -14,12 +14,14 @@
 	const $ = function (id) { return doc.getElementById(id) }
 	const win = T.window && T.window.getCurrentWindow ? T.window.getCurrentWindow() : null
 	// 页面只认平台服务，更新插件与原生事件都封装在桌面组装点。
+	// Windows 便携版也走同一套检查/下载/安装：Rust 端下载并验签后交给便携 helper 退出替换 EXE。
 	let updatePreparing = false
 	P.provide('app-update', {
-		manualDownloadUrl: P.os === 'windows' ? (root.APP_RELEASE_CHANNEL === 'dev' ? 'https://serial-dev.logan825.org/download/' : 'https://serial.logan825.org/download/') : null,
 		check: function () { return T.core.invoke('app_update_check') },
 		install: function (version) { return T.core.invoke('app_update_install', { version: version }) },
 		ack: function (operationId, ready, session) { return T.core.invoke('app_update_ack', { operationId: operationId, ready: ready, session: session || {} }) },
+		// 上一次安装失败时 helper 留下的原因(读一次即删)
+		takeResult: function () { return T.core.invoke('app_update_result') },
 		listen: function (name, cb) { return T.event.listen(name, function (e) { cb(e.payload || {}) }) },
 		isPreparing: function () { return updatePreparing },
 		setPreparing: function (value) { updatePreparing = !!value },

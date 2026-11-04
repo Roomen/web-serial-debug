@@ -1,8 +1,11 @@
 // 原生应用升级。更新对象只存于 Rust，不接受页面提供的 URL / 签名。
+// macOS 走安装包(updater 插件的 install)；Windows 是免安装的便携 ZIP，由便携 helper 在主程序退出后替换 EXE。
 use std::{collections::HashMap, sync::{Condvar, Mutex}, time::{Duration, Instant}};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, Webview};
 use tauri_plugin_updater::{Update, UpdaterExt};
+
+use crate::portable;
 
 #[derive(Default)]
 struct Inner {
@@ -61,6 +64,18 @@ fn configured(app: &AppHandle) -> bool {
     let config = app.config().plugins.0.get("updater");
     config.and_then(|v| v.get("pubkey")).and_then(|v| v.as_str()).is_some_and(|s| !s.trim().is_empty())
         && config.and_then(|v| v.get("endpoints")).and_then(|v| v.as_array()).is_some_and(|a| !a.is_empty())
+}
+
+// 便携版判定：Windows 且不是安装器打出来的包(bundle_type 为空)。
+// 历史遗留的安装器版本仍交给插件自己的静默安装，不与便携替换抢同一个 EXE。
+pub fn portable_mode() -> bool {
+    cfg!(windows) && tauri::utils::platform::bundle_type().is_none()
+}
+
+// 重启后把 helper 留下的失败原因交给页面(读一次即删)，页面据此提示并允许重试
+#[tauri::command]
+pub fn app_update_result(app: AppHandle) -> Option<portable_update_common::UpdateResult> {
+    portable::take_result(&app)
 }
 
 #[tauri::command]
@@ -219,6 +234,10 @@ pub async fn app_update_install(app: AppHandle, state: State<'_, UpdateState>, v
             received += n as u64;
             progress(&app, id, "downloading", received, total);
         }, || {}).await.map_err(|_| "更新下载或签名验证失败，请重试或从发布页下载".to_string())?;
+        // 便携版只接受能自己完成替换的载荷(主程序 + helper)；别的包让它去下载页拿
+        if portable_mode() && !portable::payload_supported(&bytes) {
+            return Err("更新包不是便携版格式，请到发布页下载新版 ZIP".into());
+        }
         {
             let mut inner = state.inner.lock().unwrap();
             inner.frozen = true;
@@ -239,6 +258,12 @@ pub async fn app_update_install(app: AppHandle, state: State<'_, UpdateState>, v
             crate::serial::release_owner(&app.state::<crate::serial::SerialState>(), &label);
         }
         progress(&app, id, "installing", received, Some(received));
+        if portable_mode() {
+            // 把载荷、计划与 helper 写进私有暂存目录，再由 helper 在自己退出后替换 EXE。
+            // helper 会再用内嵌公钥复核签名，验不过就不动任何文件。
+            portable::launch(&app, &bytes, &update.signature, &update.version)?;
+            return Ok(());
+        }
         tauri::async_runtime::spawn_blocking(move || update.install(bytes)).await
             .map_err(|_| "安装更新失败，请重试".to_string())?
             .map_err(|_| "安装更新失败，请重试或从发布页下载".to_string())?;
@@ -246,7 +271,14 @@ pub async fn app_update_install(app: AppHandle, state: State<'_, UpdateState>, v
     }.await;
     if result.is_ok() {
         let _ = app.emit("app-update-finished", serde_json::json!({ "operationId": id, "success": true }));
-        app.restart();
+        // 便携版先退出：helper 要等安装目录里的实例全退出才能换文件，再重新启动新旧版本。
+        // 这里的会话交接文件必须留到下一次启动读取，所以成功路径直接返回，不走下面的失败清理。
+        if portable_mode() {
+            app.exit(0);
+        } else {
+            app.restart();
+        }
+        return Ok(());
     }
     {
         let mut inner = state.inner.lock().unwrap();

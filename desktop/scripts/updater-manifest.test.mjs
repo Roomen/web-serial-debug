@@ -7,25 +7,49 @@ import { compareVersions, createManifest } from './updater-manifest.mjs'
 import { promotePointer } from './channel-pointer.mjs'
 import { macSigningConfig, updaterConfig } from './release-config.mjs'
 
-test('macOS updater manifest uses immutable assets; portable Windows has no installer update', () => {
+function packages(dir, version, names) {
+	for (const name of names) {
+		const file = `Serial-Debug_${version}_${name}`
+		writeFileSync(join(dir, file), 'package')
+		writeFileSync(join(dir, file + '.sig'), 'c2lnbmF0dXJl\n')
+	}
+}
+
+test('manifest covers macOS installer update and Windows portable update, nothing else', () => {
 	const dir = mkdtempSync(join(tmpdir(), 'updater-'))
 	try {
-		for (const name of ['macos_arm64.app.tar.gz']) {
-			writeFileSync(join(dir, 'Serial-Debug_1.71.0_' + name), 'package')
-			writeFileSync(join(dir, 'Serial-Debug_1.71.0_' + name + '.sig'), 'c2lnbmF0dXJl\n')
-		}
+		packages(dir, '1.71.0', ['macos_arm64.app.tar.gz', 'windows_x64.zip'])
 		const args = { directory: dir, version: '1.71.0', channel: 'dev', previous: { version: '1.70.9' } }
 		const manifest = createManifest(args)
-		assert.equal(Object.keys(manifest.platforms).length, 1)
+		assert.deepEqual(Object.keys(manifest.platforms).sort(), ['darwin-aarch64', 'windows-x86_64'])
 		assert.equal(manifest.platforms['darwin-aarch64'].signature, 'c2lnbmF0dXJl')
-		assert.equal(manifest.platforms['windows-x86_64'], undefined)
-		assert.equal(manifest.platforms['darwin-x86_64'], undefined)
+		// Windows 便携版没有安装器产物，平台键不带 nsis / msi 后缀
 		assert.equal(manifest.platforms['windows-x86_64-nsis'], undefined)
 		assert.equal(manifest.platforms['windows-x86_64-msi'], undefined)
+		assert.equal(manifest.platforms['darwin-x86_64'], undefined)
+		assert.match(manifest.platforms['windows-x86_64'].url, /desktop-dev-v1\.71\.0\/Serial-Debug_1\.71\.0_windows_x64\.zip$/)
 		assert.throws(() => createManifest({ ...args, previous: { version: '1.71.0' } }), /必须高于/)
 		assert.throws(() => createManifest({ ...args, previous: { version: '2.0.0' } }), /必须高于/)
+		// 任一平台的签名无效都失败(先坏 Windows 的签名，macOS 的仍有效)
+		writeFileSync(join(dir, 'Serial-Debug_1.71.0_windows_x64.zip.sig'), 'not a signature !!')
+		assert.throws(() => createManifest(args), /签名无效: Serial-Debug_1\.71\.0_windows_x64\.zip/)
+		// 签名文件缺失也是失败，不是跳过该平台
 		rmSync(join(dir, 'Serial-Debug_1.71.0_macos_arm64.app.tar.gz.sig'))
 		assert.throws(() => createManifest(args), /ENOENT/)
+	} finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('a manifest missing either platform fails instead of publishing a partial one', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'updater-'))
+	try {
+		// 只有 Windows 包：macOS 客户端必须也拿不到半份清单，构建直接失败
+		packages(dir, '1.71.0', ['windows_x64.zip'])
+		assert.throws(() => createManifest({ directory: dir, version: '1.71.0', channel: 'main' }), /缺少更新包: Serial-Debug_1\.71\.0_macos_arm64\.app\.tar\.gz/)
+		// 只有 macOS 包：同样失败
+		rmSync(join(dir, 'Serial-Debug_1.71.0_windows_x64.zip'))
+		rmSync(join(dir, 'Serial-Debug_1.71.0_windows_x64.zip.sig'))
+		packages(dir, '1.71.0', ['macos_arm64.app.tar.gz'])
+		assert.throws(() => createManifest({ directory: dir, version: '1.71.0', channel: 'main' }), /缺少更新包: Serial-Debug_1\.71\.0_windows_x64\.zip/)
 	} finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
@@ -80,9 +104,22 @@ test('macOS builds without Developer ID are ad-hoc signed as a whole bundle', ()
 	assert.deepEqual(macSigningConfig({}, 'win32'), {})
 })
 
-test('Windows ZIP never enables the installer updater even with signing keys', () => {
+test('Windows portable updates use the same signed channel but never build installer artifacts', () => {
 	const config = updaterConfig('main', { TAURI_UPDATER_PUBLIC_KEY: 'public', TAURI_SIGNING_PRIVATE_KEY: 'secret' }, 'win32')
+	// 便携 ZIP 由 portable-windows.mjs 自己签名，tauri 不生成安装器更新产物
 	assert.equal(config.bundle.createUpdaterArtifacts, false)
-	assert.equal(config.plugins.updater.pubkey, '')
-	assert.equal(config.plugins.updater.endpoints, undefined)
+	// 但检查/下载仍走同一套端点与公钥
+	assert.equal(config.plugins.updater.pubkey, 'public')
+	assert.equal(config.plugins.updater.requireSignedVersion, true)
+	assert.match(config.plugins.updater.endpoints[0], /desktop-main\/latest\.json$/)
+})
+
+test('signature version binding is requested so a new version cannot pair with an old signed package', () => {
+	const mac = updaterConfig('dev', { TAURI_UPDATER_PUBLIC_KEY: 'public', TAURI_SIGNING_PRIVATE_KEY: 'secret' }, 'darwin')
+	assert.equal(mac.plugins.updater.requireSignedVersion, true)
+	assert.equal(mac.bundle.createUpdaterArtifacts, true)
+	// 没有私钥时 macOS 不出更新包，但配置里仍要求版本绑定
+	const unsigned = updaterConfig('dev', { TAURI_UPDATER_PUBLIC_KEY: 'public' }, 'darwin')
+	assert.equal(unsigned.bundle.createUpdaterArtifacts, false)
+	assert.equal(unsigned.plugins.updater.requireSignedVersion, true)
 })

@@ -2,7 +2,7 @@
 
 客户端版本只取 `js/version.js`。正式版从 `main` 发布、预览版从 `dev` 发布；其它分支的本地构建默认是 `dev`。本地可用 `RELEASE_CHANNEL=main|dev` 覆盖。通道在构建时写入网页资源，更新时不切换通道。
 
-首次接入应用内更新需要手动安装包含 updater 且配置了公钥的发布版；此前客户端只有网页版本刷新检测，不能自行升级到这套机制。
+首次接入应用内更新需要手动安装包含 updater 且配置了公钥的发布版；此前客户端只有网页版本刷新检测，不能自行升级到这套机制。Windows 早期只有手动下载 ZIP，这些用户需要手动换一次带更新功能的便携包，之后即可应用内更新。
 
 本地 `npm run build` 不要求更新签名。macOS 设置 `TAURI_UPDATER_PUBLIC_KEY` 后客户端启用更新检查；同时设置 `TAURI_SIGNING_PRIVATE_KEY`（以及可选的 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）才生成更新包和 `.sig`。没有公钥时构建不嵌入假的公钥、也不提供可安装的更新。公钥必须长期保持一致；轮换需另行设计迁移，不能直接替换已有客户端信任的公钥。
 
@@ -14,7 +14,9 @@
 - Secrets：`TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
 - macOS Secrets：`APPLE_CERTIFICATE`（P12 的 Base64）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`（公证专用密码）、`APPLE_TEAM_ID`。
 
-私钥和 Apple 凭据不要提交仓库。正式版（`main`）要求更新签名配置齐全，缺少直接失败；两个通道缺 Apple 配置时都出整包 ad-hoc 签名的 macOS 包（`release-config.mjs` 的 `macSigningConfig`，首次打开在「隐私与安全性」点「仍要打开」；不要退回只有链接器签名的包，没有封存资源会被判「已损坏」，只能 `xattr -cr`），缺更新签名时只发布安装包、不生成更新清单，客户端不会收到这一版的应用内更新。Windows ZIP 不走 Tauri 安装器更新、不生成更新签名；Windows Authenticode 代码签名尚需另行配置，现阶段运行程序可能出现系统信誉提示。
+私钥和 Apple 凭据不要提交仓库。正式版（`main`）要求更新签名配置齐全，缺少直接失败；两个通道缺 Apple 配置时都出整包 ad-hoc 签名的 macOS 包（`release-config.mjs` 的 `macSigningConfig`，首次打开在「隐私与安全性」点「仍要打开」；不要退回只有链接器签名的包，没有封存资源会被判「已损坏」，只能 `xattr -cr`），缺更新签名时只发布安装包、不生成更新清单，客户端不会收到这一版的应用内更新。
+
+Windows 便携 ZIP 同样使用这套公钥签名（`signer sign --app-version <版本>`，签名里带版本号，客户端开启 `requireSignedVersion`），但载荷由便携 helper 替换 EXE，不经过 Tauri 安装器。没有 `TAURI_UPDATER_PUBLIC_KEY` 时本地仍能构建并手动解压使用便携包，只是不生成 `.sig`、不进入清单。Windows Authenticode 代码签名尚需另行配置，现阶段运行程序可能出现系统信誉提示；应用内更新的完整性由更新签名保证，与 Authenticode 是两套独立机制。
 
 ## 发布流程
 
@@ -28,11 +30,32 @@
 
 如发布在推进通道前失败，已有通道继续指向上一版。检查草稿/已发布版本与产物后人工处理失败版本，再重跑；流程不会静默覆盖同版本资产。
 
-macOS 安装包只发布 `.dmg`，不再提供 `.app.zip`；应用内更新安装的 `.app.tar.gz` 只在配了更新签名时随版本发布。Windows 只发布 `Serial-Debug_<version>_windows_x64.zip`，不生成 NSIS / MSI 安装程序。`npm run build` 在 Windows 上自动跳过 Tauri bundler，将本次目标目录的 `serial-debug.exe` 和使用说明压成 ZIP，归档到 `desktop/release/<channel>/`；显式 `--no-bundle` 时只编译、不归档。ZIP 解压后运行 `Serial Debug.exe`，无需安装或管理员权限，不创建快捷方式与卸载项。
+macOS 安装包只发布 `.dmg`，不再提供 `.app.zip`；应用内更新安装的 `.app.tar.gz` 只在配了更新签名时随版本发布。Windows 只发布 `Serial-Debug_<version>_windows_x64.zip`，不生成 NSIS / MSI 安装程序。`npm run build` 在 Windows 上自动跳过 Tauri bundler，先编译更新 helper（`desktop/portable-updater`，产物与主程序同在一个 target 目录），再把 `Serial Debug.exe`、`serial-debug-updater.exe` 与 `README.txt` 压成 ZIP，归档到 `desktop/release/<channel>/`；配了更新签名时另出 `<zip>.sig`。显式 `--no-bundle` 时只编译、不归档。ZIP 解压后运行 `Serial Debug.exe`，无需安装或管理员权限，不创建快捷方式与卸载项；`serial-debug-updater.exe` 必须与主程序放在同一文件夹。
 
 运行环境为 Windows 10/11 和 Microsoft Edge WebView2 Evergreen Runtime（ZIP 不包含该运行时，缺少时需从 Microsoft 官网安装）。配置、授权和日志仍沿用当前用户应用数据目录，便于旧安装版迁移，不随 ZIP 移动。旧安装版用户需手动下载 ZIP 并退出旧程序；可卸载旧安装器版本后使用 ZIP。新版本不再向旧 Windows 安装版提供安装器更新，旧版检查更新可能报错，需手动前往下载页。
 
-Windows 配置菜单的「下载新版 ZIP…」及原生更新菜单打开对应通道下载页，不自动检查或覆盖运行中的 EXE。更新时退出全部窗口，解压新版替换程序；macOS 的更新下载、签名与安装屏障保持原有流程。需在 Windows 实机验证 ZIP 解压启动、WebView2 缺失提示、串口功能及手动升级后的配置保留。
+## Windows 便携版的应用内更新
+
+Windows 与 macOS 共用同一套更新入口、通道清单、进度、全窗口空闲屏障、串口句柄释放与会话交接，区别只在最后一步怎么落地：
+
+1. `js/app-update.js` / `js/native-shell.js` 调 `app_update_check`（tauri-plugin-updater，公钥与端点在构建时写入）。
+2. 用户确认后 `app_update_install` 下载清单里的便携 ZIP；`Update::download` 内部先做一次签名校验，校验不过不会进入准备阶段。
+3. 全部窗口确认空闲、会话写入交接文件、MCP 在飞请求作废、原生串口句柄收回后，Rust 端把已验签的 ZIP、`plan.json` 与 ZIP 里的 helper 写进应用数据目录下的 `update/<operation>/`（私有暂存），写 `update-in-progress.json` 标记，启动 helper 后 `app.exit(0)`。
+4. helper 只收一个绝对路径参数（计划文件），自己再校验计划格式与路径、用编译期内嵌的公钥复核 ZIP 签名并要求签名的版本与计划一致，再按白名单从 ZIP 里取主程序与说明文件。
+5. helper 用 ToolHelp 枚举「同一安装目录」的全部实例（按完整映像路径比对，不是只看名字），等它们退出（默认 60 s，最多 10 min）；查询失败按「还没退出」处理而不是当作没有实例。
+6. 替换是「写新文件并回读核对 → 旧文件改名备份 → 新文件就位 → 再核对内容 → 删备份」。任一步失败都回滚，回滚失败会保留备份并把路径写进结果。主程序成功后还会一并替换 `README.txt` 与安装目录里的 `serial-debug-updater.exe`（运行中的是暂存目录那份，替换安全），这两项失败不影响已就位的新程序。
+7. 替换结束写 `update-result.json`、删本次标记、清自己的暂存目录，启动程序（成功是新版，失败是回滚后的旧版）。新版启动时 `js/app-update.js` 读出失败原因并提示，用户可以重试。
+8. 没有拿到锁的 helper（同时有两次更新、或上次 helper 还没结束）**什么都不做**：不写结果、不动别人的标记、不启动程序——否则它启动的实例会占住正在等实例退出的那次替换，把一次本可成功的更新逼成超时回滚。此时由拿到锁的那个 helper 负责重启。
+
+会话恢复的范围：交接文件只包含**发起更新那个进程的窗口**。同机另一个实例（共用同一个应用数据目录）如果在 helper 等待期间也退出了，它的窗口会话不会进交接文件，更新后不会自动恢复；它下次打开时按常规启动逻辑处理（刷新前的重连意图仍走本实例的 sessionStorage，进程已退出则没有）。
+
+并发与竞争：`update/lock` 是互斥锁（30 s 等待，崩溃残留超过 15 min 才可回收），同一时刻只有一个 helper 在替换；更新进行中另起的实例在启动阶段读到标记就提示并退出，不会去清正在使用的暂存目录或锁；暂存清理只删「名字是本工具的操作 id、且目录本身」的项，锁文件、`update` 根目录与其它文件都不动。更新失败保存的是「文件替换失败」这一层：新版程序自身崩溃不会被自动回滚，只是不再提示成功。
+
+回滚与残留：`<主程序名>.old-<operation>` 是备份，正常结束即删除；主程序、`README.txt`、`serial-debug-updater.exe` 的 `.new-*` 半成品只在主程序仍存在时于下次启动前清理；主程序不存在时任何副本都保留，避免删掉唯一可运行的旧程序。`.old-*` 不属于本轮、无法确认那次更新成功过，所以一律不主动删。
+
+回滚承诺的范围只有「文件替换」：helper 在**新程序已就位之后、结果文件写出之前**被强杀、遭遇 OOM 或断电时，磁盘上留的是新版且没有 `update-result.json`，下次启动不会显示任何更新结果（标记会因 helper 进程已死而被清掉，`<exe>.old-<operation>` 备份保留可手工恢复）。新版程序自身崩溃、运行期逻辑错误都不会被检测或自动回滚。内存峰值约为「载荷 + 主程序 + 两份回读副本」，正常包远低于上限。
+
+需在 Windows 实机验证：ZIP 解压启动、WebView2 缺失提示、串口功能、应用内更新（成功 / 签名错误 / 程序占用 / 回滚 / 多窗口同时运行 / 带空格与中文的安装路径）后的配置与会话保留。
 
 ## 本地验证
 
@@ -44,6 +67,17 @@ npm run build
 ```
 
 更新端到端验证需要两份不同版本、相同 updater 公钥的已签名安装包，以及真实可访问的 GitHub 清单。先在预览通道验证旧版升级、网络失败、签名错误与配置保留，再发布正式通道。Windows 实机验证在内网验证机进行；不可访问时记录为待验证，不声称已经通过。
+
+Rust 侧的自动化验证（本机即可跑，不需要 Windows）：
+
+```sh
+cd desktop/portable-update-common && cargo test
+cd desktop/portable-updater && cargo test
+cd desktop/src-tauri && cargo test
+cargo check --target x86_64-pc-windows-msvc -p portable-updater   # 需已装该 target
+```
+
+`portable-update-common/tests/tauri_signer_interop.rs` 用本机 Tauri CLI 生成一次性密钥并按 `--app-version` 签名，验证 helper 的验签路径与流水线产出的签名同构（不会读取任何发布私钥）。
 
 下载与签名验证完成后才开始安装准备。所有窗口必须确认空闲并释放串口；在飞的原生操作、设备固件升级、测试和功耗仪连接都会阻止安装。无响应窗口超过 8 秒同样拒绝安装。循环发送暂时停止，安装失败可重试，串口若已关闭需手动重连。
 
