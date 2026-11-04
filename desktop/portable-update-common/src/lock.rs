@@ -148,13 +148,11 @@ mod tests {
 		let _ = std::fs::remove_dir_all(&data);
 	}
 
-	#[cfg(unix)]
+	// 各平台统一用 std 的 FileTimes：Windows 上走 SetFileTime，没有空桩可以退化成
+	// 「时间没被改过」——那样残留锁的用例在 Windows 上一定失败。
 	fn set_mtime(path: &Path, when: SystemTime) {
 		let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
 		let times = std::fs::FileTimes::new().set_modified(when).set_accessed(when);
 		file.set_times(times).unwrap();
 	}
-
-	#[cfg(not(unix))]
-	fn set_mtime(_path: &Path, _when: SystemTime) {}
 }
