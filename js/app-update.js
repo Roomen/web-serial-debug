@@ -125,17 +125,16 @@
 		}
 		root.AppUpdate = { check: openDownload }
 		function initManualDownload() {
-			const menu = doc.querySelector('.rail-config-menu')
+			const menu = doc.querySelector('#activity-rail .rail-bottom')
 			if (!menu) return
-			const li = doc.createElement('li')
 			const button = doc.createElement('button')
 			button.id = 'serial-check-update'
 			button.type = 'button'
-			button.className = 'dropdown-item'
-			button.textContent = '下载新版 ZIP…'
+			button.className = 'rail-item'
+			button.innerHTML = '<i class="bi bi-arrow-down-circle"></i><span class="rail-label">更新</span>'
+			button.title = '下载新版 ZIP'
 			button.addEventListener('click', openDownload)
-			li.appendChild(button)
-			menu.appendChild(li)
+			menu.insertBefore(button, doc.getElementById('app-version'))
 		}
 		if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', initManualDownload)
 		else initManualDownload()
@@ -221,17 +220,16 @@
 		service.listen('app-update-finished', function (data) { controller.finished(data) }),
 	])
 	function init() {
-		const menu = doc.querySelector('.rail-config-menu')
+		const menu = doc.querySelector('#activity-rail .rail-bottom')
 		if (menu) {
-			const li = doc.createElement('li')
 			const button = doc.createElement('button')
 			button.id = 'serial-check-update'
 			button.type = 'button'
-			button.className = 'dropdown-item'
-			button.textContent = '检查应用更新…'
+			button.className = 'rail-item'
+			button.title = '检查应用更新'
+			button.innerHTML = '<i class="bi bi-arrow-down-circle"></i><span class="rail-label">更新</span>'
 			button.addEventListener('click', function () { check(true) })
-			li.appendChild(button)
-			menu.appendChild(li)
+			menu.insertBefore(button, doc.getElementById('app-version'))
 		}
 		const bar = doc.createElement('div')
 		bar.id = 'serial-app-update'

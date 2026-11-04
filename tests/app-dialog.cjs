@@ -221,6 +221,7 @@ test('panel：自定义内容可构建，Enter 不关面板，Esc 关闭并 reso
 	let built = 0
 	const res = d.api.panel({
 		title: '本地服务',
+		wide: true,
 		closeText: '关闭',
 		build(body) {
 			built++
@@ -233,6 +234,7 @@ test('panel：自定义内容可构建，Enter 不关面板，Esc 关闭并 reso
 	assert.equal(d.api.isOpen(), true)
 	const mask = d.mask()
 	assert.ok(mask)
+	assert.ok(find(mask, (n) => n.className.includes('app-dlg-wide')))
 	assert.equal(find(mask, (n) => n.className === 'app-dlg-title').textContent, '本地服务')
 	assert.equal(find(mask, (n) => n.className === 'app-dlg-msg'), null, '面板没有消息段')
 	assert.ok(find(mask, (n) => n.tagName === 'BUTTON' && n.textContent === '内部按钮'))
