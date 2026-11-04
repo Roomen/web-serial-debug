@@ -122,10 +122,18 @@
                         <li><button class="dropdown-item text-danger" type="button" id="serial-reset"><i class="bi bi-arrow-counterclockwise"></i> 重置所有参数…</button></li>
                     </ul>
                 </div>
-                <div class="theme-switch" id="theme-switch" role="radiogroup" aria-label="主题">
-                    <button type="button" role="radio" data-theme-choice="auto" title="主题：跟随系统" aria-label="跟随系统"><i class="bi bi-circle-half"></i></button>
-                    <button type="button" role="radio" data-theme-choice="light" title="主题：浅色" aria-label="浅色"><i class="bi bi-sun"></i></button>
-                    <button type="button" role="radio" data-theme-choice="dark" title="主题：深色" aria-label="深色"><i class="bi bi-moon-stars"></i></button>
+                <div class="dropend rail-theme">
+                    <button class="rail-item" id="rail-theme-btn" type="button" title="主题：跟随系统"
+                        data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-circle-half"></i><span class="rail-label">主题</span>
+                    </button>
+                    <div class="dropdown-menu rail-theme-menu" aria-labelledby="rail-theme-btn">
+                        <div id="theme-switch" role="radiogroup" aria-label="主题">
+                            <button type="button" role="radio" data-theme-choice="auto"><i class="bi bi-circle-half"></i><span>跟随系统</span><i class="bi bi-check2 theme-check"></i></button>
+                            <button type="button" role="radio" data-theme-choice="light"><i class="bi bi-sun"></i><span>浅色</span><i class="bi bi-check2 theme-check"></i></button>
+                            <button type="button" role="radio" data-theme-choice="dark"><i class="bi bi-moon-stars"></i><span>深色</span><i class="bi bi-check2 theme-check"></i></button>
+                        </div>
+                    </div>
                 </div>
                 <a href="https://github.com/Roomen/web-serial-debug/issues/new" target="_blank" rel="noopener" class="rail-item" data-feature="shell.browser" title="提交建议 / Bug">
                     <i class="bi bi-chat-dots"></i>

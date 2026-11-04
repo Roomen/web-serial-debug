@@ -25,6 +25,14 @@
 		const choice = themeChoice()
 		const resolved = choice === 'auto' ? (darkQuery.matches ? 'dark' : 'light') : choice
 		document.documentElement.setAttribute('data-theme', resolved)
+		const themeEntry = document.getElementById('rail-theme-btn')
+		if (themeEntry) {
+			const labels = { auto: '跟随系统', light: '浅色', dark: '深色' }
+			const icons = { auto: 'circle-half', light: 'sun', dark: 'moon-stars' }
+			themeEntry.title = '主题：' + labels[choice]
+			themeEntry.setAttribute('aria-label', themeEntry.title)
+			themeEntry.querySelector('i').className = 'bi bi-' + icons[choice]
+		}
 		if (!themeSwitch) return
 		themeSwitch.querySelectorAll('[data-theme-choice]').forEach((btn) => {
 			const on = btn.dataset.themeChoice === choice

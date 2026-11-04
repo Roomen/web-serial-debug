@@ -68,7 +68,7 @@ function makeHarness(opts) {
 	const doc = {
 		readyState: 'complete',
 		activeElement: null,
-		querySelector: (sel) => (sel === '.rail-config-menu' ? menu : null),
+		querySelector: (sel) => (sel === '#activity-rail .rail-bottom' ? menu : null),
 		getElementById: (id) => byId[id] || null,
 		createElement: (tag) => new El(tag),
 		addEventListener() {},
@@ -82,6 +82,7 @@ function makeHarness(opts) {
 				dialogCalls.push(o)
 				panelBody = new El('div')
 				o.build(panelBody)
+			doc.activeElement = panelBody.children.flatMap((n) => n.children).flatMap((n) => n.children).find((n) => n.tagName === 'INPUT') || null
 				return new Promise((resolve) => { closePanel = () => { resolve(undefined) } })
 			},
 			confirm: () => { throw new Error('面板里不应嵌套 AppDialog.confirm') },
@@ -96,10 +97,7 @@ function makeHarness(opts) {
 		menu, byId, copied, dialogCalls, status, svcListeners,
 		get panelBody() { return panelBody },
 		close() { if (closePanel) closePanel() },
-		menuItem() {
-			const li = menu.children.find((c) => c.children.some((b) => b.id === 'serial-mcp-service'))
-			return li ? li.children.find((b) => b.id === 'serial-mcp-service') : null
-		},
+		menuItem() { return menu.children.find((b) => b.id === 'serial-mcp-service') || null },
 		find(pred) {
 			const walk = (n) => {
 				if (pred(n)) return n
@@ -126,23 +124,43 @@ test('没有桌面 MCP 服务时不动配置菜单', async () => {
 	assert.equal(h.menu.children.length, 0)
 })
 
-test('配置菜单里加一个入口，点开是面板；默认关闭、端口可改', async () => {
+test('独立导航入口打开宽面板；首次聚焦仍显示默认端口', async () => {
 	const h = makeHarness()
 	await flush()
 	const btn = h.menuItem()
 	assert.ok(btn, '应当有 MCP 菜单项')
-	assert.equal(btn.textContent, '本地 MCP 服务…')
+	assert.equal(btn.className, 'rail-item rail-mcp')
+	assert.equal(btn.dataset.state, 'off')
 	assert.equal(btn.dataset.feature, 'service.mcp')
 	btn.click()
 	await flush()
 	assert.equal(h.dialogCalls.length, 1)
 	assert.equal(h.dialogCalls[0].title, '本地 MCP 服务')
+	assert.equal(h.dialogCalls[0].wide, true)
 	const status = h.find((n) => n.className.indexOf('mdn-mcp-status') !== -1)
 	assert.equal(status.textContent, '未启用（默认关闭）')
 	const port = h.find((n) => n.className.indexOf('mdn-mcp-port') !== -1)
 	assert.equal(port.value, '38991')
 	assert.equal(port.disabled, false)
 	assert.equal(h.byText('启用服务') != null, true)
+})
+
+test('面板关闭时导航状态仍随服务事件更新，重复点击不排队', async () => {
+	const h = makeHarness({ status: { enabled: true, running: true } })
+	await flush()
+	assert.equal(h.menuItem().dataset.state, 'running')
+	h.menuItem().click()
+	h.menuItem().click()
+	await flush()
+	assert.equal(h.dialogCalls.length, 1)
+	h.close()
+	await flush()
+	h.svcListeners['mcp-service']({ enabled: true, running: false, lastError: 'synthetic' })
+	assert.equal(h.menuItem().dataset.state, 'error')
+	h.svcListeners['mcp-service']({ enabled: true, running: false })
+	assert.equal(h.menuItem().dataset.state, 'waiting')
+	h.svcListeners['mcp-service']({ enabled: false, running: false })
+	assert.equal(h.menuItem().dataset.state, 'off')
 })
 
 test('令牌默认不显示；显示后写进配置，隐藏后回到占位符', async () => {

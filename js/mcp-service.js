@@ -1,4 +1,4 @@
-// 本地 MCP 服务的界面：只在桌面客户端(提供了 AppPlatform.service('mcp') 且画像开启 service.mcp)里挂一个「配置」菜单入口。
+// 本地 MCP 服务的界面：只在桌面客户端(提供了 AppPlatform.service('mcp') 且画像开启 service.mcp)里挂一个独立导航入口。
 // 网页版 / 移动端没有这个服务，本文件什么都不做，也不注册任何监听。
 // 令牌只在用户显式点「显示 / 复制」时经命令取回，放在内存里，关面板即清空；不写 localStorage、不打印日志。
 ;(function (root) {
@@ -9,6 +9,9 @@
 	if (!svc) return
 
 	const doc = root.document
+	let entry = null
+	let latestStatus = null
+	let opening = false
 	let session = null // 当前打开的面板；关闭后置 null，迟到的异步结果一律丢弃
 
 	function mk(tag, cls, text) {
@@ -90,22 +93,41 @@
 		}
 	}
 
-	function mountMenu() {
-		const menu = doc.querySelector('.rail-config-menu')
-		if (!menu || doc.getElementById('serial-mcp-service')) return
-		const li = mk('li')
-		const btn = mk('button', 'dropdown-item', '本地 MCP 服务…')
-		btn.type = 'button'
-		btn.id = 'serial-mcp-service'
-		btn.dataset.feature = 'service.mcp'
-		btn.title = '把本窗口的串口与功耗仪按需暴露给本机 agent（默认关闭，只绑 127.0.0.1）'
-		btn.addEventListener('click', function () { openPanel() })
-		li.appendChild(btn)
-		menu.insertBefore(li, menu.firstChild)
-		menu.insertBefore(mk('hr', 'dropdown-divider'), li)
+	function updateEntry(status) {
+		latestStatus = status
+		if (!entry) return
+		const st = status || {}
+		const state = st.running ? 'running' : st.lastError ? 'error' : st.enabled ? 'waiting' : 'off'
+		const label = { running: '运行中', error: '服务异常', waiting: '等待启动', off: '未启用' }[state]
+		entry.dataset.state = state
+		entry.title = '本地 MCP 服务 · ' + label
+		entry.setAttribute('aria-label', entry.title)
+	}
+
+	function mountEntry() {
+		const rail = doc.querySelector('#activity-rail .rail-bottom')
+		if (!rail || doc.getElementById('serial-mcp-service')) return
+		entry = mk('button', 'rail-item rail-mcp')
+		entry.type = 'button'
+		entry.id = 'serial-mcp-service'
+		entry.dataset.feature = 'service.mcp'
+		entry.appendChild(mk('i', 'bi bi-hdd-network'))
+		entry.appendChild(mk('span', 'rail-label', 'MCP'))
+		const dot = mk('span', 'rail-status-dot')
+		dot.setAttribute('aria-hidden', 'true')
+		entry.appendChild(dot)
+		entry.addEventListener('click', function () { openPanel() })
+		rail.insertBefore(entry, rail.firstChild)
+		updateEntry(latestStatus)
+		// 订阅先于读取；若读取期间收到了新状态，不用旧快照覆盖它。
+		const snapshot = latestStatus
+		Promise.resolve(svc.status()).then(function (status) {
+			if (latestStatus === snapshot) updateEntry(status)
+		}, function () { if (latestStatus === snapshot) updateEntry({ lastError: true }) })
 	}
 
 	function buildPanel(body, s) {
+		body.classList.toggle('mdn-mcp-panel', true)
 		s.statusLine = mk('div', 'mdn-mcp-status')
 		s.urlLine = mk('div', 'mdn-mcp-url')
 		s.urlLine.hidden = true
@@ -114,6 +136,7 @@
 		const portLabel = mk('label', 'mdn-mcp-label', '端口')
 		s.port = mk('input', 'form-control form-control-sm mdn-mcp-port')
 		s.port.type = 'number'
+		s.port.value = String((s.status && s.status.port) || 38991)
 		s.port.min = '1024'
 		s.port.max = '65535'
 		s.port.setAttribute('inputmode', 'numeric')
@@ -148,17 +171,21 @@
 		tokenRow.appendChild(s.regenBtn)
 		body.appendChild(tokenRow)
 
-		body.appendChild(mk('div', 'mdn-mcp-sub', '客户端配置'))
+		const configHead = mk('div', 'mdn-mcp-section-head')
+		configHead.appendChild(mk('div', 'mdn-mcp-sub', '客户端配置'))
 		s.copyCfgBtn = mk('button', 'btn btn-sm btn-outline-secondary', '复制配置')
 		s.copyCfgBtn.type = 'button'
 		s.cfg = mk('pre', 'mdn-mcp-cfg')
-		body.appendChild(s.copyCfgBtn)
+		configHead.appendChild(s.copyCfgBtn)
+		body.appendChild(configHead)
 		body.appendChild(s.cfg)
-		body.appendChild(mk('div', 'mdn-mcp-sub', 'Claude Code'))
+		const cliHead = mk('div', 'mdn-mcp-section-head')
+		cliHead.appendChild(mk('div', 'mdn-mcp-sub', 'Claude Code'))
 		s.copyCliBtn = mk('button', 'btn btn-sm btn-outline-secondary', '复制命令')
 		s.copyCliBtn.type = 'button'
 		s.cli = mk('pre', 'mdn-mcp-cfg')
-		body.appendChild(s.copyCliBtn)
+		cliHead.appendChild(s.copyCliBtn)
+		body.appendChild(cliHead)
 		body.appendChild(s.cli)
 		body.appendChild(mk('div', 'mdn-mcp-hint', '只监听 127.0.0.1，需要 Bearer 令牌；每个工具都必须显式指定窗口。服务开启后才会把工具暴露给 agent，窗口未登录时不执行任何操作。端口只能在服务停止时修改，绑定失败会如实报错，不会自动换端口。'))
 
@@ -258,7 +285,7 @@
 		s.statusLine.classList.toggle('is-error', !!(st.enabled && st.lastError))
 		s.urlLine.hidden = !running
 		s.urlLine.textContent = running ? baseUrl(st) : ''
-		if (doc.activeElement !== s.port) s.port.value = String(st.port || '')
+		if (doc.activeElement !== s.port) s.port.value = String(st.port || 38991)
 		s.port.disabled = running || !!s.busy
 		s.toggleBtn.disabled = !!s.busy
 		s.toggleBtn.textContent = st.enabled ? '停用服务' : '启用服务'
@@ -279,6 +306,7 @@
 		if (!s || s.closed) return
 		try {
 			const status = await svc.status()
+			updateEntry(status)
 			if (!s.closed) s.status = status
 		} catch (e) {
 			if (force && !s.closed) s.status = Object.assign({}, s.status, { lastError: String((e && e.message) || e) })
@@ -287,12 +315,16 @@
 	}
 
 	async function openPanel() {
+		if (opening || session) return
+		opening = true
 		let status = null
 		try { status = await svc.status() } catch (e) { status = { lastError: String((e && e.message) || e) } }
 		const s = { status: status, token: '', busy: false, regenArmed: false, regenTimer: 0, closed: false }
+		opening = false
 		session = s
 		root.AppDialog.panel({
 			title: '本地 MCP 服务',
+			wide: true,
 			closeText: '关闭',
 			build: function (body) { buildPanel(body, s) },
 		}).then(function () {
@@ -305,11 +337,12 @@
 	}
 
 	Promise.resolve(svc.listen('mcp-service', function (status) {
+		updateEntry(status)
 		if (!session) return
 		session.status = status || session.status
 		render(session)
 	})).catch(function () {})
 
-	if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', mountMenu)
-	else mountMenu()
+	if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', mountEntry)
+	else mountEntry()
 })(typeof window !== 'undefined' ? window : globalThis)

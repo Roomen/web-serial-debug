@@ -128,6 +128,7 @@ test('native config entry and unconfigured-build dialog use platform service', a
 	class Element {
 		constructor() { this.children = []; this.attrs = {}; this.events = {}; this.classList = { add() {}, remove() {} } }
 		appendChild(child) { child.parentNode = this; this.children.push(child); return child }
+		insertBefore(child) { return this.appendChild(child) }
 		append(...children) { children.forEach((child) => this.appendChild(child)) }
 		setAttribute(key, value) { this.attrs[key] = value }
 		removeAttribute(key) { delete this.attrs[key] }
@@ -138,7 +139,7 @@ test('native config entry and unconfigured-build dialog use platform service', a
 	const service = { listen: async () => () => {}, check: async () => { throw new Error('not configured') }, setPreparing() {} }
 	const window = { document: doc, AppPlatform: { service: () => service }, APP_UPDATER_CONFIGURED: false, AppDialog: { alert: async (text) => alerts.push(text) }, addEventListener() {} }
 	vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/app-update.js'), 'utf8'), { window })
-	assert.equal(menu.children[0].children[0].id, 'serial-check-update')
+	assert.equal(menu.children[0].id, 'serial-check-update')
 	await window.AppUpdate.check(true)
 	assert.equal(alerts.length, 1)
 	assert.match(alerts[0], /发布版客户端/)
@@ -146,9 +147,9 @@ test('native config entry and unconfigured-build dialog use platform service', a
 })
 
 test('portable update entry opens download page without native checks, listeners or timers', () => {
-	const opened = [], menu = { children: [], appendChild(child) { this.children.push(child) } }
+	const opened = [], menu = { children: [], insertBefore(child) { this.children.push(child) } }
 	const doc = {
-		readyState: 'complete', body: { appendChild() {} }, querySelector: () => menu,
+		readyState: 'complete', body: { appendChild() {} }, querySelector: () => menu, getElementById: () => null,
 		createElement(tag) { return {
 			tag, children: [], appendChild(child) { this.children.push(child) },
 			addEventListener(name, cb) { this[name] = cb },
@@ -160,8 +161,9 @@ test('portable update entry opens download page without native checks, listeners
 	vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/app-update.js'), 'utf8'), {
 		window, setTimeout() { throw new Error('installer polling started') }, setInterval() { throw new Error('installer polling started') },
 	})
-	const button = menu.children[0].children[0]
-	assert.equal(button.textContent, '下载新版 ZIP…')
+	const button = menu.children[0]
+	assert.equal(button.title, '下载新版 ZIP')
+	assert.equal(button.className, 'rail-item')
 	button.click()
 	window.AppUpdate.check(true)
 	assert.deepEqual(opened, [

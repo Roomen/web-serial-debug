@@ -23,7 +23,7 @@
 		const doc = root.document
 		const opener = doc.activeElement
 		const mask = mk('div', 'app-dlg-mask')
-		const box = mk('div', 'app-dlg' + (job.kind === 'panel' ? ' app-dlg-panel' : ''))
+		const box = mk('div', 'app-dlg' + (job.kind === 'panel' ? ' app-dlg-panel' + (job.opts.wide ? ' app-dlg-wide' : '') : ''))
 		box.setAttribute('role', job.kind === 'alert' ? 'alertdialog' : 'dialog')
 		box.setAttribute('aria-modal', 'true')
 		const titleId = 'app-dlg-title-' + Date.now().toString(36)
