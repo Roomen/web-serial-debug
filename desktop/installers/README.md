@@ -1,8 +1,10 @@
-# Windows installer templates
+# Windows installer templates (historical)
 
-Windows builds and releases use only the NSIS EXE installer, selected by
-`desktop/src-tauri/tauri.windows.conf.json`. The WiX template is retained as
-historical reference and is not part of the default build or update manifest.
+Windows builds and releases are portable ZIP only: `desktop/src-tauri/tauri.windows.conf.json`
+disables the bundler, and `desktop/scripts/portable-windows.mjs` archives the executable, the
+update helper and instructions. The templates below are retained as historical reference only;
+they are not part of the default build, the update manifest, or the in-app update path (that is
+handled by `desktop/portable-updater`).
 
 These templates are copied from the `tauri-cli-v2.12.2` tag, matching the CLI
 version pinned in `desktop/package.json`. Keep their installer, updater, WebView2,

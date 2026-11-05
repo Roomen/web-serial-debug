@@ -14,15 +14,33 @@
 	const $ = function (id) { return doc.getElementById(id) }
 	const win = T.window && T.window.getCurrentWindow ? T.window.getCurrentWindow() : null
 	// 页面只认平台服务，更新插件与原生事件都封装在桌面组装点。
+	// Windows 便携版也走同一套检查/下载/安装：Rust 端下载并验签后交给便携 helper 退出替换 EXE。
 	let updatePreparing = false
 	P.provide('app-update', {
-		manualDownloadUrl: P.os === 'windows' ? (root.APP_RELEASE_CHANNEL === 'dev' ? 'https://serial-dev.logan825.org/download/' : 'https://serial.logan825.org/download/') : null,
 		check: function () { return T.core.invoke('app_update_check') },
 		install: function (version) { return T.core.invoke('app_update_install', { version: version }) },
 		ack: function (operationId, ready, session) { return T.core.invoke('app_update_ack', { operationId: operationId, ready: ready, session: session || {} }) },
+		// 上一次安装失败时 helper 留下的原因(读一次即删)
+		takeResult: function () { return T.core.invoke('app_update_result') },
 		listen: function (name, cb) { return T.event.listen(name, function (e) { cb(e.payload || {}) }) },
 		isPreparing: function () { return updatePreparing },
 		setPreparing: function (value) { updatePreparing = !!value },
+	})
+
+	// 本地 MCP 服务：只把 Tauri 命令/事件包成平台服务，业务与界面在 js/mcp-bridge.js / js/mcp-service.js。
+	// 令牌只在页面显式请求(revealToken)时返回，不缓存、不落盘。
+	if (!P.has || P.has('service.mcp')) P.provide('mcp', {
+		status: function () { return T.core.invoke('mcp_status') },
+		enable: function (port) { return T.core.invoke('mcp_enable', { port: port == null ? null : port }) },
+		disable: function () { return T.core.invoke('mcp_disable') },
+		revealToken: function () { return T.core.invoke('mcp_reveal_token') },
+		regenerateToken: function () { return T.core.invoke('mcp_regenerate_token') },
+		register: function (info) { return T.core.invoke('mcp_register', info) },
+		windowState: function (info) { return T.core.invoke('mcp_window_state', info) },
+		unregister: function (bridgeEpoch) { return T.core.invoke('mcp_unregister', { bridgeEpoch: bridgeEpoch }) },
+		commit: function (info) { return T.core.invoke('mcp_commit', info) },
+		reply: function (info) { return T.core.invoke('mcp_reply', info) },
+		listen: function (name, cb) { return T.event.listen(name, function (e) { cb(e.payload || {}) }) },
 	})
 
 	// ---------- 提示条 ----------

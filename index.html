@@ -122,10 +122,18 @@
                         <li><button class="dropdown-item text-danger" type="button" id="serial-reset"><i class="bi bi-arrow-counterclockwise"></i> 重置所有参数…</button></li>
                     </ul>
                 </div>
-                <div class="theme-switch" id="theme-switch" role="radiogroup" aria-label="主题">
-                    <button type="button" role="radio" data-theme-choice="auto" title="主题：跟随系统" aria-label="跟随系统"><i class="bi bi-circle-half"></i></button>
-                    <button type="button" role="radio" data-theme-choice="light" title="主题：浅色" aria-label="浅色"><i class="bi bi-sun"></i></button>
-                    <button type="button" role="radio" data-theme-choice="dark" title="主题：深色" aria-label="深色"><i class="bi bi-moon-stars"></i></button>
+                <div class="dropend rail-theme">
+                    <button class="rail-item" id="rail-theme-btn" type="button" title="主题：跟随系统"
+                        data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-circle-half"></i><span class="rail-label">主题</span>
+                    </button>
+                    <div class="dropdown-menu rail-theme-menu" aria-labelledby="rail-theme-btn">
+                        <div id="theme-switch" role="radiogroup" aria-label="主题">
+                            <button type="button" role="radio" data-theme-choice="auto"><i class="bi bi-circle-half"></i><span>跟随系统</span><i class="bi bi-check2 theme-check"></i></button>
+                            <button type="button" role="radio" data-theme-choice="light"><i class="bi bi-sun"></i><span>浅色</span><i class="bi bi-check2 theme-check"></i></button>
+                            <button type="button" role="radio" data-theme-choice="dark"><i class="bi bi-moon-stars"></i><span>深色</span><i class="bi bi-check2 theme-check"></i></button>
+                        </div>
+                    </div>
                 </div>
                 <a href="https://github.com/Roomen/web-serial-debug/issues/new" target="_blank" rel="noopener" class="rail-item" data-feature="shell.browser" title="提交建议 / Bug">
                     <i class="bi bi-chat-dots"></i>
@@ -834,8 +842,8 @@
                                         <p class="sk-rw-hint mb-2">68 10 表号7B 控制码 数据长度 数据标识 序号 数据 校验和 16 · 工具扮演平台/主机角色</p>
                                         <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
                                             <div class="input-group input-group-sm" style="width: auto; min-width: 16rem; flex: 1 1 16rem;">
-                                                <span class="input-group-text">表号(7B HEX)</span>
-                                                <input type="text" class="form-control" id="cjt188-down-addr" title="全 AA = 广播,所有设备都会应答" placeholder="AA AA AA AA AA AA AA = 广播(所有设备都会应答)">
+                                                <span class="input-group-text">表号</span>
+                                                <input type="text" class="form-control" id="cjt188-down-addr" title="填 14 位表号(与日志解析显示的一致), 全 A = 广播, 所有设备都会应答" placeholder="14 位表号, 如 90040202264102; 全 A = 广播">
                                                 <button class="btn btn-outline-secondary" type="button" id="cjt188-down-addr-reset" title="重置为广播地址(全 AA)"><i class="bi bi-arrow-repeat"></i></button>
                                             </div>
                                         </div>
@@ -1793,6 +1801,9 @@
     <script src="js/blu-cmd-sheet.js"></script>
     <script src="js/modern-power.js"></script>
     <script src="js/app-update.js"></script>
+    <script src="js/mcp-ring.js"></script>
+    <script src="js/mcp-bridge.js"></script>
+    <script src="js/mcp-service.js"></script>
 
 </body>
 

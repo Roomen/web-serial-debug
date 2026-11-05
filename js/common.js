@@ -25,6 +25,14 @@
 		const choice = themeChoice()
 		const resolved = choice === 'auto' ? (darkQuery.matches ? 'dark' : 'light') : choice
 		document.documentElement.setAttribute('data-theme', resolved)
+		const themeEntry = document.getElementById('rail-theme-btn')
+		if (themeEntry) {
+			const labels = { auto: '跟随系统', light: '浅色', dark: '深色' }
+			const icons = { auto: 'circle-half', light: 'sun', dark: 'moon-stars' }
+			themeEntry.title = '主题：' + labels[choice]
+			themeEntry.setAttribute('aria-label', themeEntry.title)
+			themeEntry.querySelector('i').className = 'bi bi-' + icons[choice]
+		}
 		if (!themeSwitch) return
 		themeSwitch.querySelectorAll('[data-theme-choice]').forEach((btn) => {
 			const on = btn.dataset.themeChoice === choice
@@ -665,6 +673,15 @@
 	let rerenderPending = false
 	//各路连接重置 SEK 会话的次数，历史重渲收尾时据此判断能否把该路的重放末态交给实时会话
 	const sessionResetSeq = { S: 0, A: 0, B: 0 }
+	//每路连接代次：连接 / 断开 / 关闭失败都 +1。MCP 的读游标按它判代次，旧会话的游标不能读到新设备的数据
+	const serialSessionGen = { S: 0, A: 0, B: 0 }
+	function bumpSessionGen(sid, state) {
+		if (state === 'connecting') return
+		serialSessionGen[sid] = (serialSessionGen[sid] || 0) + 1
+		try {
+			document.dispatchEvent(new CustomEvent('serial-session', { detail: { sid: sid, state: state, generation: serialSessionGen[sid] } }))
+		} catch (e) {}
+	}
 	// ---- 按路隔离的流式解析状态 ----
 	// SEK 会话(基准水量/设备号)与 ansi_up 的颜色状态都随行累积，两路必须各算各的，否则 A 路读到的基准会被套到 B 路的表上。
 	// 单路(S)的实时状态就是全局的 window.skSession 与 ansi_up(不在某一路的上下文里时它们就是 S 的)；A/B 各存一份：
@@ -3624,6 +3641,15 @@
 		sid = sid || SerialHub.activeSendPhys()
 		opts = opts || {}
 		const reason = opts.reason || 'user'
+		// 可选取消检查(MCP)：等待旧口释放、退避重试、以及 open 本身都可能很久，
+		// 请求在等待期间超时/被停用后不能再把口打开；取消时 opts.cancelled 置位，调用方据此回报「未执行」
+		const guard = typeof opts.guard === 'function' ? opts.guard : null
+		const cancelled = function () {
+			if (!guard || !guard()) return false
+			opts.cancelled = true
+			return true
+		}
+		if (cancelled()) return false
 		const port = SerialHub.getPort(sid)
 		if (SerialHub.isOpen(sid) && !SerialHub._sess(sid).releaseFailed) return true
 		if (!port) return false
@@ -3656,11 +3682,14 @@
 			updateOpenButton(sid)
 			return false
 		}
+		// 释放旧口可能等了一秒多：这期间被取消就不再打开
+		if (cancelled()) return false
 		serialStatuChange('connecting', sid)
 		let openError = null
 		try {
 			//端口可能处于"已打开但本地状态丢失"的脏状态: releasePort 已尽量 close; 占用类错误退避重试
 			for (let attempt = 0; ; attempt++) {
+				if (attempt > 0 && cancelled()) break
 				try {
 					await port.open(SerialOptions)
 					openError = null
@@ -3670,10 +3699,25 @@
 					const retryable = OPEN_RETRY_ERRORS.indexOf(e.name || '') !== -1
 					if (!retryable || attempt >= OPEN_RETRY_DELAYS.length) throw e
 					await new Promise(function (resolve) { setTimeout(resolve, OPEN_RETRY_DELAYS[attempt]) })
+					// 退避等待期间被取消：不再重试
+					if (cancelled()) break
 				}
 			}
 		} catch (e) {
 			openError = e
+		}
+		// open 本身可能刚成功就被取消：这时也要算取消，并且释放掉这个口
+		if (openError === null && cancelled()) openError = null
+		if (opts.cancelled) {
+			SerialHub.setOpen(sid, false)
+			// 安全释放：已经真正打开的口要关掉，不留没人管的句柄
+			await releasePort(sid)
+			SerialHub.setManualClose(sid, true)
+			setSerialWantOpen(false, sid)
+			serialStatuChange(false, sid)
+			updateOpenButton(sid)
+			releaseWakeLock(sid)
+			return false
 		}
 		if (openError) {
 			const errorType = openError.name || 'UnknownError'
@@ -3783,6 +3827,75 @@
 	}
 
 	//打开或关闭串口（单路：仅 S；双路：按按钮 id 区分）
+	// 这一路现在能不能动：返回 { code, message }，可以动返回 null。MCP 与 UI 共用同一套判据
+	function laneBlockReason(sid, port) {
+		sid = SerialHub.uiSid(sid)
+		if (!platformHasSid(sid) || !SerialHub.isVisible(sid)) return { code: 'lane_not_visible', message: '这一路当前不可用' }
+		if (laneMoving) return { code: 'lane_moving', message: '正在切换串口，请稍候' }
+		if (window.serialApi && window.serialApi.updatePreparing) return { code: 'update_preparing', message: '正在安装应用更新，暂不能操作串口' }
+		if (window.serialApi && window.serialApi.isPinned() && SerialHub.activeSendPhys() === sid) {
+			return { code: 'transaction_pinned', message: '事务进行中，暂不能操作这一路的串口' }
+		}
+		if (port) {
+			const owner = lanePortOwner(port, sid)
+			if (owner) return { code: 'lane_conflict', message: portConflictMsg(owner) }
+		}
+		return null
+	}
+
+	// 打开 / 关闭某一路上已选的设备：返回结构化结果(不弹 toast)，UI 与 MCP 都走这里。
+	// opts.reason: 'user'(默认) | 'mcp'(MCP 调用，失败不弹窗)
+	async function openLane(sid, opts) {
+		opts = opts || {}
+		// MCP 用 exact：显式给 S/A/B，绝不按当前模式把 A 重映射成 S(等待期间切模式会把命令发到另一路)
+		if (opts.exact) {
+			if (!platformHasSid(sid) || !SerialHub.isVisible(sid)) return { ok: false, code: 'lane_not_visible', message: '这一路当前不可用' }
+		} else {
+			sid = SerialHub.uiSid(sid)
+		}
+		if (SerialHub.isOpening(sid)) return { ok: false, code: 'lane_busy', message: '这一路正在连接或关闭' }
+		const port = SerialHub.getPort(sid)
+		if (!port) return { ok: false, code: 'no_device_selected', message: '这一路还没有选择设备' }
+		if (SerialHub.isOpen(sid)) return { ok: true, changed: false, open: true }
+		const block = laneBlockReason(sid, port)
+		if (block) return { ok: false, code: block.code, message: block.message }
+		SerialHub.setOpening(sid, true)
+		SerialHub.setManualClose(sid, false)
+		try {
+			const openOpts = { reason: opts.reason === 'mcp' ? 'mcp' : 'user' }
+			if (typeof opts.guard === 'function') openOpts.guard = opts.guard
+			const ok = await openSerial(sid, openOpts)
+			if (!ok && openOpts.cancelled) return { ok: false, code: 'aborted', message: '请求已取消，未连接' }
+			return ok ? { ok: true, changed: true, open: true } : { ok: false, code: 'open_failed', message: SERIAL_OPEN_FAIL_MSG }
+		} finally {
+			SerialHub.setOpening(sid, false)
+		}
+	}
+
+	async function closeLane(sid, opts) {
+		opts = opts || {}
+		if (opts.exact) {
+			if (!platformHasSid(sid) || !SerialHub.isVisible(sid)) return { ok: false, code: 'lane_not_visible', message: '这一路当前不可用' }
+		} else {
+			sid = SerialHub.uiSid(sid)
+		}
+		const block = laneBlockReason(sid, null)
+		if (block) return { ok: false, code: block.code, message: block.message }
+		if (SerialHub.isOpening(sid)) return { ok: false, code: 'lane_busy', message: '这一路正在连接或关闭' }
+		const port = SerialHub.getPort(sid)
+		if (!port || (!SerialHub.isOpen(sid) && !SerialHub._sess(sid).releaseFailed)) {
+			return { ok: true, changed: false, open: false }
+		}
+		SerialHub.setManualClose(sid, true)
+		SerialHub.setOpening(sid, true)
+		try {
+			const ok = await closeSerial(sid)
+			return ok ? { ok: true, changed: true, open: false } : { ok: false, code: 'close_failed', message: '串口未确认释放，请重试关闭' }
+		} finally {
+			SerialHub.setOpening(sid, false)
+		}
+	}
+
 	async function handleToggleClick(sid) {
 		sid = SerialHub.uiSid(sid || 'A')
 		if (SerialHub.isOpening(sid)) return
@@ -3793,27 +3906,13 @@
 			return
 		}
 		if (SerialHub.isOpen(sid) || SerialHub._sess(sid).releaseFailed) {
-			SerialHub.setManualClose(sid, true)
-			SerialHub.setOpening(sid, true)
-			try {
-				await closeSerial(sid)
-			} finally {
-				SerialHub.setOpening(sid, false)
-			}
+			const r = await closeLane(sid)
+			if (!r.ok && r.message && r.code !== 'lane_busy') addLogErr(r.message, sid)
 			return
 		}
-		const taken = findPortConflict(port, sid)
-		if (taken) {
-			addLogErr(portConflictMsg(taken), sid)
-			return
-		}
-		SerialHub.setOpening(sid, true)
-		SerialHub.setManualClose(sid, false)
-		try {
-			await openSerial(sid)
-		} finally {
-			SerialHub.setOpening(sid, false)
-		}
+		const r = await openLane(sid)
+		// open_failed 已由 openSerial 自己记日志并提示，这里只补「这一路不可用 / 事务中」这类
+		if (!r.ok && r.message && r.code !== 'open_failed' && r.code !== 'lane_busy') addLogErr(r.message, sid)
 	}
 
 	serialToggle.addEventListener('click', async () => {
@@ -4442,6 +4541,7 @@
 	function serialStatuChange(statu, sid) {
 		if (window.Workbench) window.Workbench.refreshStatus()
 		sid = sid || SerialHub.uiSid('A')
+		bumpSessionGen(sid, statu)
 		if (!SerialHub.isVisible(sid)) return
 		// sid=B 永远写 #serial-status-b；双路 A 写 -a、单路 S 写 #serial-status
 		let containerId
@@ -5264,6 +5364,11 @@
 		// === 双路扩展 ===
 		getMode() {
 			return SerialHub.mode
+		},
+		// 每路连接代次：连接 / 断开都变，MCP 读游标据此拒绝跨会话数据
+		sessionGeneration(id) {
+			if (id !== 'S' && id !== 'A' && id !== 'B') return 0
+			return serialSessionGen[id] || 0
 		},
 		getActiveSendSid() {
 			return SerialHub.activeSendSid()
@@ -7140,6 +7245,16 @@
 		},
 		selectPort: selectLanePort,
 		toggle: function (sid) { return handleToggleClick(sid) },
+		// MCP 与 UI 共用：只操作这一路已选的设备，返回结构化结果。
+		// 只认显式 S/A/B 且必须是当前模式可见的那一路，不做 uiSid 重映射
+		open: function (sid, guard) {
+			if (sid !== 'S' && sid !== 'A' && sid !== 'B') return Promise.resolve({ ok: false, code: 'invalid_lane', message: '无效的会话' })
+			return openLane(sid, { reason: 'mcp', exact: true, guard: guard })
+		},
+		close: function (sid) {
+			if (sid !== 'S' && sid !== 'A' && sid !== 'B') return Promise.resolve({ ok: false, code: 'invalid_lane', message: '无效的会话' })
+			return closeLane(sid, { reason: 'mcp', exact: true })
+		},
 		forget: function (sid) { return forgetPort(sid) },
 		// 不能枚举的后端(网页版)经浏览器选择框选设备：选完即连接(本路连着别的口时 bindSessionPort 先关旧口)
 		requestPort: function (sid) { return selectPortFor(sid, { openAfterSelect: true }) },

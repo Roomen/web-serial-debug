@@ -1,0 +1,29 @@
+[package]
+name = "portable-update-common"
+# 仅内部使用：Windows 便携版应用内更新的计划/结果格式，被桌面客户端与更新 helper 共用
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 与 tauri-plugin-updater 同名同版本，helper 与应用校验同一份签名
+minisign-verify = "0.3"
+base64 = "0.22"
+# 载荷是便携 ZIP：解析交给 zip crate，只保留 deflate(复用 flate2)与存储，其它压缩后端用不到
+zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+	"Win32_Foundation",
+	"Win32_System_Threading",
+	"Win32_System_Diagnostics_ToolHelp",
+	"Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+# 测试用临时密钥生成真实 minisign 签名(只验证成功/篡改/版本错配，不接触发布私钥)
+ring = "0.17"
+# 夹具与单元测试都要构造真实 ZIP
+zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }

@@ -8,16 +8,21 @@ export function releaseChannel(cwd, env = process.env) {
 	return g.status === 0 && g.stdout.trim() === 'main' ? 'main' : 'dev'
 }
 
+// 更新通道：macOS 与 Windows 便携版共用同一份清单与公钥。
+// - 没有公钥时不嵌入假公钥、也不提供可安装的更新(本地仍能构建出可手动解压的便携 ZIP)
+// - Windows 的更新载荷是便携 ZIP，由打包脚本自己签名，因此不让 tauri 生成 updater 产物
+// - requireSignedVersion：签名里记录的版本必须与清单版本一致，防「新版号 + 旧包」的降级配对
 export function updaterConfig(channel, env = process.env, platform = process.platform) {
 	const pubkey = String(env.TAURI_UPDATER_PUBLIC_KEY || '').trim()
-	if (!pubkey || platform === 'win32') return {
+	if (!pubkey) return {
 		bundle: { createUpdaterArtifacts: false },
 		plugins: { updater: { pubkey: '' } }
 	}
 	return {
-		bundle: { createUpdaterArtifacts: Boolean(env.TAURI_SIGNING_PRIVATE_KEY) },
+		bundle: { createUpdaterArtifacts: platform === 'darwin' && Boolean(env.TAURI_SIGNING_PRIVATE_KEY) },
 		plugins: { updater: {
 			pubkey,
+			requireSignedVersion: true,
 			endpoints: [`https://github.com/Roomen/web-serial-debug/releases/download/desktop-${channel}/latest.json`],
 			windows: { installMode: 'passive' }
 		} }

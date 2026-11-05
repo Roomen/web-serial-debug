@@ -194,6 +194,13 @@ const tag = (t, items) => { let p = []; items.forEach(it => { p = p.concat(it) }
 	assert.equal(bm.sections.length, 0)
 	for (const junk of [[], [1, 2, 3], new Uint8Array(40)]) assert.equal(window.wmbusLogView(window.wmbusParseFrame(junk)), null)
 	// 写角色密钥: 解密出的密钥在日志里脱敏
+	// 0x88 写表端时间: 4 字节 LE 时间戳按设备口径(UTC 字段)显示
+	const timeFrame = window.wmbusBuildDownFrame({ addr: '01 02 03 04 05 06 07 08', keyId: 2, mcnt: 9, cmd: 0x88, payloadHex: 'C0 61 56 69' })
+	const tr = window.wmbusParseFrame(timeFrame)
+	assert.equal(tr.fields['命令CMD'].value, '0x88')
+	assert.match(tr.fields['命令CMD'].name, /写表端时间/)
+	assert.match(tr.decoded, /2026-01-01 12:00:00/)
+	assert.match(tr.decoded, /1767268800/)
 	const keyFrame = window.wmbusBuildDownFrame({ addr: '01 02 03 04 05 06 07 08', keyId: 0, mcnt: 8, cmd: 0x83, payloadHex: '01 ' + 'AB '.repeat(16) })
 	const km = window.wmbusLogView(window.wmbusParseFrame(keyFrame))
 	assert.ok(JSON.stringify(km).includes('已脱敏'))

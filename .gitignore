@@ -24,3 +24,6 @@ tools/smoke-out
 /desktop/src-tauri/target
 /desktop/src-tauri/gen
 /desktop/release
+# Windows 便携更新的共享协议 crate 与 helper：本地编译产物同样不入库
+/desktop/portable-update-common/target
+/desktop/portable-updater/target

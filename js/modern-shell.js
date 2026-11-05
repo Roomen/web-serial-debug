@@ -1,4 +1,4 @@
-// 外壳：左栏「配置」菜单、全局连接栏(每路一个连接按钮)、日志工具条、快捷行 + 发送条、日志过滤与缩放。
+// 外壳：全局连接栏(每路一个连接按钮)、日志工具条、快捷行 + 发送条、日志过滤与缩放。
 // index.html 里的原控件是来源：启动时一次性原样搬进新结构(不克隆)，
 // 新控件只驱动原控件(派发 click/change)或调用现有全局 API，状态以原控件为准、经 MutationObserver 跟随。
 // 过滤的纯函数在文件顶部，node 测试(tests/modern-shell.cjs)直接 require
@@ -174,71 +174,6 @@
 	function isDual() {
 		const h = hub()
 		return !!(h && h.mode === 'dual')
-	}
-
-	// ========== 1. 左栏「配置」菜单：主题三档 + 反馈 / GitHub ==========
-	// 这几项与左栏一级入口重复：窗口够高时它们在左栏显示，菜单里带 mdn-cfg-extra 的项由 CSS 断点隐藏，只剩导入 / 导出 / 重置
-	const THEMES = [['auto', '跟随系统'], ['light', '浅色'], ['dark', '深色']]
-	const CFG_EXTRA = 'mdn-cfg-extra'
-
-	function mountRail() {
-		const menu = document.querySelector('.rail-config-menu')
-		const sw = $('theme-switch')
-		if (!menu) return
-		const items = []
-		const divider = function () {
-			const li = mk('li', CFG_EXTRA)
-			li.appendChild(mk('hr', 'dropdown-divider'))
-			return li
-		}
-		if (sw) {
-			const li = mk('li', 'rail-config-layout mdn-cfg-theme ' + CFG_EXTRA)
-			li.appendChild(mk('span', 'rail-config-layout-title', '主题'))
-			const seg = mk('div', 'ctl-seg')
-			seg.setAttribute('role', 'group')
-			seg.setAttribute('aria-label', '主题')
-			THEMES.forEach(function (t) {
-				const b = btn('', t[1])
-				b.dataset.mdnTheme = t[0]
-				seg.appendChild(b)
-			})
-			li.appendChild(seg)
-			listen(seg, 'click', function (e) {
-				const b = e.target.closest('button')
-				if (b && typeof window.setThemeChoice === 'function') window.setThemeChoice(b.dataset.mdnTheme)
-			})
-			// 状态源是原主题开关(aria-checked)，setThemeChoice 改完它再跟过来
-			const sync = function () {
-				const on = sw.querySelector('[aria-checked="true"]')
-				const cur = on ? on.dataset.themeChoice : (window.getThemeChoice ? window.getThemeChoice() : 'auto')
-				seg.querySelectorAll('button').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.mdnTheme === cur)) })
-			}
-			observe(sw, { attributes: true, subtree: true, attributeFilter: ['aria-checked', 'class'] }, sync)
-			sync()
-			items.push(divider(), li)
-		}
-		// 反馈 / GitHub：链接地址取自左栏原链接，不另写一份；桌面客户端由原生「帮助」菜单提供，这里按 shell.browser 隐藏。下载客户端留在左栏一级，不收进来
-		const links = document.querySelectorAll('#activity-rail .rail-bottom > a.rail-item:not(#rail-download)')
-		if (links.length) {
-			const div = divider()
-			div.setAttribute('data-feature', 'shell.browser')
-			items.push(div)
-			links.forEach(function (a) {
-				const li = mk('li', CFG_EXTRA)
-				li.setAttribute('data-feature', 'shell.browser')
-				const item = mk('a', 'dropdown-item')
-				item.href = a.href
-				item.target = '_blank'
-				item.rel = 'noopener'
-				const ic = a.querySelector('i')
-				if (ic) item.appendChild(icon(ic.className.replace(/^bi\s+/, '')))
-				const label = a.querySelector('.rail-label')
-				item.appendChild(document.createTextNode(' ' + (a.title || (label ? label.textContent : ''))))
-				li.appendChild(item)
-				items.push(li)
-			})
-		}
-		items.forEach(function (li) { hostEl(li, menu) })
 	}
 
 	// ========== 2. 全局连接栏 ==========
@@ -1333,7 +1268,6 @@
 		if (mounted) return
 		mounted = true
 		refs = {}
-		mountRail()
 		mountConnBar()
 		mountLogBar()
 		mountLogZoom()
