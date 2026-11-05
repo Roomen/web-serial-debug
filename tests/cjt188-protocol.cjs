@@ -17,6 +17,22 @@ const read = seal([...hex('68 10 12 34 56 78 90 12 34 81 16 90 1F 02'),
 const write = seal(hex('68 10 12 34 56 78 90 12 34 95 03 A0 18 03'))
 const request = window.cjt188BuildDownFrame({ cmd: 3, addr: 'AA AA AA AA AA AA AA', seq: 1 })
 
+// 下发按表号填写, 组帧时倒成地址域的低字节在前; 普通与超声共用; 全 A 广播; 新表号同规则
+for (const build of [window.cjt188BuildDownFrame, window.skUltrasonicBuildDownFrame]) {
+	const f = build({ cmd: 3, addr: '07060504030201', seq: 1, preamble: false })
+	assert.deepEqual(Array.from(f.slice(2, 9)), [1, 2, 3, 4, 5, 6, 7])
+	assert.equal(window.cjt188LogView(parse(f)).subject.value, '07060504030201')
+	assert.deepEqual(Array.from(build({ cmd: 3, addr: '0706 0504 0302 01', preamble: false }).slice(2, 9)), [1, 2, 3, 4, 5, 6, 7])
+	for (const b of ['AA AA AA AA AA AA AA', 'aaaaaaaaaaaaaa']) assert.ok(Array.from(build({ cmd: 3, addr: b, preamble: false }).slice(2, 9)).every(x => x === 0xaa))
+	for (const bad of ['', '0102030405060', '010203040506070', '0102030405060A', null]) assert.throws(() => build({ cmd: 3, addr: bad }), /14 位数字/)
+}
+{
+	const w = window.cjt188BuildDownFrame({ cmd: 0x15, addr: 'AAAAAAAAAAAAAA', newAddr: '07060504030201', preamble: false })
+	assert.deepEqual(Array.from(w.slice(14, 21)), [1, 2, 3, 4, 5, 6, 7])
+	assert.match(parse(w).decoded, /新表号 = 01020304050607 \(表号=07060504030201\)/)
+	assert.throws(() => window.cjt188BuildDownFrame({ cmd: 0x15, addr: 'AAAAAAAAAAAAAA', newAddr: 'AAAAAAAAAAAAAA' }), /广播/)
+}
+
 // 写底度字段以 10L 为单位，不得悄悄舍入或截断超范围值。
 for (const build of [window.cjt188BuildDownFrame, window.skUltrasonicBuildDownFrame]) {
 	const degreeFrame = value => build({ cmd: 0x16, addr: 'AA AA AA AA AA AA AA', degreeM3: value, preamble: false })
@@ -130,15 +146,20 @@ assert.doesNotMatch(parse(corrupted).errors.join(), /地址偏移/)
 	const uiContext = vm.createContext({
 		window: { registerProtocol() {} },
 		document: fakeDocument,
-		localStorage: { getItem() { return null }, setItem() {} },
+		localStorage: { getItem(k) { return store.has(k) ? store.get(k) : null }, setItem(k, v) { store.set(k, String(v)) } },
 		Uint8Array,
 	})
+	// 旧版按帧字节顺序存的地址, 载入时转成表号; 生成后存成 14 位表号
+	const store = new Map([['cjt188DownAddr', '01 02 03 04 05 06 07']])
 	vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/cjt188-protocol.js'), 'utf8'), uiContext)
+	assert.equal(elements.get('cjt188-down-addr').value, '07060504030201')
 	const paramSel = elements.get('cjt188-down-param-sel')
 	assert.deepEqual(paramSel.options.map(option => option.textContent), ['0x55 开阀', '0x77 除锈', '0x99 关阀'])
 	Object.defineProperty(paramSel, 'value', { configurable: true, get() { return this.options[this.selectedIndex].value } })
 	elements.get('cjt188-down-build').click()
 	const defaultFrame = hex(elements.get('cjt188-down-preview').value)
+	assert.deepEqual(Array.from(defaultFrame.slice(parse(defaultFrame).frameOffset + 2, parse(defaultFrame).frameOffset + 9)), [1, 2, 3, 4, 5, 6, 7])
+	assert.equal(store.get('cjt188DownAddr'), '07060504030201')
 	assert.equal(defaultFrame[parse(defaultFrame).frameOffset + 14], 0x55)
 	assert.equal(elements.get('cjt188-down-err').textContent, '')
 	for (const protocol of ['cjt188', 'sk-ultrasonic']) {

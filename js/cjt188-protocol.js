@@ -128,6 +128,15 @@
 	function addrToMeterNo(addr) {
 		return bcdDecodeBE(Array.from(addr).reverse())
 	}
+	// 下发时按表号填写(与解析显示一致), 组帧时倒成地址域的低字节在前; 全 A(可带空格) = 广播
+	function meterNoToAddr(str, label) {
+		const s = String(str == null ? '' : str).replace(/\s+/g, '')
+		if (/^[Aa]{14}$/.test(s)) return new Uint8Array(ADDR_SIZE).fill(0xaa)
+		if (!/^\d{14}$/.test(s)) throw new Error(label + '需为 14 位数字(如 90040202264102), 全 A = 广播')
+		const out = new Uint8Array(ADDR_SIZE)
+		for (let i = 0; i < ADDR_SIZE; i++) out[ADDR_SIZE - 1 - i] = parseInt(s.substr(i * 2, 2), 16)
+		return out
+	}
 	function describeAddr(addr) {
 		return hexbytes(addr) + (isBroadcastAddr(addr) ? ' (广播,全部通配)' : ' (表号=' + addrToMeterNo(addr) + ')')
 	}
@@ -176,8 +185,8 @@
 				return new Uint8Array([op])
 			}
 			case 0x15: { // 写表号: 新表号7字节
-				const addr = toBytesHex(opt.newAddr || '')
-				if (addr.length !== ADDR_SIZE) throw new Error('新表号需 ' + ADDR_SIZE + ' 字节 HEX')
+				const addr = meterNoToAddr(opt.newAddr, '新表号')
+				if (isBroadcastAddr(addr)) throw new Error('新表号不能是广播地址')
 				return addr
 			}
 			case 0x16: { // 写底度: 4字节小端BCD, 帧上单位为10L(见设备固件 comToLittleEndianBCDArrayToUnsignedInt(...)×10); 面板按 m³ 输入,这里转换
@@ -193,8 +202,7 @@
 		opt = opt || {}
 		const cmd = (typeof opt.cmd === 'string') ? parseInt(opt.cmd, 16) : opt.cmd
 		if (!CMD_TABLE[cmd]) throw new Error('不支持的功能码 ' + opt.cmd)
-		const addr = toBytesHex(opt.addr || '')
-		if (addr.length !== ADDR_SIZE) throw new Error('表号需 ' + ADDR_SIZE + ' 字节 HEX (全 AA = 广播,所有设备都会应答)')
+		const addr = meterNoToAddr(opt.addr, '表号')
 		const seq = (opt.seq != null ? opt.seq : 0) & 0xff
 		const commuStatus = opt.commuStatus ? 1 : 0
 		const content = buildContent(cmd, seq, opt)
@@ -540,7 +548,13 @@
 		const sendBtn = document.getElementById('cjt188-down-send')
 		const preview = document.getElementById('cjt188-down-preview')
 
-		addrEl.value = localStorage.getItem('cjt188DownAddr') || BROADCAST_ADDR
+		// 旧版按帧字节顺序存空格分隔 HEX, 转成表号显示; 新版存 14 位表号, 不会再匹配这个格式
+		let savedAddr = localStorage.getItem('cjt188DownAddr') || BROADCAST_ADDR
+		if (/^([0-9A-Fa-f]{2} ){6}[0-9A-Fa-f]{2}$/.test(savedAddr) && !/^[Aa\s]+$/.test(savedAddr)) {
+			const legacy = savedAddr.split(' ').reverse().join('')
+			savedAddr = /^\d{14}$/.test(legacy) ? legacy : BROADCAST_ADDR
+		}
+		addrEl.value = savedAddr
 		seqEl.value = localStorage.getItem('cjt188DownSeq') || '1'
 		if (preambleEl) {
 			preambleEl.checked = localStorage.getItem('cjt188DownPreamble') !== '0'
@@ -581,9 +595,9 @@
 					}
 					break
 				case 0x15:
-					paramLabel.textContent = '新表号(7字节HEX)'
+					paramLabel.textContent = '新表号(14位数字)'
 					paramVal.style.display = ''
-					paramVal.placeholder = '如 01 02 03 04 05 06 07'
+					paramVal.placeholder = '如 90040202264102'
 					paramVal.value = ''
 					break
 				case 0x16:
@@ -616,7 +630,8 @@
 				if (cmd === 0x16) opt.degreeM3 = paramVal.value
 				const ultrasonic = document.getElementById('serial-protocol-select').value === 'sk-ultrasonic'
 				const frame = ultrasonic ? W.skUltrasonicBuildDownFrame(opt) : W.cjt188BuildDownFrame(opt)
-				localStorage.setItem('cjt188DownAddr', addrEl.value)
+				const addrNorm = addrEl.value.replace(/\s+/g, '')
+				localStorage.setItem('cjt188DownAddr', /^[Aa]{14}$/.test(addrNorm) ? BROADCAST_ADDR : addrNorm)
 				const nextSeq = ((opt.seq + 1) & 0xff)
 				seqEl.value = String(nextSeq)
 				localStorage.setItem('cjt188DownSeq', String(nextSeq))
