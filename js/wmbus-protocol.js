@@ -102,6 +102,20 @@
 	function deviceEpochNow() {
 		return Math.floor((Date.now() - new Date().getTimezoneOffset() * 60000) / 1000)
 	}
+	// 设备口径 epoch 与 <input type="datetime-local"> 的值(YYYY-MM-DDTHH:mm:ss)互转: 字段按 UTC 读写, 即界面上的年月日时分秒就是设备钟
+	function deviceEpochToLocalInput(ts) {
+		return new Date(ts * 1000).toISOString().slice(0, 19)
+	}
+	function localInputToDeviceEpoch(str) {
+		const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(str || '').trim())
+		if (!m) throw new Error('请填写完整的年-月-日 时:分:秒')
+		const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0))
+		const d = new Date(ms)
+		if (d.getUTCFullYear() !== +m[1] || d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) throw new Error('日期不合法: ' + str)
+		const ts = ms / 1000
+		if (ts < 0 || ts > 0xFFFFFFFF) throw new Error('时间超出 4 字节时间戳范围(1970-01-01 ~ 2106-02-07)')
+		return ts
+	}
 	// 本 profile 固件在 VIF 0x6D(4字节)里填的是 unix 秒, 不是 EN13757-3 标称的 Type-F 位域
 	// (实测同一台设备相隔 42 s 的两帧只差 42, 按 Type-F 解会得到 2051 年这类伪值), 因此统一按 unix 秒显示。
 	function fmtDeviceTime4(b) {
@@ -868,6 +882,9 @@
 			paramGroup.style.display = ''
 			ipGroup.style.display = 'none'
 			paramVal.placeholder = '值' // 各分支按需覆盖, 切换命令时先还原成通用占位符
+			paramVal.type = 'text' // 0x88 换成日期时间选择器, 其它命令还原成文本框
+			paramVal.step = ''
+			paramVal.style.width = '120px'
 			switch (cmd) {
 				case 0x16:
 					paramLabel.textContent = 'dayTs(unix秒)'
@@ -916,11 +933,14 @@
 					paramVal.value = ''
 					break
 				case 0x88:
-					paramLabel.textContent = '时间戳(unix秒)'
+					paramLabel.textContent = '校时时间'
+					paramVal.type = 'datetime-local'
+					paramVal.step = '1'
+					paramVal.style.width = '13rem'
 					paramVal.style.display = ''
-					paramVal.placeholder = '设备口径 unix 秒'
-					// 与设备同口径(本地墙钟当 UTC); 未手动改过就在生成帧时刷新成当前时刻, 免得填好后停留太久校时偏差
-					paramVal.value = String(deviceEpochNow())
+					// 按年月日时分秒填, 下发时换成设备口径 unix 秒(本地墙钟当 UTC); 默认本机当前时间,
+					// 未手动改过就在生成帧时刷新成当前时刻, 免得填好后停留太久校时偏差
+					paramVal.value = deviceEpochToLocalInput(deviceEpochNow())
 					paramVal.dataset.wmbusAutoNow = '1'
 					break
 				default:
@@ -1027,9 +1047,7 @@
 						bytes = asciiBytesStrict(paramVal.value, 1, 32, 'APN')
 						break
 					case 0x88: {
-						const raw = String(paramVal.value == null ? '' : paramVal.value).trim()
-						if (!/^\d+$/.test(raw) || Number(raw) > 0xFFFFFFFF) throw new Error('时间戳需为 0~4294967295 的整数(unix秒)')
-						bytes = u32leBytes(Number(raw))
+						bytes = u32leBytes(localInputToDeviceEpoch(paramVal.value))
 						break
 					}
 					default:
@@ -1048,7 +1066,9 @@
 		}
 
 		cmdSel.addEventListener('change', onCmdChange)
-		paramVal.addEventListener('input', () => { delete paramVal.dataset.wmbusAutoNow; computePayload() })
+		const onParamEdit = () => { delete paramVal.dataset.wmbusAutoNow; computePayload() }
+		paramVal.addEventListener('input', onParamEdit)
+		paramVal.addEventListener('change', onParamEdit)
 		paramSel.addEventListener('change', computePayload)
 		ipTypeSel.addEventListener('change', onIpTypeChange)
 		ipAddrEl.addEventListener('input', computePayload)
@@ -1070,7 +1090,7 @@
 		function buildFrame() {
 			showErr('')
 			if (parseInt(cmdSel.value, 16) === 0x88 && paramVal.dataset.wmbusAutoNow) {
-				paramVal.value = String(deviceEpochNow())
+				paramVal.value = deviceEpochToLocalInput(deviceEpochNow())
 				computePayload()
 			}
 			if (payloadErr) { showErr(payloadErr); return null }
