@@ -124,8 +124,12 @@
 		for (let i = 0; i < addr.length; i++) if (addr[i] !== 0xaa) return false
 		return true
 	}
+	// CJ/T 188 地址域 A0~A6 低字节在前, 表号按 A6→A0 读出(如 02 41 26 02 02 04 90 → 90040202264102)
+	function addrToMeterNo(addr) {
+		return bcdDecodeBE(Array.from(addr).reverse())
+	}
 	function describeAddr(addr) {
-		return hexbytes(addr) + (isBroadcastAddr(addr) ? ' (广播,全部通配)' : ' (BCD=' + bcdDecodeBE(addr) + ')')
+		return hexbytes(addr) + (isBroadcastAddr(addr) ? ' (广播,全部通配)' : ' (表号=' + addrToMeterNo(addr) + ')')
 	}
 
 	// 实时时间 YYYYMMDDhhmmss 7字节BCD; 按标准 6.4.2 多字节数据低字节先传: ss mm hh DD MM YY(低) YY(高)
@@ -377,7 +381,7 @@
 					break
 				case 0x15:
 					result.decoded = !dataFrom
-						? (content.length >= ADDR_SIZE ? '新表号 = ' + hexbytes(content.subarray(0, ADDR_SIZE)) : '(内容长度不足)')
+						? (content.length >= ADDR_SIZE ? '新表号 = ' + describeAddr(content.subarray(0, ADDR_SIZE)) : '(内容长度不足)')
 						: '写入后表号即上方地址字段'
 					break
 				case 0x16:
@@ -445,7 +449,7 @@
 			title: ext ? '拓展读数据' : f.功能码.name,
 			code: f.功能码.value,
 			dir: r.dir,
-			subject: { label: '表号', value: f.表号.replace(/^\S+ \(BCD=(\S+)\)$/, '$1') },
+			subject: { label: '表号', value: f.表号.replace(/^.+ \(表号=(\d+)\)$/, '$1') },
 			badges: [{ text: up ? '应答' : '请求', kind: 'info' }],
 			meta: [['数据标识', f.数据标识], ['序号', f.序号], ['控制码', hexByte(r.ctrl)], ['数据长度', r.dataLen]],
 			notes: [],
