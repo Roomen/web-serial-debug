@@ -211,6 +211,7 @@
 		0x85: { name: '配置应用平台网络地址' },
 		0x86: { name: '配置APN' },
 		0x87: { name: '立即上报(REPORT_NOW)' },
+		0x88: { name: '写表端时间(校时,仅红外)' },
 	}
 	const RESULT_TABLE = {
 		0: 'OK 成功', 1: 'AUTH_FAIL 鉴权失败(MAC不匹配)', 2: 'REPLAY 重放(计数器≤last_mc)',
@@ -357,6 +358,10 @@
 				try { apn = new TextDecoder().decode(payload) } catch (e) { apn = hexbytes(payload) }
 				return 'APN = ' + apn
 			}
+			case 0x88:
+				// 与 0x10 时间记录同口径: 本地墙钟按 UTC 换算的 unix 秒
+				if (payload.length < 4) return '(payload过短,需4字节时间戳)'
+				return '时间 = ' + fmtUnix(u32le(payload, 0)) + ' (设备本地钟, unix秒=' + u32le(payload, 0) + ')'
 			default:
 				return payload.length ? ('原始载荷 = ' + hexbytes(payload)) : '(无参数)'
 		}
@@ -770,12 +775,13 @@
 		if (!cmdSel || cmdSel.dataset.wmbusInit) return
 		cmdSel.dataset.wmbusInit = '1'
 
-		const SEND_CMDS = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87]
+		const SEND_CMDS = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88]
+		//0x88(写表端时间)要求 ADMIN, 且固件只受理红外通道(联网通道回 CMD_UNSUP)
 		//0x87(立即上报)是写类命令里的权限例外: 只需 PUBLIC 角色即可触发,不是 ADMIN
 		//0x84(阀控)不属于该例外, 仍要求 role>=1(操作员/管理员), 公开读不可下发
 		//0x12(读当前下行计数器)是读命令里的权限例外: 需要 role>0(操作员/管理员),公开读不可用
 		//未列出的其余命令(0x10/0x11/0x13~0x16,纯读)按协议要求最低角色 0(公开读)即可执行
-		const MIN_ROLE = { 0x12: 1, 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0 }
+		const MIN_ROLE = { 0x12: 1, 0x84: 1, 0x80: 2, 0x81: 2, 0x82: 2, 0x83: 2, 0x85: 2, 0x86: 2, 0x87: 0, 0x88: 2 }
 
 		// 收→发间隔(固定): 仅「已收到应答 → 下次发送」, 不插在发送后等应答路上。
 		// 实测 0.7s 常丢、约 850ms 较稳。写命令每次先 0x12, 探测应答后 / 无应答重发前走这段。
@@ -909,6 +915,14 @@
 					paramVal.placeholder = 'APN'
 					paramVal.value = ''
 					break
+				case 0x88:
+					paramLabel.textContent = '时间戳(unix秒)'
+					paramVal.style.display = ''
+					paramVal.placeholder = '设备口径 unix 秒'
+					// 与设备同口径(本地墙钟当 UTC); 未手动改过就在生成帧时刷新成当前时刻, 免得填好后停留太久校时偏差
+					paramVal.value = String(deviceEpochNow())
+					paramVal.dataset.wmbusAutoNow = '1'
+					break
 				default:
 					paramGroup.style.display = 'none'
 			}
@@ -1012,6 +1026,12 @@
 					case 0x86:
 						bytes = asciiBytesStrict(paramVal.value, 1, 32, 'APN')
 						break
+					case 0x88: {
+						const raw = String(paramVal.value == null ? '' : paramVal.value).trim()
+						if (!/^\d+$/.test(raw) || Number(raw) > 0xFFFFFFFF) throw new Error('时间戳需为 0~4294967295 的整数(unix秒)')
+						bytes = u32leBytes(Number(raw))
+						break
+					}
 					default:
 						bytes = []
 				}
@@ -1028,7 +1048,7 @@
 		}
 
 		cmdSel.addEventListener('change', onCmdChange)
-		paramVal.addEventListener('input', computePayload)
+		paramVal.addEventListener('input', () => { delete paramVal.dataset.wmbusAutoNow; computePayload() })
 		paramSel.addEventListener('change', computePayload)
 		ipTypeSel.addEventListener('change', onIpTypeChange)
 		ipAddrEl.addEventListener('input', computePayload)
@@ -1049,6 +1069,10 @@
 
 		function buildFrame() {
 			showErr('')
+			if (parseInt(cmdSel.value, 16) === 0x88 && paramVal.dataset.wmbusAutoNow) {
+				paramVal.value = String(deviceEpochNow())
+				computePayload()
+			}
 			if (payloadErr) { showErr(payloadErr); return null }
 			let addr
 			try { addr = computeAddrHex() } catch (e) { showErr(e.message); return null }
@@ -1094,7 +1118,8 @@
 		// 本地跟踪的计数器一旦与设备 last_mc 不同步就会导致探测本身被当重放丢弃、死锁(见该文件注释),
 		// 固定大值可保证任何情况下都能探测成功。
 		// 0x87(立即上报)不校验 MCNT 新鲜度(与纯读命令一样), 无需探测计数器, 可直接下发。
-		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1 }
+		// 0x88(写表端时间)是 ADMIN 写命令, 同样要求 MCNT > last_mc, 走探测。
+		const AUTO_PROBE_CMDS = { 0x80: 1, 0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1, 0x85: 1, 0x86: 1, 0x88: 1 }
 		// 收到探测应答后紧接着就发写命令, 红外半双工还没切回接收, 写命令会被吞。
 		// 收→发间隔只卡在 收→发 之间(整帧已由 findFrame 收齐后再计时), 不插在 发→等应答 路上。
 		// 无应答则原样重发(MCNT 不变; 设备没收到不算重放, 已执行会回结果码2, 不重复写)。
