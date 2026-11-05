@@ -194,6 +194,17 @@ const tag = (t, items) => { let p = []; items.forEach(it => { p = p.concat(it) }
 	assert.equal(bm.sections.length, 0)
 	for (const junk of [[], [1, 2, 3], new Uint8Array(40)]) assert.equal(window.wmbusLogView(window.wmbusParseFrame(junk)), null)
 	// 写角色密钥: 解密出的密钥在日志里脱敏
+	// 未注入/未填密钥时各角色默认密钥 = 密钥基每字节异或 role, 加密与 CMAC 都按帧里的 KeyID 取
+	const keyBase = [0x53, 0x45, 0x43, 0x4B, 0x2D, 0x4D, 0x49, 0x44, 0x2D, 0x54, 0x45, 0x4D, 0x50, 0x4B, 0x45, 0x59]
+	const hx = a => Array.from(a, b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ')
+	const probe = keyId => window.wmbusBuildDownFrame({ addr: '01 02 03 04 05 06 07 08', keyId, mcnt: 0x7FFFFFFE, cmd: '0x12' })
+	assert.equal(hx(probe(2)), '5B 01 02 03 04 05 06 07 08 02 FE FF FF 7F 01 46 0F F1 60 56 7C B7 62 8E 3B 6A F5 8F B3 EA 35 FC A2 54 7C B5 DB 59 FF')
+	for (const keyId of [0, 1, 2]) {
+		const explicit = window.wmbusBuildDownFrame({ addr: '01 02 03 04 05 06 07 08', keyId, mcnt: 0x7FFFFFFE, cmd: '0x12', roleKeys: { [keyId]: hx(keyBase.map(b => b ^ keyId)) } })
+		assert.equal(hx(probe(keyId)), hx(explicit))
+		assert.equal(window.wmbusParseFrame(probe(keyId)).macOk, true)
+	}
+	assert.notEqual(hx(probe(2).slice(15)), hx(window.wmbusBuildDownFrame({ addr: '01 02 03 04 05 06 07 08', keyId: 2, mcnt: 0x7FFFFFFE, cmd: '0x12', roleKeys: { 2: hx(keyBase.map(b => b ^ 1)) } }).slice(15)))
 	// 0x88 写表端时间: 4 字节 LE 时间戳按设备口径(UTC 字段)显示
 	const timeFrame = window.wmbusBuildDownFrame({ addr: '01 02 03 04 05 06 07 08', keyId: 2, mcnt: 9, cmd: 0x88, payloadHex: 'C0 61 56 69' })
 	const tr = window.wmbusParseFrame(timeFrame)
