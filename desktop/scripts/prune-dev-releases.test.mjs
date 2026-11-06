@@ -1,8 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { selectReleasesToPrune } from './prune-dev-releases.mjs'
+import { KEEP, selectReleasesToPrune } from './prune-dev-releases.mjs'
 
-test('keeps the newest five preview releases by numeric SemVer', () => {
+test('defaults to keeping only the newest preview release', () => {
+	assert.equal(KEEP, 1)
 	const tags = [
 		'desktop-dev-v1.100.0',
 		'desktop-dev-v1.99.0',
@@ -11,16 +12,16 @@ test('keeps the newest five preview releases by numeric SemVer', () => {
 		'desktop-dev-v1.101.0',
 		'desktop-dev-v0.9.9',
 	]
-	assert.deepEqual(selectReleasesToPrune(tags, 5), ['desktop-dev-v0.9.9'])
-	const doomed = new Set(selectReleasesToPrune(tags, 5))
-	const kept = tags.filter(tag => !doomed.has(tag)).sort()
-	assert.deepEqual(kept, [
-		'desktop-dev-v1.100.0',
+	assert.deepEqual(selectReleasesToPrune(tags, KEEP), [
 		'desktop-dev-v1.101.0',
-		'desktop-dev-v1.9.0',
+		'desktop-dev-v1.100.0',
 		'desktop-dev-v1.99.0',
-		'desktop-dev-v2.0.0',
-	].sort())
+		'desktop-dev-v1.9.0',
+		'desktop-dev-v0.9.9',
+	])
+	const doomed = new Set(selectReleasesToPrune(tags, KEEP))
+	const kept = tags.filter(tag => !doomed.has(tag))
+	assert.deepEqual(kept, ['desktop-dev-v2.0.0'])
 })
 
 test('numeric ordering decides the keep window, not string order', () => {
@@ -52,7 +53,7 @@ test('ignores the channel pointer, main releases, prerelease suffixes and malfor
 		42,
 	]
 	assert.deepEqual(selectReleasesToPrune(tags, 0), [])
-	assert.deepEqual(selectReleasesToPrune(tags, 5), [])
+	assert.deepEqual(selectReleasesToPrune(tags, KEEP), [])
 })
 
 test('does not prune when the total is within the keep limit', () => {
@@ -87,6 +88,12 @@ test('never returns the current release even when it is outside the keep window'
 		'desktop-dev-v1.0.4',
 	]
 	assert.deepEqual(selectReleasesToPrune(tags, 2, 'desktop-dev-v1.0.0'), [
+		'desktop-dev-v1.0.2',
+		'desktop-dev-v1.0.1',
+	])
+	// KEEP=1 时 current 仍受保护：除了窗口内的最新版，oldest 也不删
+	assert.deepEqual(selectReleasesToPrune(tags, KEEP, 'desktop-dev-v1.0.0'), [
+		'desktop-dev-v1.0.3',
 		'desktop-dev-v1.0.2',
 		'desktop-dev-v1.0.1',
 	])

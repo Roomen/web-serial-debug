@@ -1,9 +1,9 @@
-// 预览版 release 只保留最新 KEEP 个版本（含 tag）。通道指针 desktop-dev、正式版 desktop-main*
-// 与本轮刚发布的版本永不删除；匹配必须严格到 MAJOR.MINOR.PATCH，预发布后缀不算。
+// 预览版 release 只保留最新 1 个版本（含 tag），即 KEEP=1。通道指针 desktop-dev、正式版
+// desktop-main* 与本轮刚发布的版本永不删除；匹配必须严格到 MAJOR.MINOR.PATCH，预发布后缀不算。
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 
-const KEEP = 5
+export const KEEP = 1
 export const DEV_RELEASE_TAG = /^desktop-dev-v([0-9]+)\.([0-9]+)\.([0-9]+)$/
 
 function compareNumeric(a, b) {

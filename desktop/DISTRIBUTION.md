@@ -28,7 +28,7 @@ Windows 便携 ZIP 同样使用这套公钥签名（`signer sign --app-version <
 
 通道清单发布在 `desktop-main/latest.json` 或 `desktop-dev/latest.json`。清单只包含 macOS ARM64 的更新包及匹配签名（Windows ZIP 不交给安装器更新器），且版本严格大于通道旧清单。验证通过且版本 release 发布后，最后才更新通道清单，客户端不会看到尚未发布的下载地址。已有通道先上传暂存清单并校验字节，再切换资产名；旧清单保留为备份，切换失败时尝试恢复。GitHub 不提供原子替换资产接口，名称切换期间可能短暂返回 404，应重试检查更新。工作流按分支串行执行，避免同通道发布竞态。首次发布如果通道清单不存在，创建通道 release；已有通道的读取失败会阻止发布。
 
-预览版只保留最新 5 个 `desktop-dev-v<MAJOR>.<MINOR>.<PATCH>` 版本 release（含 tag）：整包版本发布成功、通道指针推进之后，工作流按 SemVer 数值排序删除更旧的预览版；通道指针 `desktop-dev`、`desktop-main*` 与本次刚发布的版本永不删除，版本已存在被跳过构建（`publish=false`）时不清理。清理失败（含个别删除失败）只 `::warning::` 告警，不影响已发布结果；release 列表取不到时跳过，不误删。
+预览版只保留最新 1 个 `desktop-dev-v<MAJOR>.<MINOR>.<PATCH>` 版本 release（含 tag），即只保留最新版预览包：整包版本发布成功、通道指针推进之后，工作流按 SemVer 数值排序删除更旧的预览版；通道指针 `desktop-dev`、`desktop-main*` 与本次刚发布的版本永不删除，版本已存在被跳过构建（`publish=false`）时不清理。清理失败（含个别删除失败）只 `::warning::` 告警，不影响已发布结果；release 列表取不到时跳过，不误删。
 
 如发布在推进通道前失败，已有通道继续指向上一版。检查草稿/已发布版本与产物后人工处理失败版本，再重跑；流程不会静默覆盖同版本资产。
 
