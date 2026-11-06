@@ -13275,6 +13275,79 @@ html[data-runtime='tauri'][data-platform='macos'][data-layout='modern']:not([dat
 	padding-top: 46px;
 }
 
+/* 液态玻璃(macOS 26+ 客户端)：窗口与 WebView 透明，NSGlassEffectView 垫在 WebView 下面(见 desktop/src-tauri/src/lib.rs)，
+   页面这边只给左侧导航、连接栏、状态栏上色。玻璃做框、内容不透：日志、发送、右栏面板、波形、固件页保持实色，
+   长时间盯的背景不能有干扰；半透明底的透明度都取高值，文字对比度与实色时基本一致。
+   data-glass 由 js/platform.js 首屏前按外壳写的 window.__APP_WINDOW_GLASS__ 定下，低版本系统与网页版没有这个属性，全部按实色画。 */
+html[data-runtime='tauri'][data-glass='liquid'] {
+	--glass-rail: rgba(28, 35, 48, 0.86);
+	--glass-bar: rgba(28, 35, 48, 0.88);
+	--glass-top: rgba(255, 255, 255, 0.78);
+	--glass-pop: rgba(255, 255, 255, 0.82);
+}
+
+html[data-runtime='tauri'][data-glass='liquid'][data-theme='dark'] {
+	--glass-rail: rgba(22, 27, 36, 0.86);
+	--glass-bar: rgba(28, 35, 48, 0.88);
+	--glass-top: rgba(44, 44, 46, 0.82);
+	--glass-pop: rgba(44, 44, 46, 0.86);
+}
+
+/* 画布透明才透得出玻璃；内容区(#views)再铺回实色，中间不留透明缝 */
+html[data-runtime='tauri'][data-glass='liquid'],
+html[data-runtime='tauri'][data-glass='liquid'] body {
+	background: transparent;
+}
+
+html[data-runtime='tauri'][data-glass='liquid'] #views {
+	background: var(--bg-body);
+}
+
+html[data-runtime='tauri'][data-glass='liquid'] #activity-rail {
+	background: var(--glass-rail);
+}
+
+/* 导航栏底部的分隔线原本靠 rail 实色底遮，半透明后换成白色细线 */
+html[data-runtime='tauri'][data-glass='liquid'] #activity-rail .rail-bottom {
+	border-top-color: rgba(255, 255, 255, 0.12);
+}
+
+html[data-runtime='tauri'][data-glass='liquid'] #mdn-connbar {
+	background: var(--glass-top);
+}
+
+html[data-runtime='tauri'][data-glass='liquid'] #serial-statusbar {
+	background: var(--glass-bar);
+}
+
+/* 弹层与对话框：磨砂 + 半透明底(背后的内容透一点)，文字仍以高不透明度兜底 */
+html[data-runtime='tauri'][data-glass='liquid'] :is(.mdn-pop, .mdn-dd, .app-dlg-panel, .modal-content, .dropdown-menu, .native-ctx) {
+	-webkit-backdrop-filter: saturate(180%) blur(24px);
+	backdrop-filter: saturate(180%) blur(24px);
+	background: var(--glass-pop);
+}
+
+/* 系统开了「降低透明度」：回到实色，与不支持的机器完全一致 */
+@media (prefers-reduced-transparency: reduce) {
+	html[data-runtime='tauri'][data-glass='liquid'] #activity-rail {
+		background: var(--mdn-rail);
+	}
+
+	html[data-runtime='tauri'][data-glass='liquid'] #mdn-connbar {
+		background: var(--bg-surface);
+	}
+
+	html[data-runtime='tauri'][data-glass='liquid'] #serial-statusbar {
+		background: var(--mdn-bar);
+	}
+
+	html[data-runtime='tauri'][data-glass='liquid'] :is(.mdn-pop, .mdn-dd, .app-dlg-panel, .modal-content, .dropdown-menu, .native-ctx) {
+		-webkit-backdrop-filter: none;
+		backdrop-filter: none;
+		background: var(--bg-surface);
+	}
+}
+
 /* 日志区右键菜单 */
 html[data-runtime='tauri'] .native-ctx {
 	position: fixed;

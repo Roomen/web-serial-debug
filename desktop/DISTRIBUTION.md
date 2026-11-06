@@ -16,6 +16,8 @@
 
 私钥和 Apple 凭据不要提交仓库。正式版（`main`）要求更新签名配置齐全，缺少直接失败；两个通道缺 Apple 配置时都出整包 ad-hoc 签名的 macOS 包（`release-config.mjs` 的 `macSigningConfig`，首次打开在「隐私与安全性」点「仍要打开」；不要退回只有链接器签名的包，没有封存资源会被判「已损坏」，只能 `xattr -cr`），缺更新签名时只发布安装包、不生成更新清单，客户端不会收到这一版的应用内更新。
 
+macOS 26+ 的液态玻璃用 AppKit 的 `NSGlassEffectView`（macOS 26 才有的类，客户端运行时判断，低版本与 Windows 保持不透明窗口，最低系统仍是 11.0），因此发行前提不变：仍只出 `.dmg`、走公证或 ad-hoc 签名，不上架 App Store（审核会拒新系统专属外观与这类私有 API，公证不检查这些）；构建机不需要 macOS 26，类名在运行时才解析。
+
 Windows 便携 ZIP 同样使用这套公钥签名（`signer sign --app-version <版本>`，签名里带版本号，客户端开启 `requireSignedVersion`），但载荷由便携 helper 替换 EXE，不经过 Tauri 安装器。没有 `TAURI_UPDATER_PUBLIC_KEY` 时本地仍能构建并手动解压使用便携包，只是不生成 `.sig`、不进入清单。Windows Authenticode 代码签名尚需另行配置，现阶段运行程序可能出现系统信誉提示；应用内更新的完整性由更新签名保证，与 Authenticode 是两套独立机制。
 
 ## 发布流程

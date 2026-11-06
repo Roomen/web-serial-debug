@@ -214,6 +214,8 @@
 			docEl.dataset.platform = desc.os
 			docEl.dataset.runtime = desc.runtime
 			docEl.dataset.profile = desc.profile
+			// 液态玻璃只由客户端外壳在建窗时写标志(macOS 26+ 才有)，页面不嗅探 UA 或系统版本；网页版没有这个标志，CSS 全按实色画
+			if (desc.runtime === 'tauri' && win.__APP_WINDOW_GLASS__ === true) docEl.dataset.glass = 'liquid'
 			addRules(gatingCss(desc))
 			// 页面里静态写的 data-feature 若不在目录里，解析完再补规则
 			const scan = function () {

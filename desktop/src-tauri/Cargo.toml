@@ -13,7 +13,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# macOSPrivateApi: true(tauri.conf.json)对应的 feature；2.12.1 起它本身是空操作，但 tauri-build 仍会核对两边是否一致
+tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -37,6 +38,12 @@ zip = { version = "4.6", default-features = false, features = ["deflate-flate2-z
 rmcp = { version = "3.8", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 reqwest = "0.13"
 tower = { version = "0.5", features = ["util"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# macOS 26+ 的液态玻璃(NSGlassEffectView)：窗口透明 + 玻璃视图垫在 WebView 下面
+window-vibrancy = "0.8"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Foundation", "Win32_System_Registry", "Win32_Devices_Communication"] }

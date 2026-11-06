@@ -19,6 +19,32 @@ const CASCADE: f64 = 28.0;
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHTS: (f64, f64) = (8.0, 15.0);
 
+// macOS 26+ 的液态玻璃：窗口与 WebView 透明，NSGlassEffectView 垫在 WebView 下面(window-vibrancy)，
+// 页面只给左侧导航、连接栏、状态栏上色(html[data-glass='liquid']，见 css/style.css 的桌面客户端外壳段)。
+// 系统没有这个类(26 以下)或 AppKit 版本不够时窗口保持不透明，外观与之前完全一致，最低系统仍是 11.0。
+#[cfg(target_os = "macos")]
+fn liquid_glass_supported() -> bool {
+	// 类不存在时按类名取用会 panic，所以先按名字查一遍；版本号是 window-vibrancy 自己的判据，两边一致才不会白透明
+	objc2::runtime::AnyClass::get(c"NSGlassEffectView").is_some() && unsafe { objc2_app_kit::NSAppKitVersionNumber } >= 2685.0
+}
+
+#[cfg(not(target_os = "macos"))]
+fn liquid_glass_supported() -> bool {
+	false
+}
+
+// 建窗后、显示前调用(都在主线程)：失败不 panic，页面照旧按实色画，窗口透明只是多一层桌面背景
+#[cfg(target_os = "macos")]
+fn apply_liquid_glass(window: &WebviewWindow) {
+	let options = window_vibrancy::LiquidGlassOptions::default();
+	if let Err(e) = window_vibrancy::apply_liquid_glass(window, options) {
+		eprintln!("液态玻璃未启用：{e:?}");
+	}
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_liquid_glass(_window: &WebviewWindow) {}
+
 // 同名文件已存在时按「名称 (n).扩展名」顺延，与浏览器下载的习惯一致
 fn unique_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
 	let first = dir.join(name);
@@ -106,6 +132,15 @@ fn build_window_with_session(app: &AppHandle, label: &str, session: Option<&std:
 	if let Some(session) = session {
 		builder = builder.initialization_script(updater::session_script(session));
 	}
+	// 液态玻璃：窗口与 WebView 透明，页面首屏前就能读到标志(js/platform.js 写 html[data-glass='liquid']，不会先画实色再变透明)
+	let glass = liquid_glass_supported();
+	if glass {
+		// 一律先隐藏建窗：玻璃垫在 WebView 下面之后才显示，免得先闪一下透明的空窗口(主窗口另外还要等位置设好)
+		builder = builder
+			.transparent(true)
+			.visible(false)
+			.initialization_script("window.__APP_WINDOW_GLASS__ = true");
+	}
 	// main 的大小(逻辑像素)与位置由 winstate 还原并钳进目标屏工作区(没存过就居中)；其余窗口跟着参考窗口错开
 	let mut restore = None;
 	match (label != MAIN).then(|| cascade_from(app)).flatten() {
@@ -128,8 +163,14 @@ fn build_window_with_session(app: &AppHandle, label: &str, session: Option<&std:
 			.traffic_light_position(LogicalPosition::new(TRAFFIC_LIGHTS.0, TRAFFIC_LIGHTS.1));
 	}
 	let window = builder.build()?;
+	if glass {
+		apply_liquid_glass(&window);
+	}
 	if let Some((pos, maximized)) = restore {
 		winstate::apply(&window, pos, maximized);
+	} else if glass {
+		// main-N 只按错开的位置建窗，这里补上显示
+		window.show()?;
 	}
 	#[cfg(target_os = "windows")]
 	window.hide_menu()?;
