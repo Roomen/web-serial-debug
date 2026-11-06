@@ -249,10 +249,13 @@
 		dd.hidden = true
 		dd.setAttribute('role', 'dialog')
 		dd.setAttribute('aria-label', '选择串口设备')
-		// 电源键：连接 / 断开这一路已选的设备(serialLanes.toggle)，没设备时禁用(refreshConn 更新 disabled)
+		// 电源键：连接 / 断开这一路已选的设备(serialLanes.toggle)，没设备时禁用(refreshConn 更新 disabled)。
+		// 本路菜单/下拉开着也先收起：连接态一变列表就要重画，留着会跟着跳
 		listen(power, 'click', function () {
 			const lanes = window.serialLanes
-			if (lanes && !power.disabled) lanes.toggle(sidFor(key))
+			if (!lanes || power.disabled) return
+			closePops()
+			lanes.toggle(sidFor(key))
 		})
 		wrap.append(power, b, more, proto, pop, dd)
 		const toggleMenu = function () {
@@ -829,8 +832,8 @@
 			const lane = sid === 'S' ? '' : who + ' '
 			p.power.disabled = !hasPort
 			p.power.setAttribute('aria-pressed', String(!!open))
-			p.power.setAttribute('aria-label', lane + (failed ? '重试关闭串口' : (open ? '断开串口' : '连接串口')))
-			p.power.title = lane + (failed ? '关闭失败，点此重试关闭' : (open ? '已连接，点此断开' : (hasPort ? '未连接，点此连接' : '先选择设备')))
+			p.power.setAttribute('aria-label', lane + (failed ? '重试关闭串口' : (opening ? '正在连接' : (open ? '断开串口' : '连接串口'))))
+			p.power.title = lane + (failed ? '关闭失败，点此重试关闭' : (opening ? '正在连接' : (open ? '已连接，点此断开' : (hasPort ? '未连接，点此连接' : '先选择设备'))))
 			p.btn.setAttribute('aria-label', who + ' ' + (portName || '未选择串口') + ' · ' + st + ' · 选择串口设备')
 			p.btn.title = who + ' · ' + st + ' · 选择串口设备'
 			p.more.title = '串口设置：参数 · ' + (sid === 'S' ? '设备管理' : '路标签 · 设备管理')
