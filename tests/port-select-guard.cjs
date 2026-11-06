@@ -41,7 +41,8 @@ function harness(mode) {
 	let pickNext = null
 	const ctx = {
 		window: { serialApi: { pinned: false, isPinned() { return this.pinned } } },
-		document: { getElementById() { return null } },
+		document: { getElementById() { return null }, querySelectorAll() { return [] } },
+		refreshParamsBusyUI() {},
 		pinSid: null,
 		laneMoving: false,
 		readGenBySid: { S: 0, A: 0, B: 0 },

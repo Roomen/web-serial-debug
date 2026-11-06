@@ -266,6 +266,9 @@ mod tests {
             "serial_close",
             "serial_write",
             "serial_read",
+            "serial_ports_list",
+            "serial_select",
+            "serial_configure",
             "blu_state",
             "blu_set_power",
             "blu_set_voltage",
@@ -311,7 +314,7 @@ mod tests {
         let client = ().serve(transport).await.expect("MCP 客户端初始化失败");
 
         let tools = client.list_tools(None).await.expect("tools/list 失败");
-        assert_eq!(tools.tools.len(), 12);
+        assert_eq!(tools.tools.len(), 15);
 
         let mut args = serde_json::Map::new();
         args.insert("window".into(), json!("main"));

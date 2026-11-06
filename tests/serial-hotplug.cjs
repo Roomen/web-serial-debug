@@ -52,6 +52,7 @@ function harness(mode) {
 	const ctx = {
 		window: {},
 		document: { getElementById() { return null } },
+		refreshParamsBusyUI() {},
 		SerialAdapter: { addEventListener(type, fn) { listeners[type] = fn } },
 		localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
 		pinSid: null,
