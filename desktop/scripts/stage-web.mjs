@@ -1,8 +1,9 @@
 // 把网页版的静态文件复制进 desktop/dist 作为客户端的前端：页面只有一份，客户端不另改页面文件。
 // tauri 不允许 frontendDist 包含 src-tauri 所在目录，所以不能直接指向仓库根目录。
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { localizeWeb } from './localize-web.mjs'
 import { releaseChannel, updaterConfig } from './release-config.mjs'
 
 const desktop = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -17,6 +18,8 @@ for (const e of ENTRIES) {
 	if (!existsSync(src)) throw new Error('缺少网页文件: ' + e)
 	cpSync(src, join(dist, e), { recursive: true })
 }
+cpSync(join(desktop, 'vendor'), join(dist, 'vendor'), { recursive: true })
+writeFileSync(join(dist, 'index.html'), localizeWeb(readFileSync(join(dist, 'index.html'), 'utf8'), new URL('../vendor/', import.meta.url)))
 console.log('stage-web: 已复制 ' + ENTRIES.join(', ') + ' → desktop/dist')
 
 writeFileSync(join(dist, 'js', 'release-config.js'), 'window.APP_RELEASE_CHANNEL = ' + JSON.stringify(releaseChannel(desktop)) + ';\nwindow.APP_UPDATER_CONFIGURED = ' + Boolean(updaterConfig(releaseChannel(desktop)).plugins.updater.pubkey) + ';\n')
