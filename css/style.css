@@ -9037,6 +9037,7 @@ html[data-layout='modern'] {
 	--shadow-sm: none;
 	--mdn-rail: #1c2330;
 	--mdn-rail-hi: #2c3646;
+	--mdn-rail-hi-fg: #fff;
 	--mdn-rail-fg: #aab4c3;
 	--mdn-rail-muted: #98a4b5;
 	--mdn-rail-accent: #7fb1ff;
@@ -9067,6 +9068,18 @@ html[data-layout='modern'][data-theme='light'] {
 	--mdn-tx-line: #d9731a;
 	--mdn-rx-bg: #dcefe3;
 	--mdn-rx-fg: #145c32;
+	/* 浅色下外框跟着变浅(mac 侧栏风格)：左栏与状态栏用浅灰底 + 深色字，活动项用强调色；深色仍用上面的深色底值 */
+	--mdn-rail: #e4e8ef;
+	--mdn-rail-hi: rgba(28, 35, 48, 0.07);
+	--mdn-rail-hi-fg: #1c2330;
+	--mdn-rail-fg: #4d5768;
+	--mdn-rail-muted: #6b7686;
+	--mdn-rail-accent: #1f5fbf;
+	--mdn-bar: #e9edf3;
+	--mdn-bar-edge: #d0d7e2;
+	--mdn-bar-fg: #3f4a5c;
+	--mdn-bar-hi: #1c2330;
+	--mdn-bar-dim: #6b7686;
 }
 
 html[data-layout='modern'][data-theme='dark'] {
@@ -9110,7 +9123,13 @@ html[data-layout='modern'] #activity-rail .rail-item {
 html[data-layout='modern'] #activity-rail .rail-item:hover,
 html[data-layout='modern'] #activity-rail .rail-item.active {
 	background: var(--mdn-rail-hi);
-	color: #fff;
+	color: var(--mdn-rail-hi-fg);
+}
+
+/* 浅色下活动项按 mac 侧栏的习惯单独用强调色，不与悬停同色 */
+html[data-layout='modern'][data-theme='light'] #activity-rail .rail-item.active {
+	background: var(--accent-light);
+	color: var(--accent);
 }
 
 html[data-layout='modern'] #activity-rail .rail-item.active::before {
@@ -9181,7 +9200,7 @@ html[data-layout='modern'] #serial-statusbar .sb-session[data-sid='B'].is-open .
 }
 
 html[data-layout='modern'] #serial-statusbar .sb-receive-reset {
-	border-color: #3a4558;
+	border-color: var(--border-color);
 	color: var(--mdn-bar-fg);
 }
 
@@ -13215,8 +13234,9 @@ html[data-runtime='tauri'][data-platform='macos'][data-layout='modern']:not([dat
    长时间盯的背景不能有干扰；半透明底的透明度都取高值，文字对比度与实色时基本一致。
    data-glass 由 js/platform.js 首屏前按外壳写的 window.__APP_WINDOW_GLASS__ 定下，低版本系统与网页版没有这个属性，全部按实色画。 */
 html[data-runtime='tauri'][data-glass='liquid'] {
-	--glass-rail: rgba(28, 35, 48, 0.86);
-	--glass-bar: rgba(28, 35, 48, 0.88);
+	/* 浅色：框是半透浅灰(与实色的 --mdn-rail / --mdn-bar 同族)，透明度取高值保文字对比度 */
+	--glass-rail: rgba(232, 235, 241, 0.82);
+	--glass-bar: rgba(233, 236, 243, 0.85);
 	--glass-top: rgba(255, 255, 255, 0.78);
 	--glass-pop: rgba(255, 255, 255, 0.82);
 }
@@ -13242,8 +13262,12 @@ html[data-runtime='tauri'][data-glass='liquid'] #activity-rail {
 	background: var(--glass-rail);
 }
 
-/* 导航栏底部的分隔线原本靠 rail 实色底遮，半透明后换成白色细线 */
+/* 导航栏底部的分隔线原本靠 rail 实色底遮，半透明后换细线：深色底用白线、浅色底用深线 */
 html[data-runtime='tauri'][data-glass='liquid'] #activity-rail .rail-bottom {
+	border-top-color: rgba(28, 35, 48, 0.1);
+}
+
+html[data-runtime='tauri'][data-glass='liquid'][data-theme='dark'] #activity-rail .rail-bottom {
 	border-top-color: rgba(255, 255, 255, 0.12);
 }
 
