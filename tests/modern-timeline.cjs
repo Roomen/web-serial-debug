@@ -1,6 +1,6 @@
 // Run: node tests/modern-timeline.cjs — synthetic data only.
-// 覆盖: 现代布局双路时间线 js/modern-timeline.js 与检查器结构化视图 js/modern-inspector.js 的纯函数
-// (时间/Δ/静默格式、Δ 与静默与慢应答的逐条计算、交互区间、持久化清理、视图模型拍平与摘要)
+// 覆盖: 现代布局聊天视图 js/modern-timeline.js 与检查器结构化视图 js/modern-inspector.js 的纯函数
+// (时间/Δ/静默格式、Δ 与静默与慢应答的逐条计算、单路 lanes 与双路默认互不串、交互区间、持久化清理、视图模型拍平与摘要)
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const vm = require('node:vm')
@@ -102,6 +102,55 @@ const mk = (sid, dir, ts) => ({ sid, dir, ts })
 	const st = T.newState()
 	const parts = [].concat(T.compute(items.slice(0, 13), null, st), T.compute(items.slice(13, 14), null, st), T.compute(items.slice(14), null, st))
 	deepEqual(parts.map((x) => [x.t, x.d, x.slow, x.gap]), whole.map((x) => [x.t, x.d, x.slow, x.gap]))
+}
+
+// ---- 单路(S)：lanes 参数化，双路默认不变 ----
+{
+	// 不传 lanes 时仍是 A/B，S 行不参与
+	const mixed = [mk('S', 'tx', 0), mk('S', 'rx', 10)]
+	const r0 = T.compute(mixed)
+	assert.equal(r0[0].lane, false, '默认 lanes 仍是 A/B')
+	assert.equal(r0[1].lane, false)
+	// 传 lanes: ['S'] 时 S 行参与，A/B 行退出
+	const r1 = T.compute(mixed, { lanes: ['S'] })
+	assert.equal(r1[0].lane, true)
+	assert.equal(r1[0].t !== '', true)
+	assert.equal(r1[1].d, '+10 ms')
+	assert.equal(r1[1].req, 0, '单路 TX 后的第一条 RX 也标应答')
+	const onlyAB = [mk('A', 'tx', 0), mk('A', 'rx', 20)]
+	const r2 = T.compute(onlyAB, { lanes: ['S'] })
+	assert.equal(r2[0].lane, false, '单路模式里 A/B 行不参与')
+	assert.equal(r2[1].lane, false)
+	// 单路慢应答与静默
+	const single = [mk('S', 'tx', 0), mk('S', 'rx', 1500), mk('S', 'tx', 5000), mk('S', 'sys', 5200), mk('S', 'tx', 9000)]
+	const r3 = T.compute(single, { lanes: ['S'] })
+	assert.equal(r3[1].slow, true, '单路同样有慢应答')
+	assert.equal(r3[1].d, '+1.50 s')
+	assert.equal(r3[2].gap, '3.5 s')
+	assert.equal(r3[3].lane, false, '单路系统行不参与')
+	assert.equal(r3[4].gap, '4.0 s', '系统行不打断静默')
+	// 交互区间与等待应答也按 lanes 参数化
+	const items2 = [mk('S', 'tx', 0), mk('S', 'sys', 30), mk('S', 'rx', 200), mk('S', 'rx', 260)]
+	const res2 = T.compute(items2, { lanes: ['S'] })
+	deepEqual(T.exchange(items2, res2, 0, { lanes: ['S'] }), { start: 0, end: 2 }, '单路 TX 到本路应答，跨系统行')
+	deepEqual(T.exchange(items2, res2, 2, { lanes: ['S'] }), { start: 0, end: 2 })
+	deepEqual(T.exchange(items2, res2, 1, { lanes: ['S'] }), null, '系统行没有交互区间')
+	deepEqual(T.exchange(items2, res2, 0), { start: 0, end: 2 }, '省略 opts 时按行归属推为单路')
+	assert.equal(T.awaitingReply(items2, 0, { lanes: ['S'] }), false, '已有应答')
+	assert.equal(T.awaitingReply(items2, 2, { lanes: ['S'] }), false, 'RX 不等待')
+	assert.equal(T.awaitingReply(items2, 0), false, '不传 lanes 时按 S 行归属推，已收到应答就不等待')
+	// 省略 opts 时按行归属推参与路：S 行的 TX 也会等待应答
+	const waiting = [mk('S', 'tx', 0)]
+	const wres = T.compute(waiting, { lanes: ['S'] })
+	assert.equal(T.awaitingReply(waiting, 0), true, 'S 行按归属推为单路 lane')
+	deepEqual(T.exchange(waiting, wres, 0), { start: 0, end: 0 }, '省略 opts 时 S 行也能算区间')
+	// 两路状态不串：单路与双路各算各的
+	const st1 = T.newState()
+	const st2 = T.newState()
+	T.compute([mk('A', 'tx', 0)], null, st1)
+	const singleRes = T.compute([mk('S', 'tx', 100)], { lanes: ['S'] }, st2)
+	assert.equal(singleRes[0].req, -1)
+	assert.equal(singleRes[0].d, '', '另一份 state 的待应答 TX 不会串到单路')
 }
 
 // ---- 交互区间 ----

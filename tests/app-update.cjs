@@ -40,6 +40,38 @@ test('busy tasks in hidden views block install; power and pinned transactions al
 	assert.ok(blockers(s.env).includes('功耗仪连接'), 'power device opening is also busy')
 })
 
+// 加载真实的 js/workbench.js，用真 TASKS 的 updateBlockers 断言过滤；MCP 状态由 window.McpServiceStatus 桩提供
+function realWorkbench(mcpStatus, dom) {
+	const win = { McpServiceStatus: mcpStatus }
+	win.window = win
+	win.document = Object.assign({
+		readyState: 'loading',
+		addEventListener() {},
+		getElementById: () => null,
+		querySelector: () => null,
+	}, dom)
+	vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/workbench.js'), 'utf8'), win)
+	return win.Workbench
+}
+
+test('MCP 服务运行中不阻止应用更新(blocksUpdate: false 的任务被 updateBlockers 过滤)', async () => {
+	const s = setup()
+	await s.controller.check()
+	// MCP 已启用且运行中：真实 TASKS 里它是 running，但 blocksUpdate 为 false，不能进阻断清单
+	s.env.Workbench = realWorkbench({ state: () => 'running', port: () => 38991, open() {} })
+	assert.deepEqual(Array.from(s.env.Workbench.updateBlockers()), [], '运行中的 MCP 不在阻断清单里')
+	assert.deepEqual(blockers(s.env), [])
+	// 同一份真实 TASKS：面板任务运行中(停止键可用)照样阻断，证明过滤确实在跑
+	const running = realWorkbench({ state: () => 'off', port: () => 38991, open() {} }, {
+		getElementById: (id) => (id === 'sk-rw-stop' ? { disabled: false } : null),
+	})
+	assert.deepEqual(Array.from(running.updateBlockers()), ['随机读写'])
+	// MCP 运行时仍可进入安装准备
+	const installing = s.controller.install()
+	s.install.resolve()
+	assert.equal(await installing, true)
+})
+
 test('signed download remains usable; preparing progress must not swallow the ready event', async () => {
 	const s = setup()
 	await s.controller.check()

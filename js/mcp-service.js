@@ -343,6 +343,23 @@
 		render(session)
 	})).catch(function () {})
 
+	// 状态栏芯片(js/workbench.js TASKS)的只读接口：状态由 updateEntry / listen 保持新鲜，open 打开本面板
+	function statusState() {
+		const st = latestStatus || {}
+		return st.running ? 'running' : st.lastError ? 'error' : st.enabled ? 'waiting' : 'off'
+	}
+	root.McpServiceStatus = {
+		state: statusState,
+		label: function () {
+			return { running: '运行中', error: '服务异常', waiting: '等待启动', off: '未启用' }[statusState()]
+		},
+		port: function () {
+			const st = latestStatus || {}
+			return st.port || 38991
+		},
+		open: function () { openPanel() },
+	}
+
 	if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', mountEntry)
 	else mountEntry()
 })(typeof window !== 'undefined' ? window : globalThis)

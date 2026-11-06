@@ -59,9 +59,10 @@
 		if (themeChoice() === 'auto') applyTheme()
 	})
 
-	/* ========== 双路视图(列表 / 气泡时间线) ========== */
-	// 与主题一样是纯界面偏好：不进导出配置、不被「重置所有参数」清掉；只在双路行日志里有入口。
-	// 气泡是纯 CSS 对现有行的重排，这里只存偏好；会话内以内存值为准，存储写失败时本次会话照常切换
+	/* ========== 视图(列表 / 聊天) ========== */
+	// 与主题一样是纯界面偏好：不进导出配置、不被「重置所有参数」清掉；单双路共用一份，入口在行日志工具条。
+	// 聊天是纯 CSS 对现有行的重排，这里只存偏好；会话内以内存值为准，存储写失败时本次会话照常切换。
+	// 存储键与 html 上的 data-dual-view 属性沿用旧名（改了用户的存档会丢）
 	const DUAL_VIEW_KEY = 'serial-debug-dual-view'
 	let sessionDualView = (function () {
 		try { return localStorage.getItem(DUAL_VIEW_KEY) === 'bubble' ? 'bubble' : 'list' } catch (e) { return 'list' }
@@ -89,10 +90,14 @@
 			else localStorage.removeItem(DUAL_VIEW_KEY)
 		} catch (e) { /* 同上 */ }
 		applyDualView()
-		// 行高变了：开着自动滚动就留在底部，别停在换算前的位置
+		// 行高变了：开着自动滚动就留在底部，别停在换算前的位置(单双路各一套日志容器，两套都顶到底)
 		const auto = document.getElementById('serial-auto-scroll')
-		const logs = document.getElementById('serial-logs-dual')
-		if (logs && auto && auto.getAttribute('aria-pressed') === 'true') logs.scrollTop = logs.scrollHeight
+		if (auto && auto.getAttribute('aria-pressed') === 'true') {
+			;['serial-logs-dual', 'serial-logs-single'].forEach(function (id) {
+				const logs = document.getElementById(id)
+				if (logs) logs.scrollTop = logs.scrollHeight
+			})
+		}
 	}
 
 	applyDualView()
@@ -3370,6 +3375,8 @@
 		SerialHub.setOpening(sid, true)
 		try {
 		await SerialAdapter.requestPort().then(async (port) => {
+				// 选的就是本路当前已打开的口：不动作(不重开、不打断)；关着的同一个口仍按下面的「选完即连接」走
+				if (port && SerialHub.getPort(sid) === port && SerialHub.isOpen(sid)) return
 				// 锁由本函数持有到结束，bindSessionPort 里不要再套一层 setOpening
 				await bindSessionPort(sid, port, { open: openAfterSelect })
 			})

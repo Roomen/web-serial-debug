@@ -353,11 +353,12 @@
 
 	// ---------- 状态栏 ----------
 
-	// 后台任务：面板任务以停止键可用视为运行中；循环发送看勾选框
+	// 后台任务：面板任务以停止键可用视为运行中；循环发送看勾选框。blocksUpdate(默认 true)为 false 的任务不阻止应用更新
 	function panelTask(panel, stopId, progressId, label) {
 		return {
 			label: label,
 			title: '打开' + label + '面板',
+			blocksUpdate: true,
 			running: function () {
 				const stop = $(stopId)
 				return !!(stop && !stop.disabled)
@@ -400,6 +401,7 @@
 			label: '功耗仪',
 			title: '切换到功耗分析',
 			noSpin: true,
+			blocksUpdate: true,
 			running: function () { return powerConnected() && !powerViewActive() },
 			text: function () {
 				const cur = $('blu-current')
@@ -418,6 +420,7 @@
 		{
 			label: '循环发送',
 			title: '定位到串口发送',
+			blocksUpdate: false,
 			running: function () {
 				const cb = $('serial-loop-send')
 				return !!(cb && cb.checked)
@@ -437,6 +440,7 @@
 			// STS 模拟启动键按下即运行/等待中
 			label: 'STS 模拟',
 			title: '打开 STS 模拟面板',
+			blocksUpdate: true,
 			running: function () {
 				return !!document.querySelector('.sts-sim-head > .ctl-toggle[aria-pressed="true"]')
 			},
@@ -445,6 +449,35 @@
 				return 'STS 模拟' + (n > 1 ? ' ×' + n : '') + ' 运行中'
 			},
 			open: function () { open('sts-sim') },
+		},
+		{
+			// 本地 MCP 服务(js/mcp-service.js)：只有平台提供了服务且已启用才显示，未启用不占位。
+			// 常驻服务绝不能阻止应用更新：blocksUpdate: false。异常 / 等待 / 运行用彩色小点区分
+			label: 'MCP',
+			title: '打开本地 MCP 服务面板',
+			noSpin: true,
+			blocksUpdate: false,
+			stateDot: true,
+			dotState: function () {
+				const s = window.McpServiceStatus
+				return s ? s.state() : 'off'
+			},
+			running: function () {
+				const s = window.McpServiceStatus
+				return !!(s && s.state() !== 'off')
+			},
+			text: function () {
+				const s = window.McpServiceStatus
+				if (!s) return 'MCP'
+				const st = s.state()
+				if (st === 'running') return 'MCP :' + s.port()
+				if (st === 'error') return 'MCP 服务异常'
+				return 'MCP 等待启动'
+			},
+			open: function () {
+				const s = window.McpServiceStatus
+				if (s) s.open()
+			},
 		},
 	]
 
@@ -512,10 +545,15 @@
 			b.dataset.task = String(idx)
 			b.title = t.title
 			const text = span('', '')
+			let dot = null
+			if (t.stateDot) {
+				dot = span('sb-dot-run')
+				b.append(dot)
+			}
 			if (t.noSpin) b.append(text)
 			else b.append(span('sb-spin'), text)
 			tasks.appendChild(b)
-			return { def: t, btn: b, text: text }
+			return { def: t, btn: b, text: text, dot: dot }
 		})
 		const hint = span('sb-hint')
 		hint.append(span('', 'Ctrl/⌘+Enter 发送'), span('', 'Ctrl/⌘+K 命令'))
@@ -559,7 +597,14 @@
 		statusRefs.tasks.forEach(function (t) {
 			const running = t.def.running()
 			t.btn.hidden = !running
-			if (running) t.text.textContent = t.def.text()
+			if (running) {
+				t.text.textContent = t.def.text()
+				if (t.dot && t.def.dotState) {
+					const st = t.def.dotState()
+					t.dot.dataset.state = st
+					t.btn.title = t.def.title + (st === 'running' ? ' · 运行中' : st === 'error' ? ' · 异常' : ' · 等待')
+				}
+			}
 		})
 	}
 
@@ -754,9 +799,9 @@
 	}
 
 	window.Workbench = {
-		// 安装更新前复用后台任务的真实运行判据，不依赖状态栏是否可见。
+		// 安装更新前复用后台任务的真实运行判据，不依赖状态栏是否可见。blocksUpdate 为 false 的任务(循环发送、常驻的 MCP 服务)不阻止更新
 		updateBlockers: function () {
-			return TASKS.filter(function (t) { return t.label !== '循环发送' && t.running() }).map(function (t) { return t.label })
+			return TASKS.filter(function (t) { return t.blocksUpdate !== false && t.running() }).map(function (t) { return t.label })
 		},
 		refreshStatus: function () { if (ready) updateStatusBar() },
 		// 检查器里放结构化视图的节点(还没建过时为 null)

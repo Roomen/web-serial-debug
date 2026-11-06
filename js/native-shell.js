@@ -122,6 +122,12 @@
 	}
 	function toggleConnect() {
 		const sid = mainSid()
+		// 连接栏的电源键(三段分体最左)：有设备即可连接 / 断开
+		const p = doc.querySelector('#mdn-connbar .mdn-conn[data-sid="' + sid + '"] > .mdn-conn-power')
+		if (p && !p.disabled) {
+			p.click()
+			return
+		}
 		const t = $(sid === 'S' ? 'serial-open-or-close' : 'serial-open-or-close-' + sid.toLowerCase())
 		// 没选过设备时连接键是隐藏的：转成打开这一路的菜单去选口
 		if (t && !t.hidden) t.click()

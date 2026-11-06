@@ -205,6 +205,23 @@ test('预留在失败(关旧口失败)后也释放', async () => {
 	assert.equal(h.hub.getPort('B'), p)
 })
 
+test('选择框里选回本路已打开的口：不动作，不重开', async () => {
+	const h = harness('single')
+	const p = makePort()
+	h.hub.setPort('S', p)
+	h.hub.setOpen('S', true)
+	h.pick(p)
+	await h.api.selectPortFor('S', { openAfterSelect: true })
+	assert.equal(h.hub.getPort('S'), p)
+	assert.equal(h.hub.isOpen('S'), true)
+	assert.deepEqual(h.opens, [], '已打开的口不应重开')
+	// 同一个口但关着：仍按「选完即连接」打开
+	h.hub.setOpen('S', false)
+	h.pick(p)
+	await h.api.selectPortFor('S', { openAfterSelect: true })
+	assert.deepEqual(h.opens, [['S', p.id]])
+})
+
 ;(async () => {
 	let failed = 0
 	for (const t of tests) {

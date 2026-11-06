@@ -90,6 +90,24 @@ const P = require('../js/platform.js')
 	assert.ok(!rulesOf(w).includes('layout.switch'))
 }
 
+// ---- 液态玻璃：只认客户端建窗时写的标志(macOS 26+ 才写)，且只在客户端运行时；网页版没有这个标志 ----
+{
+	const UA_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)'
+	const glass = fakeWin('', UA_MAC)
+	glass.__TAURI_INTERNALS__ = {}
+	glass.__APP_WINDOW_GLASS__ = true
+	P.build(glass)
+	assert.equal(glass.document.documentElement.dataset.glass, 'liquid')
+	const opaque = fakeWin('', UA_MAC)
+	opaque.__TAURI_INTERNALS__ = {}
+	P.build(opaque)
+	assert.equal(opaque.document.documentElement.dataset.glass, undefined, '没有标志(26 以下、其它系统)不写 data-glass')
+	const web = fakeWin('', UA_MAC)
+	web.__APP_WINDOW_GLASS__ = true
+	P.build(web)
+	assert.equal(web.document.documentElement.dataset.glass, undefined, '网页版即便有同名全局量也不写')
+}
+
 // ---- 预览覆盖：只换系统，运行时不变；非法值忽略 ----
 {
 	const d = P.resolve({ os: 'web', runtime: 'browser' }, { os: 'android' })
