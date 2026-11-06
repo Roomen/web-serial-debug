@@ -98,6 +98,7 @@ function makeHarness(opts) {
 		get panelBody() { return panelBody },
 		close() { if (closePanel) closePanel() },
 		menuItem() { return menu.children.find((b) => b.id === 'serial-mcp-service') || null },
+		statusApi() { return win.McpServiceStatus || null },
 		find(pred) {
 			const walk = (n) => {
 				if (pred(n)) return n
@@ -313,6 +314,33 @@ test('关闭面板后迟到的令牌不再写回页面', async () => {
 	await flush()
 	const tokenBox = h.find((n) => n.className.indexOf('mdn-mcp-token') !== -1)
 	assert.equal(tokenBox.textContent, '未显示')
+})
+
+test('状态栏只读接口：state/label/port 随事件刷新，open 打开面板', async () => {
+	const h = makeHarness({ status: { enabled: true, running: true, port: 39000 } })
+	await flush()
+	const api = h.statusApi()
+	assert.ok(api, '应当挂出 McpServiceStatus')
+	assert.equal(typeof api.state, 'function')
+	assert.equal(typeof api.label, 'function')
+	assert.equal(typeof api.port, 'function')
+	assert.equal(typeof api.open, 'function')
+	assert.equal(api.state(), 'running')
+	assert.equal(api.label(), '运行中')
+	assert.equal(api.port(), 39000)
+	h.svcListeners['mcp-service']({ enabled: true, running: false, lastError: 'synthetic' })
+	assert.equal(api.state(), 'error')
+	assert.equal(api.label(), '服务异常')
+	h.svcListeners['mcp-service']({ enabled: true, running: false })
+	assert.equal(api.state(), 'waiting')
+	assert.equal(api.label(), '等待启动')
+	h.svcListeners['mcp-service']({ enabled: false, running: false })
+	assert.equal(api.state(), 'off')
+	// 未启用时端口回落默认值
+	assert.equal(api.port(), 38991)
+	api.open()
+	await flush()
+	assert.equal(h.dialogCalls.length, 1)
 })
 
 ;(async () => {

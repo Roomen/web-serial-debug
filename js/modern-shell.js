@@ -189,6 +189,9 @@
 	function makePop(key) {
 		const wrap = mk('div', 'mdn-conn')
 		wrap.dataset.path = key
+		// 三段分体：电源键(连接/断开) · 设备键(选口) · 设置键(参数/路标签)；加本路协议键共四段
+		const power = btn('mdn-conn-power')
+		power.appendChild(icon('bi-power'))
 		const b = btn('mdn-conn-btn')
 		b.setAttribute('aria-haspopup', 'dialog')
 		b.setAttribute('aria-expanded', 'false')
@@ -196,20 +199,21 @@
 		const letter = mk('b', 'mdn-conn-letter')
 		const label = mk('span', 'mdn-conn-label')
 		const port = mk('span', 'mdn-conn-port')
-		const params = mk('span', 'mdn-conn-params')
-		b.append(dot, letter, label, port, params)
-		// 设备与配置分开：主按钮管设备(网页版本路没选口时直接弹浏览器选择框)，右侧箭头总是打开设备 / 参数菜单
-		const more = btn('mdn-conn-more', '', '串口设备与参数')
+		b.append(dot, letter, label, port)
+		// 设置键：打开完整菜单(路标签、参数、设备管理)，平时显示参数摘要
+		const more = btn('mdn-conn-more')
 		more.setAttribute('aria-haspopup', 'dialog')
 		more.setAttribute('aria-expanded', 'false')
-		more.setAttribute('aria-label', '打开串口设备与参数菜单')
-		more.appendChild(icon('bi-chevron-down'))
+		more.setAttribute('aria-label', '串口设置')
+		more.title = '串口设置'
+		const moreParams = mk('span', 'mdn-conn-params')
+		more.append(icon('bi-sliders'), moreParams)
 		const pop = mk('div', 'mdn-pop')
 		pop.hidden = true
 		pop.setAttribute('role', 'dialog')
 		const head = mk('div', 'mdn-pop-title')
 		const dev = mk('div', 'mdn-pop-sec mdn-pop-dev')
-		dev.appendChild(mk('div', 'mdn-pop-cap', '串口设备'))
+		dev.appendChild(mk('div', 'mdn-pop-cap', '设备管理'))
 		const lab = mk('div', 'mdn-pop-sec mdn-pop-label mdn-dual-only')
 		lab.appendChild(mk('div', 'mdn-pop-cap', '路标签'))
 		const par = mk('div', 'mdn-pop-sec mdn-pop-params')
@@ -245,7 +249,12 @@
 		dd.hidden = true
 		dd.setAttribute('role', 'dialog')
 		dd.setAttribute('aria-label', '选择串口设备')
-		wrap.append(b, more, proto, pop, dd)
+		// 电源键：连接 / 断开这一路已选的设备(serialLanes.toggle)，没设备时禁用(refreshConn 更新 disabled)
+		listen(power, 'click', function () {
+			const lanes = window.serialLanes
+			if (lanes && !power.disabled) lanes.toggle(sidFor(key))
+		})
+		wrap.append(power, b, more, proto, pop, dd)
 		const toggleMenu = function () {
 			const open = pop.hidden
 			closePops()
@@ -254,20 +263,17 @@
 		listen(b, 'click', function () {
 			const lanes = window.serialLanes
 			const A = window.SerialAdapter
-			// 网页版列不出没授权的口，本路还没选口时菜单里只有空列表：直接弹浏览器选择框，选完即连接
-			if (lanes && A && !A.canEnumerate() && !lanes.portOf(sidFor(key))) {
-				closePops()
-				lanes.requestPort(sidFor(key))
-				return
-			}
-			// 按能力分支，不按平台名：能枚举就下拉选口，网页版(已选过口)仍打开完整菜单
+			// 按能力分支，不按平台名：能枚举(桌面客户端)就下拉选口；网页版列不出没授权的口，无论本路选没选过都直接弹浏览器选择框，选完即连接
 			if (A && A.canEnumerate()) {
 				const open = dd.hidden
 				closePops()
 				if (open) openDropdown(key)
 				return
 			}
-			toggleMenu()
+			if (lanes) {
+				closePops()
+				lanes.requestPort(sidFor(key))
+			}
 		})
 		listen(more, 'click', toggleMenu)
 		const ports = makePortList(key)
@@ -275,7 +281,7 @@
 		// 两份列表共用一条动作队列：一路上的选用 / 连接串行做完，不论从哪份列表发起
 		Object.defineProperty(quick, 'queue', { get: function () { return ports.queue }, set: function (v) { ports.queue = v } })
 		dd.appendChild(quick.box)
-		return { wrap: wrap, btn: b, more: more, proto: proto, dot: dot, letter: letter, label: label, port: port, params: params, pop: pop, dd: dd, head: head, dev: dev, lab: lab, par: par, parCap: parCap, ports: ports, quick: quick }
+		return { wrap: wrap, power: power, btn: b, more: more, proto: proto, dot: dot, letter: letter, label: label, port: port, params: moreParams, pop: pop, dd: dd, head: head, dev: dev, lab: lab, par: par, parCap: parCap, ports: ports, quick: quick }
 	}
 
 	function openPop(key) {
@@ -806,6 +812,7 @@
 			const open = h ? h.isOpen(sid) : !!(chip && chip.classList.contains('is-open'))
 			const opening = h ? h.isOpening(sid) : false
 			const failed = !!(h && h.isReleaseFailed(sid))
+			const hasPort = !!(h && h.getPort(sid)) || !!(chip && !chip.classList.contains('is-empty'))
 			p.wrap.dataset.state = failed ? 'close-failed' : (opening ? 'opening' : (open ? 'open' : 'closed'))
 			p.wrap.dataset.sid = sid
 			const nameEl = chip ? chip.querySelector('.serial-port-name') : null
@@ -814,12 +821,19 @@
 			p.letter.textContent = sid === 'S' ? '' : sid
 			// 标签改过才显示(默认就是「A路」「B路」，再写一遍是噪声)
 			p.label.textContent = lbl && lbl !== sid + '路' ? lbl : ''
-			p.port.textContent = portName || '未选择串口'
+			p.port.textContent = portName || '选择串口'
 			p.params.textContent = params
 			const st = failed ? '关闭失败，请重试' : (opening ? '正在连接' : (open ? '已连接' : '未连接'))
 			const who = sid === 'S' ? '串口' : sid + ' 路' + (p.label.textContent ? '（' + p.label.textContent + '）' : '')
-			p.btn.setAttribute('aria-label', who + ' ' + (portName || '未选择串口') + ' · ' + params + ' · ' + st + ' · 打开菜单')
-			p.btn.title = who + ' · ' + st + ' · 选择串口 / 连接断开 / 串口参数' + (sid === 'S' ? '' : ' / 路标签')
+			// 电源键：有记住的设备才能按；状态与文案随连接态
+			const lane = sid === 'S' ? '' : who + ' '
+			p.power.disabled = !hasPort
+			p.power.setAttribute('aria-pressed', String(!!open))
+			p.power.setAttribute('aria-label', lane + (failed ? '重试关闭串口' : (open ? '断开串口' : '连接串口')))
+			p.power.title = lane + (failed ? '关闭失败，点此重试关闭' : (open ? '已连接，点此断开' : (hasPort ? '未连接，点此连接' : '先选择设备')))
+			p.btn.setAttribute('aria-label', who + ' ' + (portName || '未选择串口') + ' · ' + st + ' · 选择串口设备')
+			p.btn.title = who + ' · ' + st + ' · 选择串口设备'
+			p.more.title = '串口设置：参数 · ' + (sid === 'S' ? '设备管理' : '路标签 · 设备管理')
 			p.head.textContent = sid === 'S' ? '单路串口' : sid + ' 路'
 		})
 		// 开着的那一路菜单：状态(当前设备 / 已连接 / 被另一路占用)跟着刷新，内容没变不重建

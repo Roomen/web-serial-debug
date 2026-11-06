@@ -3370,6 +3370,8 @@
 		SerialHub.setOpening(sid, true)
 		try {
 		await SerialAdapter.requestPort().then(async (port) => {
+				// 选的就是本路当前已打开的口：不动作(不重开、不打断)；关着的同一个口仍按下面的「选完即连接」走
+				if (port && SerialHub.getPort(sid) === port && SerialHub.isOpen(sid)) return
 				// 锁由本函数持有到结束，bindSessionPort 里不要再套一层 setOpening
 				await bindSessionPort(sid, port, { open: openAfterSelect })
 			})

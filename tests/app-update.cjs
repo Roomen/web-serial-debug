@@ -40,6 +40,23 @@ test('busy tasks in hidden views block install; power and pinned transactions al
 	assert.ok(blockers(s.env).includes('功耗仪连接'), 'power device opening is also busy')
 })
 
+test('MCP 服务运行中不阻止应用更新(blocksUpdate: false 的任务被 updateBlockers 过滤)', async () => {
+	// js/workbench.js 的 updateBlockers 按真实 TASKS 定义过滤；这里用同样的规则模拟 MCP 任务在列但不阻安装
+	const s = setup()
+	await s.controller.check()
+	const tasks = [
+		{ label: 'MCP', blocksUpdate: false, running: () => true },
+		{ label: '循环发送', blocksUpdate: false, running: () => true },
+		{ label: '固件升级', blocksUpdate: true, running: () => false },
+	]
+	s.env.Workbench.updateBlockers = () => tasks.filter((t) => t.blocksUpdate !== false && t.running()).map((t) => t.label)
+	assert.deepEqual(blockers(s.env), [])
+	// MCP 运行时仍可进入安装准备
+	const installing = s.controller.install()
+	s.install.resolve()
+	assert.equal(await installing, true)
+})
+
 test('signed download remains usable; preparing progress must not swallow the ready event', async () => {
 	const s = setup()
 	await s.controller.check()

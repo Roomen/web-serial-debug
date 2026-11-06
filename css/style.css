@@ -7701,6 +7701,26 @@ body.blu-wave-fullscreen-open {
   animation: sb-pulse 1.2s ease-in-out infinite;
 }
 
+/* 状态栏任务的状态小点(MCP)：运行绿 / 等待黄 / 异常红 */
+.sb-dot-run {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #85909e;
+}
+
+.sb-dot-run[data-state='running'] {
+  background: #1c9c55;
+}
+
+.sb-dot-run[data-state='waiting'] {
+  background: #d97706;
+}
+
+.sb-dot-run[data-state='error'] {
+  background: #dc3545;
+}
+
 @keyframes sb-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.25; }
@@ -11872,10 +11892,54 @@ html[data-layout='modern'] .mdn-conn {
 	min-width: 0;
 }
 
-/* 连接按钮 + 本路协议拼成一枚分体按钮：左半打开设备/参数菜单，右半直接选协议 */
-html[data-layout='modern'] .mdn-conn > .mdn-conn-btn {
-	border-top-right-radius: 0;
-	border-bottom-right-radius: 0;
+/* 四段分体：电源键(连接/断开) · 设备键(选口) · 设置键(参数/路标签) · 协议键，首尾圆角、中间直角相接 */
+html[data-layout='modern'] .mdn-conn > .mdn-conn-power {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 34px;
+	height: 30px;
+	padding: 0;
+	border: 1px solid var(--border-color);
+	border-radius: 6px 0 0 6px;
+	background: var(--bg-surface);
+	color: var(--text-secondary);
+	font-size: 13px;
+}
+
+html[data-layout='modern'] .mdn-conn > .mdn-conn-btn,
+html[data-layout='modern'] .mdn-conn > .mdn-conn-more {
+	border-radius: 0;
+}
+
+html[data-layout='modern'] .mdn-conn > .mdn-conn-power:hover:not(:disabled) {
+	border-color: var(--text-muted);
+	color: var(--text-primary);
+}
+
+html[data-layout='modern'] .mdn-conn > .mdn-conn-power:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+html[data-layout='modern'] .mdn-conn > .mdn-conn-power:disabled {
+	opacity: 0.45;
+}
+
+/* 连接中 / 关闭失败与整体状态同步；开着时图标变绿 */
+html[data-layout='modern'] .mdn-conn[data-state='open'] > .mdn-conn-power {
+	border-color: #1c9c55;
+	color: #1c9c55;
+}
+
+html[data-layout='modern'] .mdn-conn[data-state='opening'] > .mdn-conn-power {
+	border-color: #d97706;
+	color: #d97706;
+}
+
+html[data-layout='modern'] .mdn-conn[data-state='close-failed'] > .mdn-conn-power {
+	border-color: #dc3545;
+	color: #dc3545;
 }
 
 html[data-layout='modern'] .mdn-conn-proto {
@@ -11941,15 +12005,15 @@ html[data-layout='modern'] .mdn-conn-btn[aria-expanded='true'] {
 	border-color: var(--accent);
 }
 
-/* 分体按钮中段：设备 / 参数菜单的开关，与左侧设备键分开 */
+/* 设置键：打开设备 / 参数菜单，与左侧设备键分开；图标 + 参数摘要 */
 html[data-layout='modern'] .mdn-conn-more {
 	display: inline-flex;
 	align-items: center;
+	gap: 5px;
 	height: 30px;
-	padding: 0 7px;
+	padding: 0 8px;
 	margin-left: -1px;
 	border: 1px solid var(--border-color);
-	border-radius: 0;
 	background: var(--bg-surface);
 	color: var(--text-secondary);
 	font-size: 10px;
@@ -11991,11 +12055,11 @@ html[data-layout='modern'][data-theme='dark'] .mdn-conn[data-sid='B'] .mdn-conn-
 	color: #fdb022;
 }
 
-html[data-layout='modern'] .mdn-conn[data-sid='A'] .mdn-conn-btn {
+html[data-layout='modern'] .mdn-conn[data-sid='A'] > .mdn-conn-power {
 	box-shadow: inset 3px 0 0 var(--accent);
 }
 
-html[data-layout='modern'] .mdn-conn[data-sid='B'] .mdn-conn-btn {
+html[data-layout='modern'] .mdn-conn[data-sid='B'] > .mdn-conn-power {
 	box-shadow: inset 3px 0 0 #c2410c;
 }
 
@@ -12016,9 +12080,11 @@ html[data-layout='modern'] .mdn-conn-params {
 	color: var(--text-secondary);
 }
 
-html[data-layout='modern'] .mdn-conn-params::before {
-	content: '· ';
-	font-family: var(--font-sans);
+/* 设置键里的参数摘要：窄时隐藏，保留图标 */
+@media (max-width: 1280px) {
+	html[data-layout='modern'] .mdn-conn-params {
+		display: none;
+	}
 }
 
 html[data-layout='modern'] .mdn-dot {
@@ -12676,6 +12742,28 @@ html[data-layout='modern'] #serial-statusbar .sb-task:focus-visible {
 html[data-layout='modern'] #serial-statusbar .sb-task::after {
 	content: '· 点击打开';
 	opacity: 0.85;
+}
+
+/* 带状态点的任务(MCP)：异常 / 等待时胶囊本身换色，红/黄底比小点更看得出；点改白以保对比度 */
+html[data-layout='modern'] #serial-statusbar .sb-task:has(.sb-dot-run[data-state='error']) {
+	background: #b42318;
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-task:has(.sb-dot-run[data-state='error']):hover {
+	background: #912018;
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-task:has(.sb-dot-run[data-state='waiting']) {
+	background: #b54708;
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-task:has(.sb-dot-run[data-state='waiting']):hover {
+	background: #8f3a06;
+}
+
+html[data-layout='modern'] #serial-statusbar .sb-task:has(.sb-dot-run[data-state='error']) .sb-dot-run,
+html[data-layout='modern'] #serial-statusbar .sb-task:has(.sb-dot-run[data-state='waiting']) .sb-dot-run {
+	background: #fff;
 }
 
 html[data-layout='modern'] #serial-statusbar .sb-tasks:not(:has(.sb-task:not([hidden])))::before {
