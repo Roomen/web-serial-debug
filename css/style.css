@@ -12209,62 +12209,6 @@ html[data-layout='modern'] .mdn-pop-cap {
 	color: var(--text-secondary);
 }
 
-html[data-layout='modern'] .mdn-pop .serial-device-chip {
-	width: 100%;
-	max-width: none;
-}
-
-/* 设备名可能很长：选口按钮在菜单里排成两行网格，设备名独占第一行(可折行，连续长串也按字符折)，
-   改名 / 清除别名 / 取消选择三枚小键落到第二行靠右，不被名字挤出芯片；全名同时在按钮 title 里。
-   接管基础段里写给双路(.dual-port-btn)的宽度、省略号规则 */
-html[data-layout='modern'] .mdn-pop .serial-device-chip > #serial-status,
-html[data-layout='modern'] .mdn-pop .serial-device-chip > .dual-status {
-	flex: 0 0 auto;
-}
-
-html[data-layout='modern'] .mdn-pop .serial-device-chip .serial-port-btn {
-	display: grid;
-	grid-template-columns: auto minmax(0, 1fr) auto auto auto;
-	align-items: center;
-	column-gap: 4px;
-	row-gap: 2px;
-	max-width: none;
-	min-width: 0;
-	white-space: normal;
-	line-height: 1.35;
-}
-
-html[data-layout='modern'] .mdn-pop .serial-device-chip .serial-port-btn > i {
-	grid-column: 1;
-	grid-row: 1;
-	margin: 0;
-}
-
-html[data-layout='modern'] .mdn-pop .serial-device-chip .serial-port-name {
-	grid-column: 2 / -1;
-	grid-row: 1;
-	max-width: none;
-	min-width: 0;
-	overflow: visible;
-	text-overflow: clip;
-	overflow-wrap: anywhere;
-}
-
-html[data-layout='modern'] .mdn-pop .serial-port-btn .port-rename-btn {
-	grid-column: 3;
-	grid-row: 2;
-}
-
-html[data-layout='modern'] .mdn-pop .serial-port-btn .port-alias-clear-btn {
-	grid-column: 4;
-	grid-row: 2;
-}
-
-html[data-layout='modern'] .mdn-pop .serial-port-btn .port-forget-btn {
-	grid-column: 5;
-	grid-row: 2;
-}
-
 html[data-layout='modern'] .mdn-pop .dual-session-label {
 	width: 100%;
 	height: 30px;
@@ -13016,12 +12960,7 @@ html[data-layout='modern'] #serial-log-panes:has(.serial-log-mode:not([hidden]) 
 	pointer-events: none;
 }
 
-/* 现代布局：每路菜单里的串口列表(js/modern-shell.js makePortList)。客户端列出在位的全部串口，网页版列出授权过的口 */
-/* 本路还没选口时芯片只剩一枚「选择串口」，与下面的列表重复，不显示；选了口后芯片显示本路设备、状态与连接键 */
-html[data-layout='modern'] .mdn-pop .serial-device-chip.is-empty {
-	display: none;
-}
-
+/* 现代布局：设备键下拉里的串口列表(js/modern-shell.js makePortList)。客户端列出在位的全部串口，网页版列出授权过的口 */
 html[data-layout='modern'] .mdn-ports {
 	display: flex;
 	flex-direction: column;
@@ -13201,7 +13140,8 @@ html[data-layout='modern'] .mdn-ports-foot .btn {
 	font-size: 12px;
 }
 
-/* 设备键的下拉(桌面客户端)：只有串口列表与「刷新」，贴在设备键下面，单击一行即选用并连接 */
+/* 设备键的下拉：本路的串口列表贴在设备键下面，单击一行即选用并连接；
+   网页版列授权过的口、底部「选择串口…」开浏览器选择框，桌面客户端列全部在位口、底部「刷新」 */
 html[data-layout='modern'] .mdn-dd {
 	position: absolute;
 	top: calc(100% + 6px);
@@ -13223,19 +13163,14 @@ html[data-layout='modern'] .mdn-dd[hidden] {
 	display: none;
 }
 
-html[data-layout='modern'] .mdn-ports--quick {
+html[data-layout='modern'] .mdn-dd .mdn-ports {
 	margin-top: 0;
 }
 
-html[data-layout='modern'] .mdn-ports--quick .mdn-ports-list {
+html[data-layout='modern'] .mdn-dd .mdn-ports-list {
 	max-height: min(320px, calc(100vh - 160px));
 	border: 0;
 	padding: 0;
-}
-
-html[data-layout='modern'] .mdn-ports--quick .mdn-ports-hint,
-html[data-layout='modern'] .mdn-ports--quick .mdn-port-acts {
-	display: none;
 }
 
 html[data-layout='modern'][data-theme='dark'] .mdn-port[data-kind='open'] .mdn-port-tag {

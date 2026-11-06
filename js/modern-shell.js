@@ -200,7 +200,7 @@
 		const label = mk('span', 'mdn-conn-label')
 		const port = mk('span', 'mdn-conn-port')
 		b.append(dot, letter, label, port)
-		// 设置键：打开完整菜单(路标签、参数、设备管理)，平时显示参数摘要
+		// 设置键：打开参数菜单(双路含路标签)，平时显示参数摘要；选口与改名 / 取消选择在设备键的下拉里
 		const more = btn('mdn-conn-more')
 		more.setAttribute('aria-haspopup', 'dialog')
 		more.setAttribute('aria-expanded', 'false')
@@ -212,15 +212,13 @@
 		pop.hidden = true
 		pop.setAttribute('role', 'dialog')
 		const head = mk('div', 'mdn-pop-title')
-		const dev = mk('div', 'mdn-pop-sec mdn-pop-dev')
-		dev.appendChild(mk('div', 'mdn-pop-cap', '设备管理'))
 		const lab = mk('div', 'mdn-pop-sec mdn-pop-label mdn-dual-only')
 		lab.appendChild(mk('div', 'mdn-pop-cap', '路标签'))
 		const par = mk('div', 'mdn-pop-sec mdn-pop-params')
 		// 文案随模式：双路两路的参数与协议各自独立(refreshConn 里改)
 		const parCap = mk('div', 'mdn-pop-cap', '串口参数')
 		par.appendChild(parCap)
-		pop.append(head, dev, lab, par)
+		pop.append(head, lab, par)
 		// 只有 B 路能移除：B 关闭(仍记着设备)，A 路的口、参数、协议原样交回单路(common.js 的 removeLaneB)
 		if (key === 'B') {
 			const foot = mk('div', 'mdn-pop-foot')
@@ -243,8 +241,8 @@
 			if (lanes) lanes.setProtocol(sidFor(key), proto.value)
 			if (refs.refreshConn) refs.refreshConn()
 		})
-		// 能枚举的后端(桌面客户端)点设备键直接下拉：只有串口列表(在位的全部口)，单击即选为本路设备并连接、随即收起。
-		// 它是另一份列表实例(行节点各管各的)，与完整菜单里的那份共用同一路的动作队列
+		// 设备键的下拉：本路的串口列表，选口与设备管理(改名 / 清除别名 / 取消选择)的唯一入口。
+		// 桌面客户端列出在位的全部口、底部「刷新」；网页版列出授权过的口、底部「选择串口…」开浏览器选择框
 		const dd = mk('div', 'mdn-dd')
 		dd.hidden = true
 		dd.setAttribute('role', 'dialog')
@@ -263,28 +261,16 @@
 			closePops()
 			if (open) openPop(key)
 		}
+		// 设备键一律开下拉：网页版列表里是授权过的口(没有授权过时是空态提示)，新设备从底部「选择串口…」进浏览器选择框
 		listen(b, 'click', function () {
-			const lanes = window.serialLanes
-			const A = window.SerialAdapter
-			// 按能力分支，不按平台名：能枚举(桌面客户端)就下拉选口；网页版列不出没授权的口，无论本路选没选过都直接弹浏览器选择框，选完即连接
-			if (A && A.canEnumerate()) {
-				const open = dd.hidden
-				closePops()
-				if (open) openDropdown(key)
-				return
-			}
-			if (lanes) {
-				closePops()
-				lanes.requestPort(sidFor(key))
-			}
+			const open = dd.hidden
+			closePops()
+			if (open) openDropdown(key)
 		})
 		listen(more, 'click', toggleMenu)
 		const ports = makePortList(key)
-		const quick = makePortList(key, true)
-		// 两份列表共用一条动作队列：一路上的选用 / 连接串行做完，不论从哪份列表发起
-		Object.defineProperty(quick, 'queue', { get: function () { return ports.queue }, set: function (v) { ports.queue = v } })
-		dd.appendChild(quick.box)
-		return { wrap: wrap, power: power, btn: b, more: more, proto: proto, dot: dot, letter: letter, label: label, port: port, params: moreParams, pop: pop, dd: dd, head: head, dev: dev, lab: lab, par: par, parCap: parCap, ports: ports, quick: quick }
+		dd.appendChild(ports.box)
+		return { wrap: wrap, power: power, btn: b, more: more, proto: proto, dot: dot, letter: letter, label: label, port: port, params: moreParams, pop: pop, dd: dd, head: head, lab: lab, par: par, parCap: parCap, ports: ports }
 	}
 
 	function openPop(key) {
@@ -294,12 +280,10 @@
 		if (refs.paramsBox) p.par.appendChild(refs.paramsBox)
 		if (isDual() && window.serialLanes) window.serialLanes.setParamsTarget(sidFor(key))
 		p.pop.hidden = false
-		p.btn.setAttribute('aria-expanded', 'true')
+		// aria-expanded 归各自的触发器：参数菜单只标设置键，设备键的展开态只属于它自己的下拉
+		// (native-shell 的 openLaneMenu 靠设备键的 aria-expanded 判断下拉开着没，写错会让它静默不动作)
 		p.more.setAttribute('aria-expanded', 'true')
 		refs.openKey = key
-		// 菜单一打开就重新列口；先按上次的结果画，列完再换
-		renderPorts(p.ports)
-		loadPorts(p.ports)
 	}
 	// 设备键的下拉：只有本路的串口列表，打开就把焦点放到当前设备(没有就第一行)，上下键移动、回车选用、Esc 收起
 	function openDropdown(key) {
@@ -308,7 +292,7 @@
 		p.dd.hidden = false
 		p.btn.setAttribute('aria-expanded', 'true')
 		refs.ddKey = key
-		const st = p.quick
+		const st = p.ports
 		st.wantFocus = true
 		renderPorts(st)
 		const row = st.list.querySelector('.mdn-port[tabindex="0"]')
@@ -330,9 +314,10 @@
 		if (!refs.paths) return
 		Object.keys(refs.paths).forEach(function (k) {
 			// 改名输入框开着就先失焦(按保存收尾)，隐藏后不一定还会派发 blur
-			;[refs.paths[k].ports, refs.paths[k].quick].forEach(function (st) {
-				if (st && st.editing) st.editing.input.blur()
-			})
+			const st = refs.paths[k].ports
+			if (st && st.editing) st.editing.input.blur()
+			// 没用完的聚焦请求一并清掉(blur 的收尾不带 refocus，不会误清改名后的回焦)；openDropdown 每次都会重置
+			if (st) st.wantFocus = false
 			refs.paths[k].dd.hidden = true
 			refs.paths[k].pop.hidden = true
 			refs.paths[k].btn.setAttribute('aria-expanded', 'false')
@@ -342,12 +327,12 @@
 		refs.ddKey = null
 	}
 
-	// ---------- 每路菜单里的串口列表 ----------
-	// 选口的主路径：直接列出串口(桌面客户端是在位的全部串口，网页版是浏览器里授权过的口)，单击或回车即选为本路设备并连接
-	// (本路正连着别的口就先断开再连；本路当前设备那一行没连着就连上，连着就不动作，断开走芯片上的按钮)，行内改名。选用、连接、改名一律经 window.serialLanes
+	// ---------- 设备键下拉里的串口列表 ----------
+	// 选口与设备管理的唯一入口：直接列出串口(桌面客户端是在位的全部串口，网页版是浏览器里授权过的口)，单击或回车即选为本路设备并连接
+	// (本路正连着别的口就先断开再连；本路当前设备那一行没连着就连上，连着就不动作，断开走电源键)，行内改名 / 清除别名 / 取消选择。选用、连接、改名一律经 window.serialLanes
 	// 走 common.js 原有的绑定与打开路径，这里不碰会话。设备字符串(产品名、序列号、别名)一律 textContent
-	function makePortList(key, quick) {
-		const box = mk('div', quick ? 'mdn-ports mdn-ports--quick' : 'mdn-ports')
+	function makePortList(key) {
+		const box = mk('div', 'mdn-ports')
 		const list = mk('div', 'mdn-ports-list')
 		list.setAttribute('role', 'listbox')
 		list.setAttribute('aria-label', '串口设备')
@@ -361,10 +346,13 @@
 		foot.append(add, reload)
 		box.append(list, empty, hint, foot)
 		const st = { key: key, box: box, list: list, empty: empty, hint: hint, add: add, reload: reload, foot: foot,
-			quick: !!quick, ports: [], rows: [], rowEls: null, loaded: false, seq: 0, sig: '', editing: null, queue: Promise.resolve(), focusPort: null, wantFocus: false }
+			ports: [], rows: [], rowEls: null, loaded: false, seq: 0, sig: '', editing: null, queue: Promise.resolve(), focusPort: null, wantFocus: false }
 		listen(add, 'click', function () {
 			const lanes = window.serialLanes
-			if (lanes) enqueuePort(st, function () { return lanes.requestPort(sidFor(key)) })
+			if (!lanes) return
+			// 选口走浏览器选择框：下拉的任务完成了，先收起(选取消也不会留个开着的下拉)
+			closePops()
+			enqueuePort(st, function () { return lanes.requestPort(sidFor(key)) })
 		})
 		listen(reload, 'click', function () { loadPorts(st) })
 		listen(list, 'click', function (e) { onPortClick(st, e) })
@@ -480,9 +468,12 @@
 		while (st.list.children.length > rows.length) st.list.lastChild.remove()
 		st.rowEls = keep
 		if (!tabRow) tabRow = (cur && portRowEl(st, cur)) || st.list.querySelector('.mdn-port')
-		if (tabRow) tabRow.tabIndex = 0
-		if (tabRow && (hadFocus || st.wantFocus)) tabRow.focus()
-		st.wantFocus = false
+		// 没有行可聚焦时(空态 / 加载中)不消费 wantFocus：loadPorts 回来画出第一批行时焦点才落得进去
+		if (tabRow) {
+			tabRow.tabIndex = 0
+			if (hadFocus || st.wantFocus) tabRow.focus()
+			st.wantFocus = false
+		}
 		st.list.hidden = !rows.length
 		st.empty.hidden = !!rows.length
 		st.empty.textContent = !st.loaded ? '正在查找串口…'
@@ -523,6 +514,16 @@
 				clr.append(icon('bi-x-lg'))
 				acts.append(clr)
 			}
+			// 「取消选择」只对本路当前设备有意义(forgetPort 按路清)，且只在断开 / 关闭失败时给：
+			// 连着 / 连接中先走电源键(关闭失败时它就是「重试关闭」，forget 里的 closeSerial 也会重试)
+			if (r.state.kind === 'current' || r.state.kind === 'failed') {
+				const fg = btn('mdn-port-act', '', '取消选择：本路不再记着这台设备，恢复未连接状态')
+				fg.dataset.act = 'forget'
+				fg.tabIndex = -1
+				fg.setAttribute('aria-label', '取消选择 ' + r.title)
+				fg.append(icon('bi-x-circle'))
+				acts.append(fg)
+			}
 		}
 		row.append(acts)
 	}
@@ -535,16 +536,15 @@
 	}
 
 	// 单击 / 回车：选为本路设备并连接。本路正连着别的口就先断开再连(bindSessionPort 一步完成)；
-	// 当前设备没连着就连上，已连着或正在连接就不动作(避免误触断开，断开走芯片上的按钮)
+	// 当前设备没连着就连上，已连着或正在连接就不动作(避免误触断开，断开走电源键)
 	function activatePort(st, r) {
 		const lanes = window.serialLanes
 		const h = hub()
 		if (!lanes || !h || r.state.disabled) return
 		const sid = sidFor(st.key)
 		const cur = lanes.portOf(sid)
-		// 下拉里选定就收起(下拉只负责选口)；完整菜单里的列表保持打开
+		// 选定就收起(列表就是设备键的选口下拉)
 		const done = function () {
-			if (!st.quick) return
 			closePops()
 			swallowDoubleClick()
 		}
@@ -660,13 +660,11 @@
 		input.select()
 	}
 
-	// 插拔(含没授权过的口出现 / 消失)、授权变化后，开着的那一路菜单重新列口
+	// 插拔(含没授权过的口出现 / 消失)、授权变化后，开着的设备下拉重新列口
 	function onPortsChanged() {
 		if (!mounted || !refs.paths) return
-		const p = refs.openKey ? refs.paths[refs.openKey] : null
-		if (p && p.ports) loadPorts(p.ports)
 		const q = refs.ddKey ? refs.paths[refs.ddKey] : null
-		if (q && q.quick) loadPorts(q.quick)
+		if (q && q.ports) loadPorts(q.ports)
 	}
 
 	function mountConnBar() {
@@ -681,13 +679,8 @@
 		const main = makePop('main')
 		const b = makePop('B')
 		refs.paths = { main: main, B: b }
-		// 设备芯片(状态 + 选口/改名 + 连接/断开)整块搬进各路菜单，里面的行为全部沿用
-		park($('serial-chip'), main.dev)
-		park($('serial-chip-a'), main.dev)
-		park($('serial-chip-b'), b.dev)
-		// 串口列表接在芯片下面：芯片仍显示本路设备、状态与连接键，列表负责选口
-		main.dev.appendChild(main.ports.box)
-		b.dev.appendChild(b.ports.box)
+		// 设备芯片不进菜单(选口与设备管理都在设备键的下拉里)：留在隐藏的原连接栏里，
+		// 仍是 common.js 写设备名 / 连接态、refreshConn 与原生菜单读状态的节点，不要删
 		const A = window.SerialAdapter
 		if (A) {
 			;['change', 'connect', 'disconnect'].forEach(function (type) {
@@ -748,6 +741,8 @@
 			setTimeout(function () {
 				if (typeof bootstrap !== 'undefined' && bootstrap.Dropdown) bootstrap.Dropdown.getOrCreateInstance(t).hide()
 			}, 0)
+			// 下拉与参数菜单同时只开一个
+			closePops()
 			openPop('main')
 			const baud = $('serial-baud')
 			if (baud) baud.focus()
@@ -836,12 +831,11 @@
 			p.power.title = lane + (failed ? '关闭失败，点此重试关闭' : (opening ? '正在连接' : (open ? '已连接，点此断开' : (hasPort ? '未连接，点此连接' : '先选择设备'))))
 			p.btn.setAttribute('aria-label', who + ' ' + (portName || '未选择串口') + ' · ' + st + ' · 选择串口设备')
 			p.btn.title = who + ' · ' + st + ' · 选择串口设备'
-			p.more.title = '串口设置：参数 · ' + (sid === 'S' ? '设备管理' : '路标签 · 设备管理')
+			p.more.title = sid === 'S' ? '串口设置：参数' : '串口设置：路标签 · 参数'
 			p.head.textContent = sid === 'S' ? '单路串口' : sid + ' 路'
 		})
-		// 开着的那一路菜单：状态(当前设备 / 已连接 / 被另一路占用)跟着刷新，内容没变不重建
-		if (refs.openKey && refs.paths[refs.openKey]) renderPorts(refs.paths[refs.openKey].ports)
-		if (refs.ddKey && refs.paths[refs.ddKey]) renderPorts(refs.paths[refs.ddKey].quick)
+		// 开着的设备下拉：状态(当前设备 / 已连接 / 被另一路占用)跟着刷新，内容没变不重建
+		if (refs.ddKey && refs.paths[refs.ddKey]) renderPorts(refs.paths[refs.ddKey].ports)
 		// 快捷行上的「发往」分段不在连接栏里，显隐单独跟模式
 		if (refs.sendTo) refs.sendTo.hidden = !dual
 	}
