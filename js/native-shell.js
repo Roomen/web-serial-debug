@@ -111,9 +111,10 @@
 		const r = doc.querySelector('#activity-rail .rail-item[data-view="' + id + '"]')
 		if (shown(r) && !r.classList.contains('active')) r.click()
 	}
-	// 打开某一路的连接菜单(连接栏)；没有连接栏时退回该路的「选择串口」键
+	// 打开某一路的设备下拉(连接栏设备键，选口与设备管理都在这里)；没有连接栏时退回该路的「选择串口」键。
+	// 兜底刻意复用芯片的「没选过口才自动打开」语义，不要换成 serialLanes.requestPort(它固定 openAfterSelect: true)
 	function openLaneMenu(sid) {
-		const b = doc.querySelector('#mdn-connbar .mdn-conn[data-sid="' + sid + '"] > .mdn-conn-more')
+		const b = doc.querySelector('#mdn-connbar .mdn-conn[data-sid="' + sid + '"] > .mdn-conn-btn')
 		if (b) {
 			if (b.getAttribute('aria-expanded') !== 'true') b.click()
 			return
