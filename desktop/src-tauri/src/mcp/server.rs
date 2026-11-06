@@ -6,7 +6,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerConfig};
 use schemars::JsonSchema;
 use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
@@ -80,6 +80,55 @@ pub struct VoltageParams {
     pub window: String,
     /// Source voltage in mV (500..5000). Out-of-range values are rejected, not clamped.
     pub millivolts: u32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectParams {
+    /// Window label from windows_list.
+    pub window: String,
+    /// Lane: "S", "A" or "B".
+    pub lane: String,
+    /// Opaque device id from a fresh serial_ports_list (document-scoped; stale after reload/replug). Exactly one of deviceId / sn is required.
+    pub device_id: Option<String>,
+    /// USB serial number string, matched exactly against the sn field of serial_ports_list entries. Use it across reconnects.
+    pub sn: Option<String>,
+}
+
+// serial_configure 的 options：六个键与页面 serialLanes.configure 一一对应。
+// 未知键在 schema 边界拒绝(deny_unknown_fields)，值的逐项合法性由页面归一化校验(报 invalid_options)。
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SerialOptionsPatch {
+    /// Baud rate in bit/s (>0, e.g. 115200).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baud_rate: Option<u32>,
+    /// Data bits: 7 or 8.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_bits: Option<u32>,
+    /// Stop bits: 1 or 2.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_bits: Option<u32>,
+    /// Parity: "none" | "even" | "odd".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parity: Option<String>,
+    /// RX buffer size in bytes (1..16777216).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buffer_size: Option<u32>,
+    /// Flow control: "none" | "hardware".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow_control: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigureParams {
+    /// Window label from windows_list.
+    pub window: String,
+    /// Lane: "S", "A" or "B".
+    pub lane: String,
+    /// Options to apply (any subset, at least one field). Omit to READ the lane's effective options.
+    pub options: Option<SerialOptionsPatch>,
 }
 
 #[derive(Clone)]
@@ -282,6 +331,60 @@ impl McpServer {
     }
 
     #[tool(
+        name = "serial_ports_list",
+        description = "List the serial devices currently present for one window. Each entry has an opaque deviceId (valid only for that window's current document; stale after reload/replug), port/product/alias names, vid/pid/sn/slot, persistence flags and which lanes currently hold it. Read-only: no access is granted here, grant happens at serial_select.",
+        annotations(title = "List serial ports", read_only_hint = true)
+    )]
+    async fn serial_ports_list(&self, Parameters(p): Parameters<WindowParams>) -> Result<CallToolResult, McpError> {
+        match self.call(&p.window, "serial_ports_list", json!({ "window": p.window }), READ_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(
+        name = "serial_select",
+        description = "Select a device for a lane WITHOUT opening it (call serial_open next). Pass exactly one of deviceId (from a fresh serial_ports_list) or sn. The port is re-enumerated inside the lane's mutation queue after commit, so a stale deviceId or an unplugged device is rejected rather than silently picking another unit; an ambiguous sn returns candidates instead of guessing.",
+        annotations(title = "Select serial device", read_only_hint = false, destructive_hint = false, idempotent_hint = true)
+    )]
+    async fn serial_select(&self, Parameters(p): Parameters<SelectParams>) -> Result<CallToolResult, McpError> {
+        if let Err(e) = check_lane(&p.lane) {
+            return err_result(e);
+        }
+        // 与页面 handler 同口径：deviceId 只去空串，sn 先 trim；二选一在两侧都查，先拦的不进桥
+        let device_id = p.device_id.unwrap_or_default();
+        let sn = p.sn.map(|s| s.trim().to_string()).unwrap_or_default();
+        if device_id.is_empty() && sn.is_empty() {
+            return err_result(BridgeError::new("bad_params", "必须给 deviceId(来自 serial_ports_list)或 sn"));
+        }
+        if !device_id.is_empty() && !sn.is_empty() {
+            return err_result(BridgeError::new("bad_params", "deviceId 与 sn 只能给一个"));
+        }
+        let params = json!({ "window": p.window, "lane": p.lane, "deviceId": device_id, "sn": sn });
+        match self.call(&p.window, "serial_select", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(
+        name = "serial_configure",
+        description = "Read or write a lane's serial parameters. Omit options to READ the effective options + summary; pass an options object (any subset of baudRate/dataBits/stopBits/parity/bufferSize/flowControl, at least one field) to WRITE: the values are persisted and, when the lane is open, applied by reopening it. A reopen failure after a successful save reports executed=partial (reopen_failed), so the saved values are already in effect for the next open.",
+        annotations(title = "Configure serial lane", read_only_hint = false, destructive_hint = false, idempotent_hint = true)
+    )]
+    async fn serial_configure(&self, Parameters(p): Parameters<ConfigureParams>) -> Result<CallToolResult, McpError> {
+        if let Err(e) = check_lane(&p.lane) {
+            return err_result(e);
+        }
+        let options = p.options.as_ref().map(|o| serde_json::to_value(o).unwrap_or_default()).unwrap_or_default();
+        let params = json!({ "window": p.window, "lane": p.lane, "options": options });
+        match self.call(&p.window, "serial_configure", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(
         name = "blu_state",
         description = "BLU power analyzer state of one window: connected, sampling, source voltage, record mode, sample count and the DUT power state. Power state has no hardware read-back: source is \"probed\" right after connect, \"commanded\" after a successful command, \"unknown\" otherwise.",
         annotations(title = "BLU state", read_only_hint = true)
@@ -371,5 +474,157 @@ impl ServerHandler for McpServer {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("serial-debug", self.version()))
             .with_instructions("Local desktop Serial Debug app. Call windows_list first, then pass the exact window label to every other tool.")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use serde_json::{json, Value};
+
+    use super::*;
+    use crate::mcp::bridge::mock::MockBridge;
+    use crate::mcp::WindowReg;
+
+    // 记录转发到页面桥的 params，回执原样回传，便于断言 camelCase 字段与只读/写语义
+    fn recording_server() -> (McpServer, Arc<Mutex<Vec<Value>>>) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let rec = calls.clone();
+        let state = McpState::default();
+        state.mark_running_for_test(38991);
+        state.register_window_for_test(
+            "main",
+            WindowReg { bridge_epoch: "e1".into(), authed: true, mode: "dual".into(), app_version: "t".into() },
+        );
+        let script = Arc::new(move |_tool: &str, p: &Value| {
+            rec.lock().unwrap().push(p.clone());
+            (true, json!({ "ok": true }))
+        });
+        let bridge = Arc::new(MockBridge::new(state.clone(), true, script));
+        (McpServer::new(state, bridge, None), calls)
+    }
+
+    fn structured(r: &CallToolResult) -> &Value {
+        r.structured_content.as_ref().expect("应有 structured_content")
+    }
+
+    #[tokio::test]
+    async fn ports_list_forwards_window_and_is_read_only_shape() {
+        let (s, calls) = recording_server();
+        let r = s.serial_ports_list(Parameters(WindowParams { window: "main".into() })).await.unwrap();
+        assert_eq!(r.is_error, Some(false));
+        assert_eq!(calls.lock().unwrap()[0], json!({ "window": "main" }));
+    }
+
+    #[tokio::test]
+    async fn select_requires_exactly_one_of_device_id_or_sn() {
+        let (s, calls) = recording_server();
+        // 都不给 / 两个都给 / 空白串，都在桥前拦成 bad_params
+        for (device_id, sn) in [
+            (None, None),
+            (Some("e1-d1".to_string()), Some("x".to_string())),
+            (Some(String::new()), Some("  ".to_string())),
+        ] {
+            let r = s
+                .serial_select(Parameters(SelectParams { window: "main".into(), lane: "S".into(), device_id, sn }))
+                .await
+                .unwrap();
+            assert_eq!(r.is_error, Some(true));
+            assert_eq!(structured(&r)["code"], json!("bad_params"));
+        }
+        // 非法 lane 同样在桥前拦截
+        let r = s
+            .serial_select(Parameters(SelectParams {
+                window: "main".into(),
+                lane: "X".into(),
+                device_id: Some("e1-d1".into()),
+                sn: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(structured(&r)["code"], json!("invalid_lane"));
+        assert!(calls.lock().unwrap().is_empty(), "被拒绝的请求不该进桥");
+
+        // sn 去空白后透传，空 deviceId 按「未给」处理(页面同口径)
+        let r = s
+            .serial_select(Parameters(SelectParams {
+                window: "main".into(),
+                lane: "A".into(),
+                device_id: Some(String::new()),
+                sn: Some(" SN42 ".into()),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(false));
+        assert_eq!(
+            calls.lock().unwrap()[0],
+            json!({ "window": "main", "lane": "A", "deviceId": "", "sn": "SN42" })
+        );
+    }
+
+    #[tokio::test]
+    async fn configure_read_sends_null_options_write_forwards_only_given_fields() {
+        let (s, calls) = recording_server();
+        // 省略 options = 读
+        let r = s
+            .serial_configure(Parameters(ConfigureParams { window: "main".into(), lane: "B".into(), options: None }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(false));
+        // 写：只透传已给的字段，键为 camelCase
+        let r = s
+            .serial_configure(Parameters(ConfigureParams {
+                window: "main".into(),
+                lane: "A".into(),
+                options: Some(SerialOptionsPatch {
+                    baud_rate: Some(9600),
+                    flow_control: Some("hardware".into()),
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(false));
+        let sent = calls.lock().unwrap();
+        assert_eq!(sent[0], json!({ "window": "main", "lane": "B", "options": null }));
+        assert_eq!(sent[1]["options"], json!({ "baudRate": 9600, "flowControl": "hardware" }));
+        assert_eq!(sent[1]["lane"], json!("A"));
+    }
+
+    // 反序列化边界：schema 层先拦形状(未知键 / 错类型 / 非对象)，页面层再查值
+    #[test]
+    fn new_params_deserialization_boundaries() {
+        // options 未知键(含大小写笔误)被 deny_unknown_fields 拒绝
+        let err = serde_json::from_value::<ConfigureParams>(json!({
+            "window": "main", "lane": "S", "options": { "baudrate": 9600 }
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field"), "{err}");
+        // options 非对象 / 字段错类型 / deviceId 非字符串：同样拒绝
+        for bad in [
+            json!({ "window": "main", "lane": "S", "options": "x" }),
+            json!({ "window": "main", "lane": "S", "options": { "baudRate": "x" } }),
+        ] {
+            assert!(serde_json::from_value::<ConfigureParams>(bad).is_err());
+        }
+        assert!(serde_json::from_value::<SelectParams>(json!({
+            "window": "main", "lane": "S", "deviceId": 5
+        }))
+        .is_err());
+        // 合法形状：空 options 对象(页面报 bad_params「不能为空」)、省略 options(读)
+        assert!(serde_json::from_value::<ConfigureParams>(json!({
+            "window": "main", "lane": "S", "options": {}
+        }))
+        .is_ok());
+        let p = serde_json::from_value::<ConfigureParams>(json!({ "window": "main", "lane": "S" })).unwrap();
+        assert!(p.options.is_none());
+        // 六字段的 camelCase 序列化/反序列化互认，未给的键不出现在转发里
+        let patch: SerialOptionsPatch =
+            serde_json::from_value(json!({ "dataBits": 8, "stopBits": 2, "parity": "odd" })).unwrap();
+        assert_eq!(
+            serde_json::to_value(&patch).unwrap(),
+            json!({ "dataBits": 8, "stopBits": 2, "parity": "odd" })
+        );
     }
 }

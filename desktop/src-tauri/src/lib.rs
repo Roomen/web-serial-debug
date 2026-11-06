@@ -1,6 +1,7 @@
 // 桌面客户端外壳：加载与网页版同一份静态页面(desktop/scripts/stage-web.mjs 复制进 dist)，只补网页在 WebView 里缺的能力：
 // 原生串口(serial.rs，前端 js/transport-native-serial.js)、下载落盘、多窗口、原生菜单(menu.rs)与窗口外观。
 // 页面功能与网页版一致，平台差异只走 js/platform.js，页面侧胶水在 js/native-shell.js。
+mod lease;
 mod mcp;
 mod menu;
 mod portable;
