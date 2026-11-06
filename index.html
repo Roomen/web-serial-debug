@@ -29,7 +29,8 @@
                 t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
             }
             document.documentElement.setAttribute('data-theme', t)
-            // 双路视图(列表/气泡)：同样首屏前定下；缺省即列表。界面布局只有一套，html 上的 data-layout 固定为 modern
+            // 视图(列表/聊天)：同样首屏前定下；缺省即列表。单双路共用这一份偏好，存储键与 data-dual-view 属性沿用旧名。
+            // 界面布局只有一套，html 上的 data-layout 固定为 modern
             var dualView = 'list'
             try {
                 if (localStorage.getItem('serial-debug-dual-view') === 'bubble') dualView = 'bubble'
@@ -353,10 +354,10 @@
                                     <span class="serial-log-legend-item" data-leg="left" id="serial-log-legend-left">TX</span>
                                     <span class="serial-log-legend-item" data-leg="right" id="serial-log-legend-right">RX</span>
                                 </span>
-                                <!-- 仅双路 + 行日志时显示(见 css 日志工具条段)：双路合流的显示方式 -->
-                                <div class="ctl-seg" id="serial-dual-view-seg" role="group" aria-label="双路显示方式">
+                                <!-- 仅行日志时显示(见 css 日志工具条段)：列表 / 聊天两种视图，单双路共用 -->
+                                <div class="ctl-seg" id="serial-dual-view-seg" role="group" aria-label="日志视图方式">
                                     <button type="button" id="serial-dual-view-list" aria-pressed="true">列表</button>
-                                    <button type="button" id="serial-dual-view-bubble" aria-pressed="false">时间线</button>
+                                    <button type="button" id="serial-dual-view-bubble" aria-pressed="false">聊天</button>
                                 </div>
                             </div>
 

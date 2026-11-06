@@ -857,9 +857,10 @@
 			bar.appendChild(g)
 			return g
 		}
-		const dualG = grp('mdn-grp-dual')
-		park($('serial-dual-view-seg'), dualG)
-		park($('serial-log-legend'), dualG)
+		// 列表/聊天分段与双路图例同一组：分段单双路都有，图例只在双路显示(由 css 收起)
+		const chatG = grp('mdn-grp-chat')
+		park($('serial-dual-view-seg'), chatG)
+		park($('serial-log-legend'), chatG)
 		const fmt = grp('mdn-grp-fmt')
 		fmt.setAttribute('role', 'group')
 		fmt.setAttribute('aria-label', '显示格式')
@@ -1232,7 +1233,7 @@
 		q.more.textContent = more > 0 ? '管理…（另 ' + more + ' 条）' : '管理…'
 	}
 
-	// ========== 6. 日志缩放(列表与时间线共用) ==========
+	// ========== 6. 日志缩放(列表与聊天共用) ==========
 	// 控件半透明浮在日志窗右下角，指针移上去或键盘聚焦时才显实，不挡日志；Ctrl/⌘ + 滚轮(触控板双指捏合)也能缩放。
 	// 缩放是给日志容器设 CSS zoom(经 #serial-log-panes 上的变量)，不改行内容，复制、导出、持久化都不受影响
 	const ZOOM_KEY = 'serialLogZoomModern'

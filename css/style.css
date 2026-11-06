@@ -9023,7 +9023,7 @@ details.sts-sim-alarm-picker {
 	white-space: nowrap;
 }
 
-/* 双路视图切换：默认不占位，双路 + 行日志时由日志工具条的规则打开 */
+/* 视图切换(列表 / 聊天)：默认不占位，行日志时由日志工具条的规则打开(单双路都有) */
 #serial-dual-view-seg {
 	display: none;
 }
@@ -9580,7 +9580,7 @@ html[data-layout='modern'] #fw-pack-upgrade > #nav-firmware {
 	}
 }
 
-/* ===== 现代布局 v2 · 检查器与双路时间线 ===== */
+/* ===== 现代布局 v2 · 检查器与聊天 ===== */
 /* 两路的路色：A 蓝、B 橙(设计稿)；-t 是落在浅/深面色上的文字色，-on 是落在路色实心底上的文字色，对比度均 >= 4.5:1 */
 html[data-layout='modern'] {
 	--mdn-ax: 88px;
@@ -10025,10 +10025,11 @@ html[data-layout='modern'] .wb-insp-raw-body {
 	padding-top: 6px;
 }
 
-/* ---------- 双路时间线(双路视图 = 气泡) ---------- */
-/* 容器是纵向 flex：A 靠左、B 靠右，长气泡可跨中点；侧边留出时间/Δ 的宽度。
-   不画轴线，行 DOM 与容器子节点结构不变；路色、路标与外侧方角共同标识来源。 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual {
+/* ---------- 聊天(视图 = 聊天)：气泡 ---------- */
+/* 两个日志容器共用这一套：双路 A 靠左、B 靠右；单路 RX(接收)靠左、TX(发送)靠右，系统行居中。
+   容器是纵向 flex，长气泡可跨中点；侧边留出时间/Δ 的宽度。不画轴线，行 DOM 与容器子节点结构不变；
+   路色/方向色、路标与外侧方角共同标识来源。 */
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) {
 	--bb-surface: var(--bg-surface);
 	--bb-plate: var(--bg-surface);
 	--bb-plate-fg: var(--text-primary);
@@ -10038,28 +10039,28 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual {
 	background-image: none;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi) {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single):not(.ansi) {
 	background-color: var(--mdn-subtle);
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single).ansi {
 	--bb-surface: #2c2c30;
 	--bb-plate: #1c1c1e;
 	--bb-plate-fg: #f5f5f7;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'] {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-sid='A'] {
 	--bb-c: var(--mdn-a);
 	--bb-t: var(--mdn-a-t);
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'] {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-sid='B'] {
 	--bb-c: var(--mdn-b);
 	--bb-t: var(--mdn-b-t);
 }
 
 /* 系统行等：居中小胶囊 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row {
 	--bb-bg: var(--bb-surface);
 	--bb-bd: var(--border-light);
 	--bb-ring: 0 0 0 0 transparent;
@@ -10083,25 +10084,25 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row {
 	line-height: 1.5;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:hover {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row:hover {
 	--bb-bg: var(--bg-surface-hover);
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row.selected {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row.selected {
 	--bb-bg: color-mix(in srgb, var(--danger) 12%, var(--bb-surface));
 	--bb-ring: 0 0 0 2px var(--mdn-sel);
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-time:empty {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row > .log-time:empty {
 	display: none;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-body {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row > .log-body {
 	flex: 0 1 auto;
 }
 
-/* A / B 的收发行：气泡 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) {
+/* 收发行(双路 A/B、单路 S)：气泡 */
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S']):is([data-dir='tx'], [data-dir='rx']) {
 	display: block;
 	max-width: calc(100% - var(--mdn-ax) - 16px);
 	min-height: 30px;
@@ -10114,42 +10115,42 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:i
 	color: var(--text-primary);
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A']:is([data-dir='tx'], [data-dir='rx']) {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-sid='A']:is([data-dir='tx'], [data-dir='rx']) {
 	align-self: flex-start;
 	margin-right: calc(var(--mdn-ax) + 16px);
 	border-top-left-radius: 2px;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B']:is([data-dir='tx'], [data-dir='rx']) {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-sid='B']:is([data-dir='tx'], [data-dir='rx']) {
 	align-self: flex-end;
 	margin-left: calc(var(--mdn-ax) + 16px);
 	border-top-right-radius: 2px;
 }
 
 /* TX：内容优先的雅致微底色 + 实体路色边框，取消刺眼纯实心底色 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx'] {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S'])[data-dir='tx'] {
 	--bb-bg: color-mix(in srgb, var(--bb-c) 12%, var(--bb-surface));
 	--bb-bd: var(--bb-c);
 	color: var(--text-primary);
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='tx']:hover {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S'])[data-dir='tx']:hover {
 	--bb-bg: color-mix(in srgb, var(--bb-c) 18%, var(--bb-surface));
 }
 
 /* RX：浅底 + 协调路色描边 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx'] {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S'])[data-dir='rx'] {
 	--bb-bg: color-mix(in srgb, var(--bb-c) 6%, var(--bb-surface));
 	--bb-bd: color-mix(in srgb, var(--bb-c) 55%, var(--border-light));
 	color: var(--text-primary);
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B'])[data-dir='rx']:hover {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S'])[data-dir='rx']:hover {
 	--bb-bg: color-mix(in srgb, var(--bb-c) 11%, var(--bb-surface));
 }
 
 /* 保持独立的块/内联格式化上下文，绝不能设为 contents（否则字节 span 会变成 flex 项破坏复制与导出） */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi) .log-row:is([data-sid='A'], [data-sid='B']) > .log-body {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single):not(.ansi) .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S']) > .log-body {
 	display: block;
 	max-width: 100%;
 	vertical-align: middle;
@@ -10157,23 +10158,23 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi)
 }
 
 /* ANSI 模式始终为深黑底色，恢复亮色基色，使表号、SEQ、提示及原始文字正确继承亮色，避免浅色主题下继承深黑/深绿字 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi .log-row:is([data-sid='A'], [data-sid='B']),
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi .log-row:is([data-sid='A'], [data-sid='B']) > .log-body {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single).ansi .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S']),
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single).ansi .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S']) > .log-body {
 	display: block;
 	max-width: 100%;
 	vertical-align: middle;
 	color: var(--bb-plate-fg, #f5f5f7);
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):not(:has(.pv)) > .log-body {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S']):not(:has(.pv)) > .log-body {
 	display: inline-block;
 }
 /* 选中：黄环(设计稿)，覆盖 TX / RX 各自的状态环 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']).selected {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S']):is([data-dir='tx'], [data-dir='rx']).selected {
 	--bb-ring: 0 0 0 3px var(--mdn-sel);
 }
-/* 气泡首行：方向 + 路名 + 长度；时间移到气泡旁，行首的 .log-time 清成零尺寸块，只当静默胶囊的宿主 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-time {
+/* 气泡首行：方向 + 路名(单路没有路名) + 长度；时间移到气泡旁，行首的 .log-time 清成零尺寸块，只当静默胶囊的宿主 */
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S']):is([data-dir='tx'], [data-dir='rx']) > .log-time {
 	display: block;
 	width: 0;
 	height: 0;
@@ -10185,11 +10186,11 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:i
 }
 
 /* 气泡内部直接子元素：隐藏冗余路标，让首行无缝融合成一行 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-sess {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S']):is([data-dir='tx'], [data-dir='rx']) > .log-sess {
 	display: none !important;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-dir {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S']):is([data-dir='tx'], [data-dir='rx']) > .log-dir {
 	display: inline-flex;
 	align-items: center;
 	min-width: 0;
@@ -10202,7 +10203,7 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:i
 	background: transparent;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-len {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S']):is([data-dir='tx'], [data-dir='rx']) > .log-len {
 	display: inline-block;
 	margin: 0 8px 0 0;
 	vertical-align: middle;
@@ -10214,7 +10215,7 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:i
 }
 
 /* 方向标签：文字清零，改由 ::before 显示「↑ TX / ↓ RX」，路名接在后面(复制日志读元素文本，伪元素不进剪贴板) */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:is([data-sid='A'], [data-sid='B']):is([data-dir='tx'], [data-dir='rx']) > .log-dir::before {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row:is([data-sid='A'], [data-sid='B'], [data-sid='S']):is([data-dir='tx'], [data-dir='rx']) > .log-dir::before {
 	font-size: 0.68rem;
 	font-weight: 800;
 	letter-spacing: 0.03em;
@@ -10223,73 +10224,73 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:i
 	line-height: 1.25;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='tx'] > .log-dir::before {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-dir='tx'] > .log-dir::before {
 	content: '↑ TX';
 	background: var(--bb-c);
 	color: #ffffff;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-dir='rx'] > .log-dir::before {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-dir='rx'] > .log-dir::before {
 	content: '↓ RX';
 	background: var(--success, #16a34a);
 	color: #ffffff;
 }
 
 /* 气泡内的解析卡片：保持各帧独立的块级容器，多帧依次排列不打散，防止标题正文错位 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .pv {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .pv {
 	display: block;
 	margin-top: 2px;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .pv + .pv {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .pv + .pv {
 	margin-top: 6px;
 	padding-top: 4px;
 	border-top: 1px dashed var(--border-light);
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .pv-head {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .pv-head {
 	display: flex;
 	align-items: center;
 	flex-wrap: wrap;
 	gap: 4px 6px;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi) .pv-title {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single):not(.ansi) .pv-title {
 	font-size: 0.90rem;
 	font-weight: 800;
 	color: var(--text-primary);
 	letter-spacing: -0.1px;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi) .pv-k {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single):not(.ansi) .pv-k {
 	color: var(--text-secondary);
 	font-weight: 600;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual:not(.ansi) .pv-v {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single):not(.ansi) .pv-v {
 	color: var(--text-primary);
 	font-weight: 600;
 }
 
 /* ANSI 模式始终为深色黑底背景，文字恒定保持亮色，不可受浅色主题深黑字污染 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi .pv-title {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single).ansi .pv-title {
 	font-size: 0.90rem;
 	font-weight: 800;
 	color: #f5f5f7;
 	letter-spacing: -0.1px;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi .pv-k {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single).ansi .pv-k {
 	color: #9da7b3;
 	font-weight: 600;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi .pv-v {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single).ansi .pv-v {
 	color: #f5f5f7;
 	font-weight: 600;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi .log-len {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single).ansi .log-len {
 	color: #9da7b3;
 }
 
@@ -10318,7 +10319,7 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual.ansi-b:not
 }
 
 /* 气泡内的原生代码徽标与微标清晰度提升 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .pv-code {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .pv-code {
 	font-size: 0.68rem;
 	font-weight: 700;
 	padding: 1px 5px;
@@ -10326,9 +10327,9 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .pv-code {
 	background: color-mix(in srgb, currentColor 8%, transparent);
 	color: var(--text-secondary);
 }
-/* 气泡侧边：时间(::before)、Δ 或慢应答耗时(::after)。A 放右侧、B 放左侧。 */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-t]::before,
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-d]::after {
+/* 气泡侧边：时间(::before)、Δ 或慢应答耗时(::after)。双路 A 放右侧、B 放左侧；单路 RX 放右侧、TX 放左侧(见下面单路段) */
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-mdn-t]::before,
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-mdn-d]::after {
 	position: absolute;
 	width: var(--mdn-ax);
 	text-align: center;
@@ -10339,40 +10340,40 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[d
 	pointer-events: none;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-t]::before {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-mdn-t]::before {
 	content: attr(data-mdn-t);
 	top: 3px;
 	color: var(--text-secondary);
 	font-weight: 600;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-d]::after {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-mdn-d]::after {
 	content: attr(data-mdn-d);
 	top: 17px;
 	color: var(--text-secondary);
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-slow]::after {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-mdn-slow]::after {
 	color: var(--mdn-slow);
 	font-weight: 700;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'][data-mdn-t]::before,
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'][data-mdn-d]::after {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-sid='A'][data-mdn-t]::before,
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-sid='A'][data-mdn-d]::after {
 	left: calc(100% + 11.5px);
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'][data-mdn-t]::before,
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'][data-mdn-d]::after {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-sid='B'][data-mdn-t]::before,
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-sid='B'][data-mdn-d]::after {
 	right: calc(100% + 11.5px);
 }
 
 /* 静默分隔：与上一条间隔超过阈值时，行上方留出空位，在气泡上方画胶囊(宿主是行首的 .log-time，伪元素读它自己的 data-mdn-gap) */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row:has(> .log-time[data-mdn-gap]) {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row:has(> .log-time[data-mdn-gap]) {
 	margin-top: 22px;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row > .log-time[data-mdn-gap]::before {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row > .log-time[data-mdn-gap]::before {
 	content: '⋮ 静默 ' attr(data-mdn-gap);
 	position: absolute;
 	top: -19px;
@@ -10388,30 +10389,87 @@ html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row >
 	white-space: nowrap;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='A'] > .log-time[data-mdn-gap]::before {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-sid='A'] > .log-time[data-mdn-gap]::before {
 	left: 0;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-sid='B'] > .log-time[data-mdn-gap]::before {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-sid='B'] > .log-time[data-mdn-gap]::before {
 	right: 0;
 }
 
-/* 选中帧到本路应答之间两路的所有行：整行通栏浅色底带(超大扩展阴影 + 按行高裁剪，不改行盒) */
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-band] {
+/* 选中帧到本路应答之间所有行(双路含另一路)：整行通栏浅色底带(超大扩展阴影 + 按行高裁剪，不改行盒) */
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-mdn-band] {
 	box-shadow: var(--bb-ring), 0 0 0 100vmax var(--mdn-band);
 	clip-path: inset(-3px -100vmax);
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-dual .log-row[data-mdn-band]:has(> .log-time[data-mdn-gap]) {
+html[data-layout='modern'][data-dual-view='bubble'] :is(#serial-logs-dual, #serial-logs-single) .log-row[data-mdn-band]:has(> .log-time[data-mdn-gap]) {
 	clip-path: inset(-22px -100vmax -3px);
 }
 
-/* 吸顶列头：在日志容器外面(js/modern-timeline.js 建的兄弟节点)，不随日志滚动，也不进日志内容 */
-#mdn-tl-head {
+
+
+/* ---------- 聊天：单路(按方向分左右) ---------- */
+/* 单路只有一路，气泡左右由收发方向决定(聊天软件习惯)：RX 接收靠左、TX 发送靠右，系统行居中。
+   配色沿用单路既有的方向色：RX 绿(--success，与行标签/边框同源)、TX 暖色(--mdn-tx-line)，亮暗各一套 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-single .log-row[data-dir='rx'] {
+	--bb-c: var(--success, #16a34a);
+	--bb-t: var(--mdn-rx-fg);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-single .log-row[data-dir='tx'] {
+	--bb-c: var(--mdn-tx-line);
+	--bb-t: var(--mdn-tx-fg);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-single .log-row[data-dir='rx'] {
+	align-self: flex-start;
+	margin-right: calc(var(--mdn-ax) + 16px);
+	border-top-left-radius: 2px;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-single .log-row[data-dir='tx'] {
+	align-self: flex-end;
+	margin-left: calc(var(--mdn-ax) + 16px);
+	border-top-right-radius: 2px;
+}
+
+/* 时间/Δ 放气泡外侧：RX 气泡靠左，时间在右侧；TX 气泡靠右，时间在左侧 */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-single .log-row[data-dir='rx'][data-mdn-t]::before,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-single .log-row[data-dir='rx'][data-mdn-d]::after {
+	left: calc(100% + 11.5px);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-single .log-row[data-dir='tx'][data-mdn-t]::before,
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-single .log-row[data-dir='tx'][data-mdn-d]::after {
+	right: calc(100% + 11.5px);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-single .log-row[data-dir='rx'] > .log-time[data-mdn-gap]::before {
+	left: 0;
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-single .log-row[data-dir='tx'] > .log-time[data-mdn-gap]::before {
+	right: 0;
+}
+
+/* 单路气泡里的方向徽标沿用行标签的底色/字色对(亮暗各一套，白字压在方向色上对比度不够) */
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-single .log-row[data-dir='tx'] > .log-dir::before {
+	background: var(--mdn-tx-bg);
+	color: var(--mdn-tx-fg);
+}
+
+html[data-layout='modern'][data-dual-view='bubble'] #serial-logs-single .log-row[data-dir='rx'] > .log-dir::before {
+	background: var(--mdn-rx-bg);
+	color: var(--mdn-rx-fg);
+}
+/* 吸顶列头：在日志容器外面(js/modern-timeline.js 建的兄弟节点)，不随日志滚动，也不进日志内容；
+   单双路各一份，共用 .mdn-tl-head(双路那份另有 #mdn-tl-head) */
+.mdn-tl-head {
 	display: none;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] #mdn-tl-head {
+html[data-layout='modern'][data-dual-view='bubble'] .mdn-tl-head {
 	flex: 0 0 auto;
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -10423,27 +10481,37 @@ html[data-layout='modern'][data-dual-view='bubble'] #mdn-tl-head {
 	font-weight: 700;
 }
 
-html[data-layout='modern'][data-dual-view='bubble'] .serial-log-mode:has(> #serial-logs-dual[hidden]) > #mdn-tl-head {
+/* 哪一套日志容器可见，就只显示它自己的列头(单双路各一份) */
+html[data-layout='modern'][data-dual-view='bubble'] .serial-log-mode:has(> .serial-logs[hidden]) > .mdn-tl-head {
 	display: none;
 }
 
-html[data-layout='modern'] #mdn-tl-head > span {
+html[data-layout='modern'] .mdn-tl-head > span {
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-html[data-layout='modern'] #mdn-tl-head .mdn-tl-a {
+html[data-layout='modern'] .mdn-tl-head .mdn-tl-a {
 	padding-right: 10px;
 	text-align: left;
 	color: var(--mdn-a-t);
 }
 
-html[data-layout='modern'] #mdn-tl-head .mdn-tl-b {
+html[data-layout='modern'] .mdn-tl-head .mdn-tl-b {
 	padding-left: 10px;
 	text-align: right;
 	color: var(--mdn-b-t);
+}
+
+/* 单路列头：左边接收、右边发送，颜色跟行标签一致 */
+html[data-layout='modern'] .mdn-tl-head.mdn-tl-single .mdn-tl-a {
+	color: var(--mdn-rx-fg);
+}
+
+html[data-layout='modern'] .mdn-tl-head.mdn-tl-single .mdn-tl-b {
+	color: var(--mdn-tx-fg);
 }
 
 @media (max-width: 768px) {
@@ -12299,8 +12367,8 @@ html[data-layout='modern'] .mdn-grp-label {
 	white-space: nowrap;
 }
 
-/* 双路显示方式：只在 双路 + 行日志 时出现(原规则依赖标题行，这里换成工具条) */
-html[data-layout='modern'] .mdn-logbar:has(#serial-log-legend.is-dual):has(#serial-log-view-row[aria-pressed='true']) #serial-dual-view-seg {
+/* 视图切换(列表 / 聊天)：只在行日志时出现(原规则依赖标题行，这里换成工具条)；单双路都可用，偏好共用一份 */
+html[data-layout='modern'] .mdn-logbar:has(#serial-log-view-row[aria-pressed='true']) #serial-dual-view-seg {
 	display: inline-flex;
 }
 
@@ -12468,8 +12536,9 @@ html[data-layout='modern'] .mdn-logbar .serial-log-actions .btn {
 	font-size: 12px;
 }
 
+/* 过滤是纯隐藏：聊天视图的气泡规则带 id，这里必须 !important 才压得住(单双路都要) */
 html[data-layout='modern'] .serial-logs .log-row.mdn-flt-out {
-	display: none;
+	display: none !important;
 }
 
 /* ---------- 快捷行 + 发送条 ---------- */
@@ -12772,7 +12841,7 @@ html[data-layout='modern'] #serial-statusbar .sb-tasks:not(:has(.sb-task:not([hi
 	font-size: 11px;
 }
 
-/* 日志缩放：给日志容器设 zoom(列表与时间线共用)；控件半透明浮在日志窗右下角(让出滚动条)，指针移上去或聚焦时显实 */
+/* 日志缩放：给日志容器设 zoom(列表与聊天共用)；控件半透明浮在日志窗右下角(让出滚动条)，指针移上去或聚焦时显实 */
 html[data-layout='modern'] #serial-log-panes {
 	position: relative;
 }
