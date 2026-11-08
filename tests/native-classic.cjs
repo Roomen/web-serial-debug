@@ -2,6 +2,16 @@ const test=require('node:test'),assert=require('node:assert/strict')
 const C=require('../js/native-classic.js'),A=require('../js/serial-adapter.js')
 const flush=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r))}
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return{promise,resolve,reject}}
+test('cursor namespaces require cryptographic randomness and support getRandomValues',()=>{
+ const vm=require('node:vm'),source=require('node:fs').readFileSync(require.resolve('../js/native-classic.js'),'utf8')
+ const load=crypto=>{const context={crypto};vm.runInNewContext(source,context);return context.NativeClassic}
+ assert.throws(()=>load(undefined).create({}),/crypto_unavailable/)
+ const crypto={getRandomValues:require('node:crypto').webcrypto.getRandomValues.bind(require('node:crypto').webcrypto)}
+ const service=load(crypto),deps={invoke:async()=>0}
+ const a=service.create(deps),b=service.create(deps)
+ assert.match(a.read().cursor,/^[0-9a-f]{32}:0:0:0$/)
+ assert.throws(()=>b.read({cursor:a.read().cursor}),/stale_cursor/)
+})
 function fake(options={}) {
  const calls=[];let data,event,releases=0
  const service=C.create({isPinned:()=>!!options.pinned,blocked:()=>false,createStreamPort:A.createStreamPort,toBytes:x=>Uint8Array.from(x),Channel:class{},invoke:async(cmd,p)=>{

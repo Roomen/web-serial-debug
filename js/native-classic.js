@@ -3,7 +3,9 @@
 	'use strict'
 	const fail = (code, message) => Object.assign(new Error(message || code), { code })
 	function create(deps) {
-		const namespace = root.crypto && root.crypto.randomUUID ? root.crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)
+		if (!root.crypto || (!root.crypto.randomUUID && !root.crypto.getRandomValues)) throw fail('crypto_unavailable')
+		const namespace = root.crypto.randomUUID ? root.crypto.randomUUID() :
+			Array.from(root.crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, '0')).join('')
 		let epoch = 0, generation = 0, port = null, reader = null, phase = 'idle', devices = [], tail = Promise.resolve(), queued = 0
 		let external = null
 		const lanePorts = new Set(), aliases = new Map(), lanePortByDevice = new Map()
@@ -112,7 +114,7 @@
 			const token = epoch
 			let connection = null
 			const stream = deps.createStreamPort({
-				getInfo() { return { transport: 'bt-classic', productName: device.name + ' · SPP', sessionIdentity: namespace + ':' + deviceId } },
+				getInfo() { return { transport: 'bt-classic', productName: device.name + ' · SPP' } },
 				async open(options, sink) {
 					await ready
 					if (token !== epoch || deps.blocked()) throw fail('stale_generation')

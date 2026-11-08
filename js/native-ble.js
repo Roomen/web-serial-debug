@@ -40,7 +40,6 @@
 		return { tx, rx }
 	}
 	function create(deps) {
-		const namespace = root.crypto && root.crypto.randomUUID ? root.crypto.randomUUID() : Math.random().toString(36).slice(2)
 		let generation, epoch = 0, busy = 0, initializing = true, releaseFailed = false, releasing = null
 		let selected = null, pending = null, scanning = null
 		const devices = new Map(), preferences = new Map()
@@ -130,7 +129,7 @@
 			}
 			let live = record, first = true, initialIds = { tx: txId, rx: rxId }, closed = false
 			const port = deps.createStreamPort({
-				getInfo() { return { transport: 'ble', productName: device.name + ' · 电脑 BLE', sessionIdentity: namespace + ':' + device.deviceId } },
+				getInfo() { return { transport: 'ble', productName: device.name + ' · 电脑 BLE' } },
 				async open(options, sink) {
 					return call(async () => {
 						check(record.token)
