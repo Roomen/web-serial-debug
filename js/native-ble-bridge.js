@@ -25,7 +25,7 @@
 		}
 		return deps.BleBridge.create({
 			isBusyForUpdate: () => initializing || readyFailed || orphan != null,
-			namespace, ports, blocked: deps.blocked, closeOrphan, createStreamPort: deps.createStreamPort,
+			namespace, ports, blocked: deps.blocked, isPinned: deps.isPinned, closeOrphan, createStreamPort: deps.createStreamPort,
 			async open(id, data, lost, check, recover) {
 				await ready; check()
 				await closeOrphan(); check()

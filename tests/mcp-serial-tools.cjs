@@ -341,6 +341,15 @@ function harness(opts) {
 const tests = []
 function test(name, fn) { tests.push({ name, fn }) }
 
+test('wireless lane parameters are inapplicable; MCP cannot reconnect it with a fake baud rate', async () => {
+	const p = makePort(); const info = p.getInfo(); p.getInfo = () => Object.assign({}, info, { transport: 'ble' })
+	const h = harness({ ports: [p] }); await h.boot(); h.hub.setPort('S', p)
+	const read = await h.call('serial_configure', { lane: 'S' })
+	assert.equal(read.ok, true); assert.equal(read.result.options, null); assert.equal(read.result.transport, 'ble')
+	const change = await h.call('serial_configure', { lane: 'S', options: { baudRate: 9600 } })
+	assert.equal(change.ok, false); assert.equal(change.result.code, 'unsupported_transport'); assert.equal(p.openCalls.length, 0)
+})
+
 test('serial_ports_list：枚举不授权，deviceId 不透明、selectedBy 反映占用', async () => {
 	const p1 = makePort({ sn: 'SN-1', productName: 'WidgetA' })
 	const p2 = makePort({ sn: 'SN-2' })

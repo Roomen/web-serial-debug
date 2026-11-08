@@ -30,15 +30,26 @@
 	if (P.has('view.classic') && root.NativeClassic) {
 		const classic = root.NativeClassic.create({ invoke: T.core.invoke, Channel: T.core.Channel,
 			createStreamPort: root.SerialAdapter.createStreamPort, toBytes: root.NativeBleBridge.toBytes,
+			isPinned: () => !!(root.serialApi && root.serialApi.isPinned()),
 			blocked: () => updatePreparing || !!(root.__auth && !root.__auth.authed()),
 		})
 		P.provide('classic', classic)
 		root.addEventListener('pagehide', () => { classic.release().catch(() => {}) })
 	}
 
+	if (P.has('view.ble') && root.NativeBle) {
+		const computerBle = root.NativeBle.create({ invoke: T.core.invoke, Channel: T.core.Channel,
+			createStreamPort: root.SerialAdapter.createStreamPort, toBytes: root.NativeBleBridge.toBytes,
+			blocked: () => updatePreparing || !!(root.__auth && !root.__auth.authed()),
+		})
+		P.provide('computer-ble', computerBle)
+		root.addEventListener('pagehide', () => { computerBle.release().catch(() => {}) })
+	}
+
 	if (P.has('view.ble') && root.NativeBleBridge) {
 		const ble = root.NativeBleBridge.create({
 			BleBridge: root.BleBridge,
+			isPinned: () => !!(root.serialApi && root.serialApi.isPinned()),
 			createStreamPort: root.SerialAdapter.createStreamPort,
 			invoke: T.core.invoke,
 			Channel: T.core.Channel,

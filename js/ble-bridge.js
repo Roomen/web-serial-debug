@@ -255,6 +255,7 @@
 			ports: () => deps.ports(),
 			release,
 			async run(action, p = {}, guard) {
+				if (streamLease && p[STREAM] !== streamLease && deps.isPinned && deps.isPinned()) throw error('transaction_pinned', '通信事务进行中，请先停止事务再操作 BLE 桥')
 				// Pairing input must bypass the waiting pair operation, but still commits immediately before I/O.
 				if (action === 'passkey') {
 					assert(guard)
@@ -265,6 +266,7 @@
 					return request('pair.passkey', { passkey: p.passkey }, () => assert(guard))
 				}
 				return enqueue(async check => {
+					if (streamLease && p[STREAM] !== streamLease && deps.isPinned && deps.isPinned()) throw error('transaction_pinned', '通信事务进行中，请先停止事务再操作 BLE 桥')
 					if (action === 'open') {
 						if (link || phase !== 'closed') throw error('bridge_busy')
 						phase = 'opening'; const token = epoch
@@ -325,7 +327,7 @@
 					return lease
 				}
 				return deps.createStreamPort({
-					getInfo() { return { productName: 'USB BLE Profile' } },
+					getInfo() { return { transport: 'ble-bridge', productName: 'USB BLE 桥', serialNumber: namespace + ':' + generation } },
 					async open(options, sink) {
 						if (streamLease) throw error('profile_port_busy')
 						const resolved = api.resolveProfile(saved)

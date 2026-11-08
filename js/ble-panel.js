@@ -50,47 +50,21 @@
 	button(pairing, '提交输入 / 确认一致', () => { const c = ble.state().challenge; const n = c && c.action === 'confirm' ? 1 : Number(passkey.value); passkey.value = ''; return ble.run('passkey', { generation: ble.state().generation, passkey: n }) })
 	button(pairing, '拒绝 / 取消配对', () => { const c = ble.state().challenge; passkey.value = ''; return c && c.action === 'confirm' ? ble.run('passkey', { generation: ble.state().generation, passkey: 0 }) : ble.release() })
 	el('h3', '透传 Profile', right)
-	const tx = el('select', null, right), rx = el('select', null, right); tx.setAttribute('aria-label', 'Profile TX 特征'); rx.setAttribute('aria-label', 'Profile RX 特征')
+	const tx = el('select', null, right), rx = el('select', null, right); tx.setAttribute('aria-label', 'TX · 电脑 → 设备（写特征）'); rx.setAttribute('aria-label', 'RX · 设备 → 电脑（通知特征）')
 	const mode = el('select', null, right)
 	for (const [value, label] of [['true', 'TX 有响应'], ['false', 'TX 无响应']]) { const o = el('option', label, mode); o.value = value }
 	const chunk = el('input', null, right); chunk.type = 'number'; chunk.min = '1'; chunk.max = '512'; chunk.value = '20'; chunk.setAttribute('aria-label', '分片字节数')
 	button(right, '保存 Profile', () => { localStorage.setItem('bleBridgeProfile', JSON.stringify(ble.profile(tx.value, rx.value, mode.value === 'true', Number(chunk.value)))); error.textContent = '已保存服务/特征结构选择器，不保存句柄或设备地址' })
 	button(right, '解析已存 Profile', () => { const p = JSON.parse(localStorage.getItem('bleBridgeProfile') || 'null'); const r = ble.resolveProfile(p); tx.value = r.tx; rx.value = r.rx; mode.value = String(p.response); chunk.value = p.chunkSize; error.textContent = 'Profile 已在本连接唯一匹配' })
-	let profilePort = null, profileReader = null, received = 0
-	const streamStatus = el('p', 'Profile 数据通道未打开', right)
-	button(right, '打开 Profile 数据通道', async () => {
-		if (profilePort) throw new Error('请先关闭已有 Profile 数据通道')
-		const port = ble.createProfilePort(JSON.parse(localStorage.getItem('bleBridgeProfile') || 'null'))
-		await port.open({ bufferSize: 65536 }); profilePort = port; received = 0
-		const reader = port.readable.getReader(); profileReader = reader
-		streamStatus.textContent = 'Profile 数据通道已打开 · RX 0 字节'
-		;(async () => {
-			try {
-				while (profilePort === port) {
-					const packet = await reader.read()
-					if (packet.done) break
-					received += packet.value.length
-					streamStatus.textContent = 'Profile 数据通道已打开 · RX ' + received + ' 字节'
-				}
-			} catch (e) { error.textContent = 'Profile RX：' + (e.message || String(e)) }
-			finally { reader.releaseLock(); if (profileReader === reader) profileReader = null; if (!port.readable && profilePort === port) profilePort = null }
-		})()
-	})
-	button(right, '按 Profile 发送 HEX', async () => {
-		if (!profilePort || !profilePort.writable) throw new Error('请先打开 Profile 数据通道')
-		const text = hex.value.replace(/\s/g, '')
-		if (!/^(?:[0-9a-f]{2})+$/i.test(text) || text.length > 131072) throw new Error('HEX 长度须为 1..65536 字节')
-		const writer = profilePort.writable.getWriter()
-		try { await writer.write(Uint8Array.from(text.match(/../g), x => parseInt(x, 16))) }
-		finally { writer.releaseLock() }
-	})
-	button(right, '关闭 Profile 数据通道', async () => {
-		const port = profilePort
-		if (!port) return
-		if (profileReader) await profileReader.cancel()
-		if (port.readable || port.writable) await port.close()
-		if (profilePort === port) profilePort = null
-		streamStatus.textContent = 'Profile 数据通道已关闭'
+	el('p', 'TX（电脑 → 设备）与 RX（设备 → 电脑）可属于不同服务。保存映射后在通信调试中统一收发；属性不代表设备协议的实际用途。', right)
+	button(right, '接入通信调试主发路', async () => {
+		const sources = P.service('connection-source'), lanes = root.serialLanes, hub = root.SerialHub
+		if (!sources || !lanes || !hub) throw new Error('通信调试尚未就绪')
+		const profile = ble.profile(tx.value, rx.value, mode.value === 'true', Number(chunk.value))
+		localStorage.setItem('bleBridgeProfile', JSON.stringify(profile))
+		const port = sources.bridgePort()
+		if (!await lanes.selectPort(hub.activeSendPhys(), port, { open: true })) throw new Error('本路正忙或无法接入，请检查通信调试连接状态')
+		const nav = document.querySelector('.rail-item[data-view="view-serial"]'); if (nav) nav.click()
 	})
 
 	el('h3', '事件与收发数据')
@@ -106,11 +80,20 @@
 		status.textContent = '桥状态：' + s.phase + ' · 扫描：' + (s.scanning ? '进行中' : '停止') + ' · 固件会话：' + (s.synchronized ? '已同步' : '待复位 ready') + ' · GATT：' + (s.discovery ? '已发现' : '未完成')
 		try { paintDevices() } catch (e) { error.textContent = e.message || String(e) }
 		const label = c => c.service + ' / ' + c.uuid + ' · 属性 0x' + c.props.toString(16) + ' · ' + c.characteristicId.split(':').pop()
-		fill(gatt, list, label, 'characteristicId'); fill(tx, list.filter(c => c.props & 12), label, 'characteristicId'); fill(rx, list.filter(c => c.props & 48), label, 'characteristicId')
+		fill(gatt, list, label, 'characteristicId')
+		function candidates(select, values) {
+			const selected = select.value; select.replaceChildren()
+			const blank = el('option', '请选择 UUID 与所属服务', select); blank.value = ''
+			for (const c of values) { const o = el('option', label(c), select); o.value = c.characteristicId }
+			if (values.some(c => c.characteristicId === selected)) select.value = selected
+			else if (values.length === 1) select.value = values[0].characteristicId
+		}
+		candidates(tx, list.filter(c => c.props & (mode.value === 'false' ? 4 : 8))); candidates(rx, list.filter(c => c.props & 48))
 		pairing.hidden = !s.challenge
 		pairText.textContent = s.challenge ? s.challenge.action + (s.challenge.action === 'input' ? '' : ' ' + String(s.challenge.value).padStart(6, '0')) : ''
 		const logs = ble.logs(); log.textContent = logs.events.map(e => e.sequence + ' ' + e.kind + (e.data == null ? '' : ' ' + JSON.stringify(e.data))).join('\n') + '\n丢弃事件：' + logs.dropped
 	}
+	mode.onchange = paint
 	ble.subscribe(() => { if (!scheduled) { scheduled = true; setTimeout(paint, 100) } })
 	paint(); refresh().catch(() => { error.textContent = '桥口枚举失败，请重试' })
 })(window)

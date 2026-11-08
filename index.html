@@ -96,15 +96,14 @@
         <!--最左侧工具导航栏-->
         <nav id="activity-rail">
             <div class="rail-top">
-                <button class="rail-item active" data-view="view-serial" title="串口调试">
+                <button class="rail-item active" data-view="view-serial" title="通信调试">
                     <i class="bi bi-terminal"></i>
-                    <span class="rail-label">串口调试</span>
+                    <span class="rail-label">通信调试</span>
                 </button>
                 <button class="rail-item" data-view="view-fw-pack" data-feature="view.firmware-pack" title="固件打包">
                     <i class="bi bi-box-seam"></i>
                     <span class="rail-label">固件打包</span>
                 </button>
-                <button class="rail-item" data-view="view-classic" data-feature="view.classic" title="经典蓝牙 SPP"><i class="bi bi-bluetooth"></i><span class="rail-label">经典蓝牙</span></button>
                 <button class="rail-item" data-view="view-ble" data-feature="view.ble" title="USB BLE 桥"><i class="bi bi-bluetooth"></i><span class="rail-label">BLE 桥</span></button>
                 <button class="rail-item" data-view="view-blu" data-feature="view.power" title="功耗分析">
                     <i class="bi bi-speedometer2"></i>
@@ -160,7 +159,7 @@
 
         <!--视图容器-->
         <div id="views">
-            <!--串口调试视图-->
+            <!--通信调试视图-->
             <div id="view-serial" class="app-view active">
                 <!--顶部连接条-->
                 <div id="serial-connect-bar">
@@ -1046,7 +1045,6 @@
             </div>
 
             <!--功耗分析视图（独立 Web Serial，BLU 100k）-->
-            <div id="view-classic" class="app-view" data-feature="view.classic"><div id="classic-workbench"></div></div>
             <div id="view-ble" class="app-view" data-feature="view.ble"><div id="ble-workbench"></div></div>
             <div id="view-blu" class="app-view">
                 <!--
@@ -1565,7 +1563,7 @@
 
             <!--固件打包视图（独立工具，与串口无关）-->
             <div id="view-fw-pack" class="app-view">
-                <!--顶栏：与串口调试的连接条同高同样式；生成动作放右侧-->
+                <!--顶栏：与通信调试的连接条同高同样式；生成动作放右侧-->
                 <div class="view-bar">
                     <div class="view-bar-title">
                         <i class="bi bi-box-seam"></i>
@@ -1734,10 +1732,11 @@
                 localStorage.setItem(KEY, id)
                 current = id
             }
-            // 视图入口带 data-feature 时，平台画像没开这项功能就回到串口调试(存下的视图可能来自别的平台)
+            // 视图入口带 data-feature 时，平台画像没开这项功能就回到通信调试(存下的视图可能来自别的平台)
             function allowed(id) {
-                var it = rail.querySelector('.rail-item[data-view="' + id + '"]')
-                var f = it && it.dataset.feature
+                var it = Array.from(items).find(function (item) { return item.dataset.view === id })
+                if (!it || !document.getElementById(id)) return false
+                var f = it.dataset.feature
                 if (!f || !window.AppPlatform) return true
                 return f.split(/\s+/).every(function (x) { return window.AppPlatform.has(x) })
             }
@@ -1771,7 +1770,9 @@
     <script src="js/ble-bridge.js"></script>
     <script src="js/native-ble-bridge.js"></script>
     <script src="js/native-classic.js"></script>
+    <script src="js/native-ble.js"></script>
     <script src="js/native-shell.js"></script>
+    <script src="js/connection-source.js"></script>
     <script src="js/dual-config.js"></script>
     <script src="js/text-byte-encoder.js"></script>
     <script src="js/common.js"></script>
@@ -1811,7 +1812,6 @@
     <script src="js/app-update.js"></script>
     <script src="js/mcp-ring.js"></script>
     <script src="js/ble-panel.js"></script>
-    <script src="js/classic-panel.js"></script>
     <script src="js/mcp-bridge.js"></script>
     <script src="js/mcp-service.js"></script>
 

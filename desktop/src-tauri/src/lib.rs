@@ -1,3 +1,4 @@
+mod ble;
 mod classic;
 // 桌面客户端外壳：加载与网页版同一份静态页面(desktop/scripts/stage-web.mjs 复制进 dist)，只补网页在 WebView 里缺的能力：
 // 原生串口(serial.rs，前端 js/transport-native-serial.js)、下载落盘、多窗口、原生菜单(menu.rs)与窗口外观。
@@ -216,10 +217,17 @@ pub fn run() {
 		.plugin(tauri_plugin_updater::Builder::new().build())
 		.manage(serial::SerialState::default())
 		.manage(classic::ClassicState::default())
+		.manage(ble::BleState::default())
 		.manage(mcp::McpState::default())
 		.manage(winstate::WinState::default())
 		.manage(updater::UpdateState::default())
 		.invoke_handler(tauri::generate_handler![
+			ble::ble_scan,
+			ble::ble_open,
+			ble::ble_start,
+			ble::ble_write,
+			ble::ble_close,
+			ble::ble_release_owned,
 			classic::classic_devices,
 			classic::classic_discover,
 			classic::classic_open,
@@ -254,6 +262,7 @@ pub fn run() {
 			if let tauri::WindowEvent::Destroyed = event {
 				serial::release_destroyed(&window.state::<serial::SerialState>(), window.label());
 				classic::release_destroyed(&window.state::<classic::ClassicState>(), window.label());
+				ble::release_destroyed(&window.state::<ble::BleState>(), window.label());
 				mcp::release_window(&window.app_handle(), &window.state::<mcp::McpState>(), window.label());
 			}
 			// 只记 main 的大小位置：多开的 main-N 每次都相对当前窗口错开，记下来反而会叠在旧位置上

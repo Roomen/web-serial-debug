@@ -4,7 +4,7 @@ const flush=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r))}
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return{promise,resolve,reject}}
 function fake(options={}) {
  const calls=[];let data,event,releases=0
- const service=C.create({blocked:()=>false,createStreamPort:A.createStreamPort,toBytes:x=>Uint8Array.from(x),Channel:class{},invoke:async(cmd,p)=>{
+ const service=C.create({isPinned:()=>!!options.pinned,blocked:()=>false,createStreamPort:A.createStreamPort,toBytes:x=>Uint8Array.from(x),Channel:class{},invoke:async(cmd,p)=>{
   calls.push({cmd,p})
   if(cmd==='classic_release_owned'){releases++;if(options.release)await options.release(releases);return releases}
   if(cmd==='classic_discover'){if(options.discover)await options.discover();return{}}
@@ -43,17 +43,6 @@ test('MCP commit denial has no native effects; cancellation invalidates interact
  await new Promise(r=>setTimeout(r,130));assert.equal(f.releases,2)
  gate.resolve();await assert.rejects(pending,/stale_generation/);assert.deepEqual(f.service.devices(),[])
 })
-test('actual Classic panel drains a single 8192 byte notification with one RX DOM update',async()=>{
- const fs=require('node:fs'),vm=require('node:vm'),f=fake();await connect(f)
- class E {constructor(tag){this.tagName=tag;this.children=[];this.attributes={};this.value='';this.writes=0;this._text=''}appendChild(e){this.children.push(e);return e}setAttribute(k,v){this.attributes[k]=v}replaceChildren(){this.children=[]}set textContent(v){this._text=String(v);this.writes++}get textContent(){return this._text}}
- const host=new E('div'),document={getElementById:()=>host,createElement:tag=>new E(tag)}
- const ctx={window:{AppPlatform:{has:()=>true,service:()=>f.service}},document,setTimeout}
- vm.runInNewContext(fs.readFileSync('js/classic-panel.js','utf8'),ctx)
- const log=host.children.find(e=>e.attributes['aria-label']==='Classic RX HEX'),before=log.writes
- f.data(Array(8192).fill(171));await flush()
- assert.equal(log.textContent,'ab'.repeat(8192));assert.equal(log.writes-before,1)
- await f.service.release()
-})
 test('initial stale-owner drain failure can recover through explicit release retry',async()=>{
  const f=fake({release:n=>{if(n===1)throw Error('old document still active')}});await flush()
  assert.equal(f.service.state().phase,'close-failed');await assert.rejects(f.service.run('discover'),/old document still active/)
@@ -82,4 +71,23 @@ test('real Classic system interaction prevents update download and prepare relea
  assert.equal(installs,0);assert.equal(serial,0);assert.equal(f.releases,1);assert.equal(ack[0][1],false)
  gate.resolve();await pairing;controller.finished({operationId:1,success:false});await controller.prepare({operationId:2})
  assert.equal(f.releases,2);assert.equal(serial,1);assert.equal(ack[1][1],true)
+})
+
+test('SPP lane port uses common stream contract without independent RX reader; classic MCP connect is mutually exclusive',async()=>{
+ const f=fake();await f.service.run('pair');const port=f.service.createPort('fixture');assert.equal(port.getInfo().transport,'bt-classic')
+ await port.open({baudRate:9600});const r=port.readable.getReader();f.data([1,2]);assert.deepEqual([...((await r.read()).value)],[1,2]);assert.equal(f.service.state().received,0)
+ await assert.rejects(f.service.run('connect',{deviceId:'fixture'}),/already_open/)
+ const w=port.writable.getWriter();await w.write(Uint8Array.of(255));w.releaseLock();assert.deepEqual(f.calls.at(-1).p.data,[255])
+ await r.cancel();r.releaseLock();await port.close();await port.open({});await port.close();await f.service.release()
+})
+test('owner release invalidates a SPP lane stream and late events cannot reach its reader',async()=>{
+ const f=fake();await f.service.run('pair');const port=f.service.createPort('fixture');await port.open({});const r=port.readable.getReader(),read=r.read()
+ await f.service.release();await assert.rejects(read);r.releaseLock();f.data([1,2]);await flush();assert.equal(port.readable,null)
+})
+
+test('legacy Classic operations cannot interrupt a pinned communication lane',async()=>{
+ const options={},f=fake(options);await f.service.run('pair');const port=f.service.createPort('fixture');await port.open({});options.pinned=true
+ const before=f.calls.length;await assert.rejects(f.service.run('close'),/先停止事务/);assert.equal(f.calls.length,before)
+ assert.throws(()=>f.service.read(),/serial_read/);assert.equal(f.service.state().laneOwned,true)
+ options.pinned=false;await port.close();await f.service.release()
 })
