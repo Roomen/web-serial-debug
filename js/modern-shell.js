@@ -189,7 +189,7 @@
 	function makePop(key) {
 		const wrap = mk('div', 'mdn-conn')
 		wrap.dataset.path = key
-		// 三段分体：电源键(连接/断开) · 设备键(选口) · 设置键(参数/路标签)；加本路协议键共四段
+		// 四段分体：电源键(连接/断开) · 设备键(选口) · 设置键(参数/路标签) · 协议键；B 路另有独立移除键
 		const power = btn('mdn-conn-power')
 		power.appendChild(icon('bi-power'))
 		const b = btn('mdn-conn-btn')
@@ -220,17 +220,14 @@
 		par.appendChild(parCap)
 		pop.append(head, lab, par)
 		// 只有 B 路能移除：B 关闭(仍记着设备)，A 路的口、参数、协议原样交回单路(common.js 的 removeLaneB)
-		if (key === 'B') {
-			const foot = mk('div', 'mdn-pop-foot')
-			const rm = btn('btn btn-sm btn-outline-secondary', '移除 B 路', '断开 B 路并回到单路：A 路的串口交回单路继续使用，B 路记着设备，下次加回来点一下就能连')
-			rm.prepend(icon('bi-x-lg'), document.createTextNode(' '))
-			foot.appendChild(rm)
-			listen(rm, 'click', function () {
+		const remove = key === 'B' ? btn('mdn-conn-remove', '移除 B 路', '断开 B 路并回到单路：A 路的串口交回单路继续使用，B 路记着设备，下次加回来点一下就能连') : null
+		if (remove) {
+			remove.setAttribute('aria-label', '移除 B 路并回到单路')
+			listen(remove, 'click', function () {
 				closePops()
 				const m = $('serial-mode-single')
 				if (m) m.click()
 			})
-			pop.appendChild(foot)
 		}
 		// 本路协议：常改，所以紧贴在连接按钮右侧一键直选，不进菜单。选项抄顶栏(协议注册时只往顶栏加)，改值经 serialLanes.setProtocol，
 		// 改的正好是顶栏那一路(单路、双路主发路)时由它转给顶栏派发 change
@@ -255,7 +252,9 @@
 			closePops()
 			lanes.toggle(sidFor(key))
 		})
-		wrap.append(power, b, more, proto, pop, dd)
+		wrap.append(power, b, more, proto)
+		if (remove) wrap.appendChild(remove)
+		wrap.append(pop, dd)
 		const toggleMenu = function () {
 			const open = pop.hidden
 			closePops()

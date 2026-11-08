@@ -113,10 +113,20 @@ test('pause/resume retains selection and alias; hidden selection cannot be conne
  const row=h.all().find(e=>e.className==='connection-device');row.onclick();await h.click('暂停扫描')
  h.ble.remember('fixture',{alias:'Alias'});await h.click('继续扫描');await flush()
  assert.equal(h.all().find(e=>e.className==='connection-device'&&e.textContent.includes('Alias')).attributes['aria-pressed'],'true')
+ const min=h.field('最低 RSSI（输入正数，如 70 表示 ≥ -70 dBm；可选）')
+ assert.equal(min.min,'1');assert.equal(min.max,'127')
+ min.value='40';min.oninput();assert.equal(h.all().filter(e=>e.className==='connection-device').length,0)
+ min.value='70';min.oninput();assert.equal(h.all().filter(e=>e.className==='connection-device').length,1)
+ assert.equal(h.all().find(e=>e.tagName==='button'&&e.textContent==='连接并发现 TX/RX').disabled,false)
+ min.value='';min.oninput();assert.equal(h.all().filter(e=>e.className==='connection-device').length,2)
  const q=h.field('名称 / 广播 UUID / 别名包含');q.value='no match';q.oninput()
  assert.equal(h.all().find(e=>e.tagName==='button'&&e.textContent==='连接并发现 TX/RX').disabled,true)
  q.value='alias';q.oninput();assert.equal(h.all().filter(e=>e.className==='connection-device').length,1)
- const min=h.field('最低 RSSI（dBm，可选）');min.value='invalid';min.oninput();assert.equal(h.all().find(e=>e.tagName==='button'&&e.textContent==='连接并发现 TX/RX').disabled,true)
+ for(const value of ['-70','200']){
+  min.value=value;min.oninput()
+  assert.equal(h.all().find(e=>e.tagName==='button'&&e.textContent==='连接并发现 TX/RX').disabled,true)
+  assert.ok(h.all().some(e=>e.attributes.role==='status'&&e.textContent.includes('1 到 127 的正数')))
+ }
  h.close();await pending
 })
 test('cancel in-flight inspection invalidates then drains late handle without publishing selection',async()=>{

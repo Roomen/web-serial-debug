@@ -30,6 +30,29 @@ const sys = { dir: '', text: '10:00:01.000 ! 未选择串口设备', hex: '' }
 	assert.deepEqual(Array.from(P('0x68 ABC').words), ['0x68', 'abc'], '不是两位十六进制的都按关键字')
 }
 
+// B 路连接组的移除键走原模式切换入口，电源键仍只负责连接切换。
+{
+ const src = fs.readFileSync(path.join(__dirname, '../js/modern-shell.js'), 'utf8')
+ class Element {
+  constructor(cls='',text=''){this.className=cls;this.textContent=text;this.children=[];this.handlers={};this.dataset={}}
+  append(...els){this.children.push(...els)}appendChild(el){this.children.push(el)}setAttribute(k,v){this[k]=v}
+ }
+ let modeClicks=0,closed=0,toggles=0
+ const mode={click(){modeClicks++}}
+ const env={window:{serialLanes:{toggle(){toggles++}}},document:{createTextNode:t=>new Element('',t)},
+  mk:(tag,cls,text)=>new Element(cls,text),btn:(cls,text)=>new Element(cls,text),icon:()=>new Element(),
+  listen:(el,type,fn)=>{el.handlers[type]=fn},closePops(){closed++},$:id=>id==='serial-mode-single'?mode:null,
+  makePortList:()=>({box:new Element()})}
+ vm.createContext(env)
+ vm.runInContext(src.slice(src.indexOf('\tfunction makePop('),src.indexOf('\n\tfunction openPop('))+'\nthis.make = makePop',env)
+ const main=env.make('main'),b=env.make('B')
+ assert.equal(main.wrap.children.some(e=>e.className==='mdn-conn-remove'),false)
+ const remove=b.wrap.children.find(e=>e.className==='mdn-conn-remove')
+ assert.ok(remove);assert.equal(remove.textContent,'移除 B 路')
+ remove.handlers.click()
+ assert.equal(modeClicks,1);assert.equal(closed,1);assert.equal(toggles,0)
+}
+
 // ---- 匹配 ----
 {
 	assert.equal(match('', tx), true, '空过滤全显示')

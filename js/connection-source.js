@@ -99,7 +99,13 @@
 					ownedBle = true; content.replaceChildren()
 					const filters = el('div', null, content); filters.className = 'connection-filters'
 					const query = input(filters, '名称 / 广播 UUID / 别名包含')
-					const minimum = input(filters, '最低 RSSI（dBm，可选）'); minimum.type = 'number'; minimum.min = '-127'; minimum.max = '20'
+					const minimum = input(filters, '最低 RSSI（输入正数，如 70 表示 ≥ -70 dBm；可选）'); minimum.type = 'number'; minimum.min = '1'; minimum.max = '127'; minimum.step = '1'
+					const rssiThreshold = () => {
+						if (minimum.value === '') return ''
+						const magnitude = Number(minimum.value)
+						if (!Number.isInteger(magnitude) || magnitude < 1 || magnitude > 127) throw new Error('最低 RSSI 请输入 1 到 127 的正数')
+						return -magnitude
+					}
 					const order = select(filters, '排序'); option(order, 'signal', '信号最强'); option(order, 'name', '名称'); option(order, 'recent', '最近发现')
 					const state = el('p', null, content); state.setAttribute('role', 'status'); state.setAttribute('aria-live', 'polite')
 					const rows = el('div', null, content); rows.className = 'connection-devices'; rows.setAttribute('role', 'group'); rows.setAttribute('aria-label', '扫描设备')
@@ -109,7 +115,7 @@
 					function paint() {
 						if (!live || !viewAlive) return
 						let list
-						try { list = root.NativeBle.visibleDevices(nativeBle.devices(), query.value, minimum.value, order.value) }
+						try { list = root.NativeBle.visibleDevices(nativeBle.devices(), query.value, rssiThreshold(), order.value) }
 						catch (e) { state.textContent = e.message; connect.disabled = true; return }
 						const ids = new Set(list.map(d => d.deviceId))
 						for (const [id, row] of rowMap) if (!ids.has(id)) { row.remove(); rowMap.delete(id) }
@@ -147,7 +153,7 @@
 					})
 					const connect = button(controls, '连接并发现 TX/RX', async () => {
 						const device = nativeBle.devices().find(d => d.deviceId === selectedId)
-						if (!device || !root.NativeBle.visibleDevices([device], query.value, minimum.value, order.value).length) throw new Error('请先选择可见设备')
+						if (!device || !root.NativeBle.visibleDevices([device], query.value, rssiThreshold(), order.value).length) throw new Error('请先选择可见设备')
 						await nativeBle.stopScan(); if (!live) return
 						state.textContent = '连接并发现 GATT…'; inspecting = true
 						try { heldRecord = await nativeBle.inspect(device) } finally { inspecting = false }
