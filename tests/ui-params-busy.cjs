@@ -23,7 +23,7 @@ const hubSrc = source.slice(hubStart, hubEnd + 3)
 const params = slice('\t// ===== 串口参数配置：单路、双路 A、双路 B 各自独立 =====', '\t// MCP 与 UI 共用：读某一路归一化后的参数')
 // refreshParamsBusyUI 里也有同一个 querySelectorAll，参数卡 handler 要从参数段之后找
 const handler = slice("\tdocument.querySelectorAll('#serial-params-popover", '\t//重制发送循环时钟', params.end)
-const paramsSrc = params.src
+const paramsSrc = params.src + slice('\tfunction laneTransport(sid)', '\tfunction laneParams(sid)').src
 const handlerSrc = handler.src
 
 const FIELD_IDS = ['serial-baud', 'serial-data-bits', 'serial-stop-bits', 'serial-parity', 'serial-buffer-size', 'serial-flow-control']

@@ -257,6 +257,7 @@ pub async fn app_update_install(app: AppHandle, state: State<'_, UpdateState>, v
         for label in app.webview_windows().into_keys() {
             crate::serial::release_owner(&app.state::<crate::serial::SerialState>(), &label);
             crate::classic::release_owner(&app.state::<crate::classic::ClassicState>(), &label)?;
+            crate::ble::release_owner(&app.state::<crate::ble::BleState>(), &label)?;
         }
         progress(&app, id, "installing", received, Some(received));
         if portable_mode() {

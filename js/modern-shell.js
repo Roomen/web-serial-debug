@@ -480,7 +480,9 @@
 			: (enumerable ? '未发现串口设备，插入后会自动出现' : '还没有选过串口设备。点「选择串口…」在浏览器的选择框里选择，之后它会一直列在这里')
 		st.hint.hidden = !rows.length
 		st.hint.textContent = laneBusy ? '单击其它设备即切换过去（先断开当前设备）' : '单击设备即连接'
-		st.add.hidden = enumerable
+		const sources = window.AppPlatform && window.AppPlatform.service('connection-source')
+		st.add.hidden = enumerable && !sources
+		if (sources) { st.add.textContent = '选择连接来源…'; st.add.title = '普通串口 / 经典蓝牙 SPP / 电脑 BLE / 外置 USB BLE 桥' }
 		st.reload.hidden = !enumerable
 	}
 
@@ -804,6 +806,8 @@
 			const sid = sidFor(key)
 			// 每路自己的参数；双路两路协议可以不同，按钮上一并写出
 			const params = compactParams(lanes ? lanes.summary(sid) : ($('serial-params-summary-text') || {}).textContent)
+			const transport = lanes && lanes.transportOf ? lanes.transportOf(sid) : 'serial'
+			p.par.hidden = transport !== 'serial'
 			p.parCap.textContent = dual ? '本路串口参数' : '串口参数'
 			syncProtoSelect(p.proto, sid)
 			const chip = chipFor(key)

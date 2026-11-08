@@ -223,6 +223,25 @@ test('选择框里选回本路已打开的口：不动作，不重开', async ()
 	assert.deepEqual(h.opens, [['S', p.id]])
 })
 
+test('无线来源发现完成后仍重查事务，未绑定的原生连接由来源释放', async () => {
+	const h = harness('single'), gate = deferred(), p = makePort()
+	let discarded = 0
+	h.ctx.window.AppPlatform = { service: name => name === 'connection-source' ? { requestPort: () => gate.p } : null }
+	const choosing = h.api.selectPortFor('S', { openAfterSelect: true })
+	h.ctx.window.serialApi.pinned = true
+	gate.resolve({ port: p, discard: async () => { discarded++ } })
+	await choosing
+	assert.equal(h.hub.getPort('S'), null); assert.equal(discarded, 1); assert.equal(h.hub.isOpening('S'), false)
+	assert.equal(h.opens.length, 0)
+})
+test('无线来源确认透传交给原会话打开，成功绑定不释放已交接连接', async () => {
+	const h = harness('single'), p = makePort(); p.getInfo = () => ({ transport: 'ble' })
+	let discarded = 0
+	h.ctx.window.AppPlatform = { service: () => ({ requestPort: async () => ({ port: p, discard: async () => { discarded++ } }) }) }
+	await h.api.selectPortFor('S', { openAfterSelect: false })
+	assert.equal(h.hub.getPort('S'), p); assert.deepEqual(h.opens, [['S', p.id]]); assert.equal(discarded, 0)
+})
+
 ;(async () => {
 	let failed = 0
 	for (const t of tests) {

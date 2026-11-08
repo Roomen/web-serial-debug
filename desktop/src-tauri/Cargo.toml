@@ -27,6 +27,9 @@ axum = "0.8"
 tokio = { version = "1", features = ["net", "time", "sync", "rt", "macros"] }
 tokio-util = "0.7"
 getrandom = "0.4"
+bluest = "0.6.9"
+futures-util = "0.3"
+uuid = { version = "1", features = ["serde"] }
 subtle = "2"
 schemars = "1"
 # Windows 便携版应用内更新：计划/结果格式、载荷读取与验签、进程查询与 helper 共用

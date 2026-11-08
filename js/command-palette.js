@@ -313,7 +313,7 @@
 		const list = []
 		list.push({
 			group: '视图',
-			title: '切换到串口调试',
+			title: '切换到通信调试',
 			alias: 'chuankou tiaoshi serial view',
 			run: function () { clickSel('.rail-item[data-view="view-serial"]') }
 		})

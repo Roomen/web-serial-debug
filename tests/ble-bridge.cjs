@@ -296,7 +296,7 @@ test('native BLE initial owner drain blocks updates until settled',async()=>{
 })
 test('Bluetooth rail labels use shared collapsed-navigation styling',()=>{
  const html=require('node:fs').readFileSync('index.html','utf8')
- for(const view of ['ble','classic'])assert.match(html,new RegExp('data-view="view-'+view+'"[^>]*>.*<span class="rail-label">'))
+ for(const view of ['ble','serial'])assert.match(html,new RegExp('data-view="view-'+view+'"[^>]*>[\\s\\S]*?<span class="rail-label">'))
 })
 
 test('update busy covers connect/discovery, physical write after response and release in flight',async()=>{
@@ -310,4 +310,15 @@ test('update busy covers connect/discovery, physical write after response and re
  f.event({e:'disc_done'});assert.equal(f.c.isBusyForUpdate(),false)
  const releasing=f.c.release();await pause(0);assert.equal(f.c.state().phase,'closed');assert.equal(f.c.isBusyForUpdate(),true)
  finishClose();await releasing;assert.equal(f.c.isBusyForUpdate(),false)
+})
+
+test('advanced bridge actions cannot bypass a pinned Profile stream; stream writes still work',async()=>{
+ let pinned=false
+ const f=fake({isPinned:()=>pinned,createStreamPort:require('../js/serial-adapter.js').createStreamPort})
+ const p=await connected(f),port=f.c.createProfilePort(f.c.profile(p.characteristicId,p.characteristicId,false,20));await port.open({});pinned=true
+ const before=f.writes.length
+ for(const action of ['disconnect','close','read'])await assert.rejects(f.c.run(action,p),/先停止事务/)
+ assert.equal(f.writes.length,before)
+ const w=port.writable.getWriter();await w.write(Uint8Array.of(1));w.releaseLock();assert.equal(f.writes.at(-1).op,'gatt.write')
+ pinned=false;await port.close();await f.c.release()
 })

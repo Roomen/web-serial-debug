@@ -10,7 +10,7 @@
 		if (env.serialApi && env.serialApi.isPinned()) reasons.push('协议事务')
 		// 连接中的功耗仪可能仍在接收或归档，不在安装时强行截断。
 		if (env.bluApi && (env.bluApi.isBusyForUpdate ? env.bluApi.isBusyForUpdate() : env.bluApi.isOpen())) reasons.push('功耗仪连接')
-		for (const [name, label] of [['ble', 'BLE 桥操作'], ['classic', '经典蓝牙操作']]) {
+		for (const [name, label] of [['ble', 'BLE 桥操作'], ['classic', '经典蓝牙操作'], ['computer-ble', '电脑 BLE 操作'], ['connection-source', '连接选择']]) {
 			const transport = env.AppPlatform && env.AppPlatform.service(name)
 			if (transport && transport.isBusyForUpdate && transport.isBusyForUpdate()) reasons.push(label)
 		}
@@ -87,6 +87,8 @@
 						if (ble) await ble.release()
 						const classic = env.AppPlatform && env.AppPlatform.service('classic')
 						if (classic) await classic.release()
+						const computerBle = env.AppPlatform && env.AppPlatform.service('computer-ble')
+						if (computerBle) await computerBle.release()
 						await env.serialApi.prepareForAppUpdate()
 						// 安装准备过程中如果后端已超时或取消，不能交付迟到的确认。
 						ready = frozen && operation === data.operationId

@@ -11,7 +11,7 @@ pub struct MenuHandles {
 	connect: MenuItem<Wry>,
 	auto_scroll: CheckMenuItem<Wry>,
 	themes: Vec<(&'static str, CheckMenuItem<Wry>)>,
-	// 只在串口调试视图里有意义的项，页面按当前视图启停
+	// 只在通信调试视图里有意义的项，页面按当前视图启停
 	view_items: Vec<MenuItem<Wry>>,
 }
 
@@ -86,7 +86,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 	let serial = Submenu::with_items(app, "串口", true, &[&connect, &pick, &sep()?, &send, &sep()?, &clear, &auto_scroll])?;
 
 	// ---- 视图 ----
-	let v_serial = item(app, "view-serial", "串口调试", Some("CmdOrCtrl+1"))?;
+	let v_serial = item(app, "view-serial", "通信调试", Some("CmdOrCtrl+1"))?;
 	let v_fw = item(app, "view-firmware", "固件", Some("CmdOrCtrl+2"))?;
 	let v_power = item(app, "view-power", "功耗分析", Some("CmdOrCtrl+3"))?;
 	let palette = item(app, "command-palette", "命令面板…", Some("CmdOrCtrl+K"))?;
@@ -193,7 +193,7 @@ pub fn dispatch(app: &AppHandle, id: &str) {
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MenuState {
-	// 当前视图是不是串口调试
+	// 当前视图是不是通信调试
 	serial_view: Option<bool>,
 	// 当前主发路是否已连接
 	connected: Option<bool>,

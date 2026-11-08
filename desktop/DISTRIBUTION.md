@@ -92,3 +92,14 @@ cargo check --target x86_64-pc-windows-msvc -p portable-updater   # 需已装该
 准备完成后将各窗口的会话键和现有日志缓存写入应用私有数据目录的一次性文件（不写到共享 localStorage）。重启时按原窗口恢复，再删除交接文件；日志仍受现有缓存行数与存储预算限制。失败时删除交接文件并解除冻结，不自动恢复已运行的设备任务。
 
 客户端前端依赖随包存放在 `desktop/vendor/`，资源版本与网页 CDN 保持一致；打包副本使用本地 CSS、脚本和图标字体，启动无需访问 CDN。维护方法见 `vendor/README.md`。
+
+
+## 通信调试的电脑蓝牙
+
+macOS/Windows 客户端在原选口入口提供普通串口、SPP、电脑 BLE 与外置 USB BLE 桥；展示名改为「通信调试」，应用名与内部 serial 存储保持不变。SPP 继续使用系统 IOBluetooth/RFCOMM；电脑 BLE 使用锁定于 Cargo.lock 的 bluest 0.6.9（macOS CoreBluetooth、Windows WinRT），无需 Web Bluetooth 或额外桥接硬件。外置 USB/ESP32 BLE 桥与高级 GATT 页继续保留。
+
+macOS `Info.plist` 的 `NSBluetoothAlwaysUsageDescription` 覆盖 SPP 与 BLE，沿用 `bundle.macOS.infoPlist` 合并进正式包；最低版本仍为 11.0。当前分发未启用 App Sandbox，无需额外沙盒蓝牙 entitlement。Windows 保持便携 ZIP 与系统 WinRT 蓝牙栈，不引入 UWP 包；需要系统蓝牙适配器、驱动和相应隐私权限。需要加密/配对的设备应按系统提示或系统蓝牙设置完成配对，本工具不自动确认 PIN。
+
+每进程限制一条 SPP 与一条电脑 BLE；USB 双串口仍可用。BLE 扫描以广播名为主，可附加广播服务 UUID；发现后分别确认完整 TX/RX UUID 与所属服务、写模式，RX 订阅成功才就绪。UUID/属性不能证明应用语义正确。20 字节写分片保守兼容默认 ATT MTU，不承诺特定固件升级吞吐。刷新后需重新选无线设备；重连发现重复 UUID 实例时需重选。
+
+发布前人工验收：两个系统分别检查蓝牙权限首次授权/拒绝、系统蓝牙关闭、SPP 系统配对与关闭、跨服务 BLE TX/RX、指示特征、无响应写入、长帧写时并发通知、拔电断线/设备重启、取消发现与订阅、刷新/销毁、多窗口争用、更新准备期间的释放。合成回归与 macOS Rust 编译不替代 Windows 编译、真实设备或安装包权限验证。

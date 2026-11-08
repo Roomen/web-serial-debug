@@ -18,15 +18,16 @@ class Element {
  querySelector(sel) { const m=sel.match(/data-view="([^"]+)"/); return m?this.children.find(e=>e.dataset.view===m[1])||null:null }
 }
 const flush=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r))}
-function setup(allowed=true) {
+function setup(allowed=true,savedView=null) {
  const els={},rail=new Element('nav'),views=[],store=new Map(),calls=[]
+ if(savedView!==null)store.set('serial-debug-active-view',savedView)
  els['activity-rail']=rail
  for(const m of html.matchAll(/<button class="rail-item[^"]*" data-view="([^"]+)"([^>]*)>/g)) {
   const e=new Element('button'); e.dataset.view=m[1]; const f=m[2].match(/data-feature="([^"]+)"/); if(f)e.dataset.feature=f[1]; rail.appendChild(e)
  }
  for(const m of html.matchAll(/<div id="(view-[^"]+)" class="app-view[^"]*"/g)) {const e=new Element('div');e.id=m[1];els[e.id]=e;views.push(e)}
  els['ble-workbench']=new Element('div')
- const document={getElementById:id=>els[id],createElement:tag=>new Element(tag),querySelectorAll:sel=>sel==='.app-view'?views:[]}
+ const document={querySelector:sel=>rail.querySelector(sel),getElementById:id=>els[id],createElement:tag=>new Element(tag),querySelectorAll:sel=>sel==='.app-view'?views:[]}
  let change
  const ble={
   state:()=>({phase:'idle',scanning:false,synchronized:true,generation:7,discovery:true}),
@@ -39,7 +40,7 @@ function setup(allowed=true) {
   resolveProfile:()=>({tx:'char-1',rx:'char-1',generation:7}),
  }
  const localStorage={getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v)}
- const window={AppPlatform:{has:id=>id!=='view.ble'||allowed,service:()=>allowed?ble:null}}
+ const sources={bridgePort:()=>ble.createProfilePort()}; const window={SerialHub:{activeSendPhys:()=> 'A'},serialLanes:{selectPort:async(sid,port,opts)=>{calls.push({action:'selectPort',sid,port,opts});return true}},AppPlatform:{has:id=>id!=='view.ble'||allowed,service:name=>allowed?(name==='connection-source'?sources:ble):null}}
  const ctx={window,document,localStorage,setTimeout:fn=>{fn();return 1},console}
  vm.createContext(ctx)
  const script=html.slice(html.indexOf('// 最左侧导航栏：切换工具视图'),html.indexOf('</script>',html.indexOf('// 最左侧导航栏：切换工具视图')))
@@ -71,6 +72,18 @@ test('web/mobile gate mounts no BLE controls and navigation falls back to serial
  assert.equal(h.els['view-ble'].classList.contains('active'),false)
  assert.equal(h.els['view-serial'].classList.contains('active'),true);assert.equal(h.calls.length,0)
 })
+test('saved removed or invalid views fall back and persist serial; valid views and old alias still restore',()=>{
+ for(const saved of ['view-classic','view-missing','view-ble"]']){
+  const h=setup(true,saved)
+  assert.equal(h.store.get('serial-debug-active-view'),'view-serial')
+  assert.equal(h.els['view-serial'].classList.contains('active'),true)
+ }
+ for(const [saved,expected,allowed] of [['view-ble','view-ble',true],['view-emk','view-blu',true],['view-ble','view-serial',false]]){
+  const h=setup(allowed,saved)
+  assert.equal(h.store.get('serial-debug-active-view'),expected)
+  assert.equal(h.els[expected].classList.contains('active'),true)
+ }
+})
 test('service errors surface in panel and pairing challenge buttons route generation',async()=>{
  const h=setup();await flush()
  h.ble.run=async()=>{throw Error('synthetic failure')};await h.click('扫描')
@@ -80,18 +93,12 @@ test('service errors surface in panel and pairing challenge buttons route genera
  await h.click('提交输入 / 确认一致');assert.equal(h.calls.at(-1).action,'passkey');assert.equal(h.calls.at(-1).p.passkey,1);assert.equal(h.calls.at(-1).p.generation,9)
 })
 
-test('Profile UI opens independent stream, sends HEX, consumes RX and closes without selecting global backend',async()=>{
- const adapter=require('../js/serial-adapter.js'),before=adapter.backend,h=setup()
- let sink,closed=0;const written=[]
- h.ble.createProfilePort=()=>adapter.createStreamPort({
-  open:async(o,s)=>{sink=s},write:async b=>{written.push([...b])},close:async()=>{closed++},
- })
- await flush();await h.click('保存 Profile');await h.click('打开 Profile 数据通道')
- sink.data(Uint8Array.of(1,2,3));await flush()
- assert.ok(h.all().some(e=>e.tagName==='p'&&e.textContent.includes('RX 3 字节')))
- h.all().find(e=>e.attributes['aria-label']==='写入 HEX').value='0a ff'
- await h.click('按 Profile 发送 HEX');assert.deepEqual(written,[[10,255]])
- await h.click('关闭 Profile 数据通道');assert.equal(closed,1);assert.equal(adapter.backend,before)
+test('Profile UI hands its port to the actual communication lane without opening a second reader',async()=>{
+ const h=setup(),port={synthetic:true};h.ble.createProfilePort=()=>port
+ await flush();await h.click('接入通信调试主发路')
+ const call=h.calls.find(c=>c.action==='selectPort');assert.ok(call);assert.equal(call.sid,'A');assert.equal(call.port,port);assert.equal(call.opts.open,true)
+ assert.equal(h.els['view-serial'].classList.contains('active'),true)
+ assert.equal(h.all().some(e=>e.textContent==='按 Profile 发送 HEX'),false)
 })
 test('filter buttons use real controller, show UUID, reject invalid and refresh incremental advertisements',async()=>{
  const B=require('../js/ble-bridge.js');let feed

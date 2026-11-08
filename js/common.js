@@ -443,7 +443,13 @@
 		})
 	}
 	// MCP 与 UI 共用：读某一路归一化后的参数(与打开时实际用的同一份配置)
+	function laneTransport(sid) {
+		const p = SerialHub.getPort(sid)
+		try { return p && p.getInfo && p.getInfo().transport || 'serial' } catch (_) { return 'serial' }
+	}
 	function laneParams(sid) {
+		const transport = laneTransport(sid)
+		if (transport !== 'serial') return { lane: sid, transport, options: null, summary: transport === 'bt-classic' ? 'SPP' : transport === 'ble-bridge' ? 'USB BLE 桥' : 'BLE', open: SerialHub.isOpen(sid), opening: SerialHub.isOpening(sid) }
 		const opts = sid === 'S' ? readSerialOptions(SERIAL_OPTIONS_KEY) : laneOptions[sid]
 		const norm = DualCfg.normalizeOptions(opts)
 		return { lane: sid, options: norm, summary: DualCfg.paramsSummary(norm), open: SerialHub.isOpen(sid), opening: SerialHub.isOpening(sid) }
@@ -462,6 +468,7 @@
 		}
 		if (sid !== 'S' && sid !== 'A' && sid !== 'B') return { ok: false, code: 'invalid_lane', message: '无效的会话' }
 		if (sid !== 'S' && SerialHub.mode !== 'dual') return { ok: false, code: 'lane_not_visible', message: '这一路当前不可用' }
+		if (laneTransport(sid) !== 'serial') return { ok: false, code: 'unsupported_transport', message: '无线透传不使用本地串口波特率或控制信号' }
 		// 落盘前先查与本次写入无关的忙/钉扎：正在换口、正在开关、事务进行中都不能静默改参数
 		if (laneMoving) return { ok: false, code: 'lane_moving', message: '正在切换串口，请稍候' }
 		if (SerialHub.isOpening(sid)) return { ok: false, code: 'lane_busy', message: '这一路正在连接或关闭' }
@@ -3213,6 +3220,7 @@
 	})
 	//未找到API可以动态修改串口参数，改参数(含套用双路预设)时先关闭再按新参数重新打开，与上面单路的做法一致
 	async function reopenWithNewParams(sid, opts) {
+		if (laneTransport(sid) !== 'serial') return true
 		opts = opts || {}
 		const guard = typeof opts.guard === 'function' ? opts.guard : null
 		const cancelled = function () {
@@ -3488,13 +3496,15 @@
 			return
 		}
 		SerialHub.setOpening(sid, true)
+		let selection = null
 		try {
-		await SerialAdapter.requestPort().then(async (port) => {
-				// 选的就是本路当前已打开的口：不动作(不重开、不打断)；关着的同一个口仍按下面的「选完即连接」走
-				if (port && SerialHub.getPort(sid) === port && SerialHub.isOpen(sid)) return
-				// 锁由本函数持有到结束，bindSessionPort 里不要再套一层 setOpening
-				await bindSessionPort(sid, port, { open: openAfterSelect })
-			})
+			const source = window.AppPlatform && window.AppPlatform.service('connection-source')
+			selection = source ? await source.requestPort() : { port: await SerialAdapter.requestPort() }
+			if (!selection || !selection.port) return
+			const port = selection.port
+			// 同一个已打开端口不重开；无线来源确认映射后直接打开，共用原来的绑定/冲突检查。
+			if (SerialHub.getPort(sid) === port && SerialHub.isOpen(sid)) return
+			await bindSessionPort(sid, port, { open: openAfterSelect || !!(port.getInfo && port.getInfo().transport) })
 		} catch (e) {
 			const errorType = e.name || 'UnknownError'
 			const errorMsg = e.message || '未知错误'
@@ -3506,7 +3516,9 @@
 				addLogErr(`获取串口权限出错: ${errorType} - ${errorMsg}`)
 			}
 		} finally {
-			SerialHub.setOpening(sid, false)
+			try { if (selection && selection.discard && SerialHub.getPort(sid) !== selection.port) await selection.discard() }
+			catch (e) { addLogErr('未选用的连接尚未释放，请重试释放: ' + (e.message || String(e)), sid) }
+			finally { SerialHub.setOpening(sid, false) }
 		}
 	}
 
@@ -7271,7 +7283,7 @@
 			applySerialParamsToUI()
 			notifyLaneConfig()
 			const reopen = ['A', 'B'].filter(function (sid) {
-				return plan.lanes[sid].optionsChanged && SerialHub.isOpen(sid) && !SerialHub.isOpening(sid)
+				return laneTransport(sid) === 'serial' && plan.lanes[sid].optionsChanged && SerialHub.isOpen(sid) && !SerialHub.isOpening(sid)
 			})
 			let msg = '已套用预设「' + (preset && preset.name ? preset.name : '') + '」'
 			if (reopen.length) msg += '：' + reopen.map(sidName).join('、') + ' 按新参数重新连接'
@@ -7317,7 +7329,7 @@
 			setLaneProtocol(sid, p.protocol)
 			applySerialParamsToUI()
 			notifyLaneConfig()
-			const reopen = p.optionsChanged && SerialHub.isOpen(sid) && !SerialHub.isOpening(sid)
+			const reopen = laneTransport(sid) === 'serial' && p.optionsChanged && SerialHub.isOpen(sid) && !SerialHub.isOpening(sid)
 			let msg = '已套用预设「' + (preset && preset.name ? preset.name : '') + '」' + (SerialHub.mode === 'dual' ? '到' + sidName(sid) : '')
 			if (reopen) msg += '：按新参数重新连接'
 			if (plan.unknownProtocols.length) msg += '；未识别的协议 ' + plan.unknownProtocols.join('、') + ' 保留原协议'
@@ -7457,7 +7469,9 @@
 		protocolOf: protocolIdForSid,
 		protocolName: protocolName,
 		setProtocol: setLaneProtocol,
+		transportOf: laneTransport,
 		summary: function (sid) {
+			if (laneTransport(sid) !== 'serial') return laneParams(sid).summary
 			if (laneSummaryOf) return laneSummaryOf(sid)
 			return DualCfg.paramsSummary(sid === 'S' ? readSerialOptions(SERIAL_OPTIONS_KEY) : laneOptions[sid])
 		},

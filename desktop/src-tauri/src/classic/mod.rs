@@ -241,7 +241,7 @@ pub async fn classic_open(
 		let op = state.owners.owner(&label).begin(Some(e.generation))?;
 		let claim = state
 			.claims
-			.acquire(&format!("classic:{}", e.device.address), &label, op.generation)
+			.acquire("classic-connection", &label, op.generation)
 			.map_err(|_| "Classic 设备已被窗口占用")?;
 		(e.device.clone(), op, claim)
 	};
@@ -344,6 +344,7 @@ pub async fn classic_write(webview: tauri::Webview, state: State<'_, ClassicStat
 }
 #[tauri::command]
 pub async fn classic_close(webview: tauri::Webview, state: State<'_, ClassicState>, handle: u64) -> Result<(), String> {
+	if !state.registry.lock().unwrap().handles.contains_key(&handle) { return Ok(()); }
 	let (h, op) = state.operation(webview.label(), handle)?;
 	h.stop.store(true, Ordering::Release);
 	tauri::async_runtime::spawn_blocking(move || {

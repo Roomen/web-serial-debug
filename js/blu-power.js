@@ -6550,6 +6550,7 @@
 				if (serialOwnsPort(p)) continue
 				let info = {}
 				try { info = p.getInfo ? p.getInfo() : {} } catch (e) {}
+				if (info.transport && info.transport !== 'serial') continue
 				if (isBluUsbInfo(info)) matched.push(p)
 				else if (info.usbVendorId == null && info.usbProductId == null) unknown.push(p)
 			}
