@@ -110,8 +110,9 @@ pub fn plan(saved: Option<Saved>, areas: &[Area], primary: Option<usize>) -> ((f
 	(size, pos)
 }
 
-// 窗口建好后(隐藏着)套用位置；没有有效位置就居中，再显示，免得先在别处闪一下
-pub fn apply(w: &WebviewWindow, pos: Option<(f64, f64)>, maximized: bool) {
+// 窗口建好后(隐藏着)套用位置；没有有效位置就居中，并恢复最大化状态。
+// 此函数不显示窗口；调用方完成摆放后显式调用 show。
+pub fn place(w: &WebviewWindow, pos: Option<(f64, f64)>, maximized: bool) {
 	match pos {
 		Some((x, y)) => {
 			#[cfg(target_os = "macos")]
@@ -126,7 +127,6 @@ pub fn apply(w: &WebviewWindow, pos: Option<(f64, f64)>, maximized: bool) {
 	if maximized {
 		let _ = w.maximize();
 	}
-	let _ = w.show();
 }
 
 // 窗口移动 / 缩放 / 关闭时记下来；最小化、全屏不记，最大化只记标志、保留之前的未最大化几何

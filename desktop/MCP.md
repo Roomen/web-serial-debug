@@ -124,3 +124,59 @@ claude mcp add --transport http serial-debug http://127.0.0.1:38991/mcp \
   真机行为（真实选口、收发时序、上下电、采样）不在本次验证范围内，未经实机确认；需要时由有设备的人按仓库既有规则单独验证。
 - 争用边界：MCP 操作按「窗口 × 路」串行，窗口 / 文档代次失效会作废在飞请求；同一物理设备被多个窗口引用时由 `lease.rs` 的设备租约在进程内裁决（见上节），另一个**应用**占用同一设备仍按操作系统占用如实报错。
 - 构建要求：`rmcp` 需要 Rust ≥ 1.88（本仓库工具链 1.97）。Windows 与 macOS 都只用纯 Rust 依赖（HTTP 部分为 `axum`/`tokio`，测试里的 `reqwest` 不进入应用二进制）。
+
+### USB BLE 桥（桌面 Windows / macOS）
+
+BLE 桥复用本服务端点及确切窗口路由，串口固定 2 Mbps NDJSON，独立占用原生串口资源，不切换串口调试页的后端。
+
+| 工具 | 参数（均需 window） | 完成语义 |
+| --- | --- | --- |
+| `ble_state` / `ble_ports` / `ble_devices` / `ble_gatt` / `ble_events` | 无其它参数 | 状态、桥候选、扫描列表、自动发现结果、有界事件日志 |
+| `ble_open` / `ble_connect` | `deviceId` | 前者取自 ports；后者取自 devices，连接等 `conn` 事件 |
+| `ble_close` / `ble_scan_start` / `ble_scan_stop` | 无其它参数 | 释放桥 / 扫描控制；扫描状态由事件更新 |
+| `ble_disconnect` / `ble_pair` | `generation` | 等 disconnected / encrypted 异步事件 |
+| `ble_read` | `generation`, `characteristicId` | 等 read value 事件 |
+| `ble_write` | 上述两项 + `hex`, `response` | 1..512 字节；有响应等 write 事件，无响应只报 accepted |
+| `ble_subscribe` | `generation`, `characteristicId`, `on` | 校验 notify/indicate 与唯一 CCCD，命令受理不等于已收到通知 |
+| `ble_passkey` | `generation`, `passkey` | 只回答正在进行的挑战（比较用 0/1，输入 0..999999）；不记录密钥 |
+
+所有写工具与 UI 走同一有界队列，MCP commit 在队列内 I/O 前执行。配对答复独立提交，避免被等待安全事件的配对请求阻塞。停 MCP 只作废请求，不关闭 UI 空闲连接；只有已经进入 I/O、取消后结果未知的请求才触发桥恢复释放。刷新/窗口销毁沿用原生 owner 生命周期，升级冻结后释放桥并等待完成，释放失败不确认升级。
+
+资源上限：NDJSON 1 MiB（溢出丢至下一换行），16 pending、8 队列项、512 个扫描设备、256 个服务、1024 个特征、每特征 32 个描述符；日志 256 项且最多约 64 KiB，带 sequence / dropped。超时、写失败与关闭清理 pending。返回扫描 id 不含外设地址；状态/日志不含配对码。GATT id 绑定文档与连接代次，调用必须显式携带 generation。
+
+**固件限制与恢复**：现有固件事件没有连接代次/事务 id。关闭重开 USB 串口、ping 成功都不能证明 BLE 会话已复位。工具只在当前接收通道观察到固件启动 `ready` 后允许一次连接；断线后下一次连接要求保持桥口打开并复位固件，再扫描、重新发现。`ready` 清空设备列表、扫描状态和所有 GATT 句柄。超时/取消的未知结果立即废弃当前状态，不自动重试。该策略依赖 `ready` 确实代表固件重启且固件按序清理旧事件；旧固件不提供端到端的事件代次证明，不能声称任意迟到事件下都有严格隔离。若桥复位导致 USB 重枚举且新通道收不到 ready，扫描可用，但连接会保持被禁止；可靠跨重连恢复需要固件增加会话 nonce/连接代次。
+
+释放时尽力写 `scan.stop` 和 `disconnect`，随后关闭原生句柄。页面关闭/升级路径不能把这两次本地写入当作固件已停止扫描/断连的确认，下一次打开仍为未同步。
+
+Profile 在页面保存规范化 UUID、属性、服务特征结构与描述符结构，不保存地址、ATT 句柄或实例序号。重新发现后必须唯一匹配，完全重复的服务/特征实例返回 `ambiguous_profile`、要求重新选择。TX 是主机写外设，RX 是主机接收通知。工具页可打开独立 Profile 数据通道：`createProfilePort(profile)` 以现有 `createStreamPort` 包装，TX 按 chunkSize 串行分片（单次流写入最多 64 KiB），RX 通知进入有界可读流；同一桥只允许一个 Profile 端口，关闭端口取消订阅但保留桥连接。断连/复位使流失效，重新打开必须重新解析选择器。此端口不注册或切换全局 SerialAdapter 后端。电脑原生 BLE 为后续工作。
+
+原生 `error` 与 `lost` 分开处理：可恢复读错误只清空 NDJSON 残帧并丢弃至下一换行，再继续解析；桥口、扫描会话及已发现设备保留。可能损坏的在飞应答不伪造成功，等待匹配应答或既定超时。只有 `lost` 立即走资源释放。原始驱动错误字符串不写进 BLE 日志。
+
+### BLE 广播筛选
+
+`ble_devices` 接受可选 `name` 与 `serviceUuid`：名称为忽略大小写的包含匹配，UUID 为 128-bit 精确匹配（标准连字符或 32 位十六进制），两项 AND，空白值不筛选；非法 UUID 返回 `invalid_filter`。返回的 `uuids` 是当前扫描实际收到的广播 / scan response 服务 UUID，规范化为小写完整 UUID，每设备最多 64 项。短 SIG 广播 UUID 扩展成完整 UUID；GATT 发现结果不参与。主机侧筛选不会向固件发送新增过滤字段。增量广播保留已知名称与 UUID，新扫描清空旧元数据；同名设备仍使用不同 opaque id。面板提供相同筛选与清除按钮。
+
+### 原生 Classic SPP（Windows / macOS 客户端）
+
+独立 `classic` 平台服务与工具页，使用电脑自带蓝牙，和 USB BLE 桥、串口模式同时存在；不切换全局 SerialAdapter。网页、Linux 与移动端不提供服务入口。搜索只在系统窗口内显示可发现设备，应用保存用户选中的设备，不返回系统扫描到的全部列表。设备状态是最近系统选择时的配对快照。
+
+| typed 工具 | 参数 / 行为 |
+| --- | --- |
+| `classic_state` | `window`，连接状态、generation、收到字节数 |
+| `classic_devices` | `window`，当前文档系统选择结果，opaque deviceId / name / paired；不返回地址 |
+| `classic_discover` | `window`，打开系统搜索/选择 UI，必须用户交互；不自动配对 |
+| `classic_pair` | `window`，打开系统搜索/配对 UI；用户选择设备并输入 PIN 或核对比较码；没有自动接受认证回调 |
+| `classic_connect` | `window, deviceId`，连接已配对设备的 SPP RFCOMM 服务；不要求先映射为 COM/cu |
+| `classic_close` | `window`，关闭该窗口通道并使在途动作代次失效；超时不是已关闭，需重试 |
+| `classic_read` | `window, cursor?`，最多 4096 字节 HEX、cursor、dropped、hasMore；游标含随机文档 namespace 和连接代次，1 MiB 环形上限 |
+| `classic_write` | `window, generation, hex`，1..65536 字节，结果只表示本机传输接受，不代表对端业务应答 |
+
+`discover/pair` 允许最多 120 秒交互；MCP 超时、取消或停服后仍可能有系统 UI，用户必须在系统窗口取消。配对副作用可能已发生，`unknown_after_commit` 不可自动重试。取消使应用 owner 代次失效，系统窗口返回的迟到结果不能登记到新会话。PIN/比较码仅由系统界面处理，不进入应用日志、MCP参数或存储。
+
+所有打开、读线程、写入、物理关闭保有 owner 生命周期与设备独占凭据；刷新/销毁/升级回收超时后再次回收仍会等待真实物理结束，不能因句柄已从表中移走就报告空闲。MCP停服不会关闭无在途MCP请求的UI连接。当前各 Classic 窗口间按原生设备身份独占；无法把用户另外建立的系统 COM/cu 映射与无线身份可靠关联，因此不宣称与独立串口路径之间也建立了统一物理身份仲裁。
+
+macOS SDK 的 SDP 查询没有取消入口；同步 RFCOMM open/write 也没有本实现可设的超时或强制取消。系统调用未返回时，线程、delegate、设备凭据继续保留；回收等待 3 秒后报告忙/失败并拒绝升级，不能宣布已释放。SDP 回调完成后会先检查代次再继续打开，分片写入之间亦检查；已经进入的同步调用只能等待系统返回。通道 close 返回成功或收到真实 `rfcommChannelClosed` 后才结束物理释放；`isOpen == false`（也可能正在开关）或接收溢出不作为关闭证明。Windows连接等待最多15秒、写入最多10秒，轮询间检查代次；系统配对UI需用户关闭。
+
+未进行真实外设扫描/配对/收发验收；本机 macOS 编译和离线合成测试不代表硬件兼容性已验收。Windows完整交叉构建需要可用 Windows SDK，本机缺相关 C 头文件；实际 Windows 后端已单独做目标平台类型检查。
+
+应用更新在下载前及各窗口准备阶段均检查 BLE / Classic 服务：持续扫描、连接/配对/系统窗口、GATT 发现与操作、排队及在飞写入（含 Profile 整次分片写入）、初始回收、释放中或释放失败都会阻止更新。空闲连接和单纯等待通知不阻止更新，准备阶段冻结新操作后释放连接，释放成功才确认就绪。

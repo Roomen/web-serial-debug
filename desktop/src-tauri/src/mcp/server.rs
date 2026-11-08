@@ -18,7 +18,7 @@ const MAX_READ_BYTES: u32 = 65536;
 const MAX_READ_TIMEOUT_MS: u32 = 30000;
 const MAX_WRITE_HEX_CHARS: usize = 2 * 16384 + 16384;
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowParams {
     /// Window label from windows_list (e.g. "main"). Never implicit: pass the exact window.
@@ -93,6 +93,90 @@ pub struct SelectParams {
     pub device_id: Option<String>,
     /// USB serial number string, matched exactly against the sn field of serial_ports_list entries. Use it across reconnects.
     pub sn: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BleDevicesParams {
+    pub window: String,
+    /// Host-side case-insensitive advertising name substring; empty means no filter.
+    pub name: Option<String>,
+    /// Host-side exact advertised service UUID (128-bit hyphenated or 32 hex); AND with name.
+    pub service_uuid: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClassicDeviceParams {
+    pub window: String,
+    /// Opaque deviceId from classic_devices in this exact window/document.
+    pub device_id: String,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClassicReadParams {
+    pub window: String,
+    /// Opaque document/connection cursor from classic_read; omit to start at oldest retained byte.
+    pub cursor: Option<String>,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClassicWriteParams {
+    pub window: String,
+    pub generation: u64,
+    /// 1..65536 hexadecimal bytes. Transport acceptance is not a peer acknowledgement.
+    pub hex: String,
+}
+
+// BLE handles are opaque and scoped to this document/connection. No raw bridge command tool.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BleDeviceParams {
+    pub window: String,
+    /// Opaque deviceId from ble_ports or ble_devices in this exact window.
+    pub device_id: String,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BleGenerationParams {
+    pub window: String,
+    /// Current generation from ble_state / ble_gatt. Required, never inferred.
+    pub generation: u64,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BleGattParams {
+    pub window: String,
+    pub generation: u64,
+    /// Opaque characteristicId from ble_gatt; never a numeric ATT handle.
+    pub characteristic_id: String,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BleWriteParams {
+    pub window: String,
+    pub generation: u64,
+    pub characteristic_id: String,
+    /// 1..512 bytes, hexadecimal (whitespace allowed).
+    pub hex: String,
+    /// true waits for the asynchronous write event; false reports unacknowledged acceptance only.
+    pub response: bool,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BleSubscribeParams {
+    pub window: String,
+    pub generation: u64,
+    pub characteristic_id: String,
+    pub on: bool,
+}
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BlePasskeyParams {
+    pub window: String,
+    pub generation: u64,
+    /// Local pairing challenge input; 0..999999, or 0/1 for numeric comparison. Never logged.
+    pub passkey: u32,
 }
 
 // serial_configure 的 options：六个键与页面 serialLanes.configure 一一对应。
@@ -213,6 +297,214 @@ fn check_lane(lane: &str) -> Result<(), BridgeError> {
 
 #[tool_router]
 impl McpServer {
+    #[tool(name = "classic_state", description = "Native Classic SPP state in this window.", annotations(read_only_hint = true))]
+    async fn classic_state(&self, Parameters(p): Parameters<WindowParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).map_err(|_| McpError::internal_error("invalid parameters", None))?;
+        match self.call(&p.window, "classic_state", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v), Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "classic_devices", description = "Devices selected in the system Classic UI; opaque ids only.", annotations(read_only_hint = true))]
+    async fn classic_devices(&self, Parameters(p): Parameters<WindowParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).map_err(|_| McpError::internal_error("invalid parameters", None))?;
+        match self.call(&p.window, "classic_devices", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v), Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "classic_discover", description = "Open interactive system Classic discovery/selection UI. User must select or cancel. Timeout does not close the system dialog.", annotations(read_only_hint = false))]
+    async fn classic_discover(&self, Parameters(p): Parameters<WindowParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).map_err(|_| McpError::internal_error("invalid parameters", None))?;
+        match self.call(&p.window, "classic_discover", params, Duration::from_secs(120)).await {
+            Ok(v) => ok_result(v), Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "classic_pair", description = "Open interactive system discovery/pairing UI. User must enter PIN or confirm comparison; never auto-accepts. Timeout has unknown outcome; user must cancel the system dialog.", annotations(read_only_hint = false))]
+    async fn classic_pair(&self, Parameters(p): Parameters<WindowParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).map_err(|_| McpError::internal_error("invalid parameters", None))?;
+        match self.call(&p.window, "classic_pair", params, Duration::from_secs(120)).await {
+            Ok(v) => ok_result(v), Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "classic_connect", description = "Open paired device native RFCOMM SPP channel; independent of serial and BLE bridge.", annotations(read_only_hint = false))]
+    async fn classic_connect(&self, Parameters(p): Parameters<ClassicDeviceParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).map_err(|_| McpError::internal_error("invalid parameters", None))?;
+        match self.call(&p.window, "classic_connect", params, Duration::from_secs(30)).await {
+            Ok(v) => ok_result(v), Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "classic_close", description = "Release this window Classic channel and invalidate pending discovery/open. Failed close remains busy and must be retried.", annotations(read_only_hint = false))]
+    async fn classic_close(&self, Parameters(p): Parameters<WindowParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).map_err(|_| McpError::internal_error("invalid parameters", None))?;
+        match self.call(&p.window, "classic_close", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v), Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "classic_read", description = "Read up to 4096 buffered Classic RX bytes; cursor is document and connection scoped.", annotations(read_only_hint = true))]
+    async fn classic_read(&self, Parameters(p): Parameters<ClassicReadParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).map_err(|_| McpError::internal_error("invalid parameters", None))?;
+        match self.call(&p.window, "classic_read", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v), Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "classic_write", description = "Write Classic SPP HEX bytes using current connection generation.", annotations(read_only_hint = false))]
+    async fn classic_write(&self, Parameters(p): Parameters<ClassicWriteParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).map_err(|_| McpError::internal_error("invalid parameters", None))?;
+        match self.call(&p.window, "classic_write", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v), Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_state", description = "USB BLE bridge state; no pairing secrets. Firmware ready is required before connecting; opening USB does not reset BLE.", annotations(read_only_hint = true))]
+    async fn ble_state(&self, Parameters(p): Parameters<WindowParams>) -> Result<CallToolResult, McpError> {
+        let params = json!({ "window": p.window });
+        match self.call(&p.window, "ble_state", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_ports", description = "Enumerate USB bridge candidates without opening. Opaque ids are document scoped.", annotations(read_only_hint = true))]
+    async fn ble_ports(&self, Parameters(p): Parameters<WindowParams>) -> Result<CallToolResult, McpError> {
+        let params = json!({ "window": p.window });
+        match self.call(&p.window, "ble_ports", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_devices", description = "Bounded BLE scan results, opaque device ids; no addresses exported.", annotations(read_only_hint = true))]
+    async fn ble_devices(&self, Parameters(p): Parameters<BleDevicesParams>) -> Result<CallToolResult, McpError> {
+        let params = json!({ "window": p.window, "name": p.name, "serviceUuid": p.service_uuid });
+        match self.call(&p.window, "ble_devices", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_gatt", description = "Read automatic GATT discovery results and current generation; properties and instance selectors included.", annotations(read_only_hint = true))]
+    async fn ble_gatt(&self, Parameters(p): Parameters<WindowParams>) -> Result<CallToolResult, McpError> {
+        let params = json!({ "window": p.window });
+        match self.call(&p.window, "ble_gatt", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_events", description = "Read bounded bridge event/value log with sequence and dropped count; no raw protocol frames or pairing secrets.", annotations(read_only_hint = true))]
+    async fn ble_events(&self, Parameters(p): Parameters<WindowParams>) -> Result<CallToolResult, McpError> {
+        let params = json!({ "window": p.window });
+        match self.call(&p.window, "ble_events", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_open", description = "Exclusively open USB BLE bridge at 2 Mbps. Does not select or change a serial lane.", annotations(read_only_hint = false))]
+    async fn ble_open(&self, Parameters(p): Parameters<BleDeviceParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).unwrap_or_default();
+        match self.call(&p.window, "ble_open", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_close", description = "Release USB bridge, attempt firmware disconnect, invalidate all pending requests and GATT ids.", annotations(read_only_hint = false))]
+    async fn ble_close(&self, Parameters(p): Parameters<WindowParams>) -> Result<CallToolResult, McpError> {
+        let params = json!({ "window": p.window });
+        match self.call(&p.window, "ble_close", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_scan_start", description = "Start active BLE scan, replacing the bounded device list.", annotations(read_only_hint = false))]
+    async fn ble_scan_start(&self, Parameters(p): Parameters<WindowParams>) -> Result<CallToolResult, McpError> {
+        let params = json!({ "window": p.window });
+        match self.call(&p.window, "ble_scan_start", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_scan_stop", description = "Stop BLE scanning.", annotations(read_only_hint = false))]
+    async fn ble_scan_stop(&self, Parameters(p): Parameters<WindowParams>) -> Result<CallToolResult, McpError> {
+        let params = json!({ "window": p.window });
+        match self.call(&p.window, "ble_scan_stop", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_connect", description = "Connect scan result; waits for connected event, not command acknowledgement. Requires firmware ready baseline.", annotations(read_only_hint = false))]
+    async fn ble_connect(&self, Parameters(p): Parameters<BleDeviceParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).unwrap_or_default();
+        match self.call(&p.window, "ble_connect", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_disconnect", description = "Disconnect peripheral; waits for disconnected event. Another connection requires firmware reset/ready.", annotations(read_only_hint = false))]
+    async fn ble_disconnect(&self, Parameters(p): Parameters<BleGenerationParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).unwrap_or_default();
+        match self.call(&p.window, "ble_disconnect", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_read", description = "Read readable characteristic and wait for value event. Generation required.", annotations(read_only_hint = false))]
+    async fn ble_read(&self, Parameters(p): Parameters<BleGattParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).unwrap_or_default();
+        match self.call(&p.window, "ble_read", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_write", description = "Write characteristic with property checks. Response mode waits for write event; no-response acceptance is not remote completion.", annotations(read_only_hint = false))]
+    async fn ble_write(&self, Parameters(p): Parameters<BleWriteParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).unwrap_or_default();
+        match self.call(&p.window, "ble_write", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_subscribe", description = "Enable/disable RX notifications or indications using the unique CCCD. Requires compatible properties.", annotations(read_only_hint = false))]
+    async fn ble_subscribe(&self, Parameters(p): Parameters<BleSubscribeParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).unwrap_or_default();
+        match self.call(&p.window, "ble_subscribe", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_pair", description = "Start pairing; waits for encrypted security event. User may answer challenge in local UI or ble_passkey.", annotations(read_only_hint = false))]
+    async fn ble_pair(&self, Parameters(p): Parameters<BleGenerationParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).unwrap_or_default();
+        match self.call(&p.window, "ble_pair", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
+    #[tool(name = "ble_passkey", description = "Answer active local pairing challenge. Never persists or logs passkey.", annotations(read_only_hint = false))]
+    async fn ble_passkey(&self, Parameters(p): Parameters<BlePasskeyParams>) -> Result<CallToolResult, McpError> {
+        let params = serde_json::to_value(&p).unwrap_or_default();
+        match self.call(&p.window, "ble_passkey", params, TOOL_TIMEOUT).await {
+            Ok(v) => ok_result(v),
+            Err(e) => err_result(e),
+        }
+    }
+
     #[tool(
         name = "windows_list",
         description = "List desktop windows that have the MCP bridge loaded, with mode (single/dual), addressable lanes and whether the window is logged in. Start here: every other tool needs an explicit window label.",
@@ -595,6 +887,11 @@ mod tests {
     // 反序列化边界：schema 层先拦形状(未知键 / 错类型 / 非对象)，页面层再查值
     #[test]
     fn new_params_deserialization_boundaries() {
+        let filters: BleDevicesParams = serde_json::from_value(json!({"window":"main", "name":"sensor", "serviceUuid":"12345678123456789abc123456789abc"})).unwrap();
+        assert_eq!(serde_json::to_value(filters).unwrap()["serviceUuid"], "12345678123456789abc123456789abc");
+        assert!(serde_json::from_value::<BleDevicesParams>(json!({"window":"main", "name":12})).is_err());
+        assert!(serde_json::from_value::<BleDevicesParams>(json!({"window":"main", "raw":true})).is_err());
+
         // options 未知键(含大小写笔误)被 deny_unknown_fields 拒绝
         let err = serde_json::from_value::<ConfigureParams>(json!({
             "window": "main", "lane": "S", "options": { "baudrate": 9600 }

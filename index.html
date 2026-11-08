@@ -104,6 +104,8 @@
                     <i class="bi bi-box-seam"></i>
                     <span class="rail-label">固件打包</span>
                 </button>
+                <button class="rail-item" data-view="view-classic" data-feature="view.classic" title="经典蓝牙 SPP"><i class="bi bi-bluetooth"></i><span class="rail-label">经典蓝牙</span></button>
+                <button class="rail-item" data-view="view-ble" data-feature="view.ble" title="USB BLE 桥"><i class="bi bi-bluetooth"></i><span class="rail-label">BLE 桥</span></button>
                 <button class="rail-item" data-view="view-blu" data-feature="view.power" title="功耗分析">
                     <i class="bi bi-speedometer2"></i>
                     <span class="rail-label">功耗分析</span>
@@ -1044,6 +1046,8 @@
             </div>
 
             <!--功耗分析视图（独立 Web Serial，BLU 100k）-->
+            <div id="view-classic" class="app-view" data-feature="view.classic"><div id="classic-workbench"></div></div>
+            <div id="view-ble" class="app-view" data-feature="view.ble"><div id="ble-workbench"></div></div>
             <div id="view-blu" class="app-view">
                 <!--
                   工具条按使用流：连接 → 供电/参数 → 采样动作 → 数据工具
@@ -1764,6 +1768,9 @@
     <script src="js/transport-ble.js"></script>
     <script src="js/transport-native-serial.js"></script>
     <script src="js/platform-boot.js"></script>
+    <script src="js/ble-bridge.js"></script>
+    <script src="js/native-ble-bridge.js"></script>
+    <script src="js/native-classic.js"></script>
     <script src="js/native-shell.js"></script>
     <script src="js/dual-config.js"></script>
     <script src="js/text-byte-encoder.js"></script>
@@ -1803,6 +1810,8 @@
     <script src="js/modern-power.js"></script>
     <script src="js/app-update.js"></script>
     <script src="js/mcp-ring.js"></script>
+    <script src="js/ble-panel.js"></script>
+    <script src="js/classic-panel.js"></script>
     <script src="js/mcp-bridge.js"></script>
     <script src="js/mcp-service.js"></script>
 

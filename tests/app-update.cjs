@@ -231,3 +231,36 @@ test('successful update result is consumed without any prompt', async () => {
 	assert.equal(calls.length, 1)
 	assert.equal(alerts.length, 0)
 })
+
+test('BLE release completes before update ack, failed release refuses ack', async () => {
+ const s = setup(), order = []
+ s.env.AppPlatform = { service: name => name === 'ble' ? { release: async () => { order.push('ble') } } : null }
+ s.env.serialApi.prepareForAppUpdate = async () => { order.push('serial') }
+ await s.controller.prepare({ operationId: 'ble-update' })
+ assert.deepEqual(order, ['ble', 'serial']); assert.equal(s.acknowledgments[0][1], true)
+ const f = setup()
+ f.env.AppPlatform = { service: () => ({ release: async () => { throw Error('still owned') } }) }
+ await f.controller.prepare({ operationId: 'ble-failed' })
+ assert.equal(f.acknowledgments[0][1], false)
+})
+
+test('Classic release must succeed before update acknowledgement', async () => {
+ const s=setup(), gate=deferred();s.env.AppPlatform={service:name=>name==='classic'?{release:()=>gate.promise}:null}
+ const preparing=s.controller.prepare({operationId:'classic-update'});await new Promise(r=>setImmediate(r));assert.equal(s.acknowledgments.length,0)
+ gate.reject(Error('physical channel active'));await preparing;assert.equal(s.acknowledgments[0][1],false)
+})
+
+test('Bluetooth busy blocks both download and prepare without releasing; idle connections release', async () => {
+ for (const name of ['ble', 'classic']) {
+  const s=setup(); let busy=true, installs=0, releases=0, serial=0
+  s.env.AppPlatform={service:n=>n===name?{isBusyForUpdate:()=>busy,release:async()=>{releases++}}:null}
+  s.service.install=async()=>{installs++}
+  s.env.serialApi.prepareForAppUpdate=async()=>{serial++}
+  await s.controller.check(); assert.equal(await s.controller.install(),false); assert.equal(installs,0)
+  await s.controller.prepare({operationId:1}); assert.deepEqual(s.acknowledgments,[[1,false,{}]])
+  assert.equal(releases,0); assert.equal(serial,0)
+  s.controller.finished({operationId:1,success:false});busy=false
+  assert.equal(await s.controller.install(),true); assert.equal(installs,1)
+  await s.controller.prepare({operationId:2}); assert.equal(releases,1);assert.equal(serial,1);assert.equal(s.acknowledgments[1][1],true)
+ }
+})

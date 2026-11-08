@@ -27,6 +27,28 @@
 		setPreparing: function (value) { updatePreparing = !!value },
 	})
 
+	if (P.has('view.classic') && root.NativeClassic) {
+		const classic = root.NativeClassic.create({ invoke: T.core.invoke, Channel: T.core.Channel,
+			createStreamPort: root.SerialAdapter.createStreamPort, toBytes: root.NativeBleBridge.toBytes,
+			blocked: () => updatePreparing || !!(root.__auth && !root.__auth.authed()),
+		})
+		P.provide('classic', classic)
+		root.addEventListener('pagehide', () => { classic.release().catch(() => {}) })
+	}
+
+	if (P.has('view.ble') && root.NativeBleBridge) {
+		const ble = root.NativeBleBridge.create({
+			BleBridge: root.BleBridge,
+			createStreamPort: root.SerialAdapter.createStreamPort,
+			invoke: T.core.invoke,
+			Channel: T.core.Channel,
+			ready: function () { return P.service('native-serial-ready').wait() },
+			blocked: function () { return updatePreparing || !!(root.__auth && !root.__auth.authed()) },
+		})
+		P.provide('ble', ble)
+		root.addEventListener('pagehide', function () { ble.release().catch(function () {}) })
+	}
+
 	// 本地 MCP 服务：只把 Tauri 命令/事件包成平台服务，业务与界面在 js/mcp-bridge.js / js/mcp-service.js。
 	// 令牌只在页面显式请求(revealToken)时返回，不缓存、不落盘。
 	if (!P.has || P.has('service.mcp')) P.provide('mcp', {

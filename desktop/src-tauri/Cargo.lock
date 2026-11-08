@@ -3809,6 +3809,7 @@ name = "serial-debug"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "cc",
  "getrandom 0.4.3",
  "objc2",
  "objc2-app-kit",

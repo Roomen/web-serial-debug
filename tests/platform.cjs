@@ -39,13 +39,14 @@ const P = require('../js/platform.js')
 		assert.equal(d.protocols, '*')
 		assert.deepEqual(d.transports, ['serial'])
 		assert.equal(d.multiInstance, true)
-		P.FEATURES.filter((f) => f.indexOf('transport.') !== 0 && f !== 'shell.browser').forEach((f) => assert.equal(P.hasFeature(d, f), true, os + ' ' + f))
+		P.FEATURES.filter((f) => f.indexOf('transport.') !== 0 && f !== 'shell.browser' && f !== 'view.ble' && f !== 'view.classic').forEach((f) => assert.equal(P.hasFeature(d, f), true, os + ' ' + f))
 		// 网页外壳入口(GitHub / 反馈链接)同样只在浏览器里
 		assert.equal(P.hasFeature(d, 'shell.browser'), os === 'web')
+		assert.equal(P.hasFeature(d, 'view.ble'), os === 'windows' || os === 'macos')
 		assert.equal(P.hasFeature(d, 'transport.serial'), true)
 		assert.equal(P.hasFeature(d, 'transport.ble'), false)
 		assert.equal(P.hasFeature(d, 'panel.some-future-tool'), true, '目录外的新功能在桌面默认开启')
-		assert.equal(P.gatingCss(d), '[data-feature~="transport.ble"]{display:none !important}\n[data-feature~="transport.bt-classic"]{display:none !important}' + (os === 'web' ? '' : '\n[data-feature~="shell.browser"]{display:none !important}'))
+		assert.equal(P.gatingCss(d), (os === 'web' || os === 'linux' ? '[data-feature~="view.classic"]{display:none !important}\n[data-feature~="view.ble"]{display:none !important}\n' : '') + '[data-feature~="transport.ble"]{display:none !important}\n[data-feature~="transport.bt-classic"]{display:none !important}' + (os === 'web' ? '' : '\n[data-feature~="shell.browser"]{display:none !important}'))
 	})
 }
 

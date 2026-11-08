@@ -569,6 +569,30 @@
 		return bluMutate(id, function (b, guard) { return b.stopCapture(guard) })
 	}
 
+	async function bleCall(id, p, action) {
+		const ble = P.service('ble')
+		if (!ble) return fail('ble_unavailable', '当前窗口不支持 USB BLE 桥')
+		try {
+			if (action === 'state') { const state = ble.state(); delete state.challenge; return pass(state) }
+			if (action === 'ports') return pass({ ports: await ble.ports() })
+			if (action === 'devices') return pass({ devices: ble.devices(p) })
+			if (action === 'gatt') return pass(ble.gatt())
+			if (action === 'events') return pass(ble.logs())
+			return pass(await ble.run(action, p, makeGuard(id)))
+		} catch (e) { return fail(e.code || 'ble_error', e.message || String(e)) }
+	}
+
+	async function classicCall(id, p, action) {
+		const classic = P.service('classic')
+		if (!classic) return fail('classic_unavailable', '当前窗口不支持原生 Classic SPP')
+		try {
+			if (action === 'state') return pass(classic.state())
+			if (action === 'devices') return pass({ devices: classic.devices() })
+			if (action === 'read') return pass(classic.read(p))
+			return pass(await classic.run(action, p, makeGuard(id)))
+		} catch (e) { return fail(e.code || 'classic_error', e.message || String(e)) }
+	}
+
 	const HANDLERS = {
 		serial_state: serialState,
 		serial_ports_list: serialPortsList,
@@ -586,7 +610,15 @@
 		blu_capture_summary: bluSummary,
 	}
 
+	for (const action of ['state', 'ports', 'devices', 'gatt', 'events', 'open', 'close', 'scan_start', 'scan_stop', 'connect', 'disconnect', 'read', 'write', 'subscribe', 'pair', 'passkey']) {
+		HANDLERS['ble_' + action] = function (id, p) { return bleCall(id, p, action) }
+	}
+
 	// ---------- 请求分发 ----------
+	for (const action of ['state', 'devices', 'discover', 'pair', 'connect', 'close', 'read', 'write']) {
+		HANDLERS['classic_' + action] = (id, p) => classicCall(id, p, action)
+	}
+
 	async function onRequest(msg) {
 		if (!msg || typeof msg.id !== 'string' || typeof msg.tool !== 'string') return
 		// 投给别的文档(刷新前)的事件：不处理，也不覆盖同 id 的活动请求
