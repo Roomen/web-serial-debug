@@ -12081,7 +12081,7 @@ html[data-layout='modern'] .mdn-conn {
 	min-width: 0;
 }
 
-/* 四段分体：电源键(连接/断开) · 设备键(选口) · 设置键(参数/路标签) · 协议键，首尾圆角、中间直角相接 */
+/* 四段分体：电源键(连接/断开) · 设备键(选口) · 设置键(参数/路标签) · 协议键，首尾圆角、中间直角相接；B 路的移除键独立放在右侧 */
 html[data-layout='modern'] .mdn-conn > .mdn-conn-power {
 	display: inline-flex;
 	align-items: center;
@@ -12158,6 +12158,28 @@ html[data-layout='modern'] .mdn-connbar[data-mode='dual'] .mdn-conn-proto {
 html[data-layout='modern'] .mdn-conn-proto:hover {
 	border-color: var(--text-muted);
 	color: var(--text-primary);
+}
+
+html[data-layout='modern'] .mdn-conn-remove {
+	height: 30px;
+	margin-left: 6px;
+	padding: 0 9px;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	background: var(--bg-surface);
+	color: var(--text-secondary);
+	font-size: 12px;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] .mdn-conn-remove:hover {
+	border-color: #dc3545;
+	color: #dc3545;
+}
+
+html[data-layout='modern'] .mdn-conn-remove:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
 }
 
 /* 协议已在每路的协议键上，顶栏那枚(各协议模块仍只听它的 change)隐藏但保留 */
@@ -12350,11 +12372,6 @@ html[data-layout='modern'] .mdn-pop .serial-settings-card {
 
 html[data-layout='modern'] .mdn-pop .serial-settings-title {
 	display: none;
-}
-
-html[data-layout='modern'] .mdn-pop-foot {
-	padding-top: 10px;
-	border-top: 1px solid var(--border-light);
 }
 
 html[data-layout='modern'] .mdn-conn-send {
