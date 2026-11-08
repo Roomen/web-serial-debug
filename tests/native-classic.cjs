@@ -91,3 +91,10 @@ test('legacy Classic operations cannot interrupt a pinned communication lane',as
  assert.throws(()=>f.service.read(),/serial_read/);assert.equal(f.service.state().laneOwned,true)
  options.pinned=false;await port.close();await f.service.release()
 })
+
+test('Classic aliases are shared by device identity only within current document generation',async()=>{
+ const f=fake();await f.service.run('pair');const one=f.service.createPort('fixture'),two=f.service.createPort('fixture')
+ assert.equal(one,two);assert.equal(f.service.ports().length,1);one.setDisplayAlias('Desk SPP');assert.equal(two.getDisplayAlias(),'Desk SPP');assert.equal(one.getInfo().serialNumber,undefined)
+ two.setDisplayAlias('');assert.equal(one.getDisplayAlias(),null)
+ one.setDisplayAlias('Old');await f.service.release();assert.equal(one.getDisplayAlias(),null)
+})

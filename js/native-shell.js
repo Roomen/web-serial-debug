@@ -40,6 +40,7 @@
 	if (P.has('view.ble') && root.NativeBle) {
 		const computerBle = root.NativeBle.create({ invoke: T.core.invoke, Channel: T.core.Channel,
 			createStreamPort: root.SerialAdapter.createStreamPort, toBytes: root.NativeBleBridge.toBytes,
+			boundPorts: () => root.SerialHub ? ['S', 'A', 'B'].map(sid => root.SerialHub.getPort(sid)) : [],
 			blocked: () => updatePreparing || !!(root.__auth && !root.__auth.authed()),
 		})
 		P.provide('computer-ble', computerBle)

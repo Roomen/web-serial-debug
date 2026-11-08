@@ -79,7 +79,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 	// ---- 串口 ----
 	// ⌘K 是页面的命令面板，清空日志用 ⇧⌘K；发送沿用发送框原有的 ⌘/Ctrl + Enter
 	let connect = item(app, "toggle-connect", "连接串口", Some("CmdOrCtrl+O"))?;
-	let pick = item(app, "pick-port", "选择串口…", Some("CmdOrCtrl+Shift+O"))?;
+	let pick = item(app, "pick-port", "选择设备…", Some("CmdOrCtrl+Shift+O"))?;
 	let send = item(app, "send", "发送", Some("CmdOrCtrl+Enter"))?;
 	let clear = item(app, "clear-log", "清空日志", Some("CmdOrCtrl+Shift+K"))?;
 	let auto_scroll = CheckMenuItem::with_id(app, "auto-scroll", "自动滚动", true, true, None::<&str>)?;

@@ -90,6 +90,7 @@ struct Task {
 	owner: String,
 	generation: u64,
 	cancel: CancellationToken,
+	stop_scan: Option<CancellationToken>,
 	done: watch::Receiver<bool>,
 	writes: Option<mpsc::Sender<Request>>,
 }
@@ -156,8 +157,21 @@ fn current(op: &OwnerOperation, cancel: &CancellationToken) -> Result<(), String
 		Err("BLE 操作已取消".into())
 	}
 }
+// Waiting for adapter availability is cancellable without abandoning an OS connect/write.
+async fn wait_scan_ready(
+	ready: impl std::future::Future<Output = Result<(), String>>,
+	cancel: &CancellationToken,
+	stop: &CancellationToken,
+) -> Result<bool, String> {
+	tokio::select! {
+		biased;
+		_ = cancel.cancelled() => Err("BLE 操作已取消".into()),
+		_ = stop.cancelled() => Ok(false),
+		result = ready => result.map(|_| true),
+	}
+}
 #[tauri::command]
-pub async fn ble_scan(webview: tauri::Webview, state: State<'_, BleState>, owner_generation: u64) -> Result<Vec<DeviceView>, String> {
+pub async fn ble_scan(webview: tauri::Webview, state: State<'_, BleState>, owner_generation: u64, on_device: Channel<serde_json::Value>) -> Result<(), String> {
 	let update = crate::updater::begin_device_operation(webview.app_handle())?;
 	let label = webview.label().to_string();
 	let op = state.owners.owner(&label).begin(Some(owner_generation))?;
@@ -167,17 +181,18 @@ pub async fn ble_scan(webview: tauri::Webview, state: State<'_, BleState>, owner
 		.map_err(|_| "电脑 BLE 正在使用，请先关闭连接或扫描")?;
 	let id = state.next.fetch_add(1, Ordering::Relaxed);
 	let cancel = CancellationToken::new();
+	let stop = CancellationToken::new();
 	let (done, done_rx) = watch::channel(false);
 	{
 		let mut r = state.registry.lock().unwrap();
 		current(&op, &cancel)?;
-		r.devices.retain(|_, d| d.owner != label);
 		r.tasks.insert(
 			id,
 			Arc::new(Task {
 				owner: label.clone(),
 				generation: op.generation,
 				cancel: cancel.clone(),
+				stop_scan: Some(stop.clone()),
 				done: done_rx,
 				writes: None,
 			}),
@@ -191,64 +206,67 @@ pub async fn ble_scan(webview: tauri::Webview, state: State<'_, BleState>, owner
 		let _claim = claim;
 		let _update = update;
 		let result = async {
+			on_device.send(serde_json::json!({ "type": "started" })).map_err(|_| "BLE 扫描回调已关闭")?;
 			let adapter = Adapter::default().await.ok_or("无法初始化电脑蓝牙，请检查系统蓝牙开关与权限")?;
 			current(&op, &cancel)?;
 			// CoreBluetooth initializes and requests permission asynchronously. Keep the
 			// manager alive until it is powered on; scan() itself fails immediately
 			// while initialization or the permission prompt is still pending.
-			tokio::select! {
-				_ = cancel.cancelled() => return Err("BLE 操作已取消".into()),
-				ready = tokio::time::timeout(Duration::from_secs(60), adapter.wait_available()) => {
-					ready.map_err(|_| "等待蓝牙就绪超时：请打开系统蓝牙，并在系统设置中允许本应用访问蓝牙后重试")?
-						.map_err(|_| "蓝牙尚未就绪，请检查系统蓝牙开关与访问权限")?;
-				}
+			if !wait_scan_ready(
+				async {
+					tokio::time::timeout(Duration::from_secs(60), adapter.wait_available())
+						.await
+						.map_err(|_| "等待蓝牙就绪超时：请打开系统蓝牙，并在系统设置中允许本应用访问蓝牙后重试".to_string())?
+						.map_err(|_| "蓝牙尚未就绪，请检查系统蓝牙开关与访问权限".to_string())
+				},
+				&cancel,
+				&stop,
+			)
+			.await?
+			{
+				return Ok(());
 			}
 			current(&op, &cancel)?;
+			if stop.is_cancelled() {
+				return Ok(());
+			}
 			let mut found = HashMap::new();
 			{
 				let mut scan = adapter.scan(&[]).await.map_err(|_| "BLE 扫描失败，请检查系统蓝牙开关与权限")?;
-				let deadline = tokio::time::sleep(Duration::from_secs(5));
-				tokio::pin!(deadline);
 				loop {
 					tokio::select! {
-						_ = &mut deadline => break,
+						_ = stop.cancelled() => break,
 						_ = cancel.cancelled() => break,
 						adv = scan.next() => {
-							let Some(adv) = adv else { break };
+							let Some(adv) = adv else { return Err("BLE 扫描已意外结束，请重试".into()) };
+							current(&op, &cancel)?;
+							let state = app.state::<BleState>();
+							let mut r = state.registry.lock().unwrap();
+							current(&op, &cancel)?;
 							let key = adv.device.id();
-							if found.len() >= 256 && !found.contains_key(&key) { continue; }
-							let record = found.entry(key).or_insert_with(|| (String::new(), std::collections::BTreeSet::new(), None));
+							let device_id = if let Some((id, _)) = r.devices.iter().find(|(_, d)| d.owner == label && d.generation == op.generation && d.id == key) {
+								id.clone()
+							} else {
+								// Bound the whole owner registry, including pause/resume cycles.
+								if r.devices.values().filter(|d| d.owner == label).count() >= 256 { continue; }
+								let id = format!("ble-{}", state.next.fetch_add(1, Ordering::Relaxed));
+								r.devices.insert(id.clone(), Device { owner: label.clone(), generation: op.generation, id: key, adapter: adapter.clone() });
+								id
+							};
+							let record = found.entry(device_id.clone()).or_insert_with(|| (String::new(), std::collections::BTreeSet::new(), None));
 							if let Some(name) = adv.adv_data.local_name.filter(|s| !s.is_empty()) { record.0 = name.chars().take(128).collect(); }
-							for uuid in adv.adv_data.services { if record.1.len() < 64 { record.1.insert(uuid); } } record.2 = adv.rssi;
+							for uuid in adv.adv_data.services { if record.1.len() < 64 { record.1.insert(uuid); } }
+							record.2 = adv.rssi;
+							let view = DeviceView { device_id, name: record.0.clone(), services: record.1.iter().map(|s| s.to_string()).collect(), rssi: record.2 };
+							drop(r);
+							if on_device.send(serde_json::json!({ "type": "device", "device": view })).is_err() { break; }
 						}
 					}
 				}
-				// bluest's scan guard stops the OS scan when dropped (also on cancellation).
+				// Dropping bluest's scan guard stops scanning; keep native entries for inspect.
 			}
 			current(&op, &cancel)?;
-			let state = app.state::<BleState>();
-			let mut r = state.registry.lock().unwrap();
-			current(&op, &cancel)?;
-			let mut views = Vec::new();
-			for (id, (name, services, rssi)) in found {
-				let device_id = format!("ble-{}", state.next.fetch_add(1, Ordering::Relaxed));
-				r.devices.insert(
-					device_id.clone(),
-					Device {
-						owner: label.clone(),
-						generation: op.generation,
-						id,
-						adapter: adapter.clone(),
-					},
-				);
-				views.push(DeviceView {
-					device_id,
-					name: if name.is_empty() { "未命名 BLE 设备".into() } else { name },
-					services: services.into_iter().map(|s| s.to_string()).collect(),
-					rssi,
-				});
-			}
-			Ok(views)
+			Ok(())
 		}
 		.await;
 		app.state::<BleState>().registry.lock().unwrap().tasks.remove(&id);
@@ -259,6 +277,36 @@ pub async fn ble_scan(webview: tauri::Webview, state: State<'_, BleState>, owner
 		let _ = reply.send(result);
 	});
 	rx.await.map_err(|_| "BLE 扫描任务失败".to_string())?
+}
+
+// Stop only this owner's scan. Unlike release, this preserves generation and credentials.
+#[tauri::command]
+pub async fn ble_scan_stop(webview: tauri::Webview, state: State<'_, BleState>, owner_generation: u64) -> Result<(), String> {
+	let tasks: Vec<_> = state
+		.registry
+		.lock()
+		.unwrap()
+		.tasks
+		.values()
+		.filter(|t| t.owner == webview.label() && t.generation == owner_generation && t.stop_scan.is_some())
+		.cloned()
+		.collect();
+	for t in &tasks {
+		t.stop_scan.as_ref().unwrap().cancel();
+	}
+	for t in tasks {
+		let mut done = t.done.clone();
+		tokio::time::timeout(Duration::from_secs(3), async {
+			while !*done.borrow_and_update() {
+				done.changed().await.map_err(|_| "BLE 扫描收尾失败")?;
+			}
+			Ok::<(), &str>(())
+		})
+		.await
+		.map_err(|_| "BLE 扫描尚未停止，请稍后重试")?
+		.map_err(String::from)?;
+	}
+	Ok(())
 }
 
 #[tauri::command]
@@ -298,6 +346,7 @@ pub async fn ble_open(
 				owner: label,
 				generation: op.generation,
 				cancel: cancel.clone(),
+				stop_scan: None,
 				done: done_rx,
 				writes: Some(writes),
 			}),
@@ -569,6 +618,41 @@ pub async fn ble_close(webview: tauri::Webview, state: State<'_, BleState>, hand
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[tokio::test]
+	async fn pause_terminates_wait_for_adapter_even_before_ready() {
+		let cancel = CancellationToken::new();
+		let stop = CancellationToken::new();
+		stop.cancel();
+		let paused = tokio::time::timeout(Duration::from_millis(100), wait_scan_ready(std::future::pending(), &cancel, &stop))
+			.await
+			.unwrap();
+		assert!(!paused.unwrap());
+		assert!(!cancel.is_cancelled());
+		let stop = CancellationToken::new();
+		let waiting = wait_scan_ready(std::future::pending(), &cancel, &stop);
+		let pause = async {
+			tokio::task::yield_now().await;
+			stop.cancel();
+		};
+		let (result, _) = tokio::join!(waiting, pause);
+		assert!(!result.unwrap());
+	}
+	#[test]
+	fn stopping_scan_keeps_generation_and_claim_until_task_drains() {
+		let s = BleState::default();
+		let op = s.owners.owner("fixture").begin(None).unwrap();
+		let claim = s.claims.acquire("computer-ble", "fixture", op.generation).unwrap();
+		let cancel = CancellationToken::new();
+		let stop = CancellationToken::new();
+		stop.cancel();
+		assert!(current(&op, &cancel).is_ok());
+		assert!(s.owners.owner("fixture").begin(Some(op.generation)).is_ok());
+		assert!(s.claims.acquire("computer-ble", "fixture", op.generation).is_err());
+		drop(op);
+		drop(claim);
+		assert!(s.claims.acquire("computer-ble", "fixture", 0).is_ok());
+	}
+
 	#[test]
 	fn selectors_allow_distinct_services_and_reject_ambiguous_persisted_mapping() {
 		let a = uuid::Uuid::from_u128(1);
@@ -622,6 +706,7 @@ mod tests {
 				owner: "fixture".into(),
 				generation: op.generation,
 				cancel: cancel.clone(),
+				stop_scan: None,
 				done,
 				writes: None,
 			}),

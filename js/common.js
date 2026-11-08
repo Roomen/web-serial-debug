@@ -3499,7 +3499,7 @@
 		let selection = null
 		try {
 			const source = window.AppPlatform && window.AppPlatform.service('connection-source')
-			selection = source ? await source.requestPort() : { port: await SerialAdapter.requestPort() }
+			selection = source ? await source.requestPort(opts && opts.source) : { port: await SerialAdapter.requestPort() }
 			if (!selection || !selection.port) return
 			const port = selection.port
 			// 同一个已打开端口不重开；无线来源确认映射后直接打开，共用原来的绑定/冲突检查。
@@ -3509,7 +3509,7 @@
 			const errorType = e.name || 'UnknownError'
 			const errorMsg = e.message || '未知错误'
 			if (errorType === 'NotFoundError') {
-				addLogErr('未选择串口设备')
+				addLogErr('未选择设备')
 			} else if (errorType === 'SecurityError') {
 				addLogErr('串口权限被拒绝')
 			} else {
@@ -4287,6 +4287,8 @@
 		try {
 			info = port && port.getInfo ? port.getInfo() : {}
 		} catch (e) {}
+		// Wireless identities are opaque document credentials, never persistent alias keys.
+		fp.sessionOnly = !!info.transport && info.transport !== 'serial'
 		if (info.usbVendorId != null) fp.vid = info.usbVendorId.toString(16).padStart(4, '0')
 		if (info.usbProductId != null) fp.pid = info.usbProductId.toString(16).padStart(4, '0')
 		for (const k in info) {
@@ -4320,6 +4322,7 @@
 
 	/** 生成匹配 keys；多 CDC 必须带 slot，禁止仅靠弱键互串 */
 	function buildPortKeys(fp) {
+		if (fp.sessionOnly) return []
 		const keys = new Set()
 		const n = normalizeLabel
 		const slot = (fp.slot != null && fp.slot >= 0) ? fp.slot : null
@@ -4560,6 +4563,7 @@
 	/** 获取端口显示名（同步：持久别名 → 会话内存别名 → 默认显示名） */
 	function getPortDisplayName(port) {
 		if (!port) return '未知设备'
+		if (port.getDisplayAlias && port.getDisplayAlias()) return port.getDisplayAlias()
 		const ident = _portIdentityCache.has(port) ? _portIdentityCache.get(port) : syncPortIdentity(port)
 		if (ident.keys.length) {
 			const hit = lookupAlias(ident.keys)
@@ -4573,6 +4577,7 @@
 	/** 端口当前持久别名（无则 null；清除按钮显隐 / tooltip 用） */
 	function getPortAlias(port) {
 		if (!port) return null
+		if (port.getDisplayAlias) return port.getDisplayAlias()
 		const ident = _portIdentityCache.has(port) ? _portIdentityCache.get(port) : syncPortIdentity(port)
 		if (!ident.keys.length) return null
 		const hit = lookupAlias(ident.keys)
@@ -4589,6 +4594,11 @@
 	/** 设置端口别名；有持久 key 必写 localStorage（合并/删除 entry），否则仅内存别名 */
 	async function setPortAlias(port, name) {
 		const trimmed = String(name || '').trim().slice(0, 32)
+		if (port.setDisplayAlias) {
+			port.setDisplayAlias(trimmed)
+			showToast('别名仅本页面当前无线会话有效', 2000)
+			return true
+		}
 		const ident = await resolvePortIdentity(port)
 		if (ident.keys.length) {
 			const store = loadAliases()
@@ -4659,9 +4669,9 @@
 		const chip = chipElFor(sid)
 		if (chip) chip.classList.toggle('is-empty', !port)
 		if (!port) {
-			const def = SerialHub.mode === 'dual' ? '选择' : '选择串口'
+			const def = SerialHub.mode === 'dual' ? '选择' : '选择设备'
 			btn.innerHTML = '<i class="bi bi-usb-plug"></i> ' + def
-			btn.title = '点击选择串口并连接'
+			btn.title = '点击选择设备并连接'
 			return
 		}
 		const name = getPortDisplayName(port)
@@ -7521,7 +7531,7 @@
 		},
 		forget: function (sid) { return forgetPort(sid) },
 		// 不能枚举的后端(网页版)经浏览器选择框选设备：选完即连接(本路连着别的口时 bindSessionPort 先关旧口)
-		requestPort: function (sid) { return selectPortFor(sid, { openAfterSelect: true }) },
+		requestPort: function (sid, source) { return selectPortFor(sid, { openAfterSelect: true, source: source }) },
 		setAlias: function (port, name) {
 			return setPortAlias(port, String(name || '').trim().slice(0, 32)).then(function (ok) {
 				refreshPortDisplayNames()

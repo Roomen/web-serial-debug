@@ -6,7 +6,7 @@
 		const namespace = root.crypto && root.crypto.randomUUID ? root.crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)
 		let epoch = 0, generation = 0, port = null, reader = null, phase = 'idle', devices = [], tail = Promise.resolve(), queued = 0
 		let external = null
-		const lanePorts = new Set()
+		const lanePorts = new Set(), aliases = new Map(), lanePortByDevice = new Map()
 		let next = 0, base = 0, bytes = [], error = '', releasePromise = null
 		const listeners = new Set()
 		const notify = () => { for (const fn of listeners) fn() }
@@ -23,7 +23,7 @@
 				nativeGeneration = await deps.invoke('classic_release_owned')
 				ready = Promise.resolve()
 				if (reader) await reader.cancel().catch(() => {})
-				reader = null; port = null; external = null; lanePorts.clear(); devices = []; bytes = []; base = next = 0; phase = 'idle'; error = ''; closeFailed = false; notify()
+				reader = null; port = null; external = null; lanePorts.clear(); lanePortByDevice.clear(); aliases.clear(); devices = []; bytes = []; base = next = 0; phase = 'idle'; error = ''; closeFailed = false; notify()
 			})().catch(e => { phase = 'close-failed'; error = String(e.message || e); notify(); throw e }).finally(() => { releasePromise = null })
 			return releasePromise
 		}
@@ -108,10 +108,11 @@
 		function createPort(deviceId) {
 			const device = devices.find(d => d.deviceId === deviceId && d.paired)
 			if (!device) throw fail('pairing_required', '请先在系统窗口选择已配对的 SPP 设备')
+			if (lanePortByDevice.has(deviceId)) return lanePortByDevice.get(deviceId)
 			const token = epoch
 			let connection = null
 			const stream = deps.createStreamPort({
-				getInfo() { return { transport: 'bt-classic', productName: device.name + ' · SPP', serialNumber: namespace + ':' + deviceId } },
+				getInfo() { return { transport: 'bt-classic', productName: device.name + ' · SPP', sessionIdentity: namespace + ':' + deviceId } },
 				async open(options, sink) {
 					await ready
 					if (token !== epoch || deps.blocked()) throw fail('stale_generation')
@@ -148,7 +149,9 @@
 					} catch (e) { closeFailed = true; throw e } finally { closing-- }
 				},
 			})
-			lanePorts.add(stream)
+			stream.getDisplayAlias = () => aliases.get(deviceId) || null
+			stream.setDisplayAlias = alias => { if (alias) aliases.set(deviceId, alias); else aliases.delete(deviceId) }
+			lanePorts.add(stream); lanePortByDevice.set(deviceId, stream)
 			return stream
 		}
 		return { createPort, ports: () => Array.from(lanePorts), isBusyForUpdate: () => !!(initializing || queued || releasePromise || closing || closeFailed || ['system-dialog', 'opening', 'closing', 'close-failed'].includes(phase)), state, devices: () => devices.map(d => ({ ...d })), read, run, release, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) } }

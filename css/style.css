@@ -13250,6 +13250,7 @@ html[data-layout='modern'] .mdn-ports-hint {
 
 html[data-layout='modern'] .mdn-ports-foot {
 	display: flex;
+	flex-wrap: wrap;
 	gap: 6px;
 }
 
@@ -13651,4 +13652,40 @@ html[data-layout='modern'] .mdn-mcp-port:disabled {
 }
 html[data-layout='modern'] .mdn-pop-params[hidden] {
 	display: none;
+}
+
+/* Desktop device picker: advertisement list remains stable while scanning. */
+.connection-filters {
+	display: grid;
+	grid-template-columns: minmax(0, 2fr) minmax(110px, 1fr) minmax(110px, 1fr);
+	gap: 12px;
+}
+.connection-filters label { min-width: 0; }
+.connection-devices {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	max-height: min(42vh, 360px);
+	overflow: auto;
+	margin-bottom: 12px;
+}
+.connection-devices .connection-device {
+	margin: 0;
+	flex-shrink: 0;
+	width: 100%;
+	border: 1px solid var(--border-color);
+	border-radius: 8px;
+	padding: 10px 12px;
+	background: var(--bg-body);
+	color: var(--text-primary);
+	text-align: left;
+	white-space: pre-line;
+	overflow-wrap: anywhere;
+	font-size: 0.8125rem;
+}
+.connection-device[aria-pressed='true'] { border-color: var(--bs-primary); box-shadow: inset 3px 0 var(--bs-primary); }
+.connection-device:focus-visible { outline: 2px solid var(--bs-primary); outline-offset: 1px; }
+.connection-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+@media (max-width: 640px) {
+	.connection-filters { grid-template-columns: minmax(0, 1fr); gap: 8px; }
 }

@@ -77,6 +77,15 @@ struct Registry {
 	devices: HashMap<String, Entry>,
 	handles: HashMap<u64, Arc<Handle>>,
 }
+impl Registry {
+	fn device_key(&self, owner: &str, generation: u64, address: &str) -> Option<String> {
+		self.devices
+			.iter()
+			.find(|(_, e)| e.owner == owner && e.generation == generation && e.device.address == address)
+			.map(|(id, _)| id.clone())
+	}
+}
+
 #[derive(Default)]
 pub struct ClassicState {
 	registry: Mutex<Registry>,
@@ -194,10 +203,16 @@ pub async fn classic_discover(webview: tauri::Webview, state: State<'_, ClassicS
 			if !op.is_current() {
 				return Err("Classic 会话已回收".into());
 			}
-			if r.devices.values().filter(|e| e.owner == label).count() >= 64 {
-				return Err("Classic 设备列表已满，请清理会话".into());
-			}
-			let id = format!("classic-{}", state.next.fetch_add(1, Ordering::Relaxed));
+			// Reuse only the native identity within this owner generation; names never identify a device.
+			let existing = r.device_key(&label, op.generation, &d.address);
+			let id = if let Some(id) = existing {
+				id
+			} else {
+				if r.devices.values().filter(|e| e.owner == label).count() >= 64 {
+					return Err("Classic 设备列表已满，请清理会话".into());
+				}
+				format!("classic-{}", state.next.fetch_add(1, Ordering::Relaxed))
+			};
 			let result = DeviceView {
 				device_id: id.clone(),
 				name: d.name.clone(),
@@ -344,7 +359,9 @@ pub async fn classic_write(webview: tauri::Webview, state: State<'_, ClassicStat
 }
 #[tauri::command]
 pub async fn classic_close(webview: tauri::Webview, state: State<'_, ClassicState>, handle: u64) -> Result<(), String> {
-	if !state.registry.lock().unwrap().handles.contains_key(&handle) { return Ok(()); }
+	if !state.registry.lock().unwrap().handles.contains_key(&handle) {
+		return Ok(());
+	}
 	let (h, op) = state.operation(webview.label(), handle)?;
 	h.stop.store(true, Ordering::Release);
 	tauri::async_runtime::spawn_blocking(move || {
@@ -419,5 +436,33 @@ mod tests {
 		assert!(!a.is_current());
 		assert!(b.is_current());
 		drop(release);
+	}
+}
+
+#[cfg(test)]
+mod picker_tests {
+	use super::*;
+	#[test]
+	fn repeated_system_selection_reuses_only_same_native_identity_and_owner_generation() {
+		let mut registry = Registry::default();
+		registry.devices.insert(
+			"fixture-id".into(),
+			Entry {
+				owner: "fixture-owner".into(),
+				generation: 1,
+				device: Device {
+					address: "synthetic-native-identity".into(),
+					name: "Same name".into(),
+					paired: true,
+				},
+			},
+		);
+		assert_eq!(
+			registry.device_key("fixture-owner", 1, "synthetic-native-identity").as_deref(),
+			Some("fixture-id")
+		);
+		assert!(registry.device_key("fixture-owner", 2, "synthetic-native-identity").is_none());
+		assert!(registry.device_key("other-owner", 1, "synthetic-native-identity").is_none());
+		assert!(registry.device_key("fixture-owner", 1, "another-native-identity").is_none());
 	}
 }

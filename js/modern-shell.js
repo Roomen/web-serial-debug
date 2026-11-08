@@ -242,11 +242,11 @@
 			if (refs.refreshConn) refs.refreshConn()
 		})
 		// 设备键的下拉：本路的串口列表，选口与设备管理(改名 / 清除别名 / 取消选择)的唯一入口。
-		// 桌面客户端列出在位的全部口、底部「刷新」；网页版列出授权过的口、底部「选择串口…」开浏览器选择框
+		// 桌面客户端列出在位的全部口、底部「刷新」；网页版列出授权过的口、底部「选择设备…」开浏览器选择框
 		const dd = mk('div', 'mdn-dd')
 		dd.hidden = true
 		dd.setAttribute('role', 'dialog')
-		dd.setAttribute('aria-label', '选择串口设备')
+		dd.setAttribute('aria-label', '选择设备')
 		// 电源键：连接 / 断开这一路已选的设备(serialLanes.toggle)，没设备时禁用(refreshConn 更新 disabled)。
 		// 本路菜单/下拉开着也先收起：连接态一变列表就要重画，留着会跟着跳
 		listen(power, 'click', function () {
@@ -261,7 +261,7 @@
 			closePops()
 			if (open) openPop(key)
 		}
-		// 设备键一律开下拉：网页版列表里是授权过的口(没有授权过时是空态提示)，新设备从底部「选择串口…」进浏览器选择框
+		// 设备键一律开下拉：网页版列表里是授权过的口(没有授权过时是空态提示)，新设备从底部「选择设备…」进浏览器选择框
 		listen(b, 'click', function () {
 			const open = dd.hidden
 			closePops()
@@ -340,10 +340,21 @@
 		const hint = mk('div', 'mdn-ports-hint')
 		const foot = mk('div', 'mdn-ports-foot')
 		const add = btn('btn btn-sm btn-outline-primary', '', '在浏览器的选择框里选一个串口设备并连接，选过的设备之后会一直列在这里')
-		add.append(icon('bi-usb-plug'), document.createTextNode(' 选择串口…'))
+		add.append(icon('bi-usb-plug'), document.createTextNode(' 选择设备…'))
 		const reload = btn('btn btn-sm btn-outline-secondary', '', '重新列出串口')
 		reload.append(icon('bi-arrow-clockwise'), document.createTextNode(' 刷新'))
 		foot.append(add, reload)
+		const sources = window.AppPlatform && window.AppPlatform.service('connection-source')
+		if (sources) for (const source of sources.availableSources()) {
+			const choice = btn('btn btn-sm btn-outline-primary', source.label + '…', '选择' + source.label + '设备')
+			listen(choice, 'click', function () {
+				const lanes = window.serialLanes
+				if (!lanes) return
+				closePops()
+				enqueuePort(st, function () { return lanes.requestPort(sidFor(key), source.id) })
+			})
+			foot.appendChild(choice)
+		}
 		box.append(list, empty, hint, foot)
 		const st = { key: key, box: box, list: list, empty: empty, hint: hint, add: add, reload: reload, foot: foot,
 			ports: [], rows: [], rowEls: null, loaded: false, seq: 0, sig: '', editing: null, queue: Promise.resolve(), focusPort: null, wantFocus: false }
@@ -477,12 +488,10 @@
 		st.list.hidden = !rows.length
 		st.empty.hidden = !!rows.length
 		st.empty.textContent = !st.loaded ? '正在查找串口…'
-			: (enumerable ? '未发现串口设备，插入后会自动出现' : '还没有选过串口设备。点「选择串口…」在浏览器的选择框里选择，之后它会一直列在这里')
+			: (enumerable ? '未发现串口设备，插入后会自动出现' : '还没有选过串口设备。点「选择设备…」在浏览器的选择框里选择，之后它会一直列在这里')
 		st.hint.hidden = !rows.length
 		st.hint.textContent = laneBusy ? '单击其它设备即切换过去（先断开当前设备）' : '单击设备即连接'
-		const sources = window.AppPlatform && window.AppPlatform.service('connection-source')
-		st.add.hidden = enumerable && !sources
-		if (sources) { st.add.textContent = '选择连接来源…'; st.add.title = '普通串口 / 经典蓝牙 SPP / 电脑 BLE / 外置 USB BLE 桥' }
+		st.add.hidden = enumerable
 		st.reload.hidden = !enumerable
 	}
 
@@ -823,7 +832,7 @@
 			p.letter.textContent = sid === 'S' ? '' : sid
 			// 标签改过才显示(默认就是「A路」「B路」，再写一遍是噪声)
 			p.label.textContent = lbl && lbl !== sid + '路' ? lbl : ''
-			p.port.textContent = portName || '选择串口'
+			p.port.textContent = portName || '选择设备'
 			p.params.textContent = params
 			const st = failed ? '关闭失败，请重试' : (opening ? '正在连接' : (open ? '已连接' : '未连接'))
 			const who = sid === 'S' ? '串口' : sid + ' 路' + (p.label.textContent ? '（' + p.label.textContent + '）' : '')
@@ -833,8 +842,8 @@
 			p.power.setAttribute('aria-pressed', String(!!open))
 			p.power.setAttribute('aria-label', lane + (failed ? '重试关闭串口' : (opening ? '正在连接' : (open ? '断开串口' : '连接串口'))))
 			p.power.title = lane + (failed ? '关闭失败，点此重试关闭' : (opening ? '正在连接' : (open ? '已连接，点此断开' : (hasPort ? '未连接，点此连接' : '先选择设备'))))
-			p.btn.setAttribute('aria-label', who + ' ' + (portName || '未选择串口') + ' · ' + st + ' · 选择串口设备')
-			p.btn.title = who + ' · ' + st + ' · 选择串口设备'
+			p.btn.setAttribute('aria-label', who + ' ' + (portName || '未选择设备') + ' · ' + st + ' · 选择设备')
+			p.btn.title = who + ' · ' + st + ' · 选择设备'
 			p.more.title = sid === 'S' ? '串口设置：参数' : '串口设置：路标签 · 参数'
 			p.head.textContent = sid === 'S' ? '单路串口' : sid + ' 路'
 		})
