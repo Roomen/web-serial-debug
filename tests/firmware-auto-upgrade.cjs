@@ -85,8 +85,8 @@ function makeHarness(device, opts) {
 		suppressParse: false,
 		isOpen: () => link.open,
 		onReceive(fn) { receive = fn },
-		pinSession() { pins.depth++ }, unpinSession() { pins.depth-- }, getActiveSendSid: () => 'S',
-		writeData(bytes) { hostCodes.push(bytes[3]); device.onHost(bytes); return Promise.resolve() },
+		pinSession() { pins.depth++ }, unpinSession() { pins.depth-- }, getActiveSendSid: () => 'A', getMode: () => 'single',
+		writeRawTo(sid, bytes) { assert.equal(sid, 'S', '单路 UI A 必须映射到物理 S'); hostCodes.push(bytes[3]); device.onHost(bytes); return Promise.resolve() },
 	}
 	device.send = (bytes) => setTimeout(() => receive(bytes), 0)
 	device.PCP = ctx.PCP

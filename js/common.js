@@ -807,8 +807,10 @@
 	let persistLogsTimer = 0
 	const LOG_HEX_CHARS_MAX = 12 * 1024 * 1024
 	const logHexStats = new WeakMap() // 日志容器 -> { rows, chars }；行数对不上(清空、恢复缓存)就整段重数
-	const LOG_PERSIST_LEVELS = [null, 4000, 1500, 400]
+	const LOG_PERSIST_LEVELS = [1536 * 1024, 768 * 1024, 384 * 1024, 96 * 1024]
 	let logPersistLevel = 0
+	let logPersistRetryAt = 0
+	const LOG_PERSIST_RETRY_MS = 60000
 	const LOG_PERSIST_INTERVAL_MS = 2000
 	const logLayoutPending = new Map() // 日志容器 -> 该容器的日志选项
 	function activeLogOptions() {
@@ -3743,8 +3745,9 @@
 	window.addEventListener('beforeunload', releasePortOnExit)
 
 	//bfcache 返回: pagehide 已把底层口释放, 状态/按钮与真实口状态对齐, 再按打开意图补重连
-	window.addEventListener('pageshow', function (e) {
+	window.addEventListener('pageshow', async function (e) {
 		if (!e.persisted) return
+		if (window.AppPlatform && window.AppPlatform.instanceReady) await window.AppPlatform.instanceReady
 		serialStatuChange(false, 'S')
 		serialStatuChange(false, 'A')
 		serialStatuChange(false, 'B')
@@ -5675,58 +5678,83 @@
 		} catch (e) {}
 		return false
 	}
-	function paneHtml(id, maxRows) {
+	// 按 JSON 字符预算取尾部整行，避免先读整份 innerHTML 再反复序列化大行。
+	// 保留 v2 HTML 格式，兼容历史缓存与客户端更新交接；预算按 UTF-16 两字节计。
+	function paneHtml(id, budget, memo) {
 		const el = document.getElementById(id)
 		if (!el) return ''
-		let html = ''
-		if (maxRows == null || el.childElementCount <= maxRows) {
-			html = el.innerHTML
-		} else {
-			for (let i = el.childElementCount - maxRows; i < el.childElementCount; i++) {
-				html += el.children[i].outerHTML
+		const rows = []
+		let used = 0
+		for (let i = el.childElementCount - 1; i >= 0; i--) {
+			const row = el.children[i]
+			let entry = memo.get(row)
+			if (!entry) {
+				let html = row.outerHTML
+				if (typeof window.serialLogPersistClean === 'function') html = window.serialLogPersistClean(html)
+				entry = { html, cost: JSON.stringify(html).length - 2 }
+				memo.set(row, entry)
 			}
+			const { html, cost } = entry
+			if (used + cost > budget) break
+			rows.push(html)
+			used += cost
 		}
-		//现代布局给日志行挂的派生属性(js/modern-timeline.js)只服务当前视图，不进持久化内容
-		return typeof window.serialLogPersistClean === 'function' ? window.serialLogPersistClean(html) : html
+		return rows.reverse().join('')
 	}
-	function collectLogCache(maxRows) {
-		const payload = {
-			v: LOG_CACHE_VER,
-			seq: logSeq,
-			single: paneHtml('serial-logs-single', maxRows),
-			dual: paneHtml('serial-logs-dual', maxRows),
-		}
+	function collectLogCache(budget, memo) {
+		// sessionStorage 按 UTF-16 字节保守计量；空区域不占份额。
+		let remaining = Math.max(0, Math.floor(budget / 2) - 1024)
+		const payload = { v: LOG_CACHE_VER, seq: logSeq, single: '', dual: '' }
 		if (window.SerialTerm && typeof window.SerialTerm.getText === 'function') {
-			payload.termSingle = window.SerialTerm.getText('single') || ''
-			payload.termDual = window.SerialTerm.getText('dual') || ''
+			const max = Math.min(16 * 1024, Math.floor(remaining / 24))
+			payload.termSingle = (window.SerialTerm.getText('single') || '').slice(-max)
+			payload.termDual = (window.SerialTerm.getText('dual') || '').slice(-max)
+			remaining -= JSON.stringify(payload.termSingle).length + JSON.stringify(payload.termDual).length
 		}
+		const panes = ['single', 'dual'].filter(function (mode) {
+			const el = document.getElementById('serial-logs-' + mode)
+			return el && el.childElementCount > 0
+		})
+		panes.forEach(function (mode, i) {
+			payload[mode] = paneHtml('serial-logs-' + mode, Math.floor(remaining / (panes.length - i)), memo)
+			remaining -= JSON.stringify(payload[mode]).length - 2
+		})
+		// 配额太小连一个完整行都放不下时，不以空快照覆盖仍可恢复的旧日志。
+		if (panes.length && !payload.single && !payload.dual) return null
 		return payload
 	}
-	// 超限时逐档降级,别一步掉到几百行: 默认上限提到 10000 后整份快照经常刚好压线。
-	// 记住上次写成功的那一档，下次从它开始，免得每次都先把整份序列化一遍再被配额拒绝；行数回落到上一档以内再从头试
-	function logRowsTotal() {
-		let n = 0
-		;['serial-logs-single', 'serial-logs-dual'].forEach(function (id) {
-			const el = document.getElementById(id)
-			if (el) n = Math.max(n, el.childElementCount)
-		})
-		return n
-	}
+
 	function persistLogsNow() {
 		clearTimeout(persistLogsTimer)
 		persistLogsTimer = 0
-		if (logPersistLevel > 0 && logRowsTotal() <= LOG_PERSIST_LEVELS[logPersistLevel]) logPersistLevel = 0
-		for (let i = logPersistLevel; i < LOG_PERSIST_LEVELS.length; i++) {
+		const memo = new Map()
+		const now = Date.now()
+		// 降档后最多每分钟探测一次最高档；日常的 2s 快照仍从已成功的预算开始。
+		const start = logPersistLevel > 0 && now >= logPersistRetryAt ? 0 : logPersistLevel
+		if (start === 0 && logPersistLevel > 0) logPersistRetryAt = now + LOG_PERSIST_RETRY_MS
+		for (let i = start; i < LOG_PERSIST_LEVELS.length; i++) {
+			let raw
 			try {
-				const max = LOG_PERSIST_LEVELS[i]
-				sessionStorage.setItem(LOG_CACHE_KEY, JSON.stringify(max == null ? collectLogCache() : collectLogCache(max)))
+				const payload = collectLogCache(LOG_PERSIST_LEVELS[i], memo)
+				// 单行放不下是预算不足，不是存储配额异常；更小的档也放不下，保留旧快照等升档探测。
+				if (!payload) return false
+				raw = JSON.stringify(payload)
+			} catch (e) { return false }
+			try {
+				sessionStorage.setItem(LOG_CACHE_KEY, raw)
 				logPersistLevel = i
+				if (i === 0) logPersistRetryAt = 0
+				else if (now >= logPersistRetryAt) logPersistRetryAt = now + LOG_PERSIST_RETRY_MS
 				return true
-			} catch (e) {}
+			} catch (e) {
+				// 写入被拒后留出恢复间隔；同一快照继续降档，行的序列化结果由 memo 复用。
+				logPersistRetryAt = now + LOG_PERSIST_RETRY_MS
+			}
 		}
-		try { sessionStorage.removeItem(LOG_CACHE_KEY) } catch (e3) {}
+		// setItem 失败不会改旧值，保留上一份可恢复快照和上次成功的预算。
 		return false
 	}
+
 	// 节流而不是防抖：整份快照要序列化上万行，设备每隔几百毫秒发一行时防抖等于每行都写一次；
 	// 刷新页面靠 pagehide 里的 persistLogsNow 补最后一段
 	function schedulePersistLogs() {
@@ -6255,6 +6283,12 @@
 		appendLogNode(row, target)
 		if (getLogTypeForSid(target) === 'term') showToast(msg, null, 'error')
 	}
+
+	window.addEventListener('serial-term-overflow', function (ev) {
+		const d = ev.detail || {}
+		const sid = d.sid === 'dual' ? 'A' : 'S'
+		addLogErr('终端解析积压，已丢弃 ' + d.bytes + ' 字节（累计 ' + d.total + ' 字节）', sid)
+	})
 
 	//轻量顶部气泡(非确认框)。kind='error' 用红色、停留更久
 	let _toastTimer = null
@@ -7589,6 +7623,7 @@
 			if (nav && nav.type) navType = nav.type
 			else if (performance.navigation) navType = performance.navigation.type === 1 ? 'reload' : 'navigate'
 		} catch (e) {}
+		if (window.AppPlatform && window.AppPlatform.instanceReady) await window.AppPlatform.instanceReady
 		if (navType !== 'reload') return
 		const wantS = getSerialWantOpen('S')
 		const wantA = getSerialWantOpen('A')

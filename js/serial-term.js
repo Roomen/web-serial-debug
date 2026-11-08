@@ -4,6 +4,8 @@
 	'use strict'
 
 	const terms = Object.create(null)
+	const PENDING_MAX = 1024 * 1024
+	const WRITE_CHUNK = 16 * 1024
 
 	const CDN_XTERM = [
 		'https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js',
@@ -211,6 +213,7 @@
 			onSend: opts && typeof opts.onSend === 'function' ? opts.onSend : null,
 			onFocus: opts && typeof opts.onFocus === 'function' ? opts.onFocus : null,
 			ro: null,
+			queue: [], pending: 0, writing: false, dropped: 0, reported: 0, reportTimer: null, disposed: false,
 		}
 		terms[sid] = rec
 		term.onData(function (str) {
@@ -243,18 +246,55 @@
 		})
 	}
 
+	function reportDrop(sid, rec, count) {
+		rec.dropped += count
+		if (rec.reportTimer != null) return
+		rec.reportTimer = setTimeout(function () {
+			rec.reportTimer = null
+			if (rec.disposed) return
+			const delta = rec.dropped - rec.reported
+			rec.reported = rec.dropped
+			window.dispatchEvent(new CustomEvent('serial-term-overflow', { detail: { sid, bytes: delta, total: rec.dropped } }))
+		}, 1000)
+	}
+	function pump(sid, rec) {
+		if (rec.disposed || rec.writing || !rec.queue.length) return
+		const chunk = rec.queue.shift()
+		rec.writing = true
+		let done = false
+		function finish() {
+			if (done) return
+			done = true
+			rec.pending -= chunk.length
+			rec.writing = false
+			if (rec.clearPending && !rec.disposed) {
+				rec.clearPending = false
+				try { rec.term.reset() } catch (e) {}
+			}
+			pump(sid, rec)
+		}
+		try { rec.term.write(chunk, finish) } catch (e) { reportDrop(sid, rec, chunk.length); finish() }
+	}
 	function write(sid, bytes) {
 		const rec = recOf(sid)
 		if (!rec || !rec.term || bytes == null) return
 		const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
 		if (!u8.length) return
-		try { rec.term.write(u8) } catch (e) { /* ignore */ }
+		const accepted = Math.min(u8.length, PENDING_MAX - rec.pending)
+		for (let i = 0; i < accepted; i += WRITE_CHUNK) rec.queue.push(u8.slice(i, Math.min(accepted, i + WRITE_CHUNK)))
+		rec.pending += accepted
+		if (accepted < u8.length) reportDrop(sid, rec, u8.length - accepted)
+		pump(sid, rec)
 	}
 
 	function clear(sid) {
 		const rec = recOf(sid)
 		if (!rec || !rec.term) return
-		try { rec.term.clear() } catch (e) { /* ignore */ }
+		const queued = rec.queue.reduce(function (sum, chunk) { return sum + chunk.length }, 0)
+		rec.queue.length = 0
+		rec.pending -= queued
+		rec.clearPending = rec.writing
+		try { rec.term.reset() } catch (e) { /* ignore */ }
 	}
 
 	function getText(sid) {
@@ -277,6 +317,9 @@
 		function drop(id) {
 			const rec = recOf(id)
 			if (!rec) return
+			rec.disposed = true
+			rec.queue.length = 0
+			clearTimeout(rec.reportTimer)
 			try { if (rec.ro) rec.ro.disconnect() } catch (e) { /* ignore */ }
 			try { if (rec.term) rec.term.dispose() } catch (e) { /* ignore */ }
 			delete terms[id]

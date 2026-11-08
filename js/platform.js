@@ -185,6 +185,77 @@
 			service(name) { return services[name] || null },
 		}
 
+		// Web Locks 的占用不依赖后台标签页处理消息；复制 sessionStorage 的新文档不能继承串口重连意图。
+		api.instanceSettled = false
+		function clearInheritedRuntime() {
+			try {
+				const keys = []
+				for (let i = 0; i < win.sessionStorage.length; i++) keys.push(win.sessionStorage.key(i))
+				keys.forEach(function (key) {
+					if (/^serialWant(Open|Port)/.test(key) || key === 'stsSim.prevProtocol' || key === 'sk-batch-state.index') win.sessionStorage.removeItem(key)
+				})
+			} catch (e) {}
+		}
+		let claimSeq = 0
+		let releaseClaim = null
+		let pageActive = true
+		function claimInstance() {
+			const seq = ++claimSeq
+			api.instanceSettled = false
+			api.instanceReady = new Promise(function (resolveReady) {
+				function ready() {
+					if (seq !== claimSeq || !pageActive) return
+					api.instanceSettled = true
+					resolveReady()
+				}
+				function rotate() {
+					clearInheritedRuntime()
+					api.instanceId = makeInstanceId()
+					try { win.sessionStorage.setItem('appInstanceId', api.instanceId) } catch (e) {}
+				}
+				function fallback() {
+					if (seq !== claimSeq || !pageActive) return
+					// 原生壳的进程+窗口键不会随复制的 sessionStorage 继承，刷新保留；升级交接由壳明确标记。
+					const nativeKey = desc.runtime === 'tauri' && win.__APP_NATIVE_INSTANCE_KEY__
+					let sameNative = false
+					try {
+						sameNative = !!nativeKey && win.sessionStorage.getItem('appNativeInstanceKey') === nativeKey
+						if (nativeKey) win.sessionStorage.setItem('appNativeInstanceKey', nativeKey)
+					} catch (e) {}
+					// 老浏览器没有跨文档互斥，保守放弃继承的重连；不猜其它标签页是否仍持有设备。
+					if (!sameNative && !win.__APP_UPDATE_RESTORED__) rotate()
+					ready()
+				}
+				if (!nav.locks || typeof nav.locks.request !== 'function') { fallback(); return }
+				function claim() {
+					try {
+						nav.locks.request('serial-instance-' + api.instanceId, { ifAvailable: true }, function (lock) {
+							if (seq !== claimSeq || !pageActive) return
+							if (!lock) { rotate(); claim(); return }
+							return new Promise(function (release) {
+								releaseClaim = release
+								ready()
+							})
+						}).catch(fallback)
+					} catch (e) { fallback() }
+				}
+				claim()
+			})
+		}
+		if (typeof win.addEventListener === 'function') {
+			win.addEventListener('pagehide', function () {
+				pageActive = false
+				claimSeq++
+				api.instanceSettled = false
+				if (releaseClaim) releaseClaim()
+				releaseClaim = null
+			})
+			win.addEventListener('pageshow', function (ev) {
+				if (ev.persisted) { pageActive = true; claimInstance() }
+			})
+		}
+		claimInstance()
+
 		// 门控样式：目录里关掉的功能首屏前就写好；目录外的 id(新面板、新入口)在用到时经 gate() 或 DOM 扫描补规则
 		const ruled = new Set(disabledFeatures(desc))
 		let style = null

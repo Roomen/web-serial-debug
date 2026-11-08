@@ -304,6 +304,34 @@ test('注册进 SerialAdapter 后按 kind=serial 被 pick，优先于 web 后端
 	assert.equal(A.kind, 'serial')
 })
 
+test('原生接收累计确认：打开前数据在句柄可用后确认，关闭后迟到回调不影响新连接', async () => {
+	const t = setup({ onOpen(args) { args.onData.push(new Uint8Array([1, 2, 3])) } })
+	const p = await t.backend.requestPort({})
+	await p.open({ baudRate: 9600 })
+	await new Promise(resolve => setImmediate(resolve))
+	let ack = t.state.calls.filter(c => c.cmd === 'serial_ack_receive')
+	assert.equal(ack.at(-1).args.total, 3)
+	const old = t.state.channels[0]
+	old.data.push(new Uint8Array([4, 5]))
+	await new Promise(resolve => setImmediate(resolve))
+	ack = t.state.calls.filter(c => c.cmd === 'serial_ack_receive')
+	assert.equal(ack.at(-1).args.total, 5)
+	const oldHandle = ack.at(-1).args.handle
+	await p.close()
+	await p.open({ baudRate: 9600 })
+	await new Promise(resolve => setImmediate(resolve))
+	const before = t.state.calls.filter(c => c.cmd === 'serial_ack_receive').length
+	old.data.push(new Uint8Array([99]))
+	old.event.push({ type: 'lost', message: 'synthetic stale lost' })
+	await new Promise(resolve => setImmediate(resolve))
+	ack = t.state.calls.filter(c => c.cmd === 'serial_ack_receive')
+	assert.equal(ack.length, before)
+	assert.notEqual(ack.at(-1).args.handle, oldHandle)
+	assert.equal(ack.at(-1).args.total, 3, '新连接累计值重新从零开始')
+	assert.ok(p.readable)
+	await p.close()
+})
+
 ;(async () => {
 	let failed = 0
 	for (const t of tests) {

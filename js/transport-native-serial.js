@@ -140,15 +140,38 @@
 
 		function createDriver(entry) {
 			let handle = null
+			let retireReceive = function () {}
 			return {
 				getInfo() { return portInfo(entry.desc) },
 				async open(options, sink) {
+					let received = 0, acknowledged = 0, ackBusy = false, retired = false
+					retireReceive()
+					retireReceive = function () { retired = true }
+					const acknowledge = function () {
+						if (retired || handle == null || ackBusy || received === acknowledged) return
+						const h = handle, total = received
+						ackBusy = true
+						invoke('serial_ack_receive', { handle: h, total }).then(function () {
+							acknowledged = total
+						}, function () {
+							if (retired) return
+							retired = true
+							sink.lost(makeError('NetworkError', '原生接收确认失败，已停止连接'))
+						}).finally(function () { ackBusy = false; acknowledge() })
+					}
 					const onData = new Channel()
-					onData.onmessage = function (m) { sink.data(toBytes(m)) }
+					onData.onmessage = function (m) {
+						if (retired) return
+						const bytes = toBytes(m)
+						sink.data(bytes)
+						received += bytes.byteLength
+						acknowledge()
+					}
 					const onEvent = new Channel()
 					onEvent.onmessage = function (ev) {
+						if (retired) return
 						const msg = ev && ev.message ? String(ev.message) : ''
-						if (ev && ev.type === 'lost') sink.lost(makeError('NetworkError', msg || '设备已断开'))
+						if (ev && ev.type === 'lost') { retired = true; sink.lost(makeError('NetworkError', msg || '设备已断开')) }
 						else sink.error(makeError('FramingError', msg || '串口读错误'))
 					}
 					const o = options || {}
@@ -165,7 +188,9 @@
 							onData,
 							onEvent,
 						})
+						acknowledge()
 					} catch (e) {
+						retired = true
 						throw nativeError(e)
 					}
 				},
@@ -178,7 +203,7 @@
 					const h = handle
 					if (h == null) return
 					await invoke('serial_close', { handle: h }).catch(function (e) { throw nativeError(e, 'InvalidStateError') })
-					if (handle === h) handle = null
+					if (handle === h) { retireReceive(); handle = null }
 				},
 				setSignals(s) {
 					if (handle == null) return Promise.reject(makeError('InvalidStateError', '串口未打开'))

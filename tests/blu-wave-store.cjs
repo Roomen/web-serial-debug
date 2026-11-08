@@ -50,7 +50,7 @@ function load(store) {
 	vm.createContext(ctx)
 	vm.runInContext(body + `
 		globalThis.T = { ringPush, ringReset, ringIAt, findChunkAt, calcStats, getBucketEntry,
-			chunks: waveChunks, queue: archiveQueue, bucketCache, pruneBucketCache,
+			metadataChunkLimit, chunks: waveChunks, queue: archiveQueue, bucketCache, pruneBucketCache,
 			cache: hydrateCache, pending: hydratePending,
 			state: function () { return { totalCount, hotCount, coldCount, archiveQueuedSamples, storageStop } },
 			setCap: function (n) { RING_CAP_MAX = n }, frameReset: function () { frameHydrateIds.clear() } }`, ctx)
@@ -234,6 +234,19 @@ const settle = async () => { for (let k = 0; k < 5; k++) await tick() }
 		T.frameReset()
 		const precise = T.getBucketEntry(0, 16, 0, 123)
 		assert.equal(precise.max, 15, '回读后应替换近似包络')
+	}
+
+	{
+		const { T, logs } = load(makeStore())
+		const limit = T.metadataChunkLimit()
+		// 不填充数十亿样点：注入合成冷块描述符以模拟长期高压缩率录制。
+		for (let i = 0; i < limit; i++) T.chunks.push({ id: 'synthetic-' + i, state: 'cold', n: CHUNK, base: i * CHUNK })
+		assert.equal(T.ringPush(1), false)
+		assert.equal(T.chunks.length, limit, '元数据到顶后不能继续追加')
+		assert.equal(T.state().storageStop, true)
+		assert.match(logs.at(-1), /元数据.*已有数据保留/)
+		T.ringReset()
+		assert.equal(T.ringPush(2), true, '清空后可重新录制')
 	}
 
 	console.log('blu-wave-store: ok')

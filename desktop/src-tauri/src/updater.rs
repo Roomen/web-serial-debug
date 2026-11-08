@@ -185,7 +185,7 @@ pub fn session_script(session: &HashMap<String, String>) -> String {
     let json = serde_json::to_string(session).unwrap_or_else(|_| "{}".into())
         .replace('<', "\\u003c").replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029");
     let keys = serde_json::to_string(SESSION_KEYS).unwrap();
-    format!("(()=>{{const s={json};for(const k of {keys}){{try{{sessionStorage.removeItem(k)}}catch(_){{}}}}for(const [k,v] of Object.entries(s)){{try{{sessionStorage.setItem(k,v)}}catch(_){{}}}}}})();")
+    format!("(()=>{{window.__APP_UPDATE_RESTORED__=true;const s={json};for(const k of {keys}){{try{{sessionStorage.removeItem(k)}}catch(_){{}}}}for(const [k,v] of Object.entries(s)){{try{{sessionStorage.setItem(k,v)}}catch(_){{}}}}}})();")
 }
 fn save_handoff(app: &AppHandle, state: &UpdateState) -> Result<(), String> {
     use std::io::Write;

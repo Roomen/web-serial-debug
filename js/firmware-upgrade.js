@@ -445,6 +445,11 @@
 	}
 
 	// 累积接收字节, 提取一个完整的 PCP 帧(起始 0xFFFE + 8字节头 + dataLength)
+	function writeFirmware(bytes) {
+		// getActiveSendSid 是 UI 路号：单路返回 A；writeRawTo 要的是真正的物理 S/A/B。
+		const sid = serialApi.getMode() === 'single' ? 'S' : serialApi.getActiveSendSid()
+		return serialApi.writeRawTo(sid, bytes)
+	}
 	function tryReadFrame() {
 		// 只移动读游标，整批处理完再回收前缀，避免多帧粘包时反复搬移整个数组。
 		while (recvBuffer.length - recvOffset >= 8) {
@@ -511,7 +516,7 @@
 				reject(error)
 			}
 			try {
-				Promise.resolve(serialApi.writeData(reqBytes)).catch(failWrite)
+				Promise.resolve(writeFirmware(reqBytes)).catch(failWrite)
 			} catch (error) {
 				failWrite(error)
 				return
@@ -575,7 +580,7 @@
 			log('设备拒收差分包，改用压缩包重新升级', 'warn')
 			// 先应答这次失败的下载结果，设备收尾后才接新一轮通知；应答都发不出去就不再重来
 			try {
-				await serialApi.writeData(PCP.buildDownloadResultAck(0))
+				await writeFirmware(PCP.buildDownloadResultAck(0))
 			} catch (e) {
 				log('应答下载结果失败，不再重试: ' + (e && e.message || e), 'error')
 				return
@@ -756,7 +761,7 @@
 				const resp = PCP.buildDownloadResponse(idx, chunk, version)
 				// 收到设备请求后延时 200ms 再回复, 提升传输鲁棒性
 				await sleep(200)
-				await serialApi.writeData(resp)
+				await writeFirmware(resp)
 				const isResend = sentChunks.has(idx)
 				log('发送: ' + bytesToHex(resp.slice(0, 50)) + '... (分片' + idx + ', ' + chunk.length + '字节)' + (isResend ? ' [重发]' : ''), 'info')
 				sentChunks.add(idx)
@@ -793,7 +798,7 @@
 				log('设备下载失败: ' + (errMap[res.downloadStatus] || ('0x' + res.downloadStatus.toString(16))), 'error')
 				return
 			}
-			await serialApi.writeData(PCP.buildDownloadResultAck(0))
+			await writeFirmware(PCP.buildDownloadResultAck(0))
 			log('设备下载成功', 'success')
 			setProgress(80)
 		} catch (e) {
@@ -806,7 +811,7 @@
 		emit({ type: 'phase', name: 'execute' })
 		try {
 			await sleep(500)
-			await serialApi.writeData(PCP.buildExecuteUpgradeRequest())
+			await writeFirmware(PCP.buildExecuteUpgradeRequest())
 			log('已发送升级命令, 设备开始升级...', 'success')
 			setProgress(100)
 			log('升级完成!', 'success')

@@ -17,7 +17,7 @@ const ctx = {
 	setTimeout(fn) { timers.set(++nextTimer, fn); return nextTimer },
 	clearTimeout(id) { timers.delete(id) },
 	log() {},
-	serialApi: { onReceive(fn) { receive = fn } },
+	serialApi: { getActiveSendSid: () => 'A', getMode: () => 'single', onReceive(fn) { receive = fn } },
 	PCP: { parseMessage(frame) { parses++; return { messageCode: frame[2] } } },
 }
 vm.createContext(ctx)
@@ -74,7 +74,7 @@ assert.equal(evaluate('recvBuffer.length'), 0)
 
 ;(async function () {
 	// 异步写失败立即拒绝并删除自身等待，不清掉并行的其他等待。
-	ctx.serialApi.writeData = () => Promise.reject(new Error('synthetic write failure'))
+	ctx.serialApi.writeRawTo = () => Promise.reject(new Error('synthetic write failure'))
 	let otherCalls = 0
 	ctx.otherResolve = () => { otherCalls++ }
 	ctx.otherTimer = ctx.setTimeout(() => {}, 2000)
@@ -90,13 +90,13 @@ assert.equal(evaluate('recvBuffer.length'), 0)
 	ctx.clearTimeout(ctx.otherTimer)
 
 	// 同步抛错也要回收已经注册的 timer 与 waiter。
-	ctx.serialApi.writeData = () => { throw new Error('synthetic synchronous failure') }
+	ctx.serialApi.writeRawTo = () => { throw new Error('synthetic synchronous failure') }
 	await assert.rejects(evaluate('sendAndWait(new Uint8Array([1]), 0x15, 1000)'), /synthetic synchronous failure/)
 	assert.equal(evaluate('waiters.length'), 0)
 	assert.equal(timers.size, 0)
 
 	// 写入时同步收到应答，等待在发送前就已挂好；之后写 Promise 拒绝也已被观察。
-	ctx.serialApi.writeData = () => { receive(small); return Promise.reject(new Error('synthetic late failure')) }
+	ctx.serialApi.writeRawTo = () => { receive(small); return Promise.reject(new Error('synthetic late failure')) }
 	const response = await evaluate('sendAndWait(new Uint8Array([1]), 0x15, 1000)')
 	assert.deepEqual(Array.from(response), Array.from(small))
 	await Promise.resolve()
@@ -105,7 +105,7 @@ assert.equal(evaluate('recvBuffer.length'), 0)
 
 	// 已超时的写操作之后拒绝，不应产生未处理的拒绝或恢复旧等待。
 	let rejectWrite
-	ctx.serialApi.writeData = () => new Promise((resolve, reject) => { rejectWrite = reject })
+	ctx.serialApi.writeRawTo = () => new Promise((resolve, reject) => { rejectWrite = reject })
 	const pending = evaluate('sendAndWait(new Uint8Array([1]), 0x15, 1000)')
 	const timedOut = assert.rejects(pending, /等待响应超时/)
 	const timer = timers.keys().next().value

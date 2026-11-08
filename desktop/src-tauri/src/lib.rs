@@ -131,6 +131,8 @@ fn build_window_with_session(app: &AppHandle, label: &str, session: Option<&std:
 			}
 			true
 		});
+	let native_instance = serde_json::to_string(&format!("{}:{}", std::process::id(), label)).unwrap();
+	builder = builder.initialization_script(format!("window.__APP_NATIVE_INSTANCE_KEY__={native_instance};"));
 	if let Some(session) = session {
 		builder = builder.initialization_script(updater::session_script(session));
 	}
@@ -226,6 +228,7 @@ pub fn run() {
 			classic::classic_release_owned,
 			serial::serial_list,
 			serial::serial_open,
+			serial::serial_ack_receive,
 			serial::serial_write,
 			serial::serial_set_signals,
 			serial::serial_close,

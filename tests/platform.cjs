@@ -129,7 +129,7 @@ function fakeWin(search, ua, store) {
 	return {
 		navigator: { userAgent: ua || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0', maxTouchPoints: 0 },
 		location: { search: search || '' },
-		sessionStorage: { m: store || {}, getItem(k) { return this.m[k] || null }, setItem(k, v) { this.m[k] = String(v) } },
+		sessionStorage: { m: store || {}, get length() { return Object.keys(this.m).length }, key(i) { return Object.keys(this.m)[i] }, removeItem(k) { delete this.m[k] }, getItem(k) { return this.m[k] || null }, setItem(k, v) { this.m[k] = String(v) } },
 		document: {
 			readyState: 'complete',
 			documentElement: { dataset: {} },
@@ -170,7 +170,7 @@ function rulesOf(win) { const st = win.document.head.children.find((e) => e.id =
 	// 实例 ID：同一会话存储(刷新)保持不变，新会话不同
 	assert.ok(api.instanceId)
 	const again = P.build(fakeWin('', null, { appInstanceId: api.instanceId }))
-	assert.equal(again.instanceId, api.instanceId)
+	assert.notEqual(again.instanceId, api.instanceId, '没有 Web Locks 的浏览器保守隔离继承运行态')
 	assert.notEqual(P.build(fakeWin('')).instanceId, api.instanceId)
 }
 {
@@ -200,3 +200,51 @@ function rulesOf(win) { const st = win.document.head.children.find((e) => e.id =
 }
 
 console.log('platform: ok')
+
+// 跨文档互斥不依赖旧标签页处理消息；包含 bfcache 释放/重新认领与更新交接。
+;(async function () {
+	const held = new Map()
+	const locks = { async request(key, opts, callback) {
+		if (held.has(key)) return callback(null)
+		held.set(key, true)
+		try { return await callback({ name: key }) } finally { held.delete(key) }
+	} }
+	function windowWith(store) {
+		const w = fakeWin('', null, store)
+		const listeners = {}
+		w.navigator.locks = locks
+		w.addEventListener = (type, fn) => (listeners[type] ||= []).push(fn)
+		w.emit = (type, ev = {}) => (listeners[type] || []).forEach(fn => fn(ev))
+		return w
+	}
+	const w = windowWith({ appInstanceId: 'synthetic-instance', serialWantOpenS: '1', serialWantPortS: 'synthetic', 'sk-batch-state.index': '17', 'stsSim.prevProtocol': 'sek' })
+	const first = P.build(w)
+	await first.instanceReady
+	const copy = windowWith({ ...w.sessionStorage.m })
+	const second = P.build(copy)
+	await second.instanceReady
+	assert.notEqual(second.instanceId, first.instanceId)
+	for (const key of ['serialWantOpenS', 'serialWantPortS', 'sk-batch-state.index', 'stsSim.prevProtocol']) assert.equal(copy.sessionStorage.getItem(key), null)
+	assert.equal(w.sessionStorage.getItem('serialWantOpenS'), '1')
+	w.emit('pagehide')
+	await Promise.resolve()
+	const reload = windowWith({ ...w.sessionStorage.m })
+	const third = P.build(reload)
+	await third.instanceReady
+	assert.equal(third.instanceId, first.instanceId, '刷新释放旧租约后 ID 不变')
+	w.emit('pageshow', { persisted: true })
+	await first.instanceReady
+	assert.notEqual(first.instanceId, third.instanceId, 'bfcache 恢复先重新认领，有碰撞时清理意图')
+	assert.equal(w.sessionStorage.getItem('serialWantOpenS'), null)
+	const native = fakeWin('', 'tauri', { appInstanceId: 'handoff', serialWantOpenS: '1' })
+	native.__TAURI_INTERNALS__ = {}
+	native.__APP_NATIVE_INSTANCE_KEY__ = 'process:window'
+	native.__APP_UPDATE_RESTORED__ = true
+	const restored = P.build(native)
+	await restored.instanceReady
+	assert.equal(restored.instanceId, 'handoff')
+	assert.equal(native.sessionStorage.getItem('serialWantOpenS'), '1')
+	delete native.__APP_UPDATE_RESTORED__
+	assert.equal(P.build(native).instanceId, 'handoff', '不支持 Web Locks 的原生窗口刷新不丢重连')
+	console.log('platform instance lifecycle: ok')
+})().catch(error => { console.error(error); process.exitCode = 1 })

@@ -241,6 +241,33 @@ fn port_present(path: &str) -> bool {
 	}
 }
 
+// 有界 IPC 窗口：前端交给自身有界流后确认累计字节，重复/乱序确认不返还多余额度。
+const RX_WINDOW_BYTES: u64 = 256 * 1024;
+const RX_BATCH_BYTES: usize = 64 * 1024;
+const RX_BATCH_DELAY: Duration = Duration::from_millis(10);
+#[derive(Default)]
+struct ReceiveWindow { sent: u64, acknowledged: u64 }
+impl ReceiveWindow {
+	fn reserve(&mut self, n: usize) -> bool {
+		if self.sent - self.acknowledged + n as u64 > RX_WINDOW_BYTES { return false; }
+		self.sent += n as u64;
+		true
+	}
+	fn acknowledge(&mut self, total: u64) -> Result<(), String> {
+		if total > self.sent { return Err("无效的接收确认".into()); }
+		self.acknowledged = self.acknowledged.max(total);
+		Ok(())
+	}
+}
+fn deliver_batch(batch: &mut Vec<u8>, rx: &Mutex<ReceiveWindow>, data: &Channel<InvokeResponseBody>, events: &Channel<serde_json::Value>) -> bool {
+	if batch.is_empty() { return true; }
+	if !rx.lock().unwrap().reserve(batch.len()) {
+		let _ = events.send(json!({ "type": "lost", "message": format!("原生接收窗口溢出，至少 {} 字节未交付；已停止连接", batch.len()) }));
+		return false;
+	}
+	data.send(InvokeResponseBody::Raw(std::mem::replace(batch, Vec::with_capacity(RX_BATCH_BYTES)))).is_ok()
+}
+
 struct Handle {
 	path: String,
 	// 打开它的 webview 标签：页面刷新或窗口关闭后 JS 端的状态没了，句柄按标签收回，免得独占锁一直挂着
@@ -254,6 +281,7 @@ struct Handle {
 	port: Mutex<Box<dyn serialport::SerialPort>>,
 	stop: Arc<AtomicBool>,
 	reader: Mutex<Option<JoinHandle<()>>>,
+	rx: Arc<Mutex<ReceiveWindow>>,
 }
 
 #[derive(Default)]
@@ -401,12 +429,13 @@ fn spawn_reader(
 	stop: Arc<AtomicBool>,
 	on_data: Channel<InvokeResponseBody>,
 	on_event: Channel<serde_json::Value>,
+	rx: Arc<Mutex<ReceiveWindow>>,
 ) -> std::io::Result<JoinHandle<()>> {
 	std::thread::Builder::new()
 		.name(format!("serial-read-{}", id))
 		.spawn(move || {
 			let _claim = claim;
-			read_loop(path, reader, stop, on_data, on_event)
+			read_loop(path, reader, stop, on_data, on_event, rx)
 		})
 }
 
@@ -416,7 +445,10 @@ fn read_loop(
 	stop: Arc<AtomicBool>,
 	on_data: Channel<InvokeResponseBody>,
 	on_event: Channel<serde_json::Value>,
+	rx: Arc<Mutex<ReceiveWindow>>,
 ) {
+	let mut batch = Vec::with_capacity(RX_BATCH_BYTES);
+	let mut batch_start = Instant::now();
 	let mut buf = vec![0u8; 64 * 1024];
 	let mut errors: u32 = 0;
 	let mut first_error = Instant::now();
@@ -426,7 +458,11 @@ fn read_loop(
 		let _ = on_event.send(json!({ "type": "lost", "message": msg }));
 	};
 	while !stop.load(Ordering::Acquire) {
-		match port.read(&mut buf) {
+		if !batch.is_empty() && batch_start.elapsed() >= RX_BATCH_DELAY {
+			if !deliver_batch(&mut batch, &rx, &on_data, &on_event) { return; }
+		}
+		let room = RX_BATCH_BYTES - batch.len();
+		match port.read(&mut buf[..room]) {
 			Ok(0) => {
 				errors = 0;
 				// 部分驱动拔出后读到 EOF 而不是报错
@@ -438,10 +474,9 @@ fn read_loop(
 			}
 			Ok(n) => {
 				errors = 0;
-				// 前端窗口已关，通道发不出去：没人收了，退出读线程
-				if on_data.send(InvokeResponseBody::Raw(buf[..n].to_vec())).is_err() {
-					return;
-				}
+				if batch.is_empty() { batch_start = Instant::now(); }
+				batch.extend_from_slice(&buf[..n]);
+				if batch.len() >= RX_BATCH_BYTES && !deliver_batch(&mut batch, &rx, &on_data, &on_event) { return; }
 			}
 			Err(e) => {
 				if stop.load(Ordering::Acquire) {
@@ -576,7 +611,8 @@ pub async fn serial_open(
 		let id = state.next.fetch_add(1, Ordering::Relaxed) + 1;
 		let stop = Arc::new(AtomicBool::new(false));
 		let claim = Arc::new(claim);
-		let th = spawn_reader(id, path.clone(), reader, claim.clone(), stop.clone(), on_data, on_event).map_err(|e| e.to_string())?;
+		let rx = Arc::new(Mutex::new(ReceiveWindow::default()));
+		let th = spawn_reader(id, path.clone(), reader, claim.clone(), stop.clone(), on_data, on_event, rx.clone()).map_err(|e| e.to_string())?;
 		let h = Arc::new(Handle {
 			path,
 			owner,
@@ -586,6 +622,7 @@ pub async fn serial_open(
 			port: Mutex::new(port),
 			stop,
 			reader: Mutex::new(Some(th)),
+			rx,
 		});
 		map.insert(id, h);
 		Ok(id)
@@ -663,6 +700,15 @@ pub async fn serial_set_signals(app: tauri::AppHandle, state: State<'_, SerialSt
 	.await
 }
 
+// ACK 只对发起窗口当前代次的句柄有效；旧句柄绝不能返还新连接的额度。
+#[tauri::command]
+pub fn serial_ack_receive(webview: tauri::Webview, state: State<'_, SerialState>, handle: u32, total: u64) -> Result<(), String> {
+	let (h, _operation) = state.operation(handle)?;
+	if h.owner != webview.label() || h.stop.load(Ordering::Acquire) { return Err("串口会话已回收".into()); }
+	let result = h.rx.lock().unwrap().acknowledge(total);
+	result
+}
+
 // 已经关过(设备丢失后前端补关、重复关)按成功处理：句柄不在就是已释放
 #[tauri::command]
 pub async fn serial_close(state: State<'_, SerialState>, handle: u32) -> Result<(), String> {
@@ -717,6 +763,40 @@ fn windows_hardware_handshake(port: &serialport::COMPort) -> serialport::Result<
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn receive_window_bounds_and_cumulative_ack() {
+		let mut rx = ReceiveWindow::default();
+		for _ in 0..4 { assert!(rx.reserve(RX_BATCH_BYTES)); }
+		assert!(!rx.reserve(1));
+		assert!(rx.acknowledge(RX_BATCH_BYTES as u64).is_ok());
+		assert!(rx.reserve(RX_BATCH_BYTES));
+		assert!(rx.acknowledge(RX_BATCH_BYTES as u64).is_ok());
+		assert!(!rx.reserve(1), "重复确认不得增加额度");
+		assert!(rx.acknowledge(0).is_ok());
+		assert!(!rx.reserve(1), "乱序确认不得增加额度");
+		assert!(rx.acknowledge(rx.sent + 1).is_err());
+		assert!(!ReceiveWindow::default().acknowledge(1).is_ok(), "旧连接的确认不能用于新窗口");
+	}
+
+	#[test]
+	fn batch_delivery_is_bounded_and_reports_overflow_once() {
+		let rx = Mutex::new(ReceiveWindow::default());
+		let sends = Arc::new(AtomicU32::new(0));
+		let notices = Arc::new(AtomicU32::new(0));
+		let count = sends.clone();
+		let events = notices.clone();
+		let data = Channel::new(move |_| { count.fetch_add(1, Ordering::Relaxed); Ok(()) });
+		let event = Channel::new(move |_| { events.fetch_add(1, Ordering::Relaxed); Ok(()) });
+		for _ in 0..4 {
+			let mut batch = vec![7; RX_BATCH_BYTES];
+			assert!(deliver_batch(&mut batch, &rx, &data, &event));
+			assert!(batch.is_empty());
+		}
+		assert!(!deliver_batch(&mut vec![8; 64], &rx, &data, &event));
+		assert_eq!(sends.load(Ordering::Relaxed), 4);
+		assert_eq!(notices.load(Ordering::Relaxed), 1);
+	}
+
 
 	#[test]
 	fn idle_timeout_is_distinct_from_fast_or_os_errors() {
@@ -901,6 +981,7 @@ mod tests {
 			stop.clone(),
 			Channel::new(|_| Ok(())),
 			Channel::new(|_| Ok(())),
+			Arc::new(Mutex::new(ReceiveWindow::default())),
 		)
 		.unwrap();
 		let (_, dead_rx) = std::sync::mpsc::channel::<()>();
@@ -916,6 +997,7 @@ mod tests {
 			})),
 			stop,
 			reader: Mutex::new(Some(th)),
+			rx: Arc::new(Mutex::new(ReceiveWindow::default())),
 		});
 		// 确定读线程已卡在 read 里，再走回收路径并超时 detach
 		entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
