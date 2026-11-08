@@ -111,7 +111,7 @@ const sys = { dir: '', text: '10:00:01.000 ! 未选择串口设备', hex: '' }
 
 console.log('modern-shell ok')
 
-// Execute the real dropdown construction and event wiring; choosing a source goes straight to that picker.
+// Execute the real dropdown construction: wireless sources are list rows, not duplicate footer buttons.
 {
  const src = fs.readFileSync(path.join(__dirname, '../js/modern-shell.js'), 'utf8')
  class Element {
@@ -121,13 +121,20 @@ console.log('modern-shell ok')
  const requests=[],source={availableSources:()=>[{id:'computer-ble',label:'电脑 BLE'},{id:'classic',label:'经典蓝牙 SPP'}]}
  const env={window:{AppPlatform:{service:()=>source},serialLanes:{requestPort:(...args)=>requests.push(args)}},
   document:{createTextNode:t=>new Element(t)},mk:()=>new Element(),btn:(cls,text)=>new Element(text),icon:()=>new Element(),
-  listen:(el,type,fn)=>{el.handlers[type]=fn},closePops(){},sidFor:k=>k,enqueuePort:(st,fn)=>fn(),loadPorts(){},onPortClick(){},onPortKey(){}}
+  listen:(el,type,fn)=>{el.handlers[type]=fn},closePops(){},swallowDoubleClick(){},hub:()=>({}),sidFor:k=>k,enqueuePort:(st,fn)=>fn(),loadPorts(){},onPortClick(){},onPortKey(){}}
  vm.createContext(env)
  vm.runInContext(src.slice(src.indexOf('	function makePortList('),src.indexOf('\n\tfunction loadPorts('))+'\nthis.make = makePortList',env)
  const st=env.make('B')
- st.foot.children.find(e=>e.textContent==='电脑 BLE…').handlers.click()
- st.foot.children.find(e=>e.textContent==='经典蓝牙 SPP…').handlers.click()
+ vm.runInContext(src.slice(src.indexOf('\tfunction activatePort('),src.indexOf('\n\tfunction onPortClick('))+'\nthis.activate = activatePort',env)
+ assert.equal(st.foot.children.length,2, 'footer only keeps serial picker and refresh')
+ assert.deepEqual(st.sourceRows.map(r=>r.source.id), ['computer-ble','classic'])
+ assert.deepEqual(st.sourceRows.map(r=>r.source.label), ['电脑 BLE','经典蓝牙 SPP'])
+ assert.notEqual(st.sourceRows[0].port, st.sourceRows[1].port)
+ env.activate(st,{source:st.sourceRows[0].source,state:{disabled:false}})
+ env.activate(st,{source:st.sourceRows[1].source,state:{disabled:false}})
  assert.deepEqual(requests,[['B','computer-ble'],['B','classic']])
  source.availableSources=()=>[]
- assert.equal(env.make('A').foot.children.length,2)
+ const empty=env.make('A')
+ assert.equal(empty.foot.children.length,2)
+ assert.equal(empty.sourceRows.length,0)
 }

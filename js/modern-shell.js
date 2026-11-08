@@ -345,19 +345,12 @@
 		reload.append(icon('bi-arrow-clockwise'), document.createTextNode(' 刷新'))
 		foot.append(add, reload)
 		const sources = window.AppPlatform && window.AppPlatform.service('connection-source')
-		if (sources) for (const source of sources.availableSources()) {
-			const choice = btn('btn btn-sm btn-outline-primary', source.label + '…', '选择' + source.label + '设备')
-			listen(choice, 'click', function () {
-				const lanes = window.serialLanes
-				if (!lanes) return
-				closePops()
-				enqueuePort(st, function () { return lanes.requestPort(sidFor(key), source.id) })
-			})
-			foot.appendChild(choice)
-		}
 		box.append(list, empty, hint, foot)
 		const st = { key: key, box: box, list: list, empty: empty, hint: hint, add: add, reload: reload, foot: foot,
-			ports: [], rows: [], rowEls: null, loaded: false, seq: 0, sig: '', editing: null, queue: Promise.resolve(), focusPort: null, wantFocus: false }
+			ports: [], rows: [], sourceRows: [], rowEls: null, loaded: false, seq: 0, sig: '', editing: null, queue: Promise.resolve(), focusPort: null, wantFocus: false }
+		if (sources) st.sourceRows = sources.availableSources().map(function (source) {
+			return { source: source, port: { __connectionSource: true, sourceId: source.id } }
+		})
 		listen(add, 'click', function () {
 			const lanes = window.serialLanes
 			if (!lanes) return
@@ -421,7 +414,13 @@
 		const rows = st.ports.map(function (p) { return { port: p, absent: false } })
 		// 本路记着的口不在列表里(已拔出)：灰显在最后，可清除
 		if (cur && st.loaded && st.ports.indexOf(cur) === -1) rows.push({ port: cur, absent: true })
+		st.sourceRows.forEach(function (r) { rows.push({ port: r.port, source: r.source, absent: false }) })
 		rows.forEach(function (r) {
+			if (r.source) {
+				r.meta = { alias: null, defaultName: r.source.label, productName: r.source.label, portName: '', persistent: false }
+				r.title = r.source.label; r.sub = '无线连接入口'; r.state = { kind: 'source', tag: '选择', disabled: false }
+				return
+			}
 			const m = lanes.portMeta(r.port)
 			const isCur = r.port === cur
 			r.meta = m
@@ -500,10 +499,12 @@
 		const main = mk('div', 'mdn-port-main')
 		main.append(mk('div', 'mdn-port-name', r.title))
 		if (r.sub) main.append(mk('div', 'mdn-port-sub', r.sub))
-		row.append(icon(r.absent ? 'bi-usb-plug mdn-port-icon' : 'bi-usb-symbol mdn-port-icon'), main)
+		row.append(icon(r.source ? 'bi-bluetooth mdn-port-icon' : (r.absent ? 'bi-usb-plug mdn-port-icon' : 'bi-usb-symbol mdn-port-icon')), main)
 		if (r.state.tag) row.append(mk('span', 'mdn-port-tag', r.state.tag))
 		const acts = mk('span', 'mdn-port-acts')
-		if (r.absent) {
+		if (r.source) {
+			// 无线入口不附带串口行内操作。
+		} else if (r.absent) {
 			const f = btn('mdn-port-act', '', '清除：本路不再记着这台设备')
 			f.dataset.act = 'forget'
 			f.tabIndex = -1
@@ -553,6 +554,10 @@
 		const h = hub()
 		if (!lanes || !h || r.state.disabled) return
 		const sid = sidFor(st.key)
+		if (r.source) {
+			enqueuePort(st, function () { return lanes.requestPort(sid, r.source.id) })
+			closePops(); swallowDoubleClick(); return
+		}
 		const cur = lanes.portOf(sid)
 		// 选定就收起(列表就是设备键的选口下拉)
 		const done = function () {
@@ -615,7 +620,7 @@
 		if (e.key === 'Enter') {
 			e.preventDefault()
 			activatePort(st, r)
-		} else if (e.key === 'F2' && !r.absent) {
+		} else if (e.key === 'F2' && !r.absent && !r.source) {
 			e.preventDefault()
 			startPortRename(st, r)
 		}
