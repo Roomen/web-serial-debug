@@ -193,6 +193,17 @@ pub async fn ble_scan(webview: tauri::Webview, state: State<'_, BleState>, owner
 		let result = async {
 			let adapter = Adapter::default().await.ok_or("无法初始化电脑蓝牙，请检查系统蓝牙开关与权限")?;
 			current(&op, &cancel)?;
+			// CoreBluetooth initializes and requests permission asynchronously. Keep the
+			// manager alive until it is powered on; scan() itself fails immediately
+			// while initialization or the permission prompt is still pending.
+			tokio::select! {
+				_ = cancel.cancelled() => return Err("BLE 操作已取消".into()),
+				ready = tokio::time::timeout(Duration::from_secs(60), adapter.wait_available()) => {
+					ready.map_err(|_| "等待蓝牙就绪超时：请打开系统蓝牙，并在系统设置中允许本应用访问蓝牙后重试")?
+						.map_err(|_| "蓝牙尚未就绪，请检查系统蓝牙开关与访问权限")?;
+				}
+			}
+			current(&op, &cancel)?;
 			let mut found = HashMap::new();
 			{
 				let mut scan = adapter.scan(&[]).await.map_err(|_| "BLE 扫描失败，请检查系统蓝牙开关与权限")?;

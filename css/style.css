@@ -12027,6 +12027,10 @@ html[data-layout='modern'] #activity-rail .rail-item[data-view='view-blu'] .rail
 	content: '功耗';
 }
 
+html[data-layout='modern'] #activity-rail .rail-item[data-view='view-ble'] .rail-label::after {
+	content: 'BLE 桥';
+}
+
 html[data-layout='modern'] #activity-rail .rail-version {
 	padding: 6px 0;
 	font-size: 10px;
