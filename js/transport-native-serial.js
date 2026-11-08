@@ -482,7 +482,9 @@
 		const invoke = tauri.invoke
 		// 先收回本窗口刷新前留下的句柄：pagehide 里的关闭不等完成，刷新后立刻重连会撞上独占锁。
 		// 打开一律等它完成再发，免得刷新后的自动重连跑在收回前面
-		const released = invoke('serial_release_owned').catch(function () {})
+		const released = invoke('serial_release_owned')
+		P.provide('native-serial-ready', { wait: function () { return released } })
+		released.catch(function () {})
 		root.SerialAdapter.register(createNativeSerialBackend({
 			invoke(cmd, args) {
 				return cmd === 'serial_open' ? released.then(function () { return invoke(cmd, args) }) : invoke(cmd, args)

@@ -13606,3 +13606,20 @@ html[data-layout='modern'] .mdn-mcp-port:disabled {
 	background: var(--bg-code); color: var(--text-secondary); opacity: 1;
 }
 .mdn-mcp-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* Desktop USB BLE bridge workbench */
+#ble-workbench { padding: 20px; overflow: auto; height: 100%; color: var(--text-primary); }
+#ble-workbench h2 { font-size: 20px; }
+#ble-workbench h3 { font-size: 15px; margin-top: 16px; }
+.ble-controls { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.ble-columns { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(340px, 2fr); gap: 20px; }
+#ble-workbench select, #ble-workbench input { color: inherit; background: var(--bg-body); border: 1px solid var(--border-color, #888); border-radius: 6px; padding: 6px; max-width: 100%; }
+.ble-columns select[size] { display: block; width: 100%; margin-bottom: 8px; }
+.ble-log { max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-body); padding: 12px; }
+
+/* 独立 Classic SPP 工具页 */
+html[data-layout='modern'] #classic-workbench { padding: 20px; overflow: auto; height: 100%; }
+html[data-layout='modern'] #classic-workbench > button,
+html[data-layout='modern'] #classic-workbench > select,
+html[data-layout='modern'] #classic-workbench > input { margin: 4px; }
+html[data-layout='modern'] #classic-workbench > pre { white-space: pre-wrap; overflow-wrap: anywhere; }

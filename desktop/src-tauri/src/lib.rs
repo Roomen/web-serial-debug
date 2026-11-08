@@ -1,3 +1,4 @@
+mod classic;
 // 桌面客户端外壳：加载与网页版同一份静态页面(desktop/scripts/stage-web.mjs 复制进 dist)，只补网页在 WebView 里缺的能力：
 // 原生串口(serial.rs，前端 js/transport-native-serial.js)、下载落盘、多窗口、原生菜单(menu.rs)与窗口外观。
 // 页面功能与网页版一致，平台差异只走 js/platform.js，页面侧胶水在 js/native-shell.js。
@@ -168,7 +169,8 @@ fn build_window_with_session(app: &AppHandle, label: &str, session: Option<&std:
 		apply_liquid_glass(&window);
 	}
 	if let Some((pos, maximized)) = restore {
-		winstate::apply(&window, pos, maximized);
+		winstate::place(&window, pos, maximized);
+		window.show()?;
 	} else if glass {
 		// main-N 只按错开的位置建窗，这里补上显示
 		window.show()?;
@@ -211,10 +213,17 @@ pub fn run() {
 		.plugin(tauri_plugin_opener::init())
 		.plugin(tauri_plugin_updater::Builder::new().build())
 		.manage(serial::SerialState::default())
+		.manage(classic::ClassicState::default())
 		.manage(mcp::McpState::default())
 		.manage(winstate::WinState::default())
 		.manage(updater::UpdateState::default())
 		.invoke_handler(tauri::generate_handler![
+			classic::classic_devices,
+			classic::classic_discover,
+			classic::classic_open,
+			classic::classic_write,
+			classic::classic_close,
+			classic::classic_release_owned,
 			serial::serial_list,
 			serial::serial_open,
 			serial::serial_write,
@@ -241,6 +250,7 @@ pub fn run() {
 		.on_window_event(|window, event| {
 			if let tauri::WindowEvent::Destroyed = event {
 				serial::release_destroyed(&window.state::<serial::SerialState>(), window.label());
+				classic::release_destroyed(&window.state::<classic::ClassicState>(), window.label());
 				mcp::release_window(&window.app_handle(), &window.state::<mcp::McpState>(), window.label());
 			}
 			// 只记 main 的大小位置：多开的 main-N 每次都相对当前窗口错开，记下来反而会叠在旧位置上

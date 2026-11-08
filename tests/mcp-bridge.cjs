@@ -158,7 +158,7 @@ function makeHarness(opts) {
 	}
 	const platform = {
 		has: (id) => id !== 'service.mcp' || opts.service !== null,
-		service: (name) => (name === 'mcp' ? svc : null),
+		service: (name) => (name === 'mcp' ? svc : name === 'ble' ? opts.ble || null : name === 'classic' ? opts.classic || null : null),
 	}
 	win.AppPlatform = platform
 	win.SerialHub = hub
@@ -566,6 +566,68 @@ test('serial_open：打开过程中换了设备对象 → lane_changed', async (
 	const r = await h.call('serial_open', { window: 'main', lane: 'S' })
 	assert.equal(r.result.code, 'lane_changed')
 	assert.equal(h.lane('S').open, false)
+})
+
+test('BLE typed MCP routes to shared queue guard; commit refusal, secret redaction and MCP stop preserves UI connection', async () => {
+	let writes = 0, released = 0
+	const ble = {
+		state: () => ({ phase: 'connected', challenge: { value: 123456 } }),
+		devices: p => [{ name: p.name, uuids: [p.serviceUuid] }],
+		run: async (action, p, guard) => {
+			const denied = await guard.start()
+			if (denied) throw Object.assign(new Error(denied.message), { code: denied.code })
+			const cancelled = guard.step()
+			if (cancelled) throw Object.assign(new Error(cancelled.message), { code: cancelled.code })
+			writes++; return { accepted: true }
+		},
+		release: async () => { released++ },
+	}
+	const h = makeHarness({ ble })
+	await h.boot()
+	assert.equal((await h.call('ble_state')).result.challenge, undefined)
+	const filtered = await h.call('ble_devices', {name:'fixture', serviceUuid:'12345678123456789abc123456789abc'})
+	assert.equal(filtered.result.devices[0].name, 'fixture')
+	assert.equal(filtered.result.devices[0].uuids[0], '12345678123456789abc123456789abc')
+	assert.equal((await h.call('ble_write', { generation: 1, characteristicId: 'fake', hex: '01', response: false })).ok, true)
+	assert.equal(writes, 1); assert.equal(h.commits.length, 1)
+	h.state.commitResult = { ok: false, code: 'expired_before_commit' }
+	assert.equal((await h.call('ble_write', {})).result.code, 'expired_before_commit')
+	assert.equal(writes, 1)
+	h.svcListeners['mcp-service']({ running: false }); await flush()
+	assert.equal(released, 0)
+	assert.equal(ble.state().phase, 'connected')
+})
+
+test('Classic typed MCP reads and commits shared operations, never bypasses pairing UI', async () => {
+ const calls=[]
+ const classic={state:()=>({phase:'idle',interactionRequired:true}),devices:()=>[{deviceId:'fixture'}],read:p=>({cursor:p.cursor,hex:'01'}),run:async(action,p,guard)=>{const denied=await guard.start();if(denied)throw Object.assign(Error(denied.code),{code:denied.code});calls.push(action);return{interactionRequired:true}}}
+ const h=makeHarness({classic});await h.boot()
+ assert.equal((await h.call('classic_state')).result.interactionRequired,true)
+ assert.equal((await h.call('classic_devices')).result.devices[0].deviceId,'fixture')
+ assert.equal((await h.call('classic_read',{cursor:'fixture-cursor'})).result.cursor,'fixture-cursor')
+ assert.equal((await h.call('classic_pair')).ok,true);assert.deepEqual(calls,['pair'])
+ h.state.commitResult={ok:false,code:'expired_before_commit'}
+ assert.equal((await h.call('classic_connect',{deviceId:'fixture'})).result.code,'expired_before_commit');assert.deepEqual(calls,['pair'])
+})
+
+test('real Classic service survives completed MCP connect guard: subsequent MCP and UI writes succeed', async () => {
+ const C=require('../js/native-classic.js'),A=require('../js/serial-adapter.js'),writes=[]
+ const classic=C.create({blocked:()=>false,createStreamPort:A.createStreamPort,toBytes:x=>Uint8Array.from(x),Channel:class {},invoke:async(cmd,p)=>{
+  if(cmd==='classic_devices')return[{deviceId:'fixture',name:'Fixture',paired:true}]
+  if(cmd==='classic_open')return 1
+  if(cmd==='classic_write')writes.push(p.data)
+ }})
+ const h=makeHarness({classic});await h.boot()
+ assert.equal((await h.call('classic_pair')).ok,true)
+ assert.equal((await h.call('classic_connect',{deviceId:'fixture'})).ok,true)
+ // onRequest has deleted the connect request from active before returning this reply.
+ const generation=classic.state().generation
+ assert.equal((await h.call('classic_write',{generation,hex:'aa'})).ok,true)
+ await classic.run('write',{generation,hex:'bb'})
+ assert.deepEqual(writes,[[170],[187]])
+ h.state.commitResult={ok:false,code:'expired_before_commit'}
+ assert.equal((await h.call('classic_write',{generation,hex:'cc'})).result.code,'expired_before_commit')
+ assert.equal(writes.length,2);await classic.release()
 })
 
 ;(async () => {
