@@ -248,6 +248,21 @@ test('身份缓存是 WeakMap：按端口对象缓存身份，不把旧端口对
 	assert.equal(a._portIdentityCache.get(p), ident, '旧对象的条目还在，不影响本会话里的旧引用')
 })
 
+test('无线临时凭据与同名设备不持久化；共享别名入口与选择器同步', async () => {
+	const storage = memStorage(), prefs = { alias: '选择器别名' }
+	const p = { getInfo: () => ({ transport: 'ble', productName: 'Synthetic BLE', serialNumber: 'document:opaque' }), getDisplayAlias: () => prefs.alias || null, setDisplayAlias: name => { prefs.alias = name } }
+	const a = boot(storage, [p])
+	assert.equal((await a.resolvePortIdentity(p)).keys.length, 0)
+	assert.equal(a.getPortDisplayName(p), '选择器别名')
+	await a.setPortAlias(p, '下拉改名'); assert.equal(prefs.alias, '下拉改名'); assert.equal(a.getPortAlias(p), '下拉改名')
+	await a.setPortAlias(p, ''); assert.equal(a.getPortAlias(p), null); assert.equal(a.getPortDisplayName(p), 'Synthetic BLE')
+	const q = { getInfo: () => ({ transport: 'bt-classic', productName: 'Synthetic BLE', sessionIdentity: 'another' }) }
+	assert.equal((await a.resolvePortIdentity(q)).keys.length, 0)
+	await a.setPortAlias(q, 'Classic 本次别名'); assert.equal(a.getPortDisplayName(q), 'Classic 本次别名')
+	assert.equal(storage.getItem('serialPortAliases'), null)
+	const fresh = boot(storage, [q]); assert.equal(fresh.getPortDisplayName(q), 'Synthetic BLE')
+})
+
 ;(async () => {
 	let failed = 0
 	for (const t of tests) {

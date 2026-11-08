@@ -110,3 +110,24 @@ const sys = { dir: '', text: '10:00:01.000 ! 未选择串口设备', hex: '' }
 }
 
 console.log('modern-shell ok')
+
+// Execute the real dropdown construction and event wiring; choosing a source goes straight to that picker.
+{
+ const src = fs.readFileSync(path.join(__dirname, '../js/modern-shell.js'), 'utf8')
+ class Element {
+  constructor(text=''){this.children=[];this.textContent=text;this.handlers={}}
+  append(...els){this.children.push(...els)}appendChild(el){this.children.push(el)}setAttribute(){}
+ }
+ const requests=[],source={availableSources:()=>[{id:'computer-ble',label:'电脑 BLE'},{id:'classic',label:'经典蓝牙 SPP'}]}
+ const env={window:{AppPlatform:{service:()=>source},serialLanes:{requestPort:(...args)=>requests.push(args)}},
+  document:{createTextNode:t=>new Element(t)},mk:()=>new Element(),btn:(cls,text)=>new Element(text),icon:()=>new Element(),
+  listen:(el,type,fn)=>{el.handlers[type]=fn},closePops(){},sidFor:k=>k,enqueuePort:(st,fn)=>fn(),loadPorts(){},onPortClick(){},onPortKey(){}}
+ vm.createContext(env)
+ vm.runInContext(src.slice(src.indexOf('	function makePortList('),src.indexOf('\n\tfunction loadPorts('))+'\nthis.make = makePortList',env)
+ const st=env.make('B')
+ st.foot.children.find(e=>e.textContent==='电脑 BLE…').handlers.click()
+ st.foot.children.find(e=>e.textContent==='经典蓝牙 SPP…').handlers.click()
+ assert.deepEqual(requests,[['B','computer-ble'],['B','classic']])
+ source.availableSources=()=>[]
+ assert.equal(env.make('A').foot.children.length,2)
+}

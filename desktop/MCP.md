@@ -158,7 +158,7 @@ Profile 在页面保存规范化 UUID、属性、服务特征结构与描述符�
 
 ### 原生 Classic SPP（Windows / macOS 客户端）
 
-`classic` 平台服务，UI 在通信调试的选择连接来源入口使用，使用电脑自带蓝牙，和 USB BLE 桥、串口模式同时存在；不切换全局 SerialAdapter。网页、Linux 与移动端不提供服务入口。搜索只在系统窗口内显示可发现设备，应用保存用户选中的设备，不返回系统扫描到的全部列表。设备状态是最近系统选择时的配对快照。
+`classic` 平台服务，UI 在通信调试的选择设备下拉中直接进入 SPP 选择器，使用电脑自带蓝牙，和 USB BLE 桥、串口模式同时存在；不切换全局 SerialAdapter。网页、Linux 与移动端不提供服务入口。搜索只在系统窗口内显示可发现设备，应用保存用户选中的设备，不返回系统扫描到的全部列表。设备状态是最近系统选择时的配对快照。
 
 | typed 工具 | 参数 / 行为 |
 | --- | --- |
@@ -185,7 +185,7 @@ macOS SDK 的 SDP 查询没有取消入口；同步 RFCOMM open/write 也没有�
 
 主视图显示为「通信调试」，工具名 `serial_*` 与 lane S/A/B 不变。在 UI 选择 SPP、电脑 BLE 或桥 Profile 后，`serial_read` / `serial_write`、日志、协议与固件升级都走所选会话。`serial_configure` 对无线端口读出 `transport`、`options:null`，修改返回 `unsupported_transport`。普通串口的参数与双路行为保留。
 
-电脑 BLE 扫描与 GATT 选择需要 UI 交互，不新增自动扫描/配对 MCP 工具。按广播名查找，可选完整 128-bit 广播服务 UUID，两个条件 AND；连接后选择 TX（电脑 → 设备，write 或 writeWithoutResponse）与 RX（设备 → 电脑，notify 或 indicate），允许不同服务。确认映射并订阅 RX 成功后才接入会话。保存 UUID/属性，重连重新发现且必须唯一匹配；重复实例在当次连接需明确选择，不能靠存储实例编号猜测。无线凭据不跨页面刷新复用。
+电脑 BLE 扫描与 GATT 选择需要 UI 交互，不新增自动扫描/配对 MCP 工具。自动持续扫描，列表按名称 / 广播 UUID / 本次别名子串、最低 RSSI 快筛，并按信号 / 名称 / 最近发现排序。暂停停止并等待原生扫描收尾，保留本页面设备供发现；取消 GATT 发现则回收本次选择。进入 GATT 前必须停止扫描，扫描和等待蓝牙就绪均可暂停；连接后选择 TX（电脑 → 设备，write 或 writeWithoutResponse）与 RX（设备 → 电脑，notify 或 indicate），允许不同服务。确认映射并订阅 RX 成功后才接入会话。按本页面当前 BLE 会话的设备 id 在内存保存别名与 UUID/属性，不自动沿用旧的全局映射，也不将临时 id 写入持久别名键；重连重新发现且必须唯一匹配；重复实例在当次连接需明确选择，不能靠存储实例编号猜测。无线凭据不跨页面刷新复用。
 
 旧 `classic_*` 接口仍保留供兼容：`classic_state.laneOwned` 为 true 时表示 UI 的通信路持有 SPP，旧独立 connect/write/read 不接管这个 reader，请使用 `serial_*`。旧接口与 UI 连接共享进程级单 SPP 限制。桥高级 GATT 操作与旧 Classic 操作在通信事务钉扎期间拒绝；更新/窗口销毁的资源回收使用内部释放路径。
 

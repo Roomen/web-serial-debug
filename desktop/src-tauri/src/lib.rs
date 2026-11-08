@@ -223,6 +223,7 @@ pub fn run() {
 		.manage(updater::UpdateState::default())
 		.invoke_handler(tauri::generate_handler![
 			ble::ble_scan,
+			ble::ble_scan_stop,
 			ble::ble_open,
 			ble::ble_start,
 			ble::ble_write,
