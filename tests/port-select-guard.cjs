@@ -41,7 +41,8 @@ function harness(mode) {
 	let pickNext = null
 	const ctx = {
 		window: { serialApi: { pinned: false, isPinned() { return this.pinned } } },
-		document: { getElementById() { return null } },
+		document: { getElementById() { return null }, querySelectorAll() { return [] } },
+		refreshParamsBusyUI() {},
 		pinSid: null,
 		laneMoving: false,
 		readGenBySid: { S: 0, A: 0, B: 0 },
@@ -203,6 +204,42 @@ test('预留在失败(关旧口失败)后也释放', async () => {
 	assert.equal(h.api.lanePortOwner(p, 'B'), null)
 	assert.equal(await h.api.selectLanePort('B', p, { open: false }), true)
 	assert.equal(h.hub.getPort('B'), p)
+})
+
+test('选择框里选回本路已打开的口：不动作，不重开', async () => {
+	const h = harness('single')
+	const p = makePort()
+	h.hub.setPort('S', p)
+	h.hub.setOpen('S', true)
+	h.pick(p)
+	await h.api.selectPortFor('S', { openAfterSelect: true })
+	assert.equal(h.hub.getPort('S'), p)
+	assert.equal(h.hub.isOpen('S'), true)
+	assert.deepEqual(h.opens, [], '已打开的口不应重开')
+	// 同一个口但关着：仍按「选完即连接」打开
+	h.hub.setOpen('S', false)
+	h.pick(p)
+	await h.api.selectPortFor('S', { openAfterSelect: true })
+	assert.deepEqual(h.opens, [['S', p.id]])
+})
+
+test('无线来源发现完成后仍重查事务，未绑定的原生连接由来源释放', async () => {
+	const h = harness('single'), gate = deferred(), p = makePort()
+	let discarded = 0
+	h.ctx.window.AppPlatform = { service: name => name === 'connection-source' ? { requestPort: () => gate.p } : null }
+	const choosing = h.api.selectPortFor('S', { openAfterSelect: true })
+	h.ctx.window.serialApi.pinned = true
+	gate.resolve({ port: p, discard: async () => { discarded++ } })
+	await choosing
+	assert.equal(h.hub.getPort('S'), null); assert.equal(discarded, 1); assert.equal(h.hub.isOpening('S'), false)
+	assert.equal(h.opens.length, 0)
+})
+test('无线来源确认透传交给原会话打开，成功绑定不释放已交接连接', async () => {
+	const h = harness('single'), p = makePort(); p.getInfo = () => ({ transport: 'ble' })
+	let discarded = 0
+	h.ctx.window.AppPlatform = { service: () => ({ requestPort: async () => ({ port: p, discard: async () => { discarded++ } }) }) }
+	await h.api.selectPortFor('S', { openAfterSelect: false })
+	assert.equal(h.hub.getPort('S'), p); assert.deepEqual(h.opens, [['S', p.id]]); assert.equal(discarded, 0)
 })
 
 ;(async () => {

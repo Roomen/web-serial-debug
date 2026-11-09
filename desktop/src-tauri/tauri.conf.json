@@ -9,6 +9,7 @@
 	},
 	"app": {
 		"withGlobalTauri": true,
+		"macOSPrivateApi": true,
 		"windows": [],
 		"security": {
 			"csp": null
@@ -29,7 +30,8 @@
 			}
 		},
 		"macOS": {
-			"minimumSystemVersion": "11.0"
+			"minimumSystemVersion": "11.0",
+			"infoPlist": "Info.plist"
 		}
 	}
 }

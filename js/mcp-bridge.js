@@ -162,6 +162,11 @@
 	}
 
 	// 串口变更：队列内 commit → 复查这一路 → 执行；取消/超时停在下一步
+	// run(guard, cancelCheck)：cancelCheck 每次 await 后回调，请求失效或「外部」改了端口/代次就拒绝。
+	// 本次操作自己会改端口/代次(选口、参数重连)时，在动手前调 cancelCheck.own(accept)：
+	// accept(snap, base) 精确声明「哪些快照形态算本次操作自己的变更」，匹配的才放行；
+	// 不匹配的外部变化(换了别的口、切了模式)仍然 lane_changed 拒绝，不会被 own 放行。
+	// 不传 accept 时按「无自有形态」处理：任何快照差异都拒绝(宁可误拒也不放过外部变更)。
 	async function mutate(id, lane, run) {
 		// 快照在排队之前取：排队期间换了端口/模式/连接也要算变化
 		const before = laneSnapshot(lane)
@@ -174,13 +179,19 @@
 			}
 			const step = guard.step()
 			if (step) return fromApi(step)
+			// 本次操作自己造成的快照形态：own(accept) 声明，accept(snap, before) 为真才算自有变更。
+			let ownAccept = null
 			// 传给业务层的取消检查：除了请求是否还活着，也复查「还是原来那一路上、原来的设备/模式」。
 			// 打开串口可能在等旧口释放/退避重试里耗很久，业务层会在这些等待之后回调它。
 			const cancelCheck = function () {
-				if (!sameSnapshot(before, laneSnapshot(lane))) {
+				const snap = laneSnapshot(lane)
+				if (!sameSnapshot(before, snap) && !(ownAccept && ownAccept(snap, before))) {
 					return { ok: false, code: 'lane_changed', message: '这一路的串口或模式在等待期间发生变化，已取消' }
 				}
 				return guard.step()
+			}
+			cancelCheck.own = function (accept) {
+				ownAccept = typeof accept === 'function' ? accept : function () { return false }
 			}
 			try {
 				return await run(guard, cancelCheck)
@@ -255,6 +266,142 @@
 			return res && res.ok
 				? pass({ lane: r.lane, open: false, changed: !!res.changed })
 				: fail((res && res.code) || 'close_failed', (res && res.message) || '关闭串口失败')
+		})
+	}
+
+	// ---------- 新入口：列口 / 选口 / 参数 ----------
+	// 本文档内的在位设备标识：带本文档 bridgeEpoch 命名空间(含随机串)，不持久、不跨重载复用、不承载参数。
+	// 刷新/重载后旧 id 前缀对不上，一律认不出，不会落到另一台设备上；跨重连用 sn 或重新列口
+	const deviceIds = new WeakMap()
+	let deviceSeq = 0
+	function deviceIdOf(port) {
+		if (!port || (typeof port !== 'object' && typeof port !== 'function')) return null
+		let id = deviceIds.get(port)
+		if (!id) {
+			deviceSeq += 1
+			id = bridgeEpoch + '-d' + deviceSeq
+			deviceIds.set(port, id)
+		}
+		return id
+	}
+	function lanesHolding(port) {
+		const h = hub()
+		if (!h) return []
+		return visibleLanes().filter(function (sid) { return h.getPort(sid) === port })
+	}
+	function portSummary(sl, port) {
+		const meta = sl.portMeta(port)
+		return { portName: meta.portName, productName: meta.productName, alias: meta.alias, sn: meta.sn }
+	}
+
+	// 只读：列当前在位的全部口。不调用 grantPort(授权只发生在选口)，不排队、不动设备
+	async function serialPortsList() {
+		const sl = root.serialLanes
+		if (!sl || !sl.listPorts || !sl.portMeta) return fail('internal_error', '串口列表不可用')
+		let ports
+		try { ports = await sl.listPorts() } catch (e) { return fail('internal_error', String((e && e.message) || e)) }
+		const list = (ports || []).map(function (port) {
+			const meta = sl.portMeta(port)
+			return {
+				deviceId: deviceIdOf(port),
+				portName: meta.portName,
+				productName: meta.productName,
+				alias: meta.alias,
+				vid: meta.vid,
+				pid: meta.pid,
+				sn: meta.sn,
+				slot: meta.slot,
+				persistent: !!meta.persistent,
+				excluded: !!meta.excluded,
+				selectedBy: lanesHolding(port),
+			}
+		})
+		return pass({
+			canEnumerate: !!(sl.canEnumerate && sl.canEnumerate()),
+			count: list.length,
+			ports: list,
+			note: 'deviceId 只标识本文档当前在位的这个口，不含串口参数，刷新/重插后失效；跨重连请用 sn 或重新列口',
+		})
+	}
+
+	// 选口：队列内 commit → 重新枚举 → 唯一命中才走共享 selectPort(open:false，不自动连接)
+	async function serialSelect(id, p) {
+		const r = laneOf(p)
+		if (r.error) return r.error
+		const sl = root.serialLanes
+		if (!sl || !sl.listPorts || !sl.selectPort || !sl.portMeta) return fail('internal_error', '串口列表不可用')
+		const deviceId = p.deviceId == null ? '' : String(p.deviceId)
+		const sn = p.sn == null ? '' : String(p.sn).trim()
+		if (!deviceId && !sn) return fail('bad_params', '必须给 deviceId(来自 serial_ports_list)或 sn')
+		if (deviceId && sn) return fail('bad_params', 'deviceId 与 sn 只能给一个')
+		if (deviceId && deviceId.indexOf(bridgeEpoch + '-d') !== 0) {
+			return fail('stale_device_id', '这个 deviceId 不属于本文档(可能已刷新)，请重新 serial_ports_list')
+		}
+		return mutate(id, r.lane, async function (guard, cancelCheck) {
+			// 排队期间可能拔插：commit 之后重新枚举，不沿用排队前的端口对象
+			let ports
+			try { ports = await sl.listPorts() } catch (e) { return fail('internal_error', String((e && e.message) || e)) }
+			const step = cancelCheck()
+			if (step) return fromApi(step)
+			const hits = (ports || []).filter(function (port) {
+				if (deviceId) return deviceIdOf(port) === deviceId
+				const meta = sl.portMeta(port)
+				return !!meta.sn && meta.sn === sn
+			})
+			if (!hits.length) {
+				return fail('device_not_found', deviceId
+					? '这个 deviceId 对应的设备已不在位(或已重插)，请重新 serial_ports_list'
+					: '没有在位设备匹配该序列号')
+			}
+			if (hits.length > 1) {
+				return fail('ambiguous_device', '有多台在位设备匹配，拒绝自动选择', {
+					candidates: hits.map(function (port) {
+						return Object.assign({ deviceId: deviceIdOf(port) }, portSummary(sl, port))
+					}),
+				})
+			}
+			// 取消检查交给共享选口路径：它在授权前、关旧口后、绑口前后各复查一次。
+			// 选口本身会改端口/代次：自有形态 = 同路同模式，端口在 原口/目标口/空(关旧口途中) 之间；
+			// 出现第三方的口或模式变化仍按外部变更拒绝。
+			const target = hits[0]
+			const selOpts = { open: false, selectOnly: true, quiet: true, guard: cancelCheck }
+			cancelCheck.own(function (snap, base) {
+				return snap.lane === base.lane && snap.mode === base.mode &&
+					(snap.port === base.port || snap.port === target || snap.port == null)
+			})
+			const ok = await sl.selectPort(r.lane, target, selOpts)
+			if (!ok) {
+				// 等待期被拒要回传真实原因：外部换口/切模式是 lane_changed，请求失效才是 aborted
+				if (selOpts.cancelled) return fail(selOpts.reason || 'aborted', selOpts.blockMessage || '请求已取消，未完成选口', { executed: 'partial' })
+				const codes = { lane_busy: 'lane_busy', lane_not_visible: 'lane_not_visible', lane_blocked: 'lane_blocked', unsupported_port: 'unsupported_port', close_failed: 'close_failed' }
+				return fail(codes[selOpts.reason] || 'select_failed', selOpts.blockMessage || '选择串口失败')
+			}
+			const summary = portSummary(sl, hits[0])
+			return pass({ lane: r.lane, selected: true, deviceId: deviceIdOf(hits[0]), device: summary })
+		})
+	}
+
+	const SERIAL_OPTION_FIELDS = ['baudRate', 'dataBits', 'stopBits', 'parity', 'bufferSize', 'flowControl']
+	// 参数读写：读不排队；写走共享 configure(归一化/落盘/打开后重连)，只认已知字段
+	async function serialConfigure(id, p) {
+		const r = laneOf(p)
+		if (r.error) return r.error
+		const sl = root.serialLanes
+		if (!sl || !sl.params || !sl.configure) return fail('internal_error', '串口参数不可用')
+		if (p.options == null) return fromApi(sl.params(r.lane))
+		if (typeof p.options !== 'object' || Array.isArray(p.options)) return fail('bad_params', 'options 必须是对象')
+		const keys = Object.keys(p.options)
+		if (!keys.length) return fail('bad_params', 'options 不能为空')
+		const unknown = keys.filter(function (k) { return SERIAL_OPTION_FIELDS.indexOf(k) === -1 })
+		if (unknown.length) return fail('bad_params', '未知参数：' + unknown.join('、'))
+		return mutate(id, r.lane, async function (guard, cancelCheck) {
+			// 写参数+（已打开时）重连只改连接代次：自有形态 = 同路同模式同端口；
+			// 等待期间外部换口/切模式仍按 lane_changed 拒绝。
+			cancelCheck.own(function (snap, base) {
+				return snap.lane === base.lane && snap.mode === base.mode && snap.port === base.port
+			})
+			const res = await sl.configure(r.lane, p.options, { guard: cancelCheck })
+			return fromApi(res)
 		})
 	}
 
@@ -422,8 +569,35 @@
 		return bluMutate(id, function (b, guard) { return b.stopCapture(guard) })
 	}
 
+	async function bleCall(id, p, action) {
+		const ble = P.service('ble')
+		if (!ble) return fail('ble_unavailable', '当前窗口不支持 USB BLE 桥')
+		try {
+			if (action === 'state') { const state = ble.state(); delete state.challenge; return pass(state) }
+			if (action === 'ports') return pass({ ports: await ble.ports() })
+			if (action === 'devices') return pass({ devices: ble.devices(p) })
+			if (action === 'gatt') return pass(ble.gatt())
+			if (action === 'events') return pass(ble.logs())
+			return pass(await ble.run(action, p, makeGuard(id)))
+		} catch (e) { return fail(e.code || 'ble_error', e.message || String(e)) }
+	}
+
+	async function classicCall(id, p, action) {
+		const classic = P.service('classic')
+		if (!classic) return fail('classic_unavailable', '当前窗口不支持原生 Classic SPP')
+		try {
+			if (action === 'state') return pass(classic.state())
+			if (action === 'devices') return pass({ devices: classic.devices() })
+			if (action === 'read') return pass(classic.read(p))
+			return pass(await classic.run(action, p, makeGuard(id)))
+		} catch (e) { return fail(e.code || 'classic_error', e.message || String(e)) }
+	}
+
 	const HANDLERS = {
 		serial_state: serialState,
+		serial_ports_list: serialPortsList,
+		serial_select: serialSelect,
+		serial_configure: serialConfigure,
 		serial_open: serialOpen,
 		serial_close: serialClose,
 		serial_write: serialWrite,
@@ -436,7 +610,15 @@
 		blu_capture_summary: bluSummary,
 	}
 
+	for (const action of ['state', 'ports', 'devices', 'gatt', 'events', 'open', 'close', 'scan_start', 'scan_stop', 'connect', 'disconnect', 'read', 'write', 'subscribe', 'pair', 'passkey']) {
+		HANDLERS['ble_' + action] = function (id, p) { return bleCall(id, p, action) }
+	}
+
 	// ---------- 请求分发 ----------
+	for (const action of ['state', 'devices', 'discover', 'pair', 'connect', 'close', 'read', 'write']) {
+		HANDLERS['classic_' + action] = (id, p) => classicCall(id, p, action)
+	}
+
 	async function onRequest(msg) {
 		if (!msg || typeof msg.id !== 'string' || typeof msg.tool !== 'string') return
 		// 投给别的文档(刷新前)的事件：不处理，也不覆盖同 id 的活动请求

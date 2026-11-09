@@ -27,6 +27,40 @@
 		setPreparing: function (value) { updatePreparing = !!value },
 	})
 
+	if (P.has('view.classic') && root.NativeClassic) {
+		const classic = root.NativeClassic.create({ invoke: T.core.invoke, Channel: T.core.Channel,
+			createStreamPort: root.SerialAdapter.createStreamPort, toBytes: root.NativeBleBridge.toBytes,
+			isPinned: () => !!(root.serialApi && root.serialApi.isPinned()),
+			blocked: () => updatePreparing || !!(root.__auth && !root.__auth.authed()),
+		})
+		P.provide('classic', classic)
+		root.addEventListener('pagehide', () => { classic.release().catch(() => {}) })
+	}
+
+	if (P.has('view.ble') && root.NativeBle) {
+		const computerBle = root.NativeBle.create({ invoke: T.core.invoke, Channel: T.core.Channel,
+			createStreamPort: root.SerialAdapter.createStreamPort, toBytes: root.NativeBleBridge.toBytes,
+			boundPorts: () => root.SerialHub ? ['S', 'A', 'B'].map(sid => root.SerialHub.getPort(sid)) : [],
+			blocked: () => updatePreparing || !!(root.__auth && !root.__auth.authed()),
+		})
+		P.provide('computer-ble', computerBle)
+		root.addEventListener('pagehide', () => { computerBle.release().catch(() => {}) })
+	}
+
+	if (P.has('view.ble') && root.NativeBleBridge) {
+		const ble = root.NativeBleBridge.create({
+			BleBridge: root.BleBridge,
+			isPinned: () => !!(root.serialApi && root.serialApi.isPinned()),
+			createStreamPort: root.SerialAdapter.createStreamPort,
+			invoke: T.core.invoke,
+			Channel: T.core.Channel,
+			ready: function () { return P.service('native-serial-ready').wait() },
+			blocked: function () { return updatePreparing || !!(root.__auth && !root.__auth.authed()) },
+		})
+		P.provide('ble', ble)
+		root.addEventListener('pagehide', function () { ble.release().catch(function () {}) })
+	}
+
 	// 本地 MCP 服务：只把 Tauri 命令/事件包成平台服务，业务与界面在 js/mcp-bridge.js / js/mcp-service.js。
 	// 令牌只在页面显式请求(revealToken)时返回，不缓存、不落盘。
 	if (!P.has || P.has('service.mcp')) P.provide('mcp', {
@@ -111,9 +145,10 @@
 		const r = doc.querySelector('#activity-rail .rail-item[data-view="' + id + '"]')
 		if (shown(r) && !r.classList.contains('active')) r.click()
 	}
-	// 打开某一路的连接菜单(连接栏)；没有连接栏时退回该路的「选择串口」键
+	// 打开某一路的设备下拉(连接栏设备键，选口与设备管理都在这里)；没有连接栏时退回该路的「选择串口」键。
+	// 兜底刻意复用芯片的「没选过口才自动打开」语义，不要换成 serialLanes.requestPort(它固定 openAfterSelect: true)
 	function openLaneMenu(sid) {
-		const b = doc.querySelector('#mdn-connbar .mdn-conn[data-sid="' + sid + '"] > .mdn-conn-more')
+		const b = doc.querySelector('#mdn-connbar .mdn-conn[data-sid="' + sid + '"] > .mdn-conn-btn')
 		if (b) {
 			if (b.getAttribute('aria-expanded') !== 'true') b.click()
 			return
@@ -122,6 +157,12 @@
 	}
 	function toggleConnect() {
 		const sid = mainSid()
+		// 连接栏的电源键(三段分体最左)：有设备即可连接 / 断开
+		const p = doc.querySelector('#mdn-connbar .mdn-conn[data-sid="' + sid + '"] > .mdn-conn-power')
+		if (p && !p.disabled) {
+			p.click()
+			return
+		}
 		const t = $(sid === 'S' ? 'serial-open-or-close' : 'serial-open-or-close-' + sid.toLowerCase())
 		// 没选过设备时连接键是隐藏的：转成打开这一路的菜单去选口
 		if (t && !t.hidden) t.click()

@@ -17,6 +17,8 @@
 	const backends = {}
 	const attached = new Set()
 	let active = null
+	const portProviders = new Set()
+	function extraPorts() { return Array.from(portProviders).flatMap(fn => fn() || []) }
 
 	function makeError(name, message) {
 		if (typeof DOMException === 'function') return new DOMException(message, name)
@@ -344,14 +346,14 @@
 		},
 		getPorts() {
 			if (!api.isSupported()) return Promise.resolve([])
-			return Promise.resolve(active.getPorts())
+			return Promise.resolve(active.getPorts()).then(ports => Array.from(new Set([...ports, ...extraPorts()])))
 		},
 		// 能否列出当前在位的全部串口(不只授权过的)：原生后端能；Web Serial 只看得到用户在浏览器选择框里授权过的口
 		canEnumerate() { return !!(api.isSupported() && typeof active.listPorts === 'function') },
 		// 能枚举时返回在位的全部端口(同一设备在位期间多次调用给同一对象，与 getPorts、插拔事件给的对象一致)；否则同 getPorts
 		listPorts() {
 			if (!api.isSupported()) return Promise.resolve([])
-			if (typeof active.listPorts === 'function') return Promise.resolve(active.listPorts())
+			if (typeof active.listPorts === 'function') return Promise.resolve(active.listPorts()).then(ports => Array.from(new Set([...ports, ...extraPorts()])))
 			return api.getPorts()
 		},
 		// 页面选用了 listPorts 里的某个口：记为已授权，之后 getPorts、插拔事件、刷新后自动重连都认它。后端不需要(web 由浏览器授权)时返回 false
@@ -374,6 +376,8 @@
 			const i = list.indexOf(fn)
 			if (i >= 0) list.splice(i, 1)
 		},
+		// Additional session-only stream sources do not switch the active serial backend.
+		addPortProvider(fn) { portProviders.add(fn); return () => portProviders.delete(fn) },
 		register,
 		use,
 		pick,

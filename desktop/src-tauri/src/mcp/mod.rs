@@ -819,6 +819,52 @@ mod tests {
         assert_eq!(s.pending_count_for_test(), 0);
     }
 
+    // 窗口销毁：在飞请求作废——未提交 → 未执行，已提交 → 结果未知
+    #[tokio::test]
+    async fn release_window_reports_terminal_state_preserving_commit() {
+        let s = state_with("e1");
+        let (_a, mut ra) = s.begin("main", "serial_write", TOOL_TIMEOUT).unwrap();
+        let (b, mut rb) = s.begin("main", "serial_open", TOOL_TIMEOUT).unwrap();
+        assert!(s.commit("main", &b, "e1").is_ok());
+        let cancelled = s.release_window("main");
+        assert_eq!(cancelled.len(), 2);
+        let (_, va) = ra.try_recv().unwrap();
+        let (_, vb) = rb.try_recv().unwrap();
+        assert_eq!(va["code"], json!("window_reloaded"));
+        assert_eq!(va["executed"], json!(false));
+        assert_eq!(vb["executed"], json!("unknown"));
+    }
+
+    // 升级冻结：同样区分未提交/已提交，终态代码是 update_preparing
+    #[tokio::test]
+    async fn quiesce_reports_update_preparing_terminal() {
+        let s = state_with("e1");
+        let (_a, mut ra) = s.begin("main", "serial_write", TOOL_TIMEOUT).unwrap();
+        let (b, mut rb) = s.begin("main", "serial_open", TOOL_TIMEOUT).unwrap();
+        assert!(s.commit("main", &b, "e1").is_ok());
+        let cancelled = s.drain_pending("update_preparing");
+        assert_eq!(cancelled.len(), 2);
+        let (_, va) = ra.try_recv().unwrap();
+        let (_, vb) = rb.try_recv().unwrap();
+        assert_eq!(va["code"], json!("update_preparing"));
+        assert_eq!(va["executed"], json!(false));
+        assert_eq!(vb["executed"], json!("unknown"));
+    }
+
+    // 窗口刷新(新文档注册)：旧在飞请求带终态回执，不区分来源一律作废
+    #[tokio::test]
+    async fn reload_reports_window_reloaded_terminal() {
+        let s = state_with("e1");
+        let (_a, mut ra) = s.begin("main", "serial_write", TOOL_TIMEOUT).unwrap();
+        s.register_window_for_test(
+            "main",
+            WindowReg { bridge_epoch: "e9".into(), authed: true, mode: "single".into(), app_version: "t".into() },
+        );
+        let (_, va) = ra.try_recv().unwrap();
+        assert_eq!(va["code"], json!("window_reloaded"));
+        assert_eq!(va["executed"], json!(false));
+    }
+
     // 停止服务：未提交 → 未执行；已提交 → 结果未知(不谎称未执行)
     #[tokio::test]
     async fn stop_reports_terminal_state_preserving_commit() {

@@ -273,7 +273,9 @@ function makeWorld(options = {}) {
 		},
 	}
 	class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [clock.now()])) } static now() { return clock.now() } }
+	const session = options.session || new Map()
 	const context = vm.createContext({
+		sessionStorage: { getItem: key => session.get(key) ?? null, setItem: (key, v) => session.set(key, String(v)), removeItem: key => session.delete(key) },
 		window, document, Date: FakeDate,
 		Event: class { constructor(type) { this.type = type } },
 		localStorage: {
@@ -303,7 +305,7 @@ function makeWorld(options = {}) {
 			status: element.querySelector('.sts-sim-status'),
 		}
 	}
-	return { root, panel, labels, protocol, laneProtos, laneCalls, setShown(value) { shown = value }, storage, writes, clock, engines, factoryCalls, failingSids, startFailures, startAttempts, targetCalls, links, sent, sessions, setMode(value) { mode = value }, saved: key => JSON.parse(storage.get(key) || 'null') }
+	return { root, panel, labels, protocol, laneProtos, laneCalls, setShown(value) { shown = value }, storage, session, writes, clock, engines, factoryCalls, failingSids, startFailures, startAttempts, targetCalls, links, sent, sessions, setMode(value) { mode = value }, saved: key => JSON.parse(storage.get(key) || 'null') }
 }
 
 function change(input, value) {
@@ -957,12 +959,12 @@ test('opening the panel switches the top protocol to hostproto and closing resto
 	world.setShown(false)
 	await world.clock.advance(500)
 	assert.equal(world.protocol.value, 'cjt188')
-	assert.equal(world.storage.has('stsSim.prevProtocol'), false)
+	assert.equal(world.session.has('stsSim.prevProtocol'), false)
 
-	// 面板开着刷新：打开前的协议从 localStorage 取回，关闭后仍能恢复
+	// 面板开着刷新：打开前的协议从 sessionStorage 取回，关闭后仍能恢复
 	world.setShown(true)
 	await world.clock.advance(500)
-	const refreshed = makeWorld({ storage: new Map(world.storage), protocol: 'hostproto', shown: true })
+	const refreshed = makeWorld({ storage: new Map(world.storage), session: new Map(world.session), protocol: 'hostproto', shown: true })
 	await refreshed.clock.advance(500)
 	assert.deepEqual(refreshed.protocol.changes, [])
 	refreshed.setShown(false)
@@ -997,13 +999,13 @@ test('with per-lane protocols, opening the panel switches every visible lane to 
 	world.setShown(false)
 	await world.clock.advance(500)
 	assert.deepEqual(world.laneProtos, { S: 'sek', A: 'cjt188', B: 'cjt188' })
-	assert.equal(world.storage.has('stsSim.prevProtocol'), false)
+	assert.equal(world.session.has('stsSim.prevProtocol'), false)
 
-	// 面板开着刷新：每路打开前的协议从 localStorage 取回
+	// 面板开着刷新：每路打开前的协议从 sessionStorage 取回
 	world.setMode('dual')
 	world.setShown(true)
 	await world.clock.advance(500)
-	const refreshed = makeWorld({ mode: 'dual', storage: new Map(world.storage), lanes: { ...world.laneProtos }, shown: true })
+	const refreshed = makeWorld({ mode: 'dual', storage: new Map(world.storage), session: new Map(world.session), lanes: { ...world.laneProtos }, shown: true })
 	await refreshed.clock.advance(500)
 	assert.deepEqual(refreshed.laneCalls, [])
 	refreshed.setShown(false)
@@ -1011,7 +1013,7 @@ test('with per-lane protocols, opening the panel switches every visible lane to 
 	assert.deepEqual(refreshed.laneProtos, { S: 'sek', A: 'cjt188', B: 'cjt188' })
 
 	// 升级前存下的单个值按单路恢复
-	const legacy = makeWorld({ mode: 'single', storage: new Map([['stsSim.prevProtocol', JSON.stringify('cjt188')]]), lanes: { S: 'hostproto', A: 'sek', B: 'sek' }, shown: true })
+	const legacy = makeWorld({ mode: 'single', session: new Map([['stsSim.prevProtocol', JSON.stringify('cjt188')]]), lanes: { S: 'hostproto', A: 'sek', B: 'sek' }, shown: true })
 	await legacy.clock.advance(500)
 	legacy.setShown(false)
 	await legacy.clock.advance(500)
@@ -1089,6 +1091,24 @@ for (const [mode, sid] of [['single', 'S'], ['dual', 'A']]) {
 		assert.equal(panel.cfg.open, false, 'stopping does not reopen it')
 	})
 }
+
+test('共享配置的两窗口各自保留并恢复自己的协议', async () => {
+	const storage = new Map()
+	const a = makeWorld({ storage, protocol: 'sek' })
+	const b = makeWorld({ storage, protocol: 'cjt188' })
+	a.setShown(true)
+	b.setShown(true)
+	await a.clock.advance(500)
+	await b.clock.advance(500)
+	assert.equal(storage.has('stsSim.prevProtocol'), false)
+	a.setShown(false)
+	await a.clock.advance(500)
+	assert.equal(a.protocol.value, 'sek')
+	assert.equal(b.protocol.value, 'hostproto')
+	b.setShown(false)
+	await b.clock.advance(500)
+	assert.equal(b.protocol.value, 'cjt188')
+})
 
 ;(async function () {
 	let failures = 0

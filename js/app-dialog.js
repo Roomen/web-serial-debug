@@ -38,7 +38,7 @@
 			const body = mk('div', 'app-dlg-body')
 			box.appendChild(body)
 			try {
-				if (job.opts.build) job.opts.build(body)
+				if (job.opts.build) job.opts.build(body, { close: function () { finish(false) } })
 			} catch (e) {
 				console.warn('面板内容构建失败', e)
 			}
@@ -179,7 +179,7 @@
 		alert(message, opts) { return open('alert', message, '', opts) },
 		confirm(message, opts) { return open('confirm', message, '', opts) },
 		prompt(message, defaultValue, opts) { return open('prompt', message, defaultValue, opts) },
-		// 自定义面板：opts.build(body) 负责填内容，opts.closeText 是关闭键文案；返回的 Promise 在关闭时 resolve(undefined)
+		// 自定义面板：opts.build(body, { close }) 负责填内容，close() 关闭本面板，opts.closeText 是关闭键文案；返回的 Promise 在关闭时 resolve(undefined)
 		panel(opts) { return open('panel', '', '', opts) },
 	}
 

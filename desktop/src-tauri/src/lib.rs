@@ -1,6 +1,9 @@
+mod ble;
+mod classic;
 // 桌面客户端外壳：加载与网页版同一份静态页面(desktop/scripts/stage-web.mjs 复制进 dist)，只补网页在 WebView 里缺的能力：
 // 原生串口(serial.rs，前端 js/transport-native-serial.js)、下载落盘、多窗口、原生菜单(menu.rs)与窗口外观。
 // 页面功能与网页版一致，平台差异只走 js/platform.js，页面侧胶水在 js/native-shell.js。
+mod lease;
 mod mcp;
 mod menu;
 mod portable;
@@ -18,6 +21,32 @@ const CASCADE: f64 = 28.0;
 // macOS 一体化标题栏：红绿灯浮在页面左上(左侧导航栏顶部)，纵向与顶栏 46px 的中线对齐；页面按 html[data-platform='macos'] 留出空位
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHTS: (f64, f64) = (8.0, 15.0);
+
+// macOS 26+ 的液态玻璃：窗口与 WebView 透明，NSGlassEffectView 垫在 WebView 下面(window-vibrancy)，
+// 页面只给左侧导航、连接栏、状态栏上色(html[data-glass='liquid']，见 css/style.css 的桌面客户端外壳段)。
+// 系统没有这个类(26 以下)或 AppKit 版本不够时窗口保持不透明，外观与之前完全一致，最低系统仍是 11.0。
+#[cfg(target_os = "macos")]
+fn liquid_glass_supported() -> bool {
+	// 类不存在时按类名取用会 panic，所以先按名字查一遍；版本号是 window-vibrancy 自己的判据，两边一致才不会白透明
+	objc2::runtime::AnyClass::get(c"NSGlassEffectView").is_some() && unsafe { objc2_app_kit::NSAppKitVersionNumber } >= 2685.0
+}
+
+#[cfg(not(target_os = "macos"))]
+fn liquid_glass_supported() -> bool {
+	false
+}
+
+// 建窗后、显示前调用(都在主线程)：失败不 panic，页面照旧按实色画，窗口透明只是多一层桌面背景
+#[cfg(target_os = "macos")]
+fn apply_liquid_glass(window: &WebviewWindow) {
+	let options = window_vibrancy::LiquidGlassOptions::default();
+	if let Err(e) = window_vibrancy::apply_liquid_glass(window, options) {
+		eprintln!("液态玻璃未启用：{e:?}");
+	}
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_liquid_glass(_window: &WebviewWindow) {}
 
 // 同名文件已存在时按「名称 (n).扩展名」顺延，与浏览器下载的习惯一致
 fn unique_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
@@ -103,8 +132,19 @@ fn build_window_with_session(app: &AppHandle, label: &str, session: Option<&std:
 			}
 			true
 		});
+	let native_instance = serde_json::to_string(&format!("{}:{}", std::process::id(), label)).unwrap();
+	builder = builder.initialization_script(format!("window.__APP_NATIVE_INSTANCE_KEY__={native_instance};"));
 	if let Some(session) = session {
 		builder = builder.initialization_script(updater::session_script(session));
+	}
+	// 液态玻璃：窗口与 WebView 透明，页面首屏前就能读到标志(js/platform.js 写 html[data-glass='liquid']，不会先画实色再变透明)
+	let glass = liquid_glass_supported();
+	if glass {
+		// 一律先隐藏建窗：玻璃垫在 WebView 下面之后才显示，免得先闪一下透明的空窗口(主窗口另外还要等位置设好)
+		builder = builder
+			.transparent(true)
+			.visible(false)
+			.initialization_script("window.__APP_WINDOW_GLASS__ = true");
 	}
 	// main 的大小(逻辑像素)与位置由 winstate 还原并钳进目标屏工作区(没存过就居中)；其余窗口跟着参考窗口错开
 	let mut restore = None;
@@ -128,8 +168,15 @@ fn build_window_with_session(app: &AppHandle, label: &str, session: Option<&std:
 			.traffic_light_position(LogicalPosition::new(TRAFFIC_LIGHTS.0, TRAFFIC_LIGHTS.1));
 	}
 	let window = builder.build()?;
+	if glass {
+		apply_liquid_glass(&window);
+	}
 	if let Some((pos, maximized)) = restore {
-		winstate::apply(&window, pos, maximized);
+		winstate::place(&window, pos, maximized);
+		window.show()?;
+	} else if glass {
+		// main-N 只按错开的位置建窗，这里补上显示
+		window.show()?;
 	}
 	#[cfg(target_os = "windows")]
 	window.hide_menu()?;
@@ -169,12 +216,28 @@ pub fn run() {
 		.plugin(tauri_plugin_opener::init())
 		.plugin(tauri_plugin_updater::Builder::new().build())
 		.manage(serial::SerialState::default())
+		.manage(classic::ClassicState::default())
+		.manage(ble::BleState::default())
 		.manage(mcp::McpState::default())
 		.manage(winstate::WinState::default())
 		.manage(updater::UpdateState::default())
 		.invoke_handler(tauri::generate_handler![
+			ble::ble_scan,
+			ble::ble_scan_stop,
+			ble::ble_open,
+			ble::ble_start,
+			ble::ble_write,
+			ble::ble_close,
+			ble::ble_release_owned,
+			classic::classic_devices,
+			classic::classic_discover,
+			classic::classic_open,
+			classic::classic_write,
+			classic::classic_close,
+			classic::classic_release_owned,
 			serial::serial_list,
 			serial::serial_open,
+			serial::serial_ack_receive,
 			serial::serial_write,
 			serial::serial_set_signals,
 			serial::serial_close,
@@ -199,6 +262,8 @@ pub fn run() {
 		.on_window_event(|window, event| {
 			if let tauri::WindowEvent::Destroyed = event {
 				serial::release_destroyed(&window.state::<serial::SerialState>(), window.label());
+				classic::release_destroyed(&window.state::<classic::ClassicState>(), window.label());
+				ble::release_destroyed(&window.state::<ble::BleState>(), window.label());
 				mcp::release_window(&window.app_handle(), &window.state::<mcp::McpState>(), window.label());
 			}
 			// 只记 main 的大小位置：多开的 main-N 每次都相对当前窗口错开，记下来反而会叠在旧位置上

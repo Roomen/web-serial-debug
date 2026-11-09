@@ -140,15 +140,38 @@
 
 		function createDriver(entry) {
 			let handle = null
+			let retireReceive = function () {}
 			return {
 				getInfo() { return portInfo(entry.desc) },
 				async open(options, sink) {
+					let received = 0, acknowledged = 0, ackBusy = false, retired = false
+					retireReceive()
+					retireReceive = function () { retired = true }
+					const acknowledge = function () {
+						if (retired || handle == null || ackBusy || received === acknowledged) return
+						const h = handle, total = received
+						ackBusy = true
+						invoke('serial_ack_receive', { handle: h, total }).then(function () {
+							acknowledged = total
+						}, function () {
+							if (retired) return
+							retired = true
+							sink.lost(makeError('NetworkError', '原生接收确认失败，已停止连接'))
+						}).finally(function () { ackBusy = false; acknowledge() })
+					}
 					const onData = new Channel()
-					onData.onmessage = function (m) { sink.data(toBytes(m)) }
+					onData.onmessage = function (m) {
+						if (retired) return
+						const bytes = toBytes(m)
+						sink.data(bytes)
+						received += bytes.byteLength
+						acknowledge()
+					}
 					const onEvent = new Channel()
 					onEvent.onmessage = function (ev) {
+						if (retired) return
 						const msg = ev && ev.message ? String(ev.message) : ''
-						if (ev && ev.type === 'lost') sink.lost(makeError('NetworkError', msg || '设备已断开'))
+						if (ev && ev.type === 'lost') { retired = true; sink.lost(makeError('NetworkError', msg || '设备已断开')) }
 						else sink.error(makeError('FramingError', msg || '串口读错误'))
 					}
 					const o = options || {}
@@ -165,7 +188,9 @@
 							onData,
 							onEvent,
 						})
+						acknowledge()
 					} catch (e) {
+						retired = true
 						throw nativeError(e)
 					}
 				},
@@ -178,7 +203,7 @@
 					const h = handle
 					if (h == null) return
 					await invoke('serial_close', { handle: h }).catch(function (e) { throw nativeError(e, 'InvalidStateError') })
-					if (handle === h) handle = null
+					if (handle === h) { retireReceive(); handle = null }
 				},
 				setSignals(s) {
 					if (handle == null) return Promise.reject(makeError('InvalidStateError', '串口未打开'))
@@ -308,7 +333,7 @@
 		return backend
 	}
 
-	// ---- 选口对话框(Bootstrap modal 外观，自己管显隐，不依赖 bootstrap.Modal) ----
+	// ---- 选口对话框(自己管显隐，不依赖 bootstrap.Modal) ----
 	// 设备字符串来自设备本身(USB 描述符)，是不可信输入，一律 textContent
 	function createPortPicker(doc) {
 		let busy = null
@@ -327,18 +352,29 @@
 			overlay.setAttribute('aria-labelledby', 'native-port-title')
 			const box = el('div', 'native-port-dialog modal-content')
 			const head = el('div', 'modal-header')
-			const title = el('h5', 'modal-title', '选择串口设备')
+			const heading = el('div', 'native-port-heading')
+			const headingIcon = el('span', 'native-port-heading-icon')
+			headingIcon.setAttribute('aria-hidden', 'true')
+			headingIcon.append(el('i', 'bi bi-usb-symbol'))
+			const headingText = el('div', 'native-port-heading-text')
+			const title = el('h2', 'modal-title', '选择串口设备')
 			title.id = 'native-port-title'
-			const x = el('button', 'btn-close')
+			headingText.append(title, el('p', 'native-port-subtitle', '选择要连接的设备，确认端口后连接'))
+			heading.append(headingIcon, headingText)
+			const x = el('button', 'native-port-close')
 			x.type = 'button'
 			x.setAttribute('aria-label', '取消')
-			head.append(title, x)
+			x.append(el('i', 'bi bi-x-lg'))
+			head.append(heading, x)
 			const body = el('div', 'modal-body native-port-body')
+			const toolbar = el('div', 'native-port-toolbar')
+			const count = el('span', 'native-port-count')
 			const hint = el('div', 'native-port-hint', ctx.filters && ctx.filters.length ? '只列出本功能支持的设备' : '设备插拔后列表会自动刷新')
 			const list = el('div', 'native-port-list')
 			list.setAttribute('role', 'listbox')
 			list.setAttribute('aria-label', '串口设备')
-			body.append(hint, list)
+			toolbar.append(count, hint)
+			body.append(toolbar, list)
 			const foot = el('div', 'modal-footer')
 			const refreshBtn = el('button', 'btn btn-sm btn-outline-secondary me-auto')
 			refreshBtn.type = 'button'
@@ -351,7 +387,7 @@
 			foot.append(refreshBtn, cancel, ok)
 			box.append(head, body, foot)
 			overlay.append(box)
-			return { overlay, list, x, cancel, ok, refreshBtn }
+			return { overlay, list, count, x, cancel, ok, refreshBtn }
 		}
 
 		function renderRow(d, selected) {
@@ -365,12 +401,15 @@
 			const line1 = el('div', 'native-port-line1')
 			line1.append(el('span', 'native-port-name', portTitle(d)))
 			if (d.open) line1.append(el('span', 'native-port-badge', '已打开'))
-			main.append(line1)
-			const details = portDetails(d)
-			if (details.length) main.append(el('div', 'native-port-details', details.join(' · ')))
 			const path = el('div', 'native-port-path', d.name)
 			path.title = d.path
-			row.append(icon, main, path)
+			main.append(line1, path)
+			const details = portDetails(d)
+			if (details.length) main.append(el('div', 'native-port-details', details.join(' · ')))
+			const check = el('span', 'native-port-check')
+			check.setAttribute('aria-hidden', 'true')
+			if (selected) check.append(el('i', 'bi bi-check-lg'))
+			row.append(icon, main, check)
 			return row
 		}
 
@@ -385,6 +424,7 @@
 
 				function render() {
 					ui.list.textContent = ''
+					ui.count.textContent = items.length + ' 个可用设备'
 					if (!items.length) {
 						const empty = el('div', 'native-port-empty')
 						empty.append(el('div', 'native-port-empty-title', '没有找到串口设备'))
@@ -467,7 +507,9 @@
 		const invoke = tauri.invoke
 		// 先收回本窗口刷新前留下的句柄：pagehide 里的关闭不等完成，刷新后立刻重连会撞上独占锁。
 		// 打开一律等它完成再发，免得刷新后的自动重连跑在收回前面
-		const released = invoke('serial_release_owned').catch(function () {})
+		const released = invoke('serial_release_owned')
+		P.provide('native-serial-ready', { wait: function () { return released } })
+		released.catch(function () {})
 		root.SerialAdapter.register(createNativeSerialBackend({
 			invoke(cmd, args) {
 				return cmd === 'serial_open' ? released.then(function () { return invoke(cmd, args) }) : invoke(cmd, args)

@@ -30,6 +30,29 @@ const sys = { dir: '', text: '10:00:01.000 ! 未选择串口设备', hex: '' }
 	assert.deepEqual(Array.from(P('0x68 ABC').words), ['0x68', 'abc'], '不是两位十六进制的都按关键字')
 }
 
+// B 路连接组的移除键走原模式切换入口，电源键仍只负责连接切换。
+{
+ const src = fs.readFileSync(path.join(__dirname, '../js/modern-shell.js'), 'utf8')
+ class Element {
+  constructor(cls='',text=''){this.className=cls;this.textContent=text;this.children=[];this.handlers={};this.dataset={}}
+  append(...els){this.children.push(...els)}appendChild(el){this.children.push(el)}setAttribute(k,v){this[k]=v}
+ }
+ let modeClicks=0,closed=0,toggles=0
+ const mode={click(){modeClicks++}}
+ const env={window:{serialLanes:{toggle(){toggles++}}},document:{createTextNode:t=>new Element('',t)},
+  mk:(tag,cls,text)=>new Element(cls,text),btn:(cls,text)=>new Element(cls,text),icon:()=>new Element(),
+  listen:(el,type,fn)=>{el.handlers[type]=fn},closePops(){closed++},$:id=>id==='serial-mode-single'?mode:null,
+  makePortList:()=>({box:new Element()})}
+ vm.createContext(env)
+ vm.runInContext(src.slice(src.indexOf('\tfunction makePop('),src.indexOf('\n\tfunction openPop('))+'\nthis.make = makePop',env)
+ const main=env.make('main'),b=env.make('B')
+ assert.equal(main.wrap.children.some(e=>e.className==='mdn-conn-remove'),false)
+ const remove=b.wrap.children.find(e=>e.className==='mdn-conn-remove')
+ assert.ok(remove);assert.equal(remove.textContent,'移除 B 路')
+ remove.handlers.click()
+ assert.equal(modeClicks,1);assert.equal(closed,1);assert.equal(toggles,0)
+}
+
 // ---- 匹配 ----
 {
 	assert.equal(match('', tx), true, '空过滤全显示')
@@ -110,3 +133,31 @@ const sys = { dir: '', text: '10:00:01.000 ! 未选择串口设备', hex: '' }
 }
 
 console.log('modern-shell ok')
+
+// Execute the real dropdown construction: wireless sources are list rows, not duplicate footer buttons.
+{
+ const src = fs.readFileSync(path.join(__dirname, '../js/modern-shell.js'), 'utf8')
+ class Element {
+  constructor(text=''){this.children=[];this.textContent=text;this.handlers={}}
+  append(...els){this.children.push(...els)}appendChild(el){this.children.push(el)}setAttribute(){}
+ }
+ const requests=[],source={availableSources:()=>[{id:'computer-ble',label:'BLE'},{id:'classic',label:'经典蓝牙 SPP'}]}
+ const env={window:{AppPlatform:{service:()=>source},serialLanes:{requestPort:(...args)=>requests.push(args)}},
+  document:{createTextNode:t=>new Element(t)},mk:()=>new Element(),btn:(cls,text)=>new Element(text),icon:()=>new Element(),
+  listen:(el,type,fn)=>{el.handlers[type]=fn},closePops(){},swallowDoubleClick(){},hub:()=>({}),sidFor:k=>k,enqueuePort:(st,fn)=>fn(),loadPorts(){},onPortClick(){},onPortKey(){}}
+ vm.createContext(env)
+ vm.runInContext(src.slice(src.indexOf('	function makePortList('),src.indexOf('\n\tfunction loadPorts('))+'\nthis.make = makePortList',env)
+ const st=env.make('B')
+ vm.runInContext(src.slice(src.indexOf('\tfunction activatePort('),src.indexOf('\n\tfunction onPortClick('))+'\nthis.activate = activatePort',env)
+ assert.equal(st.foot.children.length,2, 'footer only keeps serial picker and refresh')
+ assert.deepEqual(st.sourceRows.map(r=>r.source.id), ['computer-ble','classic'])
+ assert.deepEqual(st.sourceRows.map(r=>r.source.label), ['BLE','经典蓝牙 SPP'])
+ assert.notEqual(st.sourceRows[0].port, st.sourceRows[1].port)
+ env.activate(st,{source:st.sourceRows[0].source,state:{disabled:false}})
+ env.activate(st,{source:st.sourceRows[1].source,state:{disabled:false}})
+ assert.deepEqual(requests,[['B','computer-ble'],['B','classic']])
+ source.availableSources=()=>[]
+ const empty=env.make('A')
+ assert.equal(empty.foot.children.length,2)
+ assert.equal(empty.sourceRows.length,0)
+}

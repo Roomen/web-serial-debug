@@ -104,9 +104,13 @@
 		const list = []
 		list.push({
 			group: '串口',
-			title: '选择串口',
-			alias: 'xuanze chuankou select port',
-			run: function () { clickEl('serial-select-port') }
+			title: '选择设备',
+			alias: 'xuanze shebei chuankou select device port',
+			run: function () {
+				const device = document.querySelector('#mdn-connbar .mdn-conn-btn')
+				if (device) { if (device.getAttribute('aria-expanded') !== 'true') device.click() }
+				else clickEl('serial-select-port')
+			}
 		})
 		// 按钮三态: 无口「连接」(选口+打开)、有口未开「打开」、已开「关闭」
 		const toggleText = textOf('serial-open-or-close') || '连接'
@@ -313,7 +317,7 @@
 		const list = []
 		list.push({
 			group: '视图',
-			title: '切换到串口调试',
+			title: '切换到通信调试',
 			alias: 'chuankou tiaoshi serial view',
 			run: function () { clickSel('.rail-item[data-view="view-serial"]') }
 		})

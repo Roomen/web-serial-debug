@@ -6,11 +6,13 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State};
+
+use crate::lease::{resource_key, ClaimDenied, ClaimGuard, OwnerLifecycle, OwnerOperation, OwnerRelease, OwnerSet};
 
 // 读写都用短超时轮询：读线程靠它及时看到停止标记；写由 write_all_until 按截止时间循环，
 // 不给读写两个句柄设不同超时(Windows 上复制出的句柄共用一份 COMMTIMEOUTS，会互相覆盖)
@@ -21,92 +23,20 @@ const MAX_READ_ERRORS: u32 = 50;
 const READ_ERROR_WINDOW: Duration = Duration::from_millis(2500);
 const RELEASE_TIMEOUT: Duration = Duration::from_secs(3);
 
-#[derive(Default)]
-struct OwnerInner {
-	generation: u64,
-	active: usize,
-	releasing: usize,
-}
-
-#[derive(Default)]
-struct OwnerLifecycle {
-	inner: Mutex<OwnerInner>,
-	drained: Condvar,
-}
-
-struct OwnerOperation {
-	owner: Arc<OwnerLifecycle>,
-	generation: u64,
-}
-
-impl OwnerLifecycle {
-	fn begin(self: &Arc<Self>, expected: Option<u64>) -> Result<OwnerOperation, String> {
-		let mut inner = self.inner.lock().unwrap();
-		if inner.releasing != 0 || expected.is_some_and(|g| g != inner.generation) {
-			return Err("串口会话已回收或正在回收".into());
-		}
-		inner.active += 1;
-		Ok(OwnerOperation {
-			owner: self.clone(),
-			generation: inner.generation,
-		})
-	}
-
-	fn wait_drained(&self, deadline: Instant) -> bool {
-		let inner = self.inner.lock().unwrap();
-		let (inner, _) = self
-			.drained
-			.wait_timeout_while(inner, deadline.saturating_duration_since(Instant::now()), |s| s.active != 0)
-			.unwrap();
-		inner.active == 0
-	}
-}
-
-impl OwnerOperation {
-	fn is_current(&self) -> bool {
-		let inner = self.owner.inner.lock().unwrap();
-		inner.generation == self.generation && inner.releasing == 0
-	}
-}
-
-impl Drop for OwnerOperation {
-	fn drop(&mut self) {
-		let mut inner = self.owner.inner.lock().unwrap();
-		inner.active -= 1;
-		self.owner.drained.notify_all();
-	}
-}
-
-struct OwnerRelease {
-	owner: Arc<OwnerLifecycle>,
-	handles: Vec<Arc<Handle>>,
-}
-
-impl OwnerRelease {
+// 串口的释放收尾：逐个关停收回来的句柄(共用总截止)，先放掉这批引用再等在飞 operation 归还。
+// releasing 屏障由 OwnerRelease 的 Drop 减回(lease.rs)，哪怕这里没跑完也不会把该窗口永久挡住。
+impl OwnerRelease<Vec<Arc<Handle>>> {
 	fn finish(mut self) {
 		let deadline = Instant::now() + RELEASE_TIMEOUT;
-		for h in &self.handles {
+		for h in &self.payload {
 			shutdown(h.clone(), Some(deadline));
 		}
 		// Drop our writer handles before waiting for the remaining operation references.
-		drop(std::mem::take(&mut self.handles));
-		if !self.owner.wait_drained(deadline) {
+		drop(std::mem::take(&mut self.payload));
+		if !self.wait_drained(deadline) {
 			eprintln!("serial owner release timed out waiting for pending operations");
 		}
-		// releasing 由 Drop 减回。Outstanding operations still carry the old generation and cannot register a handle.
-	}
-}
-
-// releasing 必须减回，哪怕 finish 没跑(后台任务在退出时被丢弃)或中途 panic：
-// 否则这个窗口标签之后一直打不开串口，main 标签关掉再开也一样
-impl Drop for OwnerRelease {
-	fn drop(&mut self) {
-		let mut inner = match self.owner.inner.lock() {
-			Ok(g) => g,
-			Err(p) => p.into_inner(),
-		};
-		inner.releasing -= 1;
-		self.owner.drained.notify_all();
+		// Outstanding operations still carry the old generation and cannot register a handle.
 	}
 }
 
@@ -311,22 +241,56 @@ fn port_present(path: &str) -> bool {
 	}
 }
 
+// 有界 IPC 窗口：前端交给自身有界流后确认累计字节，重复/乱序确认不返还多余额度。
+const RX_WINDOW_BYTES: u64 = 256 * 1024;
+const RX_BATCH_BYTES: usize = 64 * 1024;
+const RX_BATCH_DELAY: Duration = Duration::from_millis(10);
+#[derive(Default)]
+struct ReceiveWindow { sent: u64, acknowledged: u64 }
+impl ReceiveWindow {
+	fn reserve(&mut self, n: usize) -> bool {
+		if self.sent - self.acknowledged + n as u64 > RX_WINDOW_BYTES { return false; }
+		self.sent += n as u64;
+		true
+	}
+	fn acknowledge(&mut self, total: u64) -> Result<(), String> {
+		if total > self.sent { return Err("无效的接收确认".into()); }
+		self.acknowledged = self.acknowledged.max(total);
+		Ok(())
+	}
+}
+fn deliver_batch(batch: &mut Vec<u8>, rx: &Mutex<ReceiveWindow>, data: &Channel<InvokeResponseBody>, events: &Channel<serde_json::Value>) -> bool {
+	if batch.is_empty() { return true; }
+	if !rx.lock().unwrap().reserve(batch.len()) {
+		let _ = events.send(json!({ "type": "lost", "message": format!("原生接收窗口溢出，至少 {} 字节未交付；已停止连接", batch.len()) }));
+		return false;
+	}
+	data.send(InvokeResponseBody::Raw(std::mem::replace(batch, Vec::with_capacity(RX_BATCH_BYTES)))).is_ok()
+}
+
 struct Handle {
 	path: String,
 	// 打开它的 webview 标签：页面刷新或窗口关闭后 JS 端的状态没了，句柄按标签收回，免得独占锁一直挂着
 	owner: String,
 	lifecycle: Arc<OwnerLifecycle>,
 	generation: u64,
+	// 设备租约凭据：不主动读，存活即占用。写句柄与读线程各持一份(见 spawn_reader)，
+	// 回收超时 detach 读线程后，句柄先释放占用仍在，直到读线程真正退出、两份凭据都归还
+	#[allow(dead_code)]
+	claim: Arc<ClaimGuard>,
 	port: Mutex<Box<dyn serialport::SerialPort>>,
 	stop: Arc<AtomicBool>,
 	reader: Mutex<Option<JoinHandle<()>>>,
+	rx: Arc<Mutex<ReceiveWindow>>,
 }
 
 #[derive(Default)]
 pub struct SerialState {
 	next: AtomicU32,
 	handles: Mutex<HashMap<u32, Arc<Handle>>>,
-	owners: Mutex<HashMap<String, Arc<OwnerLifecycle>>>,
+	owners: OwnerSet,
+	// 设备级单 owner 租约：已登记句柄与打开途中的 pending 都算占用，跨窗口争用在这里裁决(lease.rs)
+	claims: crate::lease::Claims,
 }
 
 impl SerialState {
@@ -337,29 +301,26 @@ impl SerialState {
 		let operation = h.lifecycle.begin(Some(h.generation))?;
 		Ok((h.clone(), operation))
 	}
-	fn open_paths(&self) -> Vec<String> {
-		self.handles.lock().unwrap().values().map(|h| h.path.clone()).collect()
+	fn claimed_paths(&self) -> Vec<String> {
+		self.claims.keys()
 	}
 	fn owner(&self, label: &str) -> Arc<OwnerLifecycle> {
-		self.owners.lock().unwrap().entry(label.to_string()).or_default().clone()
+		self.owners.owner(label)
 	}
 
 	// Invalidate opens and prevent new operations before taking the registered handles.
-	// All paths lock the handle map before the lifecycle.
-	fn begin_release(&self, label: &str) -> OwnerRelease {
+	// All paths lock the handle map before the lifecycle (invalidate 也在这把锁里推进代次)。
+	fn begin_release(&self, label: &str) -> OwnerRelease<Vec<Arc<Handle>>> {
 		let owner = self.owner(label);
 		let mut map = self.handles.lock().unwrap();
-		let mut inner = owner.inner.lock().unwrap();
-		inner.generation += 1;
-		inner.releasing += 1;
+		owner.invalidate();
 		let ids: Vec<u32> = map.iter().filter(|(_, h)| h.owner == label).map(|(id, _)| *id).collect();
 		let handles: Vec<_> = ids.into_iter().filter_map(|id| map.remove(&id)).collect();
 		for h in &handles {
 			h.stop.store(true, Ordering::Release);
 		}
 		drop(map);
-		drop(inner);
-		OwnerRelease { owner, handles }
+		OwnerRelease::new(owner, handles)
 	}
 }
 
@@ -374,7 +335,8 @@ fn shutdown(h: Arc<Handle>, deadline: Option<Instant>) {
 			let _ = th.join();
 		} else {
 			// Dropping JoinHandle detaches; the reader still owns its port until it exits.
-			eprintln!("serial reader shutdown timed out");
+			// 读线程闭包里还有一份 claim 凭据，占用不会随句柄先释放
+			eprintln!("serial reader shutdown timed out: {}", h.path);
 		}
 	}
 }
@@ -415,14 +377,15 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Sen
 
 #[tauri::command]
 pub async fn serial_list(state: State<'_, SerialState>) -> Result<Vec<PortDesc>, String> {
-	let open = state.open_paths();
+	// 占用按设备租约算：已登记的句柄和别的窗口正在打开中的口都算「已打开」
+	let open: std::collections::HashSet<String> = state.claimed_paths().into_iter().collect();
 	blocking(move || {
 		let ports = serialport::available_ports().map_err(|e| e.to_string())?;
 		let mut out: Vec<PortDesc> = ports
 			.into_iter()
 			.filter(|p| listed(&p.port_name))
 			.map(|p| {
-				let is_open = open.contains(&p.port_name);
+				let is_open = open.contains(&resource_key(&p.port_name));
 				describe(p, is_open)
 			})
 			.collect();
@@ -437,7 +400,7 @@ pub async fn serial_list(state: State<'_, SerialState>) -> Result<Vec<PortDesc>,
 						port_name: p.to_string(),
 						port_type: serialport::SerialPortType::Unknown,
 					};
-					out.push(describe(info, open.contains(&p.to_string())));
+					out.push(describe(info, open.contains(&resource_key(p))));
 				}
 			}
 		}
@@ -456,13 +419,36 @@ fn normal_idle_error(error: &std::io::Error) -> bool {
 	matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock | ErrorKind::Interrupted) && error.raw_os_error().is_none()
 }
 
+// 读线程入口：claim 随闭包进线程，与 Handle 里的那份共持同一租约——
+// 回收超时 detach 后句柄先释放占用仍在，读线程退出时两份凭据都归还才释放
+fn spawn_reader(
+	id: u32,
+	path: String,
+	reader: Box<dyn serialport::SerialPort>,
+	claim: Arc<ClaimGuard>,
+	stop: Arc<AtomicBool>,
+	on_data: Channel<InvokeResponseBody>,
+	on_event: Channel<serde_json::Value>,
+	rx: Arc<Mutex<ReceiveWindow>>,
+) -> std::io::Result<JoinHandle<()>> {
+	std::thread::Builder::new()
+		.name(format!("serial-read-{}", id))
+		.spawn(move || {
+			let _claim = claim;
+			read_loop(path, reader, stop, on_data, on_event, rx)
+		})
+}
+
 fn read_loop(
 	path: String,
 	mut port: Box<dyn serialport::SerialPort>,
 	stop: Arc<AtomicBool>,
 	on_data: Channel<InvokeResponseBody>,
 	on_event: Channel<serde_json::Value>,
+	rx: Arc<Mutex<ReceiveWindow>>,
 ) {
+	let mut batch = Vec::with_capacity(RX_BATCH_BYTES);
+	let mut batch_start = Instant::now();
 	let mut buf = vec![0u8; 64 * 1024];
 	let mut errors: u32 = 0;
 	let mut first_error = Instant::now();
@@ -472,7 +458,11 @@ fn read_loop(
 		let _ = on_event.send(json!({ "type": "lost", "message": msg }));
 	};
 	while !stop.load(Ordering::Acquire) {
-		match port.read(&mut buf) {
+		if !batch.is_empty() && batch_start.elapsed() >= RX_BATCH_DELAY {
+			if !deliver_batch(&mut batch, &rx, &on_data, &on_event) { return; }
+		}
+		let room = RX_BATCH_BYTES - batch.len();
+		match port.read(&mut buf[..room]) {
 			Ok(0) => {
 				errors = 0;
 				// 部分驱动拔出后读到 EOF 而不是报错
@@ -484,10 +474,9 @@ fn read_loop(
 			}
 			Ok(n) => {
 				errors = 0;
-				// 前端窗口已关，通道发不出去：没人收了，退出读线程
-				if on_data.send(InvokeResponseBody::Raw(buf[..n].to_vec())).is_err() {
-					return;
-				}
+				if batch.is_empty() { batch_start = Instant::now(); }
+				batch.extend_from_slice(&buf[..n]);
+				if batch.len() >= RX_BATCH_BYTES && !deliver_batch(&mut batch, &rx, &on_data, &on_event) { return; }
 			}
 			Err(e) => {
 				if stop.load(Ordering::Acquire) {
@@ -541,11 +530,25 @@ pub async fn serial_open(
 	let owner_operation = lifecycle.begin(None)?;
 	let app = webview.app_handle().clone();
 	let owner = webview.label().to_string();
+	// 设备租约在触碰硬件前裁决：本窗口另一路 / 别的窗口占用(含正在打开)都在 open 之前拒绝；
+	// 同窗口旧代次残留的占用在凭据归还前也不放行(新旧两个方向都禁止顶替，见 lease.rs)，
+	// 旧在飞 open 仍会在它的登记屏障失败
+	let claim = state
+		.claims
+		.acquire(&resource_key(&path), &owner, owner_operation.generation)
+		.map_err(|d| match d {
+			ClaimDenied::SameOwner => "该串口已被本窗口另一路占用".to_string(),
+			ClaimDenied::OtherOwner => "该串口正被另一窗口占用".to_string(),
+		})?;
+	if !owner_operation.is_current() {
+		return Err("串口会话已回收".into());
+	}
 	let p = path.clone();
 	blocking(move || {
 		// Keep both barriers alive even if the async command is cancelled.
 		let _operation = _operation;
 		let owner_operation = owner_operation;
+		let claim = claim;
 		let state = app.state::<SerialState>();
 		let data_bits = match options.data_bits.unwrap_or(8) {
 			5 => serialport::DataBits::Five,
@@ -597,9 +600,9 @@ pub async fn serial_open(
 		.map_err(|e| format!("打开 {} 失败: {}", short_name(&p), e))?;
 		let reader = port.try_clone().map_err(|e| e.to_string())?;
 		// Linearize registration with release. Stale ports and their clones drop here.
+		// invalidate 也只在 handles 锁里推进代次，所以 is_current 到 insert 之间不会被释放插队。
 		let mut map = state.handles.lock().unwrap();
-		let inner = lifecycle.inner.lock().unwrap();
-		if inner.generation != owner_operation.generation || inner.releasing != 0 {
+		if !owner_operation.is_current() {
 			return Err("串口会话已回收".into());
 		}
 		if crate::updater::frozen(&app) {
@@ -607,23 +610,21 @@ pub async fn serial_open(
 		}
 		let id = state.next.fetch_add(1, Ordering::Relaxed) + 1;
 		let stop = Arc::new(AtomicBool::new(false));
-		let s = stop.clone();
-		let rp = path.clone();
-		let th = std::thread::Builder::new()
-			.name(format!("serial-read-{}", id))
-			.spawn(move || read_loop(rp, reader, s, on_data, on_event))
-			.map_err(|e| e.to_string())?;
+		let claim = Arc::new(claim);
+		let rx = Arc::new(Mutex::new(ReceiveWindow::default()));
+		let th = spawn_reader(id, path.clone(), reader, claim.clone(), stop.clone(), on_data, on_event, rx.clone()).map_err(|e| e.to_string())?;
 		let h = Arc::new(Handle {
 			path,
 			owner,
 			lifecycle: lifecycle.clone(),
 			generation: owner_operation.generation,
+			claim,
 			port: Mutex::new(port),
 			stop,
 			reader: Mutex::new(Some(th)),
+			rx,
 		});
 		map.insert(id, h);
-		drop(inner);
 		Ok(id)
 	})
 	.await
@@ -699,6 +700,15 @@ pub async fn serial_set_signals(app: tauri::AppHandle, state: State<'_, SerialSt
 	.await
 }
 
+// ACK 只对发起窗口当前代次的句柄有效；旧句柄绝不能返还新连接的额度。
+#[tauri::command]
+pub fn serial_ack_receive(webview: tauri::Webview, state: State<'_, SerialState>, handle: u32, total: u64) -> Result<(), String> {
+	let (h, _operation) = state.operation(handle)?;
+	if h.owner != webview.label() || h.stop.load(Ordering::Acquire) { return Err("串口会话已回收".into()); }
+	let result = h.rx.lock().unwrap().acknowledge(total);
+	result
+}
+
 // 已经关过(设备丢失后前端补关、重复关)按成功处理：句柄不在就是已释放
 #[tauri::command]
 pub async fn serial_close(state: State<'_, SerialState>, handle: u32) -> Result<(), String> {
@@ -753,7 +763,40 @@ fn windows_hardware_handshake(port: &serialport::COMPort) -> serialport::Result<
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use std::sync::mpsc;
+	#[test]
+	fn receive_window_bounds_and_cumulative_ack() {
+		let mut rx = ReceiveWindow::default();
+		for _ in 0..4 { assert!(rx.reserve(RX_BATCH_BYTES)); }
+		assert!(!rx.reserve(1));
+		assert!(rx.acknowledge(RX_BATCH_BYTES as u64).is_ok());
+		assert!(rx.reserve(RX_BATCH_BYTES));
+		assert!(rx.acknowledge(RX_BATCH_BYTES as u64).is_ok());
+		assert!(!rx.reserve(1), "重复确认不得增加额度");
+		assert!(rx.acknowledge(0).is_ok());
+		assert!(!rx.reserve(1), "乱序确认不得增加额度");
+		assert!(rx.acknowledge(rx.sent + 1).is_err());
+		assert!(!ReceiveWindow::default().acknowledge(1).is_ok(), "旧连接的确认不能用于新窗口");
+	}
+
+	#[test]
+	fn batch_delivery_is_bounded_and_reports_overflow_once() {
+		let rx = Mutex::new(ReceiveWindow::default());
+		let sends = Arc::new(AtomicU32::new(0));
+		let notices = Arc::new(AtomicU32::new(0));
+		let count = sends.clone();
+		let events = notices.clone();
+		let data = Channel::new(move |_| { count.fetch_add(1, Ordering::Relaxed); Ok(()) });
+		let event = Channel::new(move |_| { events.fetch_add(1, Ordering::Relaxed); Ok(()) });
+		for _ in 0..4 {
+			let mut batch = vec![7; RX_BATCH_BYTES];
+			assert!(deliver_batch(&mut batch, &rx, &data, &event));
+			assert!(batch.is_empty());
+		}
+		assert!(!deliver_batch(&mut vec![8; 64], &rx, &data, &event));
+		assert_eq!(sends.load(Ordering::Relaxed), 4);
+		assert_eq!(notices.load(Ordering::Relaxed), 1);
+	}
+
 
 	#[test]
 	fn idle_timeout_is_distinct_from_fast_or_os_errors() {
@@ -763,87 +806,234 @@ mod tests {
 		assert!(!normal_idle_error(&std::io::Error::other("driver failure")));
 	}
 
+	// 设备租约(lease::Claims)接入 serial 的判定：跨窗口、同窗口另一路、代次顶替
 	#[test]
-	fn release_invalidates_pending_open_and_rejects_stale_writer() {
+	fn claims_arbitrate_pending_open_across_windows() {
 		let state = SerialState::default();
-		let owner = state.owner("test-window");
-		let opening = owner.begin(None).unwrap();
-		let old_generation = opening.generation;
-		let release = state.begin_release("test-window");
-		assert_ne!(owner.inner.lock().unwrap().generation, old_generation);
-		assert!(!opening.is_current());
-		assert!(owner.begin(None).is_err());
-		drop(opening);
-		release.finish();
-		assert!(owner.begin(Some(old_generation)).is_err());
-		assert!(owner.begin(None).is_ok());
+		let op_a = state.owner("win-a").begin(None).unwrap();
+		let op_b = state.owner("win-b").begin(None).unwrap();
+		let key = resource_key("/dev/cu.test-claim");
+		let claim_a = state.claims.acquire(&key, "win-a", op_a.generation).unwrap();
+		// 窗口 A 持有(打开途中也算)时 B 拒绝
+		assert_eq!(
+			state.claims.acquire(&key, "win-b", op_b.generation).unwrap_err(),
+			ClaimDenied::OtherOwner
+		);
+		// 同窗口同一代次的另一路也拒绝
+		assert_eq!(
+			state.claims.acquire(&key, "win-a", op_a.generation).unwrap_err(),
+			ClaimDenied::SameOwner
+		);
+		drop(claim_a);
+		assert!(state.claims.acquire(&key, "win-b", op_b.generation).is_ok());
 	}
 
+	// 回收推进代次后，旧 pending 的占用凭据未归还前新代次也不能顶替；
+	// 旧请求登记屏障失败、凭据归还后才可重取
 	#[test]
-	fn drain_waits_until_all_operations_drop() {
+	fn release_advances_generation_but_held_stale_claim_still_blocks() {
 		let state = SerialState::default();
-		let owner = state.owner("test-window");
-		let opening = owner.begin(None).unwrap();
-		let writing = owner.begin(Some(opening.generation)).unwrap();
-		let release = state.begin_release("test-window");
-		let (entered_tx, entered_rx) = mpsc::channel();
-		let (done_tx, done_rx) = mpsc::channel();
-		let worker = std::thread::spawn(move || {
-			entered_tx.send(()).unwrap();
-			release.finish();
-			done_tx.send(()).unwrap();
+		let owner = state.owner("win-a");
+		let op1 = owner.begin(None).unwrap();
+		let key = resource_key("/dev/cu.test-stale");
+		let stale = state.claims.acquire(&key, "win-a", op1.generation).unwrap();
+		// 刷新/回收：代次推进，旧 pending open 不再能登记
+		let release = state.begin_release("win-a");
+		assert!(owner.begin(None).is_err());
+		drop(op1);
+		drop(release);
+		let op2 = owner.begin(None).unwrap();
+		// 旧 pending 凭据还没归还，新代次不能顶替(晚到的旧请求同样拒，见 lease 测试)
+		assert_eq!(
+			state.claims.acquire(&key, "win-a", op2.generation).unwrap_err(),
+			ClaimDenied::SameOwner
+		);
+		// 旧请求 is_current 失败收尾、凭据归还，占用才释放
+		drop(stale);
+		let current = state.claims.acquire(&key, "win-a", op2.generation).unwrap();
+		drop(current);
+		assert!(!state.claims.contains(&key));
+	}
+
+	// 确定性延迟的假读端：第一次 read 先报已进入，随后阻塞在 gate 上直到放行。
+	// Handle 里的写端也用同一类型(gate 永不放行，写路径不会调它的 read)
+	struct FakePort {
+		entered: Option<std::sync::mpsc::Sender<()>>,
+		gate: std::sync::mpsc::Receiver<()>,
+	}
+
+	impl std::io::Read for FakePort {
+		fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+			if let Some(entered) = self.entered.take() {
+				let _ = entered.send(());
+			}
+			let _ = self.gate.recv();
+			Err(std::io::Error::new(ErrorKind::Other, "fake reader released"))
+		}
+	}
+
+	impl std::io::Write for FakePort {
+		fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+			Ok(buf.len())
+		}
+		fn flush(&mut self) -> std::io::Result<()> {
+			Ok(())
+		}
+	}
+
+	impl serialport::SerialPort for FakePort {
+		fn name(&self) -> Option<String> {
+			None
+		}
+		fn baud_rate(&self) -> serialport::Result<u32> {
+			Ok(9600)
+		}
+		fn data_bits(&self) -> serialport::Result<serialport::DataBits> {
+			Ok(serialport::DataBits::Eight)
+		}
+		fn flow_control(&self) -> serialport::Result<serialport::FlowControl> {
+			Ok(serialport::FlowControl::None)
+		}
+		fn parity(&self) -> serialport::Result<serialport::Parity> {
+			Ok(serialport::Parity::None)
+		}
+		fn stop_bits(&self) -> serialport::Result<serialport::StopBits> {
+			Ok(serialport::StopBits::One)
+		}
+		fn timeout(&self) -> Duration {
+			IO_TIMEOUT
+		}
+		fn set_baud_rate(&mut self, _v: u32) -> serialport::Result<()> {
+			Ok(())
+		}
+		fn set_data_bits(&mut self, _v: serialport::DataBits) -> serialport::Result<()> {
+			Ok(())
+		}
+		fn set_flow_control(&mut self, _v: serialport::FlowControl) -> serialport::Result<()> {
+			Ok(())
+		}
+		fn set_parity(&mut self, _v: serialport::Parity) -> serialport::Result<()> {
+			Ok(())
+		}
+		fn set_stop_bits(&mut self, _v: serialport::StopBits) -> serialport::Result<()> {
+			Ok(())
+		}
+		fn set_timeout(&mut self, _v: Duration) -> serialport::Result<()> {
+			Ok(())
+		}
+		fn write_request_to_send(&mut self, _v: bool) -> serialport::Result<()> {
+			Ok(())
+		}
+		fn write_data_terminal_ready(&mut self, _v: bool) -> serialport::Result<()> {
+			Ok(())
+		}
+		fn read_clear_to_send(&mut self) -> serialport::Result<bool> {
+			Ok(false)
+		}
+		fn read_data_set_ready(&mut self) -> serialport::Result<bool> {
+			Ok(false)
+		}
+		fn read_ring_indicator(&mut self) -> serialport::Result<bool> {
+			Ok(false)
+		}
+		fn read_carrier_detect(&mut self) -> serialport::Result<bool> {
+			Ok(false)
+		}
+		fn bytes_to_read(&self) -> serialport::Result<u32> {
+			Ok(0)
+		}
+		fn bytes_to_write(&self) -> serialport::Result<u32> {
+			Ok(0)
+		}
+		fn clear(&self, _b: serialport::ClearBuffer) -> serialport::Result<()> {
+			Ok(())
+		}
+		fn try_clone(&self) -> serialport::Result<Box<dyn serialport::SerialPort>> {
+			Err(serialport::Error::new(serialport::ErrorKind::NoDevice, "fake"))
+		}
+		fn set_break(&self) -> serialport::Result<()> {
+			Ok(())
+		}
+		fn clear_break(&self) -> serialport::Result<()> {
+			Ok(())
+		}
+	}
+
+	// 回收超时 detach 读线程后，占用凭据由读线程与句柄共持：
+	// 句柄先释放时另一个 owner 仍被拒，读线程退出、两份凭据都归还才释放
+	#[test]
+	fn detached_reader_keeps_claim_until_it_exits() {
+		let claims = crate::lease::Claims::default();
+		let path = "/dev/cu.test-detach";
+		let key = resource_key(path);
+		let claim = Arc::new(claims.acquire(&key, "win-a", 0).unwrap());
+		let stop = Arc::new(AtomicBool::new(false));
+		let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+		let (gate_tx, gate_rx) = std::sync::mpsc::channel::<()>();
+		let th = spawn_reader(
+			7,
+			path.to_string(),
+			Box::new(FakePort {
+				entered: Some(entered_tx),
+				gate: gate_rx,
+			}),
+			claim.clone(),
+			stop.clone(),
+			Channel::new(|_| Ok(())),
+			Channel::new(|_| Ok(())),
+			Arc::new(Mutex::new(ReceiveWindow::default())),
+		)
+		.unwrap();
+		let (_, dead_rx) = std::sync::mpsc::channel::<()>();
+		let h = Arc::new(Handle {
+			path: path.to_string(),
+			owner: "win-a".to_string(),
+			lifecycle: Arc::new(OwnerLifecycle::default()),
+			generation: 0,
+			claim,
+			port: Mutex::new(Box::new(FakePort {
+				entered: None,
+				gate: dead_rx,
+			})),
+			stop,
+			reader: Mutex::new(Some(th)),
+			rx: Arc::new(Mutex::new(ReceiveWindow::default())),
 		});
-		entered_rx.recv().unwrap();
-		drop(opening);
-		assert_eq!(owner.inner.lock().unwrap().active, 1);
-		assert!(matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
-		drop(writing);
-		done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-		worker.join().unwrap();
-		assert_eq!(owner.inner.lock().unwrap().active, 0);
+		// 确定读线程已卡在 read 里，再走回收路径并超时 detach
+		entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+		shutdown(h.clone(), Some(Instant::now() + Duration::from_millis(100)));
+		drop(h);
+		// 句柄(写端)已释放、读线程尚存：另一个 owner 仍被拒
+		assert_eq!(
+			claims.acquire(&key, "win-b", 0).unwrap_err(),
+			ClaimDenied::OtherOwner
+		);
+		// 放行：read 返回错误、stop 已置，读线程退出后凭据归还
+		drop(gate_tx);
+		let deadline = Instant::now() + Duration::from_secs(2);
+		while claims.contains(&key) && Instant::now() < deadline {
+			std::thread::sleep(Duration::from_millis(5));
+		}
+		assert!(claims.acquire(&key, "win-b", 0).is_ok());
 	}
 
 	#[test]
-	fn blocked_operation_has_bounded_drain_and_can_finish_later() {
-		let owner = Arc::new(OwnerLifecycle::default());
-		let operation = owner.begin(None).unwrap();
-		assert!(!owner.wait_drained(Instant::now()));
-		drop(operation);
-		assert!(owner.wait_drained(Instant::now()));
-	}
-
-	#[test]
-	fn overlapping_releases_do_not_reopen_barrier_early() {
-		let state = SerialState::default();
-		let owner = state.owner("test-window");
-		let first = state.begin_release("test-window");
-		let second = state.begin_release("test-window");
-		first.finish();
-		assert!(owner.begin(None).is_err());
-		second.finish();
-		assert!(owner.begin(None).is_ok());
-		assert_eq!(owner.inner.lock().unwrap().generation, 2);
-	}
-
-	#[test]
-	fn dropped_release_without_finish_still_reopens_barrier() {
-		let state = SerialState::default();
-		let owner = state.owner("test-window");
-		drop(state.begin_release("test-window"));
-		assert_eq!(owner.inner.lock().unwrap().releasing, 0);
-		assert!(owner.begin(None).is_ok());
-	}
-
-	#[test]
-	fn release_is_isolated_by_owner_and_generation_survives_reuse() {
-		let state = SerialState::default();
-		let owner = state.owner("first");
-		let other = state.owner("second");
-		let initial = owner.begin(None).unwrap().generation;
-		state.begin_release("first").finish();
-		assert!(other.begin(Some(0)).is_ok());
-		let reused = state.owner("first");
-		assert!(Arc::ptr_eq(&owner, &reused));
-		assert!(reused.begin(Some(initial)).is_err());
+	fn concurrent_pending_opens_keep_single_claimant() {
+		let state = Arc::new(SerialState::default());
+		let barrier = Arc::new(std::sync::Barrier::new(8));
+		let mut workers = Vec::new();
+		for i in 0..8 {
+			let state = state.clone();
+			let barrier = barrier.clone();
+			workers.push(std::thread::spawn(move || {
+				let label = format!("win-{}", i % 3);
+				let generation = state.owner(&label).begin(None).unwrap().generation;
+				barrier.wait();
+				// 凭据带回来保住占用，否则返回值处 Drop 会让下一个立刻得手
+				state.claims.acquire(&resource_key("COM7"), &label, generation).ok()
+			}));
+		}
+		let wins: Vec<Option<ClaimGuard>> = workers.into_iter().map(|h| h.join().unwrap()).collect();
+		assert_eq!(wins.iter().filter(|w| w.is_some()).count(), 1);
 	}
 }

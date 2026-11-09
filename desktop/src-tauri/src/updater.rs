@@ -185,7 +185,7 @@ pub fn session_script(session: &HashMap<String, String>) -> String {
     let json = serde_json::to_string(session).unwrap_or_else(|_| "{}".into())
         .replace('<', "\\u003c").replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029");
     let keys = serde_json::to_string(SESSION_KEYS).unwrap();
-    format!("(()=>{{const s={json};for(const k of {keys}){{try{{sessionStorage.removeItem(k)}}catch(_){{}}}}for(const [k,v] of Object.entries(s)){{try{{sessionStorage.setItem(k,v)}}catch(_){{}}}}}})();")
+    format!("(()=>{{window.__APP_UPDATE_RESTORED__=true;const s={json};for(const k of {keys}){{try{{sessionStorage.removeItem(k)}}catch(_){{}}}}for(const [k,v] of Object.entries(s)){{try{{sessionStorage.setItem(k,v)}}catch(_){{}}}}}})();")
 }
 fn save_handoff(app: &AppHandle, state: &UpdateState) -> Result<(), String> {
     use std::io::Write;
@@ -256,6 +256,8 @@ pub async fn app_update_install(app: AppHandle, state: State<'_, UpdateState>, v
         // 前端已保存日志、停止任务并关闭流；再收回窗口可能残留的原生句柄。
         for label in app.webview_windows().into_keys() {
             crate::serial::release_owner(&app.state::<crate::serial::SerialState>(), &label);
+            crate::classic::release_owner(&app.state::<crate::classic::ClassicState>(), &label)?;
+            crate::ble::release_owner(&app.state::<crate::ble::BleState>(), &label)?;
         }
         progress(&app, id, "installing", received, Some(received));
         if portable_mode() {

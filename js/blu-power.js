@@ -378,7 +378,7 @@
 
 	function samplesFromRamGB(ramGB) {
 		const bytes = Math.max(0, ramGB) * 1024 * 1024 * 1024
-		let n = Math.floor(bytes / BYTES_PER_SAMPLE)
+		let n = Math.floor(bytes * 0.70 / BYTES_PER_SAMPLE)
 		n = Math.floor(n / CHUNK_SIZE) * CHUNK_SIZE
 		return Math.max(CHUNK_SIZE * 2, n)
 	}
@@ -402,6 +402,16 @@
 	// 顺序分块：hot 有 buf；cold/pending 落盘后可释放 buf
 	// { id, buf, n, sumI, sumSqI, sumP, minI, maxI, state, diskBytes }
 	const waveChunks = []
+	let archiveCursor = 0
+	// 每个描述符、字符串、对象与完整包络按 4 KiB 预留；这不是 JS 引擎堆的精确测量。
+	// 70% 热区 + 热区 1/8 归档队列 + 48 块回读/在飞回读 + 压缩工作区/尾块，余量留元数据。
+	const CHUNK_META_BYTES = 4096
+	function metadataChunkLimit() {
+		const total = storageCfg.ramGB * 1024 * 1024 * 1024
+		const reserved = RING_CAP_MAX * BYTES_PER_SAMPLE + archiveQueueMax() * BYTES_PER_SAMPLE +
+			(HYDRATE_CACHE_MAX * 2 + 8) * CHUNK_SIZE * BYTES_PER_SAMPLE
+		return Math.max(0, Math.floor((total - reserved) / CHUNK_META_BYTES))
+	}
 	let totalCount = 0 // 全部保留样点（冷+热）
 	let hotCount = 0
 	let coldCount = 0
@@ -541,7 +551,8 @@
 			(diskBudgetBytes > 0
 				? (' · 磁盘 ' + fmtGb(storageCfg.diskGB) + ' 压后约 +' + fmtDuration(diskSec))
 				: ' · 磁盘 0（RAM 满即停）') +
-			' · 热 ' + fmtBytes(hotBytes) + '/' + fmtGb(storageCfg.ramGB) +
+			' · 元数据 ' + waveChunks.length + '/' + metadataChunkLimit() + ' 块（到顶停采）' +
+			' · 热 ' + fmtBytes(hotBytes) + '/' + fmtBytes(RING_CAP_MAX * BYTES_PER_SAMPLE) +
 			(diskBudgetBytes > 0 ? (' · 盘 ' + fmtBytes(diskBytes) + '/' + fmtGb(storageCfg.diskGB)) : '') +
 			(coldCount > 0 ? (' · 冷 ' + coldCount + ' 点') : '')
 		if (wrap) wrap.title = tip
@@ -707,7 +718,7 @@
 	/** 将最老的完整热块压缩归档；失败返回 false（磁盘满/无后端/内存） */
 	function enqueueOldestHotArchive() {
 		let idx = -1
-		for (let i = 0; i < waveChunks.length; i++) {
+		for (let i = archiveCursor; i < waveChunks.length; i++) {
 			const ch = waveChunks[i]
 			if (ch.state === 'hot' && ch.buf && ch.n > 0) {
 				// 优先归档已写满的块；仅当热数据已顶满预算时才归档未满尾块
@@ -746,6 +757,7 @@
 		} catch (e) {
 			ch.env = null
 		}
+		archiveCursor = idx + 1
 		ch.state = 'pending'
 		ch.buf = null
 		hotCount -= ch.n
@@ -804,6 +816,7 @@
 					try {
 						ch.buf = samples
 						ch.state = 'hot'
+						archiveCursor = Math.min(archiveCursor, chunkIndexAt(ch.base))
 						hotCount += ch.n
 						coldCount = Math.max(0, coldCount - ch.n)
 					} catch (e2) {
@@ -872,6 +885,10 @@
 
 		let ch = waveChunks.length ? waveChunks[waveChunks.length - 1] : null
 		if (!ch || ch.state !== 'hot' || !ch.buf || ch.n >= CHUNK_SIZE) {
+			if (waveChunks.length >= metadataChunkLimit()) {
+				triggerStorageStop('波形元数据达到 RAM 预留上限，已停止采样；已有数据保留，可导出后清空继续')
+				return false
+			}
 			ch = newHotChunk()
 			if (!ch) {
 				// 尝试腾出一块再分配
@@ -919,6 +936,7 @@
 		}
 		archiveQueuedSamples = 0
 		waveChunks.length = 0
+		archiveCursor = 0
 		totalCount = 0
 		hotCount = 0
 		coldCount = 0
@@ -6532,6 +6550,7 @@
 				if (serialOwnsPort(p)) continue
 				let info = {}
 				try { info = p.getInfo ? p.getInfo() : {} } catch (e) {}
+				if (info.transport && info.transport !== 'serial') continue
 				if (isBluUsbInfo(info)) matched.push(p)
 				else if (info.usbVendorId == null && info.usbProductId == null) unknown.push(p)
 			}

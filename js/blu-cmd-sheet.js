@@ -63,7 +63,7 @@
 					'<div id="blu-cmd-no-serial" hidden>' +
 						'<div class="blu-cmd-hint">串口未打开，无法发送</div>' +
 						'<button class="btn btn-sm btn-outline-secondary" id="blu-cmd-goto-serial">' +
-							'<i class="bi bi-box-arrow-up-right"></i> 打开串口调试' +
+							'<i class="bi bi-box-arrow-up-right"></i> 打开通信调试' +
 						'</button>' +
 					'</div>' +
 					'<div id="blu-cmd-has-serial" hidden>' +
@@ -118,7 +118,7 @@
 		closeBtn.addEventListener('click', function () { setOpen(false) })
 		backdrop.addEventListener('click', function () { setOpen(false) })
 
-		// 跳转串口调试页
+		// 跳转通信调试页
 		E('blu-cmd-goto-serial').addEventListener('click', function () {
 			const rail = document.querySelector('.rail-item[data-view="view-serial"]')
 			if (rail) rail.click()

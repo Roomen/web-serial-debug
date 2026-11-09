@@ -477,11 +477,11 @@
 			list: list.map(function (e) {
 				return { presetName: e.presetName, value: e.value, step: e.step, enabled: e.enabled !== false }
 			}),
-			index: current,
 			timeoutMs: parseInt(el.timeout.value, 10) || DEFAULT_TIMEOUT_MS,
 			gapMs: parseInt(el.gap.value, 10) || DEFAULT_GAP_MS,
 			continueOnFail: !!el.continueOnFail.checked
 		}
+		try { sessionStorage.setItem(STATE_KEY + '.index', String(current)) } catch (e) {}
 		try { localStorage.setItem(STATE_KEY, JSON.stringify(st)) } catch (e) { /* 忽略存储失败 */ }
 	}
 
@@ -502,7 +502,7 @@
 				}
 			})
 		}
-		current = parseInt(st.index, 10) || 0
+		try { current = Math.max(0, parseInt(sessionStorage.getItem(STATE_KEY + '.index'), 10) || 0) } catch (e) { current = 0 }
 		if (st.timeoutMs != null) el.timeout.value = st.timeoutMs
 		if (st.gapMs != null) el.gap.value = st.gapMs
 		if (st.continueOnFail != null) el.continueOnFail.checked = !!st.continueOnFail
@@ -660,10 +660,13 @@
 		})
 	}
 
+	function start() {
+		Promise.resolve(window.AppPlatform && window.AppPlatform.instanceReady).then(init)
+	}
 	if (document.readyState === 'loading') {
-		document.addEventListener('DOMContentLoaded', init)
+		document.addEventListener('DOMContentLoaded', start)
 	} else {
-		init()
+		start()
 	}
 
 	window.skBatchConfig = {

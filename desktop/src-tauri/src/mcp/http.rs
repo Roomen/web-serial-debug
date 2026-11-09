@@ -266,6 +266,9 @@ mod tests {
             "serial_close",
             "serial_write",
             "serial_read",
+            "serial_ports_list",
+            "serial_select",
+            "serial_configure",
             "blu_state",
             "blu_set_power",
             "blu_set_voltage",
@@ -311,7 +314,14 @@ mod tests {
         let client = ().serve(transport).await.expect("MCP 客户端初始化失败");
 
         let tools = client.list_tools(None).await.expect("tools/list 失败");
-        assert_eq!(tools.tools.len(), 12);
+        assert_eq!(tools.tools.len(), 39);
+        for name in ["ble_state", "ble_ports", "ble_open", "ble_scan_start", "ble_scan_stop", "ble_connect", "ble_gatt", "ble_write", "ble_pair", "ble_passkey"] {
+            assert!(tools.tools.iter().any(|t| t.name == name), "missing typed BLE tool: {name}");
+        }
+
+        for name in ["classic_state", "classic_devices", "classic_discover", "classic_pair", "classic_connect", "classic_close", "classic_read", "classic_write"] {
+            assert!(tools.tools.iter().any(|t| t.name == name), "missing typed Classic tool: {name}");
+        }
 
         let mut args = serde_json::Map::new();
         args.insert("window".into(), json!("main"));
