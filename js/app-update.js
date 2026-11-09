@@ -10,7 +10,7 @@
 		if (env.serialApi && env.serialApi.isPinned()) reasons.push('协议事务')
 		// 连接中的功耗仪可能仍在接收或归档，不在安装时强行截断。
 		if (env.bluApi && (env.bluApi.isBusyForUpdate ? env.bluApi.isBusyForUpdate() : env.bluApi.isOpen())) reasons.push('功耗仪连接')
-		for (const [name, label] of [['ble', 'BLE 桥操作'], ['classic', '经典蓝牙操作'], ['computer-ble', '电脑 BLE 操作'], ['connection-source', '连接选择']]) {
+		for (const [name, label] of [['ble', 'BLE 桥操作'], ['classic', '经典蓝牙操作'], ['computer-ble', 'BLE 操作'], ['connection-source', '连接选择']]) {
 			const transport = env.AppPlatform && env.AppPlatform.service(name)
 			if (transport && transport.isBusyForUpdate && transport.isBusyForUpdate()) reasons.push(label)
 		}

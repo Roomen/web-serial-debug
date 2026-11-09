@@ -96,7 +96,7 @@ cargo check --target x86_64-pc-windows-msvc -p portable-updater   # 需已装该
 
 ## 通信调试的电脑蓝牙
 
-macOS/Windows 客户端在原选口入口提供普通串口、SPP、电脑 BLE 与外置 USB BLE 桥；展示名改为「通信调试」，应用名与内部 serial 存储保持不变。SPP 继续使用系统 IOBluetooth/RFCOMM；电脑 BLE 使用锁定于 Cargo.lock 的 bluest 0.6.9（macOS CoreBluetooth、Windows WinRT），无需 Web Bluetooth 或额外桥接硬件。外置 USB/ESP32 BLE 桥与高级 GATT 页继续保留。
+macOS/Windows 客户端在原选口入口提供普通串口、SPP 与 BLE（`computer-ble` 电脑 BLE 实现），外置 USB BLE 桥不进入该下拉、只在 BLE 桥页处理；展示名改为「通信调试」，应用名与内部 serial 存储保持不变。SPP 继续使用系统 IOBluetooth/RFCOMM；电脑 BLE 使用锁定于 Cargo.lock 的 bluest 0.6.9（macOS CoreBluetooth、Windows WinRT），无需 Web Bluetooth 或额外桥接硬件。外置 USB/ESP32 BLE 桥与高级 GATT 页继续保留，桥口接入通信调试仍走 BLE 桥页的交接按钮。
 
 macOS `Info.plist` 的 `NSBluetoothAlwaysUsageDescription` 覆盖 SPP 与 BLE，沿用 `bundle.macOS.infoPlist` 合并进正式包；最低版本仍为 11.0。当前分发未启用 App Sandbox，无需额外沙盒蓝牙 entitlement。Windows 保持便携 ZIP 与系统 WinRT 蓝牙栈，不引入 UWP 包；需要系统蓝牙适配器、驱动和相应隐私权限。需要加密/配对的设备应按系统提示或系统蓝牙设置完成配对，本工具不自动确认 PIN。
 

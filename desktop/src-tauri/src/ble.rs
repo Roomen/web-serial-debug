@@ -178,7 +178,7 @@ pub async fn ble_scan(webview: tauri::Webview, state: State<'_, BleState>, owner
 	let claim = state
 		.claims
 		.acquire("computer-ble", &label, op.generation)
-		.map_err(|_| "电脑 BLE 正在使用，请先关闭连接或扫描")?;
+		.map_err(|_| "BLE 正在使用，请先关闭连接或扫描")?;
 	let id = state.next.fetch_add(1, Ordering::Relaxed);
 	let cancel = CancellationToken::new();
 	let stop = CancellationToken::new();
@@ -330,7 +330,7 @@ pub async fn ble_open(
 		let claim = state
 			.claims
 			.acquire("computer-ble", &label, op.generation)
-			.map_err(|_| "只支持一条电脑 BLE 连接，请先关闭原连接")?;
+			.map_err(|_| "只支持一条 BLE 连接，请先关闭原连接")?;
 		(op, d.id.clone(), d.adapter.clone(), claim)
 	};
 	let id = state.next.fetch_add(1, Ordering::Relaxed);
