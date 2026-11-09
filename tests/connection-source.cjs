@@ -40,7 +40,7 @@ function setup(options={}) {
 async function discover(h){await flush();const row=h.all().find(e=>e.className==='connection-device'&&e.textContent.includes('<Fixture>'));assert.ok(row);row.onclick();await h.click('连接并发现 TX/RX')}
 test('serial requests bypass source screen; available services expose direct picker entries',async()=>{
  const h=setup(),selected=await h.source.requestPort();assert.equal(selected.port,h.usb);assert.equal(h.calls.filter(c=>c.command==='ble_scan').length,0)
- assert.deepEqual(JSON.parse(JSON.stringify(h.source.availableSources())),[{id:'computer-ble',label:'电脑 BLE'}])
+ assert.deepEqual(JSON.parse(JSON.stringify(h.source.availableSources())),[{id:'computer-ble',label:'BLE'}])
 })
 test('auto streaming scan, quick filters, cross-service mapping and session alias through unified stream',async()=>{
  const h=setup(),pending=h.source.requestPort('computer-ble');await flush()
@@ -77,18 +77,17 @@ test('SPP source uses system-selected device id, not arbitrary enumeration order
  assert.equal((await pending).port,port);assert.equal(selected,'chosen')
 })
 
-test('bridge selection reuses port after binding refusal and bounds stale mapping enumeration',async()=>{
+test('bridge handoff reuses port after binding refusal and bounds stale mapping enumeration',async()=>{
  let generation=1,created=0,invalid=false,bound=null,closed=0
  const bridge={state:()=>({generation}),resolveProfile:p=>{if(invalid)throw Error('ambiguous mapping');return{generation,tx:p.tx,rx:p.rx}},createProfilePort:()=>({number:++created,close:()=>{closed++}})}
  const h=setup({bridge,hub:{getPort:sid=>sid==='S'?bound:null}})
  const save=(overrides={})=>h.store.set('bleBridgeProfile',JSON.stringify({version:1,tx:'tx',rx:'rx',response:true,chunkSize:20,...overrides}))
  save()
  const first=h.source.bridgePort();bound=first
- // Source modal and bridge panel call the same factory; refusal leaves no new object to leak.
- for(let i=0;i<3;i++){
-  const pending=h.source.requestPort('bridge');await flush();await h.click('使用已连接桥的映射')
-  assert.equal((await pending).port,first)
- }
+ // The bridge page handoff calls the same factory; the device dropdown no longer exposes a bridge entry.
+ assert.equal(h.source.availableSources().some(s=>s.id==='bridge'),false)
+ await assert.rejects(h.source.requestPort('bridge'),/不可用/)
+ for(let i=0;i<3;i++) assert.equal(h.source.bridgePort(),first)
  assert.equal(created,1);assert.deepEqual([...h.ports()],[first])
  // Resolved identities, not serialized property order, define an equivalent mapping.
  h.store.set('bleBridgeProfile',JSON.stringify({chunkSize:20,response:true,rx:'rx',tx:'tx',version:1}))

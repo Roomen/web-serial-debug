@@ -141,7 +141,7 @@ console.log('modern-shell ok')
   constructor(text=''){this.children=[];this.textContent=text;this.handlers={}}
   append(...els){this.children.push(...els)}appendChild(el){this.children.push(el)}setAttribute(){}
  }
- const requests=[],source={availableSources:()=>[{id:'computer-ble',label:'电脑 BLE'},{id:'classic',label:'经典蓝牙 SPP'}]}
+ const requests=[],source={availableSources:()=>[{id:'computer-ble',label:'BLE'},{id:'classic',label:'经典蓝牙 SPP'}]}
  const env={window:{AppPlatform:{service:()=>source},serialLanes:{requestPort:(...args)=>requests.push(args)}},
   document:{createTextNode:t=>new Element(t)},mk:()=>new Element(),btn:(cls,text)=>new Element(text),icon:()=>new Element(),
   listen:(el,type,fn)=>{el.handlers[type]=fn},closePops(){},swallowDoubleClick(){},hub:()=>({}),sidFor:k=>k,enqueuePort:(st,fn)=>fn(),loadPorts(){},onPortClick(){},onPortKey(){}}
@@ -151,7 +151,7 @@ console.log('modern-shell ok')
  vm.runInContext(src.slice(src.indexOf('\tfunction activatePort('),src.indexOf('\n\tfunction onPortClick('))+'\nthis.activate = activatePort',env)
  assert.equal(st.foot.children.length,2, 'footer only keeps serial picker and refresh')
  assert.deepEqual(st.sourceRows.map(r=>r.source.id), ['computer-ble','classic'])
- assert.deepEqual(st.sourceRows.map(r=>r.source.label), ['电脑 BLE','经典蓝牙 SPP'])
+ assert.deepEqual(st.sourceRows.map(r=>r.source.label), ['BLE','经典蓝牙 SPP'])
  assert.notEqual(st.sourceRows[0].port, st.sourceRows[1].port)
  env.activate(st,{source:st.sourceRows[0].source,state:{disabled:false}})
  env.activate(st,{source:st.sourceRows[1].source,state:{disabled:false}})

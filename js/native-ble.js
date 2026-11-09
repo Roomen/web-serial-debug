@@ -89,7 +89,7 @@
 			return call(async () => {
 				await ready; check(token)
 				await stopScan(); check(token)
-				if (selected || pending || releaseFailed) throw fail('请先关闭现有电脑 BLE 连接，或重试释放')
+				if (selected || pending || releaseFailed) throw fail('请先关闭现有 BLE 连接，或重试释放')
 				const record = { device, handle: null, alive: true, sink: null, chars: [], token, lost: false }
 				pending = record
 				const onData = new deps.Channel(), onEvent = new deps.Channel()
@@ -129,7 +129,7 @@
 			}
 			let live = record, first = true, initialIds = { tx: txId, rx: rxId }, closed = false
 			const port = deps.createStreamPort({
-				getInfo() { return { transport: 'ble', productName: device.name + ' · 电脑 BLE' } },
+				getInfo() { return { transport: 'ble', productName: device.name + ' · BLE' } },
 				async open(options, sink) {
 					return call(async () => {
 						check(record.token)
@@ -181,7 +181,7 @@
 			return { port, discard: () => entry.discard(record) }
 		}
 		function scan(onDevice = () => {}) {
-			if (scanning || selected || pending || releaseFailed) return Promise.reject(fail('请先停止扫描或关闭现有电脑 BLE 连接'))
+			if (scanning || selected || pending || releaseFailed) return Promise.reject(fail('请先停止扫描或关闭现有 BLE 连接'))
 			const token = epoch, onEvent = new deps.Channel()
 			let started, failed
 			const state = { token, accepting: true, started: new Promise((resolve, reject) => { started = resolve; failed = reject }) }

@@ -183,7 +183,7 @@ macOS SDK 的 SDP 查询没有取消入口；同步 RFCOMM open/write 也没有�
 
 ### 统一通信会话与电脑 BLE
 
-主视图显示为「通信调试」，工具名 `serial_*` 与 lane S/A/B 不变。在 UI 选择 SPP、电脑 BLE 或桥 Profile 后，`serial_read` / `serial_write`、日志、协议与固件升级都走所选会话。`serial_configure` 对无线端口读出 `transport`、`options:null`，修改返回 `unsupported_transport`。普通串口的参数与双路行为保留。
+主视图显示为「通信调试」，工具名 `serial_*` 与 lane S/A/B 不变。在 UI 选择 SPP、BLE（电脑 BLE 实现）或桥 Profile 后，`serial_read` / `serial_write`、日志、协议与固件升级都走所选会话。`serial_configure` 对无线端口读出 `transport`、`options:null`，修改返回 `unsupported_transport`。普通串口的参数与双路行为保留。
 
 电脑 BLE 扫描与 GATT 选择需要 UI 交互，不新增自动扫描/配对 MCP 工具。自动持续扫描，列表按名称 / 广播 UUID / 本次别名子串、最低 RSSI 快筛，并按信号 / 名称 / 最近发现排序。暂停停止并等待原生扫描收尾，保留本页面设备供发现；取消 GATT 发现则回收本次选择。进入 GATT 前必须停止扫描，扫描和等待蓝牙就绪均可暂停；连接后选择 TX（电脑 → 设备，write 或 writeWithoutResponse）与 RX（设备 → 电脑，notify 或 indicate），允许不同服务。确认映射并订阅 RX 成功后才接入会话。按本页面当前 BLE 会话的设备 id 在内存保存别名与 UUID/属性，不自动沿用旧的全局映射，也不将临时 id 写入持久别名键；重连重新发现且必须唯一匹配；重复实例在当次连接需明确选择，不能靠存储实例编号猜测。无线凭据不跨页面刷新复用。
 

@@ -17,7 +17,6 @@
 		}
 	}
 	function el(tag, text, parent) { const e = document.createElement(tag); if (text) e.textContent = text; parent.appendChild(e); return e }
-	function jump(view) { const b = document.querySelector('.rail-item[data-view="' + view + '"]'); if (b) b.click() }
 	function bridgePort() {
 		const bridge = P.service('ble'), profile = JSON.parse(localStorage.getItem('bleBridgeProfile') || 'null')
 		const resolved = bridge.resolveProfile(profile)
@@ -33,7 +32,7 @@
 		return port
 	}
 	function availableSources() {
-		return [['computer-ble', '电脑 BLE', 'computer-ble'], ['classic', '经典蓝牙 SPP', 'classic'], ['bridge', '外置 USB BLE 桥', 'ble']]
+		return [['computer-ble', 'BLE', 'computer-ble'], ['classic', '经典蓝牙 SPP', 'classic']]
 			.filter(([, , service]) => P.service(service)).map(([id, label]) => ({ id, label }))
 	}
 	async function requestPort(kind = 'serial') {
@@ -85,16 +84,11 @@
 						done(classic.createPort(d.deviceId))
 					})
 				}
-				function showBridge() {
-					el('p', '使用外置桥当前已连接的设备与已保存 TX/RX 映射。扫描、配对与高级 GATT 设置保留在 BLE 桥页。', content)
-					button(content, '使用已连接桥的映射', () => done(bridgePort()))
-					button(content, '打开桥配置', () => { result = { navigate: 'view-ble' }; dialog.close() })
-				}
 				async function showBle() {
 					if (!live) return
 					if (!ownedBle && !nativeBle.canSelect()) {
 						content.replaceChildren()
-						throw new Error(nativeBle.canRetryRelease() ? '上次扫描或选择的清理尚未完成，请重试释放后再选择设备' : '请先用本路「断开」关闭现有电脑 BLE 连接')
+						throw new Error(nativeBle.canRetryRelease() ? '上次扫描或选择的清理尚未完成，请重试释放后再选择设备' : '请先用本路「断开」关闭现有 BLE 连接')
 					}
 					ownedBle = true; content.replaceChildren()
 					const filters = el('div', null, content); filters.className = 'connection-filters'
@@ -191,11 +185,11 @@
 						const selected = nativeBle.createPort(record, profile, Number(tx.value), Number(rx.value))
 						done(selected.port, selected.discard)
 					})
-					el('p', 'RX 订阅成功后才显示已连接。修改映射请断开本路，再从「选择设备 → 电脑 BLE」进入；重连会重新核对 UUID 与属性，重复实例须重选。', content)
+					el('p', 'RX 订阅成功后才显示已连接。修改映射请断开本路，再从「选择设备 → BLE」进入；重连会重新核对 UUID 与属性，重复实例须重选。', content)
 					button(content, '返回扫描 / 修改设备', async () => { await nativeBle.close(record); heldRecord = null; await showBle() })
 				}
 				// Enter the requested picker directly; the device dropdown already chose the source.
-				run(kind === 'computer-ble' ? showBle : kind === 'classic' ? showClassic : showBridge)
+				run(kind === 'computer-ble' ? showBle : showClassic)
 			} })
 			live = false
 			if (!result && ownedBle) {
@@ -204,7 +198,6 @@
 				else { await nativeBle.stopScan(); if (heldRecord) await nativeBle.close(heldRecord) }
 			}
 			if (action) await action.catch(() => {})
-			if (result && result.navigate) { jump(result.navigate); return null }
 			return result
 		} finally { live = false; choosing = false }
 	}
