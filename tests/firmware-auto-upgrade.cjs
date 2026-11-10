@@ -49,11 +49,12 @@ function makeHarness(device, opts) {
 	const els = {}
 	const events = []
 	const logs = []
+	const waits = []
 	let receive = null
 	const ctx = {
 		console, Uint8Array, DataView, ArrayBuffer, TextEncoder, TextDecoder, URL, Promise, Error, Map, Set, Math, JSON, Date, Number, String, Array, Object,
-		// 只压缩协议里固定的 200ms 分片间隔与 500ms 执行前等待，应答超时保持原值(只在出错时才会走到)
-		setTimeout: (fn, ms) => setTimeout(fn, ms === 200 || ms === 500 ? 0 : ms),
+		// 记录生产代码选择的等待值，只加速 200ms 周转与 500ms 执行等待。
+		setTimeout: (fn, ms) => { waits.push(ms); return setTimeout(fn, ms === 200 || ms === 500 ? 0 : ms) },
 		// 真定时器(unref，不拖住进程)：面板的连接轮询与准备阶段的断线监视都靠它
 		clearTimeout, setInterval: (fn, ms) => { const t = setInterval(fn, ms); t.unref(); return t }, clearInterval,
 		fetch: opts.fetch || (() => Promise.reject(new Error('offline'))),
@@ -62,6 +63,11 @@ function makeHarness(device, opts) {
 		CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail } },
 	}
 	ctx.window = ctx
+	if (!opts.noLanes) ctx.serialLanes = { transportOf(sid) {
+		assert.equal(sid, 'S')
+		if (opts.transportThrows) throw new Error('synthetic info failure')
+		return Object.hasOwn(opts, 'transport') ? opts.transport : 'ble'
+	} }
 	ctx.document = {
 		currentScript: { src: 'http://localhost/js/firmware-upgrade.js' },
 		getElementById(id) { return els[id] || (els[id] = stubEl(id)) },
@@ -81,19 +87,31 @@ function makeHarness(device, opts) {
 	const pins = { depth: 0 }
 	const hostCodes = []
 	const link = { open: true }
+	let writing = false
 	ctx.serialApi = {
 		suppressParse: false,
 		isOpen: () => link.open,
 		onReceive(fn) { receive = fn },
 		pinSession() { pins.depth++ }, unpinSession() { pins.depth-- }, getActiveSendSid: () => 'A', getMode: () => 'single',
-		writeRawTo(sid, bytes) { assert.equal(sid, 'S', '单路 UI A 必须映射到物理 S'); hostCodes.push(bytes[3]); device.onHost(bytes); return Promise.resolve() },
+		writeRawTo(sid, bytes) {
+			assert.equal(sid, 'S', '单路 UI A 必须映射到物理 S')
+			assert.equal(writing, false, 'cannot acquire a writer before the preceding write settles')
+			writing = true
+			hostCodes.push(bytes[3])
+			device.onHost(bytes)
+			const startedAt = Date.now()
+			return (opts.writeDelay ? new Promise(r => setTimeout(r, opts.writeDelay)) : Promise.resolve()).then(() => {
+				writing = false
+				return { startedAt, completedAt: Date.now(), durationMs: opts.writeDelay || 0, bytes: bytes.length }
+			})
+		},
 	}
 	device.send = (bytes) => setTimeout(() => receive(bytes), 0)
 	device.PCP = ctx.PCP
 	vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/firmware-upgrade.js'), 'utf8'), ctx)
 	els['fw-chunk-size'].value = '500'
 	return {
-		ctx, els, events, logs, pins, hostCodes, link, library: ctx.FirmwareLibrary,
+		ctx, els, events, logs, waits, pins, hostCodes, link, library: ctx.FirmwareLibrary,
 		async waitFor(pred, ms) {
 			for (let i = 0; i < (ms || 2000); i++) { if (pred()) return true; await new Promise((r) => setTimeout(r, 1)) }
 			return false
@@ -137,8 +155,10 @@ function makeDevice(current, opts) {
 			chunks = new Array(total)
 			dev.chunkSize = chunkSize
 			dev.runs++
-			dev.send(P.buildMessage(0x14, [0]))
-			dev.send(P.buildMessage(0x15, P.versionToBytes(target).concat([0, 0])))
+			const ack = P.buildMessage(0x14, [0])
+			const req = P.buildMessage(0x15, P.versionToBytes(target).concat([0, 0]))
+			if (dev.holdRequest) dev.send(ack)
+			else dev.send(Uint8Array.from([...ack, ...req]))
 		} else if (m.messageCode === 0x15) {
 			const idx = (m.data[1] << 8) | m.data[2]
 			chunks[idx] = m.data.slice(3)
@@ -166,6 +186,92 @@ function makeDevice(current, opts) {
 	const V1 = rawFirmware('V1.0.0', 0x4100, 1)
 	const V1other = rawFirmware('V1.0.0', 0x4100, 9) // 同版本另一份构建
 	const V2 = rawFirmware('V2.0.0', 0x4180, 2)
+
+	// Only confirmed BLE links skip the pre-existing 200ms turnaround, including conservative fallbacks.
+	for (const opts of [{ transport: 'ble' }, { transport: 'ble-bridge' }, { transport: 'serial' }, { transport: 'bt-classic' }, { transport: 'unknown' }, { transport: undefined }, { noLanes: true }, { transportThrows: true }]) {
+		const dev = makeDevice(V1)
+		const h = makeHarness(dev, opts)
+		dev.parser = h.ctx.FirmwareParser
+		h.load(V2, 'V2.bin')
+		assert.equal((await h.upgrade()).ok, true)
+		const chunks = h.events.filter(e => e.type === 'chunk').length
+		assert.ok(chunks > 0)
+		const ble = opts.transport === 'ble' || opts.transport === 'ble-bridge'
+		assert.equal(h.waits.filter(ms => ms === 200).length, ble ? 0 : chunks)
+	}
+	// User cancellation at query/notify waits is informational, without a timeout or lastError.
+	for (const code of [0x13, 0x14]) {
+		const dev = makeDevice(V1)
+		const h = makeHarness(dev)
+		dev.parser = h.ctx.FirmwareParser
+		const respond = dev.onHost
+		dev.onHost = bytes => { if (bytes[3] !== code) respond(bytes) }
+		h.load(V2, 'V2.bin')
+		const end = await h.upgrade(async () => {
+			assert.ok(await h.waitFor(() => h.hostCodes.includes(code)))
+			h.els['fw-stop'].click()
+		})
+		assert.equal(end.stopped, true)
+		assert.equal(end.error, '')
+		assert.ok(!h.events.some(e => e.type === 'log' && e.level === 'error'))
+		assert.ok(!h.logs.some(l => /超时/.test(l)))
+	}
+
+	// Coalesced handshake plus next requests delivered before the preceding write resolves.
+	{
+		const dev = makeDevice(V1)
+		const h = makeHarness(dev, { writeDelay: 5 })
+		dev.parser = h.ctx.FirmwareParser
+		h.load(V2, 'V2.bin')
+		assert.equal((await h.upgrade()).ok, true)
+		assert.equal(h.pins.depth, 0)
+		assert.ok(h.events.some(e => e.type === 'write' && e.code === 0x15 && e.durationMs === 5))
+		assert.ok(h.logs.some(l => /后端写完成 5ms/.test(l)))
+	}
+	// Stop while awaiting the first request, then restart the same panel/session cleanly.
+	{
+		const dev = makeDevice(V1)
+		const h = makeHarness(dev)
+		dev.parser = h.ctx.FirmwareParser
+		h.load(V2, 'V2.bin')
+		dev.holdRequest = true
+		const stopped = await h.upgrade(async () => {
+			assert.ok(await h.waitFor(() => h.events.some(e => e.type === 'phase' && e.name === 'transfer')))
+			h.els['fw-stop'].click()
+		})
+		assert.equal(stopped.stopped, true)
+		assert.equal(stopped.error, '')
+		assert.ok(!h.events.some(e => e.type === 'log' && e.level === 'error'))
+		assert.ok(!h.logs.some(l => /超时/.test(l)))
+		assert.equal(h.pins.depth, 0)
+		// A subsequent standalone query must not inherit the previous upgrade's stop flag.
+		const write = h.ctx.serialApi.writeRawTo
+		h.ctx.serialApi.writeRawTo = () => Promise.reject(new Error('synthetic standalone failure'))
+		h.els['fw-query'].click()
+		assert.ok(await h.waitFor(() => h.events.some(e => e.type === 'device-version' && e.source === 'query' && e.ok === false)))
+		h.ctx.serialApi.writeRawTo = write
+		dev.holdRequest = false
+		assert.equal((await h.upgrade()).ok, true)
+	}
+
+	{
+		const dev = makeDevice(V1)
+		const h = makeHarness(dev)
+		dev.parser = h.ctx.FirmwareParser
+		h.load(V2, 'V2.bin')
+		dev.holdRequest = true
+		const disconnected = await h.upgrade(async () => {
+			assert.ok(await h.waitFor(() => h.events.some(e => e.type === 'phase' && e.name === 'transfer')))
+			h.link.open = false
+		})
+		assert.equal(disconnected.ok, false)
+		assert.match(disconnected.error, /串口已断开/)
+		assert.ok(!h.logs.some(l => /超时/.test(l)))
+		assert.equal(h.pins.depth, 0)
+		h.link.open = true
+		dev.holdRequest = false
+		assert.equal((await h.upgrade()).ok, true)
+	}
 
 	// ---- 库里没有原固件：压缩包；原始固件导入即存库 ----
 	{
