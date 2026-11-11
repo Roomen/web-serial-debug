@@ -9491,11 +9491,13 @@ html[data-layout='modern'] #app-shell > #activity-rail {
 	grid-row: 1 / -1;
 }
 
+/* 顶栏里的串口下拉 / 参数菜单向下盖住视图：z-index 必须高于各视图顶栏 .view-bar / .blu-connect-bar 的 30，
+   两者同在根层叠上下文里，同级时按 DOM 顺序后来的视图顶栏会盖住下拉的上半截 */
 html[data-layout='modern'] #app-topbar {
 	grid-column: 2;
 	grid-row: 1;
 	position: relative;
-	z-index: 30;
+	z-index: 31;
 	min-width: 0;
 }
 
