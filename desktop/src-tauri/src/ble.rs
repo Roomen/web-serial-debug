@@ -150,6 +150,21 @@ pub async fn ble_release_owned(webview: tauri::Webview, state: State<'_, BleStat
 		.map_err(|_| "BLE 回收任务失败")??;
 	Ok(state.owners.owner(webview.label()).begin(None)?.generation)
 }
+// One Write Request / Write Command carries at most ATT_MTU - 3 bytes. bluest's max_write_len
+// returns exactly that on both hosts (CoreBluetooth maximumWriteValueLength(.withoutResponse),
+// WinRT MaxPduSize - 3), so writes with response stay single ATT writes, never prepare/execute.
+// 20 is the ATT_MTU 23 floor every link supports; 512 is the GATT attribute-value ceiling, so a
+// larger trusted value (ATT_MTU 517 -> 514 on Windows) is capped to 512. Values below 20 or above
+// the u16 ATT_MTU bound (Windows' MaxPduSize - 3 wrapping around) are untrusted and fall back to 20.
+const BLE_MIN_WRITE_LEN: usize = 20;
+const BLE_MAX_WRITE_LEN: usize = 512;
+const BLE_MAX_REPORTED_WRITE_LEN: usize = u16::MAX as usize - 3;
+fn write_chunk_len(reported: Option<usize>) -> usize {
+	match reported {
+		Some(len) if (BLE_MIN_WRITE_LEN..=BLE_MAX_REPORTED_WRITE_LEN).contains(&len) => len.min(BLE_MAX_WRITE_LEN),
+		_ => BLE_MIN_WRITE_LEN,
+	}
+}
 fn current(op: &OwnerOperation, cancel: &CancellationToken) -> Result<(), String> {
 	if op.is_current() && !cancel.is_cancelled() {
 		Ok(())
@@ -484,7 +499,13 @@ pub async fn ble_open(
 								_operation,
 							} => {
 								let result = async {
-									for chunk in data.chunks(20) {
+									// Read per frame: the ATT MTU can grow after connect (Windows MaxPduSizeChanged).
+									let chunk_len = write_chunk_len(
+										std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tx.max_write_len()))
+											.ok()
+											.and_then(Result::ok),
+									);
+									for chunk in data.chunks(chunk_len) {
 										current(&op, &cancel)?;
 										let result = if profile.response {
 											tx.write(chunk).await
@@ -618,6 +639,29 @@ pub async fn ble_close(webview: tauri::Webview, state: State<'_, BleState>, hand
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn write_chunk_len_follows_reported_limit_and_falls_back_to_20() {
+		assert_eq!(write_chunk_len(Some(244)), 244);
+		assert_eq!(write_chunk_len(Some(20)), 20);
+		assert_eq!(write_chunk_len(Some(512)), 512);
+		assert_eq!(write_chunk_len(None), 20);
+		assert_eq!(write_chunk_len(Some(0)), 20);
+		assert_eq!(write_chunk_len(Some(19)), 20);
+		// Trusted large values (Windows ATT_MTU 517 -> 514, u16 max MTU -> 65532) cap at 512.
+		assert_eq!(write_chunk_len(Some(513)), 512);
+		assert_eq!(write_chunk_len(Some(514)), 512);
+		assert_eq!(write_chunk_len(Some(65532)), 512);
+		// Beyond any u16 ATT_MTU, including Windows MaxPduSize - 3 wrapping in release builds.
+		assert_eq!(write_chunk_len(Some(65533)), 20);
+		assert_eq!(write_chunk_len(Some(usize::MAX - 2)), 20);
+		let data: Vec<u8> = (0..1380u32).map(|i| (i % 251) as u8).collect();
+		let chunks: Vec<&[u8]> = data.chunks(write_chunk_len(Some(244))).collect();
+		assert_eq!(chunks.iter().map(|c| c.len()).collect::<Vec<_>>(), vec![244, 244, 244, 244, 244, 160]);
+		assert_eq!(chunks.concat(), data);
+		let capped: Vec<&[u8]> = data.chunks(write_chunk_len(Some(514))).collect();
+		assert_eq!(capped.iter().map(|c| c.len()).collect::<Vec<_>>(), vec![512, 512, 356]);
+		assert_eq!(capped.concat(), data);
+	}
 	#[tokio::test]
 	async fn pause_terminates_wait_for_adapter_even_before_ready() {
 		let cancel = CancellationToken::new();
