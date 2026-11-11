@@ -11,6 +11,8 @@ function fragment(start, end, src = source) {
 	return src.slice(a, b) + '\n'
 }
 async function main() {
+	let clock = 10
+	const logs = []
 	const writes = [], errors = [], history = [], listeners = {}, stored = new Map()
 	const elements = {}
 	for (const id of ['serial-send-content', 'serial-send-info', 'serial-hex-send', 'serial-add-cr', 'serial-add-lf', 'serial-add-nul', 'serial-quick-send-content']) {
@@ -20,11 +22,11 @@ async function main() {
 	const session = { txBytes: 0 }
 	const port = { writable: { getWriter() { acquired++; return { write(data) { writes.push(Array.from(data)); return Promise.resolve() }, releaseLock() {} } } } }
 	const ctx = vm.createContext({
-		window: {}, TextEncoder, Uint8Array, Date,
+		window: {}, TextEncoder, Uint8Array, Date, performance: { now: () => clock },
 		document: { getElementById: id => elements[id] },
 		sendInput: elements['serial-send-content'], sendInfo: elements['serial-send-info'],
 		SerialHub: { activeSendPhys: () => 'S', getPort: () => port, isOpen: () => true, _sess: () => session },
-		addLogErr: s => errors.push(s), addLog() {}, showToast() {}, recoverIfWriteDead() {},
+		addLogErr: s => errors.push(s), addLog(...args) { logs.push(args) }, showToast() {}, recoverIfWriteDead() {},
 		flushPendingRx() { flushed++ }, lookupQuickSendName: () => 'synthetic', pushSendHistory: s => history.push(s),
 		localStorage: { getItem: k => stored.get(k) || null, setItem: (k, v) => stored.set(k, v) },
 		SPLIT_MODES: ['time', 'line'], isValidLogType: () => true, LOG_OPTION_KEYS: [], dragHappened: false, currQuickSend: { list: [] }, saveQuickList() {}
@@ -41,6 +43,22 @@ async function main() {
 	ctx.window.serialApi = ctx.publicApi
 	ctx.publicApi.isOpen = () => true
 	const { api } = ctx
+	// Completion is captured after a deferred backend write, while TX keeps its start timestamp.
+	const originalGetWriter = port.writable.getWriter
+	let finishWrite
+	port.writable.getWriter = () => ({ write() { return new Promise(r => { finishWrite = r }) }, releaseLock() {} })
+	const beforeLogs = logs.length
+	const pendingWrite = api.writeData(Uint8Array.of(1, 2), 'S', null, { raw: true })
+	assert.equal(logs.length, beforeLogs)
+	clock += 77
+	finishWrite()
+	const timing = await pendingWrite
+	assert.equal(timing.durationMs, 77)
+	assert.equal(timing.bytes, 2)
+	assert.equal(timing.startedAt, logs.at(-1)[2].getTime())
+	assert.ok(timing.completedAt >= timing.startedAt)
+	assert.deepEqual(Object.keys(timing).sort(), ['bytes', 'completedAt', 'durationMs', 'startedAt'])
+	port.writable.getWriter = originalGetWriter
 	assert.equal(api.options.addNUL, false)
 	api.options.hexSend = false
 	const input = elements['serial-send-content']

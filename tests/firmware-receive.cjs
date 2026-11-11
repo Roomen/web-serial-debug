@@ -18,17 +18,18 @@ const ctx = {
 	clearTimeout(id) { timers.delete(id) },
 	log() {},
 	serialApi: { getActiveSendSid: () => 'A', getMode: () => 'single', onReceive(fn) { receive = fn } },
-	PCP: { parseMessage(frame) { parses++; return { messageCode: frame[2] } } },
+	PCPMessageCode: { DOWNLOAD_REQUEST: 0x15, DOWNLOAD_RESULT: 0x16, NEW_VERSION_NOTIFY: 0x14 },
+	PCP: { PROTOCOL_VERSION: 1, parseMessage(frame) { parses++; return { messageCode: frame[2], checksumValid: true, version: 1 } } },
 }
 vm.createContext(ctx)
-vm.runInContext(`let recvBuffer = [], recvOffset = 0, running = false, splices = 0
+vm.runInContext(`let recvBuffer = [], recvOffset = 0, running = false, stopFlag = false, splices = 0
 const arraySplice = Array.prototype.splice
 Array.prototype.splice = function (...args) { splices++; return arraySplice.apply(this, args) }
 ` + source.slice(start, end), ctx)
 const evaluate = s => vm.runInContext(s, ctx)
 const frame = size => {
 	const out = new Uint8Array(8 + size)
-	out.set([0xFF, 0xFE, 0x15, 0, 0, 0, size >> 8, size & 0xFF])
+	out.set([0xFF, 0xFE, 0x13, 0, 0, 0, size >> 8, size & 0xFF])
 	out.fill(0x55, 8)
 	return out
 }
@@ -57,7 +58,7 @@ assert.equal(parses, 3000)
 assert.equal(evaluate('recvBuffer.length'), 63)
 let resolved
 ctx.resolve = bytes => { resolved = bytes }
-evaluate('waiters.push({ codes: [0x15], timer: null, resolve })')
+evaluate('waiters.push({ codes: [0x13], timer: null, resolve })')
 receive(up.subarray(63))
 assert.deepEqual(Array.from(resolved), Array.from(up))
 assert.equal(evaluate('waiters.length'), 0)
@@ -79,7 +80,7 @@ assert.equal(evaluate('recvBuffer.length'), 0)
 	ctx.otherResolve = () => { otherCalls++ }
 	ctx.otherTimer = ctx.setTimeout(() => {}, 2000)
 	evaluate('waiters.push({ codes: [0x16], timer: otherTimer, resolve: otherResolve })')
-	await assert.rejects(evaluate('sendAndWait(new Uint8Array([1]), 0x15, 1000)'), /synthetic write failure/)
+	await assert.rejects(evaluate('sendAndWait(new Uint8Array([1]), 0x13, 1000)'), /synthetic write failure/)
 	assert.equal(evaluate('waiters.length'), 1)
 	assert.equal(timers.size, 1)
 	assert.equal(timers.has(ctx.otherTimer), true)
@@ -91,14 +92,13 @@ assert.equal(evaluate('recvBuffer.length'), 0)
 
 	// 同步抛错也要回收已经注册的 timer 与 waiter。
 	ctx.serialApi.writeRawTo = () => { throw new Error('synthetic synchronous failure') }
-	await assert.rejects(evaluate('sendAndWait(new Uint8Array([1]), 0x15, 1000)'), /synthetic synchronous failure/)
+	await assert.rejects(evaluate('sendAndWait(new Uint8Array([1]), 0x13, 1000)'), /synthetic synchronous failure/)
 	assert.equal(evaluate('waiters.length'), 0)
 	assert.equal(timers.size, 0)
 
-	// 写入时同步收到应答，等待在发送前就已挂好；之后写 Promise 拒绝也已被观察。
+	// 写入时同步收到应答仍需等写完成；后续写失败不能被早到的应答掩盖。
 	ctx.serialApi.writeRawTo = () => { receive(small); return Promise.reject(new Error('synthetic late failure')) }
-	const response = await evaluate('sendAndWait(new Uint8Array([1]), 0x15, 1000)')
-	assert.deepEqual(Array.from(response), Array.from(small))
+	await assert.rejects(evaluate('sendAndWait(new Uint8Array([1]), 0x13, 1000)'), /synthetic late failure/)
 	await Promise.resolve()
 	assert.equal(evaluate('waiters.length'), 0)
 	assert.equal(timers.size, 0)
@@ -106,7 +106,7 @@ assert.equal(evaluate('recvBuffer.length'), 0)
 	// 已超时的写操作之后拒绝，不应产生未处理的拒绝或恢复旧等待。
 	let rejectWrite
 	ctx.serialApi.writeRawTo = () => new Promise((resolve, reject) => { rejectWrite = reject })
-	const pending = evaluate('sendAndWait(new Uint8Array([1]), 0x15, 1000)')
+	const pending = evaluate('sendAndWait(new Uint8Array([1]), 0x13, 1000)')
 	const timedOut = assert.rejects(pending, /等待响应超时/)
 	const timer = timers.keys().next().value
 	const timeout = timers.get(timer)

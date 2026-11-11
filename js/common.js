@@ -4859,8 +4859,11 @@
 			}
 			flushPendingRx(sid)
 			const sendTime = new Date()
+			const writeStart = typeof performance !== 'undefined' ? performance.now() : Date.now()
 			session.writeTask = writer.write(data)
 			await session.writeTask
+			const completedAt = new Date()
+			const durationMs = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - writeStart)
 			if ((session.writeSeq || 0) !== gen) {
 				if (opts.throwOnError) throw new Error('串口写入已取消')
 				return
@@ -4868,6 +4871,7 @@
 			SerialHub._sess(sid).txBytes += data.length
 			const shown = opts.logData ? Uint8Array.from(opts.logData) : data
 			addLog(shown, false, sendTime, sid, false, sendName)
+			return { startedAt: sendTime.getTime(), completedAt: completedAt.getTime(), durationMs, bytes: data.length }
 		} catch (error) {
 			recoverIfWriteDead(sid, session, gen, error)
 			if (opts.throwOnError) throw new Error('串口写入失败')
@@ -5524,7 +5528,7 @@
 		async writeRawTo(id, data, opts) {
 			if (id !== 'S' && id !== 'A' && id !== 'B') throw new Error('无效的串口会话')
 			if (!this.isSessionOpen(id)) throw new Error('串口会话未打开或当前模式不可路由')
-			await writeData(data, id, undefined, { raw: true, logData: opts && opts.logData, throwOnError: true })
+			return await writeData(data, id, undefined, { raw: true, logData: opts && opts.logData, throwOnError: true })
 		},
 		isOpen() {
 			const sid = SerialHub.activeSendPhys()
