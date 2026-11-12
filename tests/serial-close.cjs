@@ -63,6 +63,7 @@ function harness() {
 		laneMoving: false, platformHasSid: () => true, lanePortOwner: () => null, portConflictMsg: () => 'synthetic conflict'
 	})
 	vm.runInContext(
+		section('\tfunction portTransport(', '\tfunction laneParams(') +
 		section('\tfunction portHeldByOther(', '\tfunction randAliasId(') +
 		section('\tasync function releasePort(sid) {', '\t//页面销毁时释放串口句柄') +
 		section('\tasync function closeSerial(sid)', '\tfunction chipElFor(sid)') +
@@ -314,11 +315,33 @@ async function testOpenLaneCancelledIsAborted() {
 	assert.equal(h.sessions.S.open, false)
 }
 
+async function testBleOpenFailureDoesNotRetry() {
+	for (const transport of ['ble', 'ble-bridge']) {
+		const h = harness()
+		let opens = 0
+		h.sessions.S.open = false
+		h.sessions.S.port = {
+			getInfo: () => ({ transport }),
+			readable: null, writable: null,
+			close: async () => {},
+			open: async () => {
+				opens++
+				throw Object.assign(new Error('蓝牙连接已断开'), { name: 'NetworkError' })
+			},
+		}
+		const ok = await h.api.openSerial('S', { reason: 'user' })
+		assert.equal(ok, false)
+		assert.equal(opens, 1, transport + ': BLE 打开失败时不自动退避重试')
+		assert.equal(h.timers.size, 0)
+	}
+}
+
 ;(async () => {
 	await testFlushAndIsolation()
 	await testOpenCancelledDuringRelease()
 	await testOpenCancelledWhileOpening()
 	await testOpenLaneCancelledIsAborted()
+	await testBleOpenFailureDoesNotRetry()
 	await testRejectedClose()
 	await testHangingClose()
 	await testHangingReader()

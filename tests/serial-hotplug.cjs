@@ -23,6 +23,11 @@ assert.ok(hubStart > 0 && hubEnd > hubStart, 'common.js 的 SerialHub 段不见�
 const hubSrc = source.slice(hubStart, hubEnd + 3)
 // 热插拔事件处理，到 serialStatuChange 之前
 const hotplugSrc = slice("\tSerialAdapter.addEventListener('connect'", '\tfunction serialStatuChange(')
+// 传输种类判断(disconnect 里按 transport 区分 BLE)
+const transportStart = source.indexOf('\tfunction portTransport(')
+const transportEnd = source.indexOf('\tfunction laneParams(', transportStart)
+assert.ok(transportStart > 0 && transportEnd > transportStart, 'common.js 的传输种类段不见了')
+const transportSrc = source.slice(transportStart, transportEnd)
 // connect 之前紧挨着的声明(如已拔出口的记录)也要带上：从上一个函数结束处开始
 const preStart = source.lastIndexOf('\n\t}\n', source.indexOf("\tSerialAdapter.addEventListener('connect'")) + 3
 const preSrc = source.slice(preStart, source.indexOf("\tSerialAdapter.addEventListener('connect'"))
@@ -85,7 +90,7 @@ function harness(mode) {
 			return Promise.resolve()
 		},
 	})
-	vm.runInContext(preSrc + hotplugSrc, ctx)
+	vm.runInContext(transportSrc + '\n' + preSrc + hotplugSrc, ctx)
 	assert.ok(listeners.connect && listeners.disconnect, '热插拔监听没有挂上')
 	const api = {
 		hub, events,
