@@ -22,7 +22,7 @@ function setup(options={}) {
   if(command==='ble_close'&&options.close) await options.close()
   if(command==='ble_write'&&options.write) await options.write(p)
  }})
- return {service,calls,data:b=>data.onmessage(b),advertise:d=>scanChannel.onmessage({type:'device',device:d}),scanChannel:()=>scanChannel,lost:()=>event.onmessage({type:'lost'})}
+ return {service,calls,event:()=>event,data:b=>data.onmessage(b),advertise:d=>scanChannel.onmessage({type:'device',device:d}),scanChannel:()=>scanChannel,lost:()=>event.onmessage({type:'lost'})}
 }
 async function scanned(h) { const job=h.service.scan(); await flush(); await h.service.stopScan(); await job }
 async function prepare(h) { await scanned(h); const r=await h.service.inspect(device); return h.service.createPort(r,B.mapping(r.chars,0,1,true),0,1) }
@@ -190,4 +190,28 @@ test('ambiguous instance mappings never reuse a prior closed port',async()=>{
  assert.notEqual(next.port,first.port);await next.port.open({})
  assert.equal(h.calls.findLast(c=>c.command==='ble_start').p.txId,2);assert.deepEqual(h.service.ports(),[next.port])
  await next.port.close();await h.service.release()
+})
+test('lane disconnect aborts an auto-reopen stuck in the native connect and frees the BLE claim',async()=>{
+ // Rust names the handle on the event channel before connecting; ble_close cancels the pending connect.
+ let hang=null,handle=40
+ const h=setup({open:()=>{ if(!hang) return; const id=++handle; h.event().onmessage({type:'opening',handle:id}); return hang.promise }, close:()=>{ if(hang){ hang.reject(Error('BLE 操作已取消')); hang=null } }})
+ const {port}=await prepare(h);await port.open({})
+ const r=port.readable.getReader(),read=r.read();h.lost();await assert.rejects(read);r.releaseLock();await flush()
+ hang=deferred()
+ const reopening=port.open({});await flush()
+ assert.equal(typeof port.abortOpen,'function');assert.equal(h.service.isBusyForUpdate(),true)
+ await port.abortOpen();await assert.rejects(reopening,/取消/);await flush()
+ assert.ok(h.calls.some(c=>c.command==='ble_close'&&c.p.handle===41))
+ assert.equal(port.readable,null);assert.equal(h.service.isBusyForUpdate(),false);assert.equal(h.service.canSelect(),true)
+ await h.service.release()
+})
+test('abort before the native handle is known closes it as soon as the opening event arrives',async()=>{
+ let hang=null,announce=null
+ const h=setup({open:()=>{ if(!hang) return; announce=()=>h.event().onmessage({type:'opening',handle:77}); return hang.promise }, close:()=>{ if(hang){ hang.reject(Error('BLE 操作已取消')); hang=null } }})
+ const {port}=await prepare(h);await port.open({});await port.close()
+ hang=deferred()
+ const reopening=port.open({});await flush()
+ await port.abortOpen();announce();await assert.rejects(reopening,/取消/);await flush()
+ assert.ok(h.calls.some(c=>c.command==='ble_close'&&c.p.handle===77))
+ assert.equal(h.service.isBusyForUpdate(),false);await h.service.release()
 })

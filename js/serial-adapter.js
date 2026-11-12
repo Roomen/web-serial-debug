@@ -107,7 +107,7 @@
 	//   getInfo() → { usbVendorId, usbProductId, ... }(全部自有属性都会进设备指纹，序列号可直接放这里)
 	//   open(options, sink) → Promise；之后驱动经 sink.data(Uint8Array) 推数据，sink.error(err) 报可恢复的读错误
 	//     (当前 readable 报错、换新流续读)，sink.lost(err) 报设备丢失(两条流报错并置 null，句柄由适配层替页面关掉)
-	//   write(Uint8Array) → Promise，close() → Promise，可选 setSignals(signals) → Promise
+	//   write(Uint8Array) → Promise，close() → Promise，可选 setSignals(signals) → Promise，可选 abortOpen() 让进行中的 open 尽快失败
 	// }
 	// 读侧队列上限取 max(bufferSize, 1 MiB) 字节，超过按 Chromium 的 BufferOverrunError 处理(报错换新流)
 	const MIN_READ_QUEUE = 1 << 20
@@ -319,6 +319,13 @@
 				gen++
 				state = 'closed'
 			},
+		}
+		// 可选：取消进行中的 open(如 BLE 掉线后的自动重连卡在系统连接上)。open 照常以失败收尾，端口回到关闭
+		if (typeof driver.abortOpen === 'function') {
+			port.abortOpen = function () {
+				if (state !== 'opening') return Promise.resolve()
+				return Promise.resolve().then(function () { return driver.abortOpen() }).catch(function () {})
+			}
 		}
 		if (typeof driver.setSignals === 'function') {
 			port.setSignals = function (signals) {
