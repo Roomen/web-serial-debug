@@ -310,6 +310,7 @@
 				emit({ type: 'device-version', ok: true, source: 'query', version: res.version })
 			}
 		} catch (e) {
+			if (upgradeInterrupted(e)) return
 			log('查询版本超时: ' + e.message, 'error')
 			emit({ type: 'device-version', ok: false, source: 'query', error: '超时' })
 		} finally {
@@ -382,6 +383,7 @@
 		} finally {
 			diffRunner.dispose()
 			running = false
+			cancelFirmwareWaiters(new StopError('升级已结束'))
 			serialApi.unpinSession()
 			window.serialApi.suppressParse = false
 			el.start.disabled = false
@@ -396,6 +398,8 @@
 	el.stop.addEventListener('click', () => {
 		if (!running) return
 		stopFlag = true
+		clearTransferInbox()
+		cancelFirmwareWaiters(new StopError('已停止'))
 		log('正在停止升级...', 'warn')
 		// 自动升级的准备阶段(查库、取 BLANK、算差分)不经串口，要主动打断：结束在途差分、中止 BLANK 请求、让等待立即返回
 		cancelPrepare()
@@ -405,6 +409,12 @@
 	// StopError：用户点停止(记为已停止)；断线时 disconnected 为 true(记为失败)
 	class StopError extends Error {
 		constructor(msg, disconnected) { super(msg); this.disconnected = !!disconnected }
+	}
+	function upgradeInterrupted(error) {
+		if (!running || (!stopFlag && !(error instanceof StopError))) return false
+		if (!stopFlag && error.disconnected) log('串口已断开，升级中止', 'error')
+		else log('已停止升级', 'info')
+		return true
 	}
 	let prepAbort = null
 	let prepStop = null
@@ -445,10 +455,21 @@
 	}
 
 	// 累积接收字节, 提取一个完整的 PCP 帧(起始 0xFFFE + 8字节头 + dataLength)
-	function writeFirmware(bytes) {
+	function firmwareTurnaroundMs() {
+		const sid = serialApi.getMode() === 'single' ? 'S' : serialApi.getActiveSendSid()
+		try {
+			const transport = window.serialLanes && window.serialLanes.transportOf(sid)
+			if (transport === 'ble' || transport === 'ble-bridge') return 0
+		} catch (_) { /* 未能确认 BLE 时保留原有串口周转时间 */ }
+		return 200
+	}
+	async function writeFirmware(bytes) {
 		// getActiveSendSid 是 UI 路号：单路返回 A；writeRawTo 要的是真正的物理 S/A/B。
 		const sid = serialApi.getMode() === 'single' ? 'S' : serialApi.getActiveSendSid()
-		return serialApi.writeRawTo(sid, bytes)
+		const timing = await serialApi.writeRawTo(sid, bytes)
+		// 只读诊断，不改原始 TX 行的「开始写」时间；完成表示后端写入兑现，并非设备处理完成。
+		if (timing) emit(Object.assign({ type: 'write', code: bytes[3] }, timing))
+		return timing
 	}
 	function tryReadFrame() {
 		// 只移动读游标，整批处理完再回收前缀，避免多帧粘包时反复搬移整个数组。
@@ -469,6 +490,45 @@
 
 	// 常驻接收: 把所有串口原始字节累积进 recvBuffer, 并尝试派发给正在等待的 waiter
 	let waiters = []
+	// 只接纳当前通知被允许之后的下载消息；ACK 与请求可能在同一读回中。
+	// 有界去重队列覆盖 await 的微任务间隙与写入期间，不把普通流量带到下一轮。
+	let transferInbox = null
+	const receiveDropReasons = new Set()
+	function dropFirmwareFrame(reason) {
+		if (!receiveDropReasons.has(reason) && receiveDropReasons.size < 10) {
+			receiveDropReasons.add(reason)
+			log('忽略升级帧: ' + reason, 'warn')
+		}
+		return false
+	}
+	function beginTransferInbox(version, totalChunks) {
+		// 与通知帧相同的 16 字节 UTF-8 截取 / NUL 终止语义，不按 UI 原始字符串猜版本。
+		transferInbox = { version: PCP.bytesToVersion(PCP.versionToBytes(version)), totalChunks, accepted: false, frames: [] }
+	}
+	function cancelFirmwareWaiters(error) {
+		for (const w of waiters.splice(0)) {
+			clearTimeout(w.timer)
+			w.reject(error)
+		}
+	}
+	function clearTransferInbox() {
+		transferInbox = null
+		receiveDropReasons.clear()
+		recvBuffer = []
+		recvOffset = 0
+	}
+	function validTransferMessage(parsed, frame) {
+		if (stopFlag) return false
+		if (!transferInbox || !transferInbox.accepted) return dropFirmwareFrame('尚未允许升级')
+		if (parsed.messageCode === PCPMessageCode.DOWNLOAD_RESULT) {
+			return parsed.dataLength >= 1 || dropFirmwareFrame('下载结果过短')
+		}
+		if (parsed.dataLength < 18) return dropFirmwareFrame('下载请求过短')
+		const req = PCP.parseDownloadRequest(frame)
+		if (req.targetVersion !== transferInbox.version) return dropFirmwareFrame('目标版本不符')
+		if (req.chunkIndex >= transferInbox.totalChunks) return dropFirmwareFrame('分片索引越界')
+		return true
+	}
 	serialApi.onReceive((data) => {
 		if (!data || !data.length) return
 		// 未升级也未查询时，不让普通串口流量进入固件帧解析器。
@@ -479,12 +539,30 @@
 		while ((frame = tryReadFrame())) {
 			const parsed = PCP.parseMessage(frame)
 			if (!parsed) continue
+			// parseMessage 也返回校验失败的视图，升级收发只能使用完整有效的协议帧。
+			if (!parsed.checksumValid) { dropFirmwareFrame('校验错误'); continue }
+			if (parsed.version !== PCP.PROTOCOL_VERSION) { dropFirmwareFrame('协议版本不符'); continue }
+			if (parsed.messageCode === PCPMessageCode.NEW_VERSION_NOTIFY && parsed.dataLength < 1) { dropFirmwareFrame('通知应答过短'); continue }
+			const transfer = parsed.messageCode === PCPMessageCode.DOWNLOAD_REQUEST || parsed.messageCode === PCPMessageCode.DOWNLOAD_RESULT
+			if (transfer && !validTransferMessage(parsed, frame)) continue
+			let delivered = false
 			for (let i = waiters.length - 1; i >= 0; i--) {
 				const w = waiters[i]
 				if (w.codes.indexOf(parsed.messageCode) !== -1) {
 					waiters.splice(i, 1)
 					clearTimeout(w.timer)
+					if (transferInbox && parsed.messageCode === PCPMessageCode.NEW_VERSION_NOTIFY && parsed.dataLength >= 1) {
+						transferInbox.accepted = parsed.data[0] === 0
+					}
+					delivered = true
 					w.resolve(frame)
+				}
+			}
+			if (transfer && !delivered) {
+				const queue = transferInbox.frames
+				if (!queue.some(f => f.length === frame.length && f.every((b, i) => b === frame[i]))) {
+					if (queue.length < 16) queue.push(frame)
+					else dropFirmwareFrame('待处理消息已满')
 				}
 			}
 		}
@@ -497,9 +575,12 @@
 	function sendAndWait(reqBytes, expectCodes, timeout) {
 		const codes = Array.isArray(expectCodes) ? expectCodes : [expectCodes]
 		return new Promise((resolve, reject) => {
+			let writeTask
 			const w = {
 				codes,
-				resolve,
+				// RX 可能在最后一片写入兑现前到达；释放 writer 后才进入下一步。
+				resolve(frame) { Promise.resolve().then(() => writeTask).then(() => resolve(frame), reject) },
+				reject,
 				timer: setTimeout(() => {
 					const idx = waiters.indexOf(w)
 					if (idx !== -1) waiters.splice(idx, 1)
@@ -516,7 +597,8 @@
 				reject(error)
 			}
 			try {
-				Promise.resolve(writeFirmware(reqBytes)).catch(failWrite)
+				writeTask = Promise.resolve(writeFirmware(reqBytes))
+				writeTask.catch(failWrite)
 			} catch (error) {
 				failWrite(error)
 				return
@@ -544,6 +626,7 @@
 			log('设备当前版本: ' + deviceVersion, 'success')
 			emit({ type: 'device-version', ok: true, source: 'upgrade', version: deviceVersion })
 		} catch (e) {
+			if (upgradeInterrupted(e)) return
 			log('查询版本超时: ' + e.message, 'error')
 			return
 		}
@@ -660,6 +743,11 @@
 	}
 
 	async function runUpgrade(target) {
+		clearTransferInbox()
+		try { await performUpgrade(target) } finally { clearTransferInbox() }
+	}
+
+	async function performUpgrade(target) {
 		const chunkSize = parseInt(el.chunkSize.value) || 128
 		const firmwareData = target.firmwareData
 		const totalChunks = Math.ceil(firmwareData.length / chunkSize)
@@ -683,12 +771,14 @@
 			emit({ type: 'device-version', ok: true, source: 'upgrade', version: res.version })
 			setProgress(15)
 		} catch (e) {
+			if (upgradeInterrupted(e)) return
 			log('查询版本超时: ' + e.message, 'error')
 			return
 		}
 
 		// 步骤2: 通知新版本
 		if (stopFlag) return
+		beginTransferInbox(version, totalChunks)
 		emit({ type: 'phase', name: 'notify' })
 		try {
 			const resp = await sendAndWait(
@@ -706,6 +796,7 @@
 			log('设备允许升级', 'success')
 			setProgress(25)
 		} catch (e) {
+			if (upgradeInterrupted(e)) return
 			log('新版本通知超时', 'error')
 			return
 		}
@@ -759,11 +850,13 @@
 					chunk = padded
 				}
 				const resp = PCP.buildDownloadResponse(idx, chunk, version)
-				// 收到设备请求后延时 200ms 再回复, 提升传输鲁棒性
-				await sleep(200)
-				await writeFirmware(resp)
+				// 只对确认的 BLE 链路省去周转等待，普通串口 / SPP / 未知传输保持原来的 200ms。
+				const turnaround = firmwareTurnaroundMs()
+				if (turnaround) await sleep(turnaround)
+				if (stopFlag || !serialApi.isOpen()) return
+				const timing = await writeFirmware(resp)
 				const isResend = sentChunks.has(idx)
-				log('发送: ' + bytesToHex(resp.slice(0, 50)) + '... (分片' + idx + ', ' + chunk.length + '字节)' + (isResend ? ' [重发]' : ''), 'info')
+				log('发送: ' + bytesToHex(resp.slice(0, 50)) + '... (分片' + idx + ', ' + chunk.length + '字节)' + (isResend ? ' [重发]' : '') + (timing ? ' [后端写完成 ' + timing.durationMs + 'ms]' : ''), 'info')
 				sentChunks.add(idx)
 				const done = sentChunks.size
 				emit({ type: 'chunk', index: idx, resend: isResend, sent: done, total: totalChunks, bytes: chunk.length })
@@ -774,6 +867,7 @@
 			}
 			log('固件传输完成, 共 ' + sentChunks.size + ' 个分片', 'success')
 		} catch (e) {
+			if (upgradeInterrupted(e)) return
 			log('下载过程异常: ' + e.message, 'error')
 			return
 		}
@@ -802,6 +896,7 @@
 			log('设备下载成功', 'success')
 			setProgress(80)
 		} catch (e) {
+			if (upgradeInterrupted(e)) return
 			log('下载结果处理异常: ' + e.message, 'error')
 			return
 		}
@@ -811,12 +906,14 @@
 		emit({ type: 'phase', name: 'execute' })
 		try {
 			await sleep(500)
+			if (stopFlag || !serialApi.isOpen()) return
 			await writeFirmware(PCP.buildExecuteUpgradeRequest())
 			log('已发送升级命令, 设备开始升级...', 'success')
 			setProgress(100)
 			log('升级完成!', 'success')
 			outcomeOk = true
 		} catch (e) {
+			if (upgradeInterrupted(e)) return
 			log('执行升级异常: ' + e.message, 'error')
 		}
 	}
@@ -824,10 +921,15 @@
 	// 仅等待某一消息码(不自动发送), 带超时, 用于分片请求/下载结果
 	function waitForCode(expectCode, timeout) {
 		const codes = Array.isArray(expectCode) ? expectCode : [expectCode]
-		return new Promise((resolve) => {
+		if (transferInbox && !stopFlag) {
+			const idx = transferInbox.frames.findIndex(frame => codes.indexOf(frame[3]) !== -1)
+			if (idx !== -1) return Promise.resolve(transferInbox.frames.splice(idx, 1)[0])
+		}
+		return new Promise((resolve, reject) => {
 			const w = {
 				codes,
 				resolve,
+				reject,
 				timer: setTimeout(() => {
 					const idx = waiters.indexOf(w)
 					if (idx !== -1) waiters.splice(idx, 1)
@@ -877,6 +979,10 @@
 		if (open !== lastOpen) {
 			lastOpen = open
 			syncStartBtn()
+			if (!open && running) {
+				clearTransferInbox()
+				cancelFirmwareWaiters(new StopError('串口已断开', true))
+			}
 		}
 	}, 500)
 })()
