@@ -54,6 +54,9 @@ test('device loss nulls streams, releases native handle and suppresses late RX',
  const h=setup(),{port}=await prepare(h);await port.open({});const r=port.readable.getReader()
  const read=r.read();h.lost();await assert.rejects(read);r.releaseLock();await flush()
  assert.equal(port.readable,null);assert.equal(port.writable,null);assert.ok(h.calls.some(c=>c.command==='ble_close'))
+ assert.equal(h.calls.filter(c=>c.command==='ble_open').length,1);assert.equal(h.service.canSelect(),true)
+ const next=await h.service.inspect(device),reused=h.service.createPort(next,B.mapping(next.chars,0,1,true),0,1)
+ assert.equal(reused.port,port);await reused.discard()
  h.data([9]);await h.service.release()
 })
 test('failed physical close remains retryable and blocks update; no second BLE connection',async()=>{

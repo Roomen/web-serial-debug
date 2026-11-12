@@ -161,8 +161,9 @@
 						} catch (e) { await close(live); throw e }
 					}).finally(() => { if (opening === abort) opening = null })
 				},
-				// The lane's disconnect cancels a connect still in flight (e.g. auto-reopen after loss):
-				// close the native task now instead of waiting for the OS connect to give up.
+				// The lane's disconnect cancels a connect still in flight (e.g. a manual open while
+				// the OS connect is pending): close the native task now instead of waiting for the
+				// OS connect to give up.
 				abortOpen() {
 					const abort = opening
 					if (!abort) return
@@ -175,11 +176,10 @@
 					if (!live || !live.alive || live.lost) return Promise.reject(fail('BLE 已断开'))
 					return call(() => deps.invoke('ble_write', { handle: live.handle, data: Array.from(bytes) }))
 				},
-				close() { return close(live) },
+				async close() { await close(live); closed = true; prunePorts() },
 			})
-			const openPort = port.open.bind(port), closePort = port.close.bind(port)
+			const openPort = port.open.bind(port)
 			port.open = async options => { closed = false; return openPort(options) }
-			port.close = async () => { await closePort(); closed = true; prunePorts() }
 			const entry = {
 				key,
 				active: () => live.alive || !!live.closing,

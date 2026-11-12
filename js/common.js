@@ -445,9 +445,16 @@
 		})
 	}
 	// MCP 与 UI 共用：读某一路归一化后的参数(与打开时实际用的同一份配置)
+	function portTransport(port) {
+		try { return port && port.getInfo && port.getInfo().transport || 'serial' } catch (_) { return 'serial' }
+	}
 	function laneTransport(sid) {
-		const p = SerialHub.getPort(sid)
-		try { return p && p.getInfo && p.getInfo().transport || 'serial' } catch (_) { return 'serial' }
+		return portTransport(SerialHub.getPort(sid))
+	}
+	// 无线透传口(BLE / USB BLE 桥)：设备侧断开后不自动重连，打开失败也不退避重试
+	function isBlePort(port) {
+		const t = portTransport(port)
+		return t === 'ble' || t === 'ble-bridge'
 	}
 	function laneParams(sid) {
 		const transport = laneTransport(sid)
@@ -3880,9 +3887,10 @@
 		// 释放旧口可能等了一秒多：这期间被取消就不再打开
 		if (cancelled()) return false
 		serialStatuChange('connecting', sid)
+		const blePort = isBlePort(port)
 		let openError = null
 		try {
-			//端口可能处于"已打开但本地状态丢失"的脏状态: releasePort 已尽量 close; 占用类错误退避重试
+			//端口可能处于"已打开但本地状态丢失"的脏状态: releasePort 已尽量 close; 占用类错误退避重试(BLE 不自动重试连接)
 			for (let attempt = 0; ; attempt++) {
 				if (attempt > 0 && cancelled()) break
 				try {
@@ -3891,7 +3899,7 @@
 					break
 				} catch (e) {
 					openError = e
-					const retryable = OPEN_RETRY_ERRORS.indexOf(e.name || '') !== -1
+					const retryable = !blePort && OPEN_RETRY_ERRORS.indexOf(e.name || '') !== -1
 					if (!retryable || attempt >= OPEN_RETRY_DELAYS.length) throw e
 					await new Promise(function (resolve) { setTimeout(resolve, OPEN_RETRY_DELAYS[attempt]) })
 					// 退避等待期间被取消：不再重试
@@ -3927,13 +3935,14 @@
 				addLogErr('权限错误：请检查浏览器串口权限设置')
 			} else if (errorType === 'InvalidStateError') {
 				addLogErr('串口状态错误：设备可能已被占用')
-			} else if (errorType === 'NetworkError') {
+			} else if (errorType === 'NetworkError' && !blePort) {
 				addLogErr(SERIAL_OPEN_FAIL_MSG)
 			}
 
 			//自动重连(刷新/重插)失败禁止弹窗只打日志; 手动打开失败给简短友好提示, 不甩原始错误
+			//BLE 例外：无线连接失败的原因具体(已取消、订阅期间断开等)，直接显示驱动给的文案
 			if (reason === 'user') {
-				showMsg(SERIAL_OPEN_FAIL_MSG)
+				showMsg(blePort && openError.message ? openError.message : SERIAL_OPEN_FAIL_MSG)
 			}
 			return false
 		}
@@ -4758,6 +4767,9 @@
 		const sid = SerialHub.findSessionByPort(port)
 		if (!sid) return
 		addLogErr('设备断开连接 (' + getPortDisplayName(port) + ')', sid)
+		if (isBlePort(port)) {
+			SerialHub.setManualClose(sid, true)
+		}
 		await closeSerial(sid)
 		if (!SerialHub.isManualClose(sid)) {
 			addLogErr(sidName(sid) + ' 设备已断开，重新插入后将自动重连', sid)
@@ -5020,6 +5032,9 @@
 	function rxWatchSuppressed() {
 		return !!(window.serialApi && window.serialApi.suppressParse)
 	}
+	function isBleLane(sid) {
+		return isBlePort(SerialHub.getPort(sid))
+	}
 	function resetRxWatch(sid) {
 		const w = rxWatch(sid)
 		w.lastRxAt = 0
@@ -5040,6 +5055,24 @@
 		if (!SerialHub.getPort(sid)) return
 		if (SerialHub.isManualClose(sid)) return
 		if (SerialHub.isOpening(sid)) return
+		// BLE 设备主动断开后不自动重连：标记手动关闭并释放底层资源，保留已选设备供手动重连
+		if (isBleLane(sid)) {
+			const w = rxWatch(sid)
+			if (w.deferTimer) {
+				clearInterval(w.deferTimer)
+				w.deferTimer = null
+			}
+			reopenAttemptBySid[sid] = 0
+			SerialHub.setManualClose(sid, true)
+			SerialHub.setOpening(sid, true)
+			try {
+				addLogErr('BLE 设备已断开连接(' + sid + ')', sid)
+				await closeSerial(sid)
+			} finally {
+				SerialHub.setOpening(sid, false)
+			}
+			return
+		}
 		if (rxWatchSuppressed()) {
 			scheduleDeferredRecover(sid, reasonMsg)
 			return
@@ -5202,7 +5235,7 @@
 				backoffLevel = Math.min(backoffLevel + 1, READ_BACKOFF_DELAYS.length - 1)
 			}
 			if (!port.readable) {
-				addLogErr('串口读取流不可用(' + sid + ')，将尝试重新打开', sid)
+				if (!isBleLane(sid)) addLogErr('串口读取流不可用(' + sid + ')，将尝试重新打开', sid)
 				break
 			}
 			// Chromium 异步重建接收流，不能反复获取同一已关闭流的 reader。
@@ -5236,6 +5269,7 @@
 					const glitchAt = lineErrAt
 					lineErrAt = 0
 					if (done) {
+						if (isBleLane(sid) && !port.readable) break
 						noteFailure(null)
 						break
 					}
@@ -5255,6 +5289,7 @@
 				}
 			} catch (error) {
 				if (!alive()) return
+				if (isBleLane(sid) && !port.readable) break
 				noteFailure(error)
 			} finally {
 				if (SerialHub.getReader(sid) === r) SerialHub.setReader(sid, null)

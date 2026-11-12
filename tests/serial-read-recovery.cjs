@@ -10,6 +10,10 @@ const releaseStart = source.indexOf('\tasync function releasePort(sid) {')
 const releaseEnd = source.indexOf('\t//页面销毁时释放串口句柄', releaseStart)
 const statsStart = source.indexOf('\t\tresetStats(sid) {')
 const statsEnd = source.indexOf('\n\n\t\tisManualClose', statsStart)
+// read 循环按 transport 区分 BLE，传输种类判断也要带上
+const transportStart = source.indexOf('\tfunction portTransport(')
+const transportEnd = source.indexOf('\tfunction laneParams(', transportStart)
+assert.ok(transportStart > 0 && transportEnd > transportStart, 'common.js 的传输种类段不见了')
 const settle = () => new Promise(resolve => setImmediate(resolve))
 
 function harness() {
@@ -55,8 +59,9 @@ function harness() {
 		portHeldByOther: () => false, serialStatuChange: () => {}, updateOpenButton: () => {},
 		openSerial: async (sid, opts) => { opened.push({ sid, opts, port: sessions[sid].port }); sessions[sid].open = true; return true }
 	})
-	vm.runInContext(source.slice(start, end) + source.slice(releaseStart, releaseEnd) + `
-		recoverDeadReadLoop = async sid => recovered.push(sid)
+	vm.runInContext(source.slice(transportStart, transportEnd) + source.slice(start, end) + source.slice(releaseStart, releaseEnd) + `
+		const realRecoverDeadReadLoop = recoverDeadReadLoop
+		recoverDeadReadLoop = async (sid, msg) => isBleLane(sid) ? realRecoverDeadReadLoop(sid, msg) : recovered.push(sid)
 		Object.assign(SerialHub, { ${source.slice(statsStart, statsEnd)} })
 		globalThis.api = { readData, kickReaderOnForeground, resetRxWatch, rxWatch, noteSerialRx,
 			releasePort, rebuildSerialReceive,
@@ -78,7 +83,7 @@ function harness() {
 		now = target
 		await settle()
 	}
-	return { sessions, hub, logs, received, rxNotes, timers, recovered, closed, opened, api: context.api, advance,
+	return { sessions, hub, window: context.window, logs, received, rxNotes, timers, recovered, closed, opened, api: context.api, advance,
 		manualChanges: () => manualChanges, now: () => now }
 }
 
@@ -1031,6 +1036,44 @@ async function run() {
 		await brokenRead
 		assert.deepEqual(broken.recovered, ['A'])
 		assert.deepEqual(broken.closed, [])
+	}
+
+	// BLE / USB BLE 桥设备主动断开连接时：置为手动关闭并释放，不自动重连(即使处于固件升级 suppressParse 期间也立即断开且不延后重连)
+	for (const transport of ['ble', 'ble-bridge']) {
+		for (const suppressed of [false, true]) {
+			const ble = harness()
+			if (suppressed) ble.window.serialApi = { suppressParse: true }
+			let rejectRead
+			const port = {
+				getInfo: () => ({ transport }),
+				readable: {
+					getReader: () => ({
+						read: () => new Promise((_, reject) => { rejectRead = reject }),
+						releaseLock: () => {},
+						cancel: async () => {},
+					}),
+				},
+				close: async () => {},
+			}
+			ble.sessions.A.port = port
+			const pending = ble.api.readData('A')
+			await settle()
+			// 模拟 BLE 设备主动断开：createStreamPort 的 sink.lost 先把 readable 置为 null，再让当前 read 报错
+			port.readable = null
+			rejectRead(new Error('BLE 连接已断开'))
+			await pending
+			if (suppressed) ble.window.serialApi = { suppressParse: false }
+			await ble.advance(10000)
+			assert.equal(ble.sessions.A.open, false, transport + ': 断开后会话应关闭')
+			assert.equal(ble.sessions.A.manualClose, true, transport + ': 断开后应置 manualClose 防止重连')
+			assert.equal(ble.sessions.A.opening, false)
+			assert.equal(ble.sessions.A.port, port, transport + ': 仍保留已选设备供用户手动重连')
+			assert.deepEqual(ble.closed, ['A'], transport + ': 应走 closeSerial 释放')
+			assert.deepEqual(ble.recovered, [], transport + ': 不走串口自动重连')
+			assert.deepEqual(ble.opened, [], transport + ': 不发起自动重开')
+			assert.equal(ble.timers.size, 0, transport + ': 不残留重连定时器')
+			assert.deepEqual(ble.logs, [{ msg: 'BLE 设备已断开连接(A)', sid: 'A' }], transport + ': 只记录断开提示，不报重建流错误')
+		}
 	}
 
 	// The manual fallback releases the original port and preserves connection intent, using silent open.
