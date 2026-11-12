@@ -84,17 +84,26 @@
 			}).catch(e => { releaseFailed = true; throw e }).finally(() => { record.closing = null })
 			return record.closing
 		}
-		async function inspect(device) {
+		// abort: optional { aborted } owned by a stream port open; set before the native handle exists,
+		// the "opening" event closes the pending connect as soon as Rust names it.
+		async function inspect(device, abort) {
 			const token = epoch
 			return call(async () => {
 				await ready; check(token)
 				await stopScan(); check(token)
+				if (abort && abort.aborted) throw fail('BLE 连接已取消')
 				if (selected || pending || releaseFailed) throw fail('请先关闭现有 BLE 连接，或重试释放')
 				const record = { device, handle: null, alive: true, sink: null, chars: [], token, lost: false }
 				pending = record
+				if (abort) abort.record = record
 				const onData = new deps.Channel(), onEvent = new deps.Channel()
 				onData.onmessage = bytes => { if (record.alive && token === epoch && record.sink) record.sink.data(deps.toBytes(bytes)) }
 				onEvent.onmessage = e => {
+					if (e.type === 'opening') {
+						if (!record.alive || abort && abort.aborted) deps.invoke('ble_close', { handle: e.handle }).catch(() => {})
+						else if (record.handle == null) record.handle = e.handle
+						return
+					}
 					if (!record.alive || token !== epoch || e.type !== 'lost') return
 					record.lost = true
 					if (record.sink) record.sink.lost(fail('BLE 连接已断开'))
@@ -103,6 +112,7 @@
 					const result = await deps.invoke('ble_open', { deviceId: device.deviceId, ownerGeneration: generation, onData, onEvent })
 					record.handle = result.handle; record.chars = result.characteristics
 					check(token)
+					if (abort && abort.aborted) throw fail('BLE 连接已取消')
 					if (record.lost) throw fail('BLE 在发现服务期间断开')
 					return record
 				} catch (e) { await close(record); throw e }
@@ -127,25 +137,38 @@
 					return { port, discard: () => entry.discard(record) }
 				}
 			}
-			let live = record, first = true, initialIds = { tx: txId, rx: rxId }, closed = false
+			let live = record, first = true, initialIds = { tx: txId, rx: rxId }, closed = false, opening = null
 			const port = deps.createStreamPort({
 				getInfo() { return { transport: 'ble', productName: device.name + ' · BLE' } },
 				async open(options, sink) {
+					const abort = { aborted: false, record: first ? live : null }
+					opening = abort
 					return call(async () => {
 						check(record.token)
-						if (!first) live = await inspect(device)
+						if (!first) live = await inspect(device, abort)
 						const initial = first; first = false
 						live.sink = sink
 						try {
+							if (abort.aborted) throw fail('BLE 连接已取消')
 							if (!live.alive || live.lost || live.handle == null) throw fail('BLE 连接已失效，请重新选择')
 							const ids = initial ? initialIds : match(live.chars, saved)
 							await deps.invoke('ble_start', { handle: live.handle, profile: saved, txId: ids.tx, rxId: ids.rx })
 							check(record.token)
+							if (abort.aborted) throw fail('BLE 连接已取消')
 							if (live.lost) throw fail('BLE 订阅期间断开')
 							selected = live; if (pending === live) pending = null
 							ports.add(port); choices.set(port, entry); prunePorts()
 						} catch (e) { await close(live); throw e }
-					})
+					}).finally(() => { if (opening === abort) opening = null })
+				},
+				// The lane's disconnect cancels a connect still in flight (e.g. auto-reopen after loss):
+				// close the native task now instead of waiting for the OS connect to give up.
+				abortOpen() {
+					const abort = opening
+					if (!abort) return
+					abort.aborted = true
+					const r = abort.record
+					if (r && r.handle != null) return close(r).catch(() => {})
 				},
 				write(bytes) {
 					check(record.token)

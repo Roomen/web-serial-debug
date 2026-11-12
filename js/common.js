@@ -223,6 +223,8 @@
 		isOpening(sid) { return this._sess(sid).opening },
 		setOpening(sid, v) {
 			this._sess(sid).opening = v
+			// 取消只对当前这段连接过程有效：连接过程结束(成功、失败或已取消)就清掉
+			if (!v) this._sess(sid).openCancel = false
 			refreshParamsBusyUI()
 			if (window.Workbench) window.Workbench.refreshStatus()
 		},
@@ -3826,6 +3828,13 @@
 		// 请求在等待期间超时/被停用后不能再把口打开；取消时 opts.cancelled 置位，调用方据此回报「未执行」
 		const guard = typeof opts.guard === 'function' ? opts.guard : null
 		const cancelled = function () {
+			// 用户在连接过程中点了电源键(含掉线后的自动重连)：不再重试，已打开的口释放掉
+			if (SerialHub._sess(sid).openCancel) {
+				opts.cancelled = true
+				opts.cancelCode = 'aborted'
+				opts.blockMessage = '已取消连接'
+				return true
+			}
 			const denied = guard ? guard() : null
 			if (!denied) return false
 			opts.cancelled = true
@@ -3893,7 +3902,7 @@
 			openError = e
 		}
 		// open 本身可能刚成功就被取消：这时也要算取消，并且释放掉这个口(下面 opts.cancelled 分支处理)
-		if (openError === null) cancelled()
+		if (openError === null || SerialHub._sess(sid).openCancel) cancelled()
 		if (opts.cancelled) {
 			SerialHub.setOpen(sid, false)
 			// 安全释放：已经真正打开的口要关掉，不留没人管的句柄
@@ -4084,9 +4093,27 @@
 		}
 	}
 
+	// 连接过程中(手动连接或掉线后的自动重连)点电源键：取消这次连接，不再自动重试。
+	// 无线口的系统连接可能一直挂着(BLE 设备不在附近时系统不会自己放弃)，所以还要让端口中止进行中的 open。
+	function cancelLaneOpen(sid) {
+		const session = SerialHub._sess(sid)
+		if (session.openCancel) return
+		session.openCancel = true
+		SerialHub.setManualClose(sid, true)
+		setSerialWantOpen(false, sid)
+		setSerialWantPortKey(sid, null)
+		addLogErr('已取消连接(' + sid + ')', sid)
+		const port = SerialHub.getPort(sid)
+		if (port && typeof port.abortOpen === 'function') port.abortOpen()
+	}
+
 	async function handleToggleClick(sid) {
 		sid = SerialHub.uiSid(sid || 'A')
-		if (SerialHub.isOpening(sid)) return
+		if (SerialHub.isOpening(sid)) {
+			// manualClose 为真时这段 opening 是关闭过程，不打断
+			if (!SerialHub.isManualClose(sid)) cancelLaneOpen(sid)
+			return
+		}
 		const port = SerialHub.getPort(sid)
 		if (!port) {
 			// 「连接」态: 选口 + 打开一步到位, 省掉一次点「选择」
