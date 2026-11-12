@@ -173,7 +173,6 @@ const BLE_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(20);
 // Cleanup must always finish: an unbounded wait here holds the claim forever.
 const BLE_UNSUBSCRIBE_WAIT: Duration = Duration::from_secs(2);
 const BLE_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-const BLE_DISCONNECT_ATTEMPTS: usize = 3;
 async fn bounded<T>(work: impl std::future::Future<Output = Result<T, String>>, cancel: &CancellationToken, limit: Duration, timeout: &str) -> Result<T, String> {
 	tokio::select! {
 		biased;
@@ -571,13 +570,18 @@ pub async fn ble_open(
 			// Notification-stream Drop requests unsubscribe asynchronously on both hosts.
 			// Observe it before releasing the connection/claim, preventing a late CCCD-disable
 			// from racing a new connection. Unknown close state remains busy/retryable.
-			let deadline = Instant::now() + BLE_UNSUBSCRIBE_WAIT;
-			while device.is_connected().await && Instant::now() < deadline {
-				if !matches!(rx.is_notifying().await, Ok(true)) {
-					break;
+			// Bound every native query, not just the loop: on Windows is_notifying reads the CCCD
+			// and may not return while the link is going down.
+			let deadline = tokio::time::Instant::now() + BLE_UNSUBSCRIBE_WAIT;
+			let _ = tokio::time::timeout_at(deadline, async {
+				while device.is_connected().await {
+					if !matches!(rx.is_notifying().await, Ok(true)) {
+						break;
+					}
+					tokio::time::sleep(Duration::from_millis(20)).await;
 				}
-				tokio::time::sleep(Duration::from_millis(20)).await;
-			}
+			})
+			.await;
 			result
 		}
 		.await;
@@ -586,17 +590,14 @@ pub async fn ble_open(
 		if let Ok(device) = &device {
 			// CoreBluetooth reports didDisconnect only for a live connection: calling
 			// disconnect_device after the link already dropped (or while a connect was just
-			// cancelled) waits forever. Only disconnect a connected device, and bound each try.
-			for attempt in 0..BLE_DISCONNECT_ATTEMPTS {
-				if !device.is_connected().await {
-					break;
-				}
+			// cancelled) waits forever. Only disconnect a connected device and bound each try;
+			// while it stays connected keep the claim and retry, never report a release that
+			// did not happen (the page then sees close failure and stays retryable).
+			while device.is_connected().await {
 				if matches!(tokio::time::timeout(BLE_DISCONNECT_TIMEOUT, adapter.disconnect_device(device)).await, Ok(Ok(()))) {
 					break;
 				}
-				if attempt + 1 < BLE_DISCONNECT_ATTEMPTS {
-					tokio::time::sleep(Duration::from_millis(500)).await;
-				}
+				tokio::time::sleep(Duration::from_millis(500)).await;
 			}
 		}
 		drop(device); // Windows closes here, after the last GATT child was dropped.
