@@ -844,8 +844,8 @@
 			const lane = sid === 'S' ? '' : who + ' '
 			p.power.disabled = !hasPort
 			p.power.setAttribute('aria-pressed', String(!!open))
-			p.power.setAttribute('aria-label', lane + (failed ? '重试关闭串口' : (opening ? '正在连接' : (open ? '断开串口' : '连接串口'))))
-			p.power.title = lane + (failed ? '关闭失败，点此重试关闭' : (opening ? '正在连接' : (open ? '已连接，点此断开' : (hasPort ? '未连接，点此连接' : '先选择设备'))))
+			p.power.setAttribute('aria-label', lane + (failed ? '重试关闭串口' : (opening ? '正在连接，取消连接' : (open ? '断开串口' : '连接串口'))))
+			p.power.title = lane + (failed ? '关闭失败，点此重试关闭' : (opening ? '正在连接，点此取消' : (open ? '已连接，点此断开' : (hasPort ? '未连接，点此连接' : '先选择设备'))))
 			p.btn.setAttribute('aria-label', who + ' ' + (portName || '未选择设备') + ' · ' + st + ' · 选择设备')
 			p.btn.title = who + ' · ' + st + ' · 选择设备'
 			p.more.title = sid === 'S' ? '串口设置：参数' : '串口设置：路标签 · 参数'
