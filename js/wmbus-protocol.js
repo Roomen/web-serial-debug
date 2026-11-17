@@ -1089,7 +1089,7 @@
 
 		function buildFrame() {
 			showErr('')
-			if (parseInt(cmdSel.value, 16) === 0x88 && paramVal.dataset.wmbusAutoNow) {
+			if (parseInt(cmdSel.value, 16) === 0x88) {
 				paramVal.value = deviceEpochToLocalInput(deviceEpochNow())
 				computePayload()
 			}

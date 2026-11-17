@@ -140,7 +140,7 @@
 	function platformTimeBytes(src) {
 		const pad = (n, l) => String(n).padStart(l, '0')
 		let digits
-		if (src instanceof Date && !isNaN(src.getTime())) {
+		if ((src instanceof Date || (src && typeof src.getTime === 'function')) && !isNaN(src.getTime())) {
 			digits = pad(src.getFullYear(), 4) + pad(src.getMonth() + 1, 2) + pad(src.getDate(), 2) +
 				pad(src.getHours(), 2) + pad(src.getMinutes(), 2) + pad(src.getSeconds(), 2)
 		} else if (typeof src === 'string') {
@@ -2635,6 +2635,47 @@
 		u16leWrite(head, crc)
 		head.push(0x16)
 		return new Uint8Array(head)
+	}
+
+	// 下发帧时间更新：若是包含时间的 SEK 下行帧，将时间更新为当前最新时间并重算 CRC
+	W.skUpdateFrameTime = function (bytes, now) {
+		if (!bytes || bytes.length < 19) return false
+		if (bytes[0] !== 0xA9 || bytes[1] !== 0x9A) return false
+		const declaredLen = bytes[14] | (bytes[15] << 8)
+		if (bytes.length !== 16 + declaredLen + 3) return false
+		if (bytes[bytes.length - 1] !== 0x16) return false
+		const fc = bytes[12]
+		// 上行帧功能码通常最高位为 1 (如 0x81/0x82/0x91) 或为 0x02 主动上报
+		if ((fc & 0x80) !== 0 || fc === 0x02) return false
+
+		const timeBytes = platformTimeBytes(now || new Date())
+		for (let i = 0; i < 7; i++) {
+			bytes[5 + i] = timeBytes[i]
+		}
+
+		// 若未加密且包含 Tag3-ID20 (水表实时时间)，同步更新数据域载荷里的 7 字节时间
+		const ctrl = bytes[13]
+		if ((ctrl & 0x01) === 0 && declaredLen >= 2) {
+			let p = 18
+			const maxP = 16 + declaredLen
+			while (p + 3 <= maxP) {
+				const tag = bytes[p]
+				const tagLen = bytes[p + 1] | (bytes[p + 2] << 8)
+				p += 3
+				const tagEnd = Math.min(p + tagLen, maxP)
+				if (tag === 3 && tagLen === 8 && bytes[p] === 20) {
+					for (let i = 0; i < 7; i++) {
+						bytes[p + 1 + i] = timeBytes[i]
+					}
+				}
+				p = tagEnd
+			}
+		}
+
+		const crc = W.skCrc16(bytes.subarray(0, 16 + declaredLen))
+		bytes[16 + declaredLen] = crc & 0xff
+		bytes[17 + declaredLen] = (crc >> 8) & 0xff
+		return true
 	}
 
 	// 绑定历史序列图表: 折线 + 悬停显示时间/流量

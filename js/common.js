@@ -1247,6 +1247,7 @@
 				findFrame: typeof skFindFrame === 'function' ? skFindFrame : null,
 				byteMap: typeof skByteMap === 'function' ? skByteMap : null,
 				buildDownFrame: typeof skBuildDownFrame === 'function' ? skBuildDownFrame : null,
+				updateFrameTime: typeof skUpdateFrameTime === 'function' ? skUpdateFrameTime : null,
 				presets: window.SK_DOWN_PRESETS || [],
 			})
 		}
@@ -1295,7 +1296,7 @@
 			}
 		}
 
-		// 暴露协议预设重建函数
+		// 暴露协议预设重建函数与下发帧时间更新函数
 		window.rebuildProtocolPresets = function () {
 			if (!window.SK_DOWN_PRESETS) return
 			var proto = window.getActiveProtocol()
@@ -1304,6 +1305,9 @@
 			window.SK_DOWN_PRESETS = presets
 			rebuildPresets(document.getElementById('serial-protocol-down-func').value)
 			window.SK_DOWN_PRESETS = oldSK
+		}
+		window.updateDownlinkFrameTime = function (bytes, now) {
+			return updateDownlinkFrameTime(bytes, now)
 		}
 	})()
 
@@ -2482,8 +2486,19 @@
 					if (!bytes) return
 				} else if (preset.param.type === 'hexbytes') {
 					const s = paramVal.value.trim()
-					if (!s) return
-					bytes = hexToBytes(s, preset.param.fillLen)
+					if (!s) {
+						if (preset.param.fillLen === 7 && preset.name && preset.name.includes('时间')) {
+							const d = new Date()
+							const pad = (n, l) => String(n).padStart(l, '0')
+							const digits = pad(d.getFullYear(), 4) + pad(d.getMonth() + 1, 2) + pad(d.getDate(), 2) +
+								pad(d.getHours(), 2) + pad(d.getMinutes(), 2) + pad(d.getSeconds(), 2)
+							bytes = hexToBytes(digits, 7)
+						} else {
+							return
+						}
+					} else {
+						bytes = hexToBytes(s, preset.param.fillLen)
+					}
 				} else if (preset.param.type === 'multi') {
 					bytes = multiParamToBytes(preset.param.fields)
 					if (!bytes || !bytes.length) return
@@ -4830,6 +4845,40 @@
 		}
 	}
 
+	// 下发报文若包含时间字段，在下发时自动更新为最新时间并同步重算校验
+	function updateDownlinkFrameTime(bytes, now) {
+		if (!bytes || bytes.length < 5) return false
+		const active = window.getActiveProtocol && window.getActiveProtocol()
+		if (active && typeof active.updateFrameTime === 'function') {
+			try {
+				if (active.updateFrameTime(bytes, now)) return true
+			} catch (_) {}
+		}
+		if (window._protocols) {
+			for (const id in window._protocols) {
+				const p = window._protocols[id]
+				if (p && p !== active && typeof p.updateFrameTime === 'function') {
+					try {
+						if (p.updateFrameTime(bytes, now)) return true
+					} catch (_) {}
+				}
+			}
+		}
+		return false
+	}
+
+	function syncDownlinkPreviewIfMatch(oldHexCompact, newU8) {
+		const previewEl = document.getElementById('serial-protocol-down-preview')
+		if (!previewEl || !previewEl.value) return
+		if (previewEl.value.replace(/\s+/g, '').toUpperCase() === oldHexCompact.toUpperCase()) {
+			let hexArr = []
+			for (let i = 0; i < newU8.length; i++) {
+				hexArr.push(('0' + newU8[i].toString(16).toUpperCase()).slice(-2))
+			}
+			previewEl.value = hexArr.join(' ')
+		}
+	}
+
 	//发送HEX到串口（使用主发口）
 	async function sendHex(hex, sendName) {
 		const value = hex.replace(/\s+/g, '')
@@ -4838,7 +4887,11 @@
 			for (let i = 0; i < value.length; i = i + 2) {
 				data.push(parseInt(value.substring(i, i + 2), 16))
 			}
-			await writeData(Uint8Array.from(data), null, sendName || lookupQuickSendName(hex), { composed: true })
+			const u8 = Uint8Array.from(data)
+			if (updateDownlinkFrameTime(u8)) {
+				syncDownlinkPreviewIfMatch(value, u8)
+			}
+			await writeData(u8, null, sendName || lookupQuickSendName(hex), { composed: true })
 		} else {
 			addLogErr('HEX格式错误:' + hex)
 		}
