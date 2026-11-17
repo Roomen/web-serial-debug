@@ -18,6 +18,7 @@ const window = {
 const context = vm.createContext({
 	window,
 	Uint8Array,
+	console,
 	document: {
 		getElementById() { return null },
 		createElement() { return {} },
@@ -29,7 +30,7 @@ const context = vm.createContext({
 })
 
 // 加载协议文件
-const files = ['protocol-schema', 'protocol-crypto', 'parse-view', 'protocol', 'cjt188-protocol']
+const files = ['version', 'protocol-schema', 'protocol-crypto', 'parse-view', 'protocol', 'cjt188-protocol']
 for (const f of files) {
 	vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/' + f + '.js'), 'utf8'), context)
 }
@@ -48,12 +49,12 @@ window.registerProtocol('cjt188', {
 	updateFrameTime: window.cjt188UpdateFrameTime,
 })
 
-function updateDownlinkFrameTime(bytes, now) {
+function updateDownlinkFrameTime(bytes, now, encKey) {
 	if (!bytes || bytes.length < 5) return false
 	const active = window.getActiveProtocol && window.getActiveProtocol()
 	if (active && typeof active.updateFrameTime === 'function') {
 		try {
-			if (active.updateFrameTime(bytes, now)) return true
+			if (active.updateFrameTime(bytes, now, encKey)) return true
 		} catch (_) {}
 	}
 	if (window._protocols) {
@@ -61,7 +62,7 @@ function updateDownlinkFrameTime(bytes, now) {
 			const p = window._protocols[id]
 			if (p && p !== active && typeof p.updateFrameTime === 'function') {
 				try {
-					if (p.updateFrameTime(bytes, now)) return true
+					if (p.updateFrameTime(bytes, now, encKey)) return true
 				} catch (_) {}
 			}
 		}
@@ -116,7 +117,46 @@ function updateDownlinkFrameTime(bytes, now) {
 	assert.ok(item20, 'Item 20 存在')
 	assert.deepEqual(Array.from(item20.raw), [0x20, 0x26, 0x11, 0x17, 0x15, 0x30, 0x45])
 
-	// 1.3 上行帧不应该被修改
+	// 1.3 Tag 3 组合参数中的 ID 20 (例如 ID 9 上报频率 + ID 20 水表时间)
+	const frameMultiItems = window.skBuildDownFrame({
+		funcCode: '0x01',
+		version: 2,
+		time: oldDate,
+		frameSeq: 3,
+		tlv: [{ tag: 3, items: [
+			{ id: 9, value: [0xA0, 0x05] }, // 1440 分钟
+			{ id: 20, value: [0x20, 0x20, 0x01, 0x01, 0x12, 0x00, 0x00] },
+		] }],
+	})
+	assert.equal(window.skParseFrame(frameMultiItems).crcOk, true)
+	assert.equal(updateDownlinkFrameTime(frameMultiItems, newDate), true)
+	const parsedMulti = window.skParseFrame(frameMultiItems)
+	assert.equal(parsedMulti.crcOk, true)
+	const tag3Multi = parsedMulti.tlv.find(t => t.tag === 3)
+	const item20Multi = tag3Multi.items.find(it => it.id === 20)
+	assert.ok(item20Multi, '组合参数中 Item 20 存在')
+	assert.deepEqual(Array.from(item20Multi.raw), [0x20, 0x26, 0x11, 0x17, 0x15, 0x30, 0x45], '组合参数中的水表时间已更新')
+
+	// 1.4 加密帧下发时更新时间
+	const testKey = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
+	const frameEnc = window.skBuildDownFrame({
+		funcCode: '0x01',
+		version: 2,
+		time: oldDate,
+		frameSeq: 4,
+		encKey: testKey,
+		tlv: [{ tag: 3, items: [{ id: 20, value: [0x20, 0x20, 0x01, 0x01, 0x12, 0x00, 0x00] }] }],
+	})
+	assert.equal((frameEnc[13] & 0x01), 1, '帧控制码加密标志为1')
+	assert.equal(updateDownlinkFrameTime(frameEnc, newDate, testKey), true)
+	const parsedEnc = window.skParseFrame(frameEnc, { keyHex: Buffer.from(testKey).toString('hex') })
+	assert.equal(parsedEnc.crcOk, true, '加密帧更新后 CRC 正确')
+	assert.equal(parsedEnc.decryptOk, true, '解密成功')
+	const tag3Enc = parsedEnc.tlv.find(t => t.tag === 3)
+	const item20Enc = tag3Enc.items.find(it => it.id === 20)
+	assert.deepEqual(Array.from(item20Enc.raw), [0x20, 0x26, 0x11, 0x17, 0x15, 0x30, 0x45], '加密载荷解密后时间已更新')
+
+	// 1.5 上行帧不应该被修改
 	// 伪造一个 SEK 上行帧头
 	const fakeUpFrame = new Uint8Array(27)
 	fakeUpFrame[0] = 0xA9
@@ -188,5 +228,8 @@ function updateDownlinkFrameTime(bytes, now) {
 	assert.equal(updateDownlinkFrameTime(frame188, newDate), true)
 	assert.equal(window.cjt188ParseFrame(frame188).csOk, true)
 }
+
+// 4. 版本号检查
+assert.equal(window.APP_VERSION, '1.89.0', '版本号必须按 feat 规则 bump 至 1.89.0')
 
 console.log('All protocol downlink time tests passed successfully!')

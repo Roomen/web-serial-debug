@@ -4846,12 +4846,13 @@
 	}
 
 	// 下发报文若包含时间字段，在下发时自动更新为最新时间并同步重算校验
-	function updateDownlinkFrameTime(bytes, now) {
+	function updateDownlinkFrameTime(bytes, now, encKey) {
 		if (!bytes || bytes.length < 5) return false
+		const key = encKey || (typeof resolveToolEncKey === 'function' ? resolveToolEncKey() : null)
 		const active = window.getActiveProtocol && window.getActiveProtocol()
 		if (active && typeof active.updateFrameTime === 'function') {
 			try {
-				if (active.updateFrameTime(bytes, now)) return true
+				if (active.updateFrameTime(bytes, now, key)) return true
 			} catch (_) {}
 		}
 		if (window._protocols) {
@@ -4859,7 +4860,7 @@
 				const p = window._protocols[id]
 				if (p && p !== active && typeof p.updateFrameTime === 'function') {
 					try {
-						if (p.updateFrameTime(bytes, now)) return true
+						if (p.updateFrameTime(bytes, now, key)) return true
 					} catch (_) {}
 				}
 			}
