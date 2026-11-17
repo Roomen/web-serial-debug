@@ -85,6 +85,8 @@ cd desktop/src-tauri && cargo test
 cargo check --target x86_64-pc-windows-msvc -p portable-updater   # 需已装该 target
 ```
 
+三个 crate 的编译产物都落在 `desktop/src-tauri/target`：`desktop/.cargo/config.toml` 设了 `build.target-dir`，在各自目录跑 `cargo test` 会向上读到它，不再各建一份 `target/`（`scripts/tauri.mjs` 给 helper 显式传的 `CARGO_TARGET_DIR` 指同一目录）。依赖在 dev/test profile 下不开调试信息、lib 不产出移动端专用的 `staticlib`，所以 debug 产物比 crate 模板默认值小很多；清空间用 `cargo clean --profile dev`（在 `desktop/src-tauri` 下），不要整个 `cargo clean` 掉已经打好的 release 产物。
+
 `portable-update-common/tests/tauri_signer_interop.rs` 用本机 Tauri CLI 生成一次性密钥并按 `--app-version` 签名，验证 helper 的验签路径与流水线产出的签名同构（不会读取任何发布私钥）。
 
 下载与签名验证完成后才开始安装准备。所有窗口必须确认空闲并释放串口；在飞的原生操作、设备固件升级、测试和功耗仪连接都会阻止安装。无响应窗口超过 8 秒同样拒绝安装。循环发送暂时停止，安装失败可重试，串口若已关闭需手动重连。

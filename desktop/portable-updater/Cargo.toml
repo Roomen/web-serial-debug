@@ -15,6 +15,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 portable-update-common = { path = "../portable-update-common" }
 
+# 与 src-tauri 同一口径：依赖不开调试信息(三个 crate 共用 desktop/src-tauri/target)
+[profile.dev.package."*"]
+debug = 0
+
 # 便携包要小、要能在旧机器上跑，不引入 LTO 之外的额外优化
 [profile.release]
 codegen-units = 1

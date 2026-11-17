@@ -7,7 +7,10 @@ publish = false
 
 [lib]
 name = "serial_debug_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# 只出桌面包(macOS/Windows)：rlib 给 bin 与 `cargo test --lib` 用，cdylib 给 tauri 的桌面运行时不缺。
+# 不要再加回 staticlib(create-tauri-app 给移动端准备的默认值)：Tauri 移动端才要它(gen/android、gen/ios)，
+# 而每个 profile 下它都会把全部依赖的 object 归档成一份带调试信息的 .a，是 debug 目录里最大的单个产物。
+crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
 cc = "1"
@@ -51,6 +54,11 @@ objc2-app-kit = { version = "0.3", features = ["NSApplication"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Foundation", "Win32_System_Registry", "Win32_Devices_Communication", "Win32_Devices_Bluetooth", "Win32_Networking_WinSock"] }
+
+# 依赖不开调试信息：569 个包的 debuginfo 是 target/debug 体积的主因(GB 级)，而调试只需要本项目代码的行号。
+# 本项目自己的 crate 仍保留完整 debug，断点与 backtrace 照旧；test profile 继承 dev，`cargo test` 同时受益。
+[profile.dev.package."*"]
+debug = 0
 
 [profile.release]
 codegen-units = 8

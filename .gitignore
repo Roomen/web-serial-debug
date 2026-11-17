@@ -1,6 +1,9 @@
 /.vscode
 /.gitea_token
 
+# macOS Finder 在仓库内留下的目录元数据(不属于项目内容)
+.DS_Store
+
 # host-side cross-test build artifacts (do not commit binaries)
 tools/sk-cross-test/sk_c_mirror
 tools/sk-cross-test/*.o
@@ -24,6 +27,7 @@ tools/smoke-out
 /desktop/src-tauri/target
 /desktop/src-tauri/gen
 /desktop/release
-# Windows 便携更新的共享协议 crate 与 helper：本地编译产物同样不入库
+# Windows 便携更新的共享协议 crate 与 helper 的编译产物：
+# 平时经 desktop/.cargo/config.toml 统一落到 src-tauri/target，这两条只在有人显式覆盖 CARGO_TARGET_DIR 时兜底
 /desktop/portable-update-common/target
 /desktop/portable-updater/target
