@@ -1038,8 +1038,8 @@ async function run() {
 		assert.deepEqual(broken.closed, [])
 	}
 
-	// BLE / USB BLE 桥设备主动断开连接时：置为手动关闭并释放，不自动重连(即使处于固件升级 suppressParse 期间也立即断开且不延后重连)
-	for (const transport of ['ble', 'ble-bridge']) {
+	// BLE 设备主动断开连接时：置为手动关闭并释放，不自动重连(即使处于固件升级 suppressParse 期间也立即断开且不延后重连)
+	for (const transport of ['ble']) {
 		for (const suppressed of [false, true]) {
 			const ble = harness()
 			if (suppressed) ble.window.serialApi = { suppressParse: true }

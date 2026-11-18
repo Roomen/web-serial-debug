@@ -27,9 +27,16 @@
 		setPreparing: function (value) { updatePreparing = !!value },
 	})
 
+	function toBytes(value) {
+		if (value instanceof Uint8Array) return value
+		if (value instanceof ArrayBuffer) return new Uint8Array(value)
+		if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+		return Array.isArray(value) ? Uint8Array.from(value) : new Uint8Array(0)
+	}
+
 	if (P.has('view.classic') && root.NativeClassic) {
 		const classic = root.NativeClassic.create({ invoke: T.core.invoke, Channel: T.core.Channel,
-			createStreamPort: root.SerialAdapter.createStreamPort, toBytes: root.NativeBleBridge.toBytes,
+			createStreamPort: root.SerialAdapter.createStreamPort, toBytes: toBytes,
 			isPinned: () => !!(root.serialApi && root.serialApi.isPinned()),
 			blocked: () => updatePreparing || !!(root.__auth && !root.__auth.authed()),
 		})
@@ -37,28 +44,14 @@
 		root.addEventListener('pagehide', () => { classic.release().catch(() => {}) })
 	}
 
-	if (P.has('view.ble') && root.NativeBle) {
+	if (root.NativeBle && ['windows', 'macos'].indexOf(P.os) !== -1) {
 		const computerBle = root.NativeBle.create({ invoke: T.core.invoke, Channel: T.core.Channel,
-			createStreamPort: root.SerialAdapter.createStreamPort, toBytes: root.NativeBleBridge.toBytes,
+			createStreamPort: root.SerialAdapter.createStreamPort, toBytes: toBytes,
 			boundPorts: () => root.SerialHub ? ['S', 'A', 'B'].map(sid => root.SerialHub.getPort(sid)) : [],
 			blocked: () => updatePreparing || !!(root.__auth && !root.__auth.authed()),
 		})
 		P.provide('computer-ble', computerBle)
 		root.addEventListener('pagehide', () => { computerBle.release().catch(() => {}) })
-	}
-
-	if (P.has('view.ble') && root.NativeBleBridge) {
-		const ble = root.NativeBleBridge.create({
-			BleBridge: root.BleBridge,
-			isPinned: () => !!(root.serialApi && root.serialApi.isPinned()),
-			createStreamPort: root.SerialAdapter.createStreamPort,
-			invoke: T.core.invoke,
-			Channel: T.core.Channel,
-			ready: function () { return P.service('native-serial-ready').wait() },
-			blocked: function () { return updatePreparing || !!(root.__auth && !root.__auth.authed()) },
-		})
-		P.provide('ble', ble)
-		root.addEventListener('pagehide', function () { ble.release().catch(function () {}) })
 	}
 
 	// 本地 MCP 服务：只把 Tauri 命令/事件包成平台服务，业务与界面在 js/mcp-bridge.js / js/mcp-service.js。

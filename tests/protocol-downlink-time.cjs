@@ -230,6 +230,6 @@ function updateDownlinkFrameTime(bytes, now, encKey) {
 }
 
 // 4. 版本号检查
-assert.equal(window.APP_VERSION, '1.89.0', '版本号必须按 feat 规则 bump 至 1.89.0')
+assert.equal(window.APP_VERSION, '1.90.0', '版本号必须按 feat 规则 bump 至 1.90.0')
 
 console.log('All protocol downlink time tests passed successfully!')

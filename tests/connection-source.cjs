@@ -26,7 +26,6 @@ function setup(options={}) {
  }})
  map.set('computer-ble',ble)
  if(options.classic)map.set('classic',options.classic)
- if(options.bridge)map.set('ble',options.bridge)
  const usb={usb:true};let provider
  const window={AppPlatform:{service:n=>map.get(n),provide:(n,s)=>map.set(n,s)},SerialAdapter:{requestPort:async()=>usb,addPortProvider:fn=>{provider=fn}},NativeBle:B,AppDialog:{panel:opts=>new Promise(r=>{host=new E('div');close=()=>r();opts.build(host,{close})})}}
  const ctx={window,document:{createElement:t=>new E(t),querySelector:()=>null},localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v)},console}
@@ -75,31 +74,6 @@ test('SPP source uses system-selected device id, not arbitrary enumeration order
  let selected;const port={spp:true},classic={ports:()=>[],createPort:id=>{selected=id;return port},run:async()=>({selectedDeviceId:'chosen',devices:[{deviceId:'chosen',paired:true},{deviceId:'other',paired:true}]})}
  const h=setup({classic}),pending=h.source.requestPort('classic');await flush();await h.click('选择已配对设备…')
  assert.equal((await pending).port,port);assert.equal(selected,'chosen')
-})
-
-test('bridge handoff reuses port after binding refusal and bounds stale mapping enumeration',async()=>{
- let generation=1,created=0,invalid=false,bound=null,closed=0
- const bridge={state:()=>({generation}),resolveProfile:p=>{if(invalid)throw Error('ambiguous mapping');return{generation,tx:p.tx,rx:p.rx}},createProfilePort:()=>({number:++created,close:()=>{closed++}})}
- const h=setup({bridge,hub:{getPort:sid=>sid==='S'?bound:null}})
- const save=(overrides={})=>h.store.set('bleBridgeProfile',JSON.stringify({version:1,tx:'tx',rx:'rx',response:true,chunkSize:20,...overrides}))
- save()
- const first=h.source.bridgePort();bound=first
- // The bridge page handoff calls the same factory; the device dropdown no longer exposes a bridge entry.
- assert.equal(h.source.availableSources().some(s=>s.id==='bridge'),false)
- await assert.rejects(h.source.requestPort('bridge'),/不可用/)
- for(let i=0;i<3;i++) assert.equal(h.source.bridgePort(),first)
- assert.equal(created,1);assert.deepEqual([...h.ports()],[first])
- // Resolved identities, not serialized property order, define an equivalent mapping.
- h.store.set('bleBridgeProfile',JSON.stringify({chunkSize:20,response:true,rx:'rx',tx:'tx',version:1}))
- assert.equal(h.source.bridgePort(),first)
- invalid=true;assert.throws(()=>h.source.bridgePort(),/ambiguous/);invalid=false
- save({response:false});const changed=h.source.bridgePort();assert.notEqual(changed,first)
- assert.deepEqual([...h.ports()],[first,changed]) // current lane retained while a replacement is only selected
- bound=null;assert.deepEqual([...h.ports()],[changed])
- for(let chunkSize=21;chunkSize<45;chunkSize++){save({chunkSize});h.source.bridgePort();assert.equal(h.ports().length,1)}
- const old=h.ports()[0];bound=old;generation++
- assert.equal(h.ports().length,0);const fresh=h.source.bridgePort();assert.notEqual(fresh,old)
- assert.deepEqual([...h.ports()],[fresh]);assert.equal(closed,0) // enumeration pruning never closes lane resources
 })
 
 test('cancel ongoing scan drains without inspecting or closing another lane',async()=>{

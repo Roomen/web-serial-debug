@@ -314,10 +314,8 @@ mod tests {
         let client = ().serve(transport).await.expect("MCP 客户端初始化失败");
 
         let tools = client.list_tools(None).await.expect("tools/list 失败");
-        assert_eq!(tools.tools.len(), 39);
-        for name in ["ble_state", "ble_ports", "ble_open", "ble_scan_start", "ble_scan_stop", "ble_connect", "ble_gatt", "ble_write", "ble_pair", "ble_passkey"] {
-            assert!(tools.tools.iter().any(|t| t.name == name), "missing typed BLE tool: {name}");
-        }
+        assert_eq!(tools.tools.len(), 23);
+        assert!(!tools.tools.iter().any(|t| t.name.starts_with("ble_")), "ble tools should be removed");
 
         for name in ["classic_state", "classic_devices", "classic_discover", "classic_pair", "classic_connect", "classic_close", "classic_read", "classic_write"] {
             assert!(tools.tools.iter().any(|t| t.name == name), "missing typed Classic tool: {name}");

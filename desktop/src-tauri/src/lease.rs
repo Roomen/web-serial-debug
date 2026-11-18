@@ -1,7 +1,7 @@
 // 公共 owner / lease / generation / release 契约(T1)：串口、MCP 与后续 RTT/BLE 后端共用的生命周期基元。
 //
 // 词汇与映射：
-// - owner：资源的唯一归属。物理资源(串口路径、探针、BLE 桥)的 owner 是「窗口标签 + 文档代次」——
+// - owner：资源的唯一归属。物理资源(串口路径、探针、蓝牙设备)的 owner 是「窗口标签 + 文档代次」——
 //   窗口标签定归属窗口，页面每次加载(serial_release_owned)/销毁/升级收尾推进该 owner 的代次，
 //   即文档代次；MCP 请求租约的 owner 是「窗口标签 + bridgeEpoch」，语义同源。
 // - generation：代次。owner 的连接代次随每次 release 推进，旧代次的在飞调用不能登记新资源、

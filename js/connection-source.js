@@ -3,34 +3,9 @@
 ;(function (root) {
 	'use strict'
 	const P = root.AppPlatform, A = root.SerialAdapter, D = root.AppDialog
-	if (!P || !A || !D || !P.service('classic') && !P.service('computer-ble') && !P.service('ble')) return
+	if (!P || !A || !D || !P.service('classic') && !P.service('computer-ble')) return
 	let choosing = false
-	const bridgePorts = new Map()
-	let latestBridgeKey = null
-	function pruneBridgePorts() {
-		const bridge = P.service('ble'), generation = bridge && bridge.state().generation
-		const bound = root.SerialHub ? ['S', 'A', 'B'].map(sid => root.SerialHub.getPort(sid)) : []
-		for (const [key, entry] of bridgePorts) {
-			// Keep the latest choice (including failed binding retries) and current lane mappings.
-			// Removing an enumeration entry never closes a port owned by a lane.
-			if (entry.bridge !== bridge || entry.generation !== generation || key !== latestBridgeKey && !bound.includes(entry.port)) bridgePorts.delete(key)
-		}
-	}
 	function el(tag, text, parent) { const e = document.createElement(tag); if (text) e.textContent = text; parent.appendChild(e); return e }
-	function bridgePort() {
-		const bridge = P.service('ble'), profile = JSON.parse(localStorage.getItem('bleBridgeProfile') || 'null')
-		const resolved = bridge.resolveProfile(profile)
-		const key = JSON.stringify([resolved.generation, resolved.tx, resolved.rx, profile.response, profile.chunkSize])
-		let entry = bridgePorts.get(key)
-		if (!entry || entry.bridge !== bridge) {
-			entry = { port: bridge.createProfilePort(profile), bridge, generation: resolved.generation }
-			bridgePorts.set(key, entry)
-		}
-		latestBridgeKey = key
-		pruneBridgePorts()
-		const port = entry.port
-		return port
-	}
 	function availableSources() {
 		return [['computer-ble', 'BLE', 'computer-ble'], ['classic', '经典蓝牙 SPP', 'classic']]
 			.filter(([, , service]) => P.service(service)).map(([id, label]) => ({ id, label }))
@@ -201,10 +176,9 @@
 			return result
 		} finally { live = false; choosing = false }
 	}
-	const api = { requestPort, availableSources, bridgePort, isBusyForUpdate: () => choosing,
+	const api = { requestPort, availableSources, isBusyForUpdate: () => choosing,
 		ports: () => {
-			pruneBridgePorts()
-			return [...(P.service('classic') ? P.service('classic').ports() : []), ...(P.service('computer-ble') ? P.service('computer-ble').ports() : []), ...Array.from(bridgePorts.values(), entry => entry.port)]
+			return [...(P.service('classic') ? P.service('classic').ports() : []), ...(P.service('computer-ble') ? P.service('computer-ble').ports() : [])]
 		},
 	}
 	P.provide('connection-source', api)

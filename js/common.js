@@ -451,14 +451,14 @@
 	function laneTransport(sid) {
 		return portTransport(SerialHub.getPort(sid))
 	}
-	// 无线透传口(BLE / USB BLE 桥)：设备侧断开后不自动重连，打开失败也不退避重试
+	// 无线透传口(BLE)：设备侧断开后不自动重连，打开失败也不退避重试
 	function isBlePort(port) {
 		const t = portTransport(port)
-		return t === 'ble' || t === 'ble-bridge'
+		return t === 'ble'
 	}
 	function laneParams(sid) {
 		const transport = laneTransport(sid)
-		if (transport !== 'serial') return { lane: sid, transport, options: null, summary: transport === 'bt-classic' ? 'SPP' : transport === 'ble-bridge' ? 'USB BLE 桥' : 'BLE', open: SerialHub.isOpen(sid), opening: SerialHub.isOpening(sid) }
+		if (transport !== 'serial') return { lane: sid, transport, options: null, summary: transport === 'bt-classic' ? 'SPP' : 'BLE', open: SerialHub.isOpen(sid), opening: SerialHub.isOpening(sid) }
 		const opts = sid === 'S' ? readSerialOptions(SERIAL_OPTIONS_KEY) : laneOptions[sid]
 		const norm = DualCfg.normalizeOptions(opts)
 		return { lane: sid, options: norm, summary: DualCfg.paramsSummary(norm), open: SerialHub.isOpen(sid), opening: SerialHub.isOpening(sid) }
