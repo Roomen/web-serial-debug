@@ -234,7 +234,7 @@ test('successful update result is consumed without any prompt', async () => {
 
 test('BLE release completes before update ack, failed release refuses ack', async () => {
  const s = setup(), order = []
- s.env.AppPlatform = { service: name => name === 'ble' ? { release: async () => { order.push('ble') } } : null }
+ s.env.AppPlatform = { service: name => name === 'computer-ble' ? { release: async () => { order.push('ble') } } : null }
  s.env.serialApi.prepareForAppUpdate = async () => { order.push('serial') }
  await s.controller.prepare({ operationId: 'ble-update' })
  assert.deepEqual(order, ['ble', 'serial']); assert.equal(s.acknowledgments[0][1], true)
@@ -251,7 +251,7 @@ test('Classic release must succeed before update acknowledgement', async () => {
 })
 
 test('Bluetooth busy blocks both download and prepare without releasing; idle connections release', async () => {
- for (const name of ['ble', 'classic']) {
+ for (const name of ['computer-ble', 'classic']) {
   const s=setup(); let busy=true, installs=0, releases=0, serial=0
   s.env.AppPlatform={service:n=>n===name?{isBusyForUpdate:()=>busy,release:async()=>{releases++}}:null}
   s.service.install=async()=>{installs++}

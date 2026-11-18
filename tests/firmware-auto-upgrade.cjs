@@ -188,7 +188,7 @@ function makeDevice(current, opts) {
 	const V2 = rawFirmware('V2.0.0', 0x4180, 2)
 
 	// Only confirmed BLE links skip the pre-existing 200ms turnaround, including conservative fallbacks.
-	for (const opts of [{ transport: 'ble' }, { transport: 'ble-bridge' }, { transport: 'serial' }, { transport: 'bt-classic' }, { transport: 'unknown' }, { transport: undefined }, { noLanes: true }, { transportThrows: true }]) {
+	for (const opts of [{ transport: 'ble' }, { transport: 'serial' }, { transport: 'bt-classic' }, { transport: 'unknown' }, { transport: undefined }, { noLanes: true }, { transportThrows: true }]) {
 		const dev = makeDevice(V1)
 		const h = makeHarness(dev, opts)
 		dev.parser = h.ctx.FirmwareParser
@@ -196,7 +196,7 @@ function makeDevice(current, opts) {
 		assert.equal((await h.upgrade()).ok, true)
 		const chunks = h.events.filter(e => e.type === 'chunk').length
 		assert.ok(chunks > 0)
-		const ble = opts.transport === 'ble' || opts.transport === 'ble-bridge'
+		const ble = opts.transport === 'ble'
 		assert.equal(h.waits.filter(ms => ms === 200).length, ble ? 0 : chunks)
 	}
 	// User cancellation at query/notify waits is informational, without a timeout or lastError.

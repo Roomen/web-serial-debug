@@ -459,7 +459,7 @@
 		const sid = serialApi.getMode() === 'single' ? 'S' : serialApi.getActiveSendSid()
 		try {
 			const transport = window.serialLanes && window.serialLanes.transportOf(sid)
-			if (transport === 'ble' || transport === 'ble-bridge') return 0
+			if (transport === 'ble') return 0
 		} catch (_) { /* 未能确认 BLE 时保留原有串口周转时间 */ }
 		return 200
 	}

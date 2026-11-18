@@ -158,7 +158,7 @@ function makeHarness(opts) {
 	}
 	const platform = {
 		has: (id) => id !== 'service.mcp' || opts.service !== null,
-		service: (name) => (name === 'mcp' ? svc : name === 'ble' ? opts.ble || null : name === 'classic' ? opts.classic || null : null),
+		service: (name) => (name === 'mcp' ? svc : name === 'classic' ? opts.classic || null : null),
 	}
 	win.AppPlatform = platform
 	win.SerialHub = hub
@@ -568,34 +568,12 @@ test('serial_open：打开过程中换了设备对象 → lane_changed', async (
 	assert.equal(h.lane('S').open, false)
 })
 
-test('BLE typed MCP routes to shared queue guard; commit refusal, secret redaction and MCP stop preserves UI connection', async () => {
-	let writes = 0, released = 0
-	const ble = {
-		state: () => ({ phase: 'connected', challenge: { value: 123456 } }),
-		devices: p => [{ name: p.name, uuids: [p.serviceUuid] }],
-		run: async (action, p, guard) => {
-			const denied = await guard.start()
-			if (denied) throw Object.assign(new Error(denied.message), { code: denied.code })
-			const cancelled = guard.step()
-			if (cancelled) throw Object.assign(new Error(cancelled.message), { code: cancelled.code })
-			writes++; return { accepted: true }
-		},
-		release: async () => { released++ },
-	}
-	const h = makeHarness({ ble })
+test('BLE bridge tools are removed from MCP handlers', async () => {
+	const h = makeHarness({})
 	await h.boot()
-	assert.equal((await h.call('ble_state')).result.challenge, undefined)
-	const filtered = await h.call('ble_devices', {name:'fixture', serviceUuid:'12345678123456789abc123456789abc'})
-	assert.equal(filtered.result.devices[0].name, 'fixture')
-	assert.equal(filtered.result.devices[0].uuids[0], '12345678123456789abc123456789abc')
-	assert.equal((await h.call('ble_write', { generation: 1, characteristicId: 'fake', hex: '01', response: false })).ok, true)
-	assert.equal(writes, 1); assert.equal(h.commits.length, 1)
-	h.state.commitResult = { ok: false, code: 'expired_before_commit' }
-	assert.equal((await h.call('ble_write', {})).result.code, 'expired_before_commit')
-	assert.equal(writes, 1)
-	h.svcListeners['mcp-service']({ running: false }); await flush()
-	assert.equal(released, 0)
-	assert.equal(ble.state().phase, 'connected')
+	const res = await h.call('ble_state')
+	assert.equal(res.ok, false)
+	assert.equal(res.result.code, 'unknown_tool')
 })
 
 test('Classic typed MCP reads and commits shared operations, never bypasses pairing UI', async () => {

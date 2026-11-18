@@ -316,7 +316,7 @@ async function testOpenLaneCancelledIsAborted() {
 }
 
 async function testBleOpenFailureDoesNotRetry() {
-	for (const transport of ['ble', 'ble-bridge']) {
+	for (const transport of ['ble']) {
 		const h = harness()
 		let opens = 0
 		h.sessions.S.open = false
