@@ -73,15 +73,17 @@ export function packageWindows({ desktop, version, channel, target, debug = fals
 	if (!existsSync(executable)) throw new Error('找不到本次构建的 Windows 主程序')
 	const helper = helperBinary({ desktop, target, debug })
 	if (!existsSync(helper)) throw new Error('找不到更新助手 serial-debug-updater.exe，请先构建 desktop/portable-updater')
-	const staging = mkdtempSync(join(tmpdir(), 'serial-debug-portable-'))
+	const workDir = mkdtempSync(join(tmpdir(), 'serial-debug-portable-'))
+	const staging = join(workDir, 'files')
 	const name = `Serial-Debug_${version}_windows_${archName}.zip`
 	try {
+		mkdirSync(staging, { recursive: true })
 		copyFileSync(executable, join(staging, EXE_ENTRY))
 		copyFileSync(helper, join(staging, HELPER_FILE))
 		writeFileSync(join(staging, README_ENTRY), readmeText(version), 'utf8')
-		// 路径经环境变量传给 PowerShell，避免空格、引号等进入脚本语法。
-		const archive = join(staging, name)
-		const result = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Compress-Archive -LiteralPath (Join-Path $env:SERIAL_ZIP_STAGE "Serial Debug.exe"),(Join-Path $env:SERIAL_ZIP_STAGE "serial-debug-updater.exe"),(Join-Path $env:SERIAL_ZIP_STAGE "README.txt") -DestinationPath $env:SERIAL_ZIP_OUT -CompressionLevel Optimal -Force'], {
+		// 直接使用 .NET ZipFile，避免 Windows PowerShell Compress-Archive 在不同镜像版本下的模块回归；路径经环境变量传递。
+		const archive = join(workDir, name)
+		const result = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory($env:SERIAL_ZIP_STAGE, $env:SERIAL_ZIP_OUT, [System.IO.Compression.CompressionLevel]::Optimal, $false)'], {
 			stdio: 'inherit', env: { ...env, SERIAL_ZIP_STAGE: staging, SERIAL_ZIP_OUT: archive }
 		})
 		if (result.error || result.status !== 0 || !existsSync(archive)) throw new Error('Windows ZIP 打包失败', { cause: result.error })
@@ -98,5 +100,5 @@ export function packageWindows({ desktop, version, channel, target, debug = fals
 		if (signature) copyFileSync(archive + '.sig', join(out, name + '.sig'))
 		console.log('release: desktop/release/' + channel + '/' + name)
 		return join(out, name)
-	} finally { rmSync(staging, { recursive: true, force: true }) }
+	} finally { rmSync(workDir, { recursive: true, force: true }) }
 }
