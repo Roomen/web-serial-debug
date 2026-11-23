@@ -13662,9 +13662,10 @@ html[data-layout='modern'] .mdn-pop-params[hidden] {
 /* Desktop device picker: advertisement list remains stable while scanning. */
 .connection-filters {
 	display: grid;
-	grid-template-columns: minmax(0, 2fr) minmax(130px, 1fr) minmax(110px, 1fr);
+	grid-template-columns: minmax(0, 1fr) 152px 116px;
+	align-items: end;
 	gap: 10px;
-	margin-bottom: 8px;
+	margin-bottom: 10px;
 }
 .connection-filters label {
 	min-width: 0;
@@ -13673,7 +13674,9 @@ html[data-layout='modern'] .mdn-pop-params[hidden] {
 	flex-direction: column;
 	gap: 4px;
 	font-size: 0.78rem;
+	font-weight: 500;
 	color: var(--text-secondary);
+	white-space: nowrap;
 }
 .connection-status-bar {
 	display: flex;
