@@ -13,16 +13,18 @@ const u1='00000001-0000-0000-0000-000000000001',u2='00000002-0000-0000-0000-0000
 const chars=[{id:0,service:u1,characteristic:u2,props:8},{id:1,service:u2,characteristic:u1,props:16}]
 function setup(options={}) {
  const calls=[],map=new Map(),store=new Map();let host,close,data,events,gen=0,scanDone,scanChannel
- const ble=B.create({createStreamPort:A.createStreamPort,toBytes:b=>Uint8Array.from(b),Channel:class{},blocked:()=>false,invoke:async(command,p)=>{
+ const storage=options.persist?{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v)}:null
+ const initialDevices=options.devices||[{deviceId:'fixture',name:'<Fixture>',services:[u1],rssi:-44},{deviceId:'other',name:'Other',services:[u2]}]
+ const ble=B.create({createStreamPort:A.createStreamPort,toBytes:b=>Uint8Array.from(b),Channel:class{},blocked:()=>false,storage,invoke:async(command,p)=>{
   calls.push({command,p});if(command==='ble_release_owned'){if(scanDone)scanDone();return ++gen}
   if(command==='ble_scan'){
    scanChannel=p.onDevice;scanChannel.onmessage({type:'started'})
-   for(const device of [{deviceId:'fixture',name:'<Fixture>',services:[u1],rssi:-44},{deviceId:'other',name:'Other',services:[u2]}])scanChannel.onmessage({type:'device',device})
+   for(const device of initialDevices)scanChannel.onmessage({type:'device',device})
    await new Promise(r=>{scanDone=r})
   }
   if(command==='ble_scan_stop'){if(options.stop)await options.stop();if(scanDone)scanDone()}
 
-  if(command==='ble_open'){if(options.open)await options.open();data=p.onData;events=p.onEvent;return{handle:1,characteristics:options.chars||chars}}
+  if(command==='ble_open'){if(options.open)await options.open();data=p.onData;events=p.onEvent;return{handle:1,characteristics:options.chars||chars,deviceName:options.deviceName||null}}
  }})
  map.set('computer-ble',ble)
  if(options.classic)map.set('classic',options.classic)
@@ -44,7 +46,7 @@ test('serial requests bypass source screen; available services expose direct pic
 test('auto streaming scan, quick filters, cross-service mapping and session alias through unified stream',async()=>{
  const h=setup(),pending=h.source.requestPort('computer-ble');await flush()
  assert.equal(h.calls.filter(c=>c.command==='ble_scan').length,1)
- const query=h.field('名称 / 广播 UUID / 别名包含');query.value='fixture';query.oninput()
+ const query=h.field('名称 / 广播 UUID / 别名 / 地址包含');query.value='fixture';query.oninput()
  let rows=h.all().filter(e=>e.className==='connection-device');assert.equal(rows.length,1);assert.ok(rows[0].textContent.includes('<Fixture>'))
  rows[0].onclick();const selectedRow=rows[0];h.advertise({deviceId:'fixture',name:'<Fixture>',services:[u1],rssi:-30})
  assert.equal(h.all().find(e=>e.className==='connection-device'),selectedRow);assert.equal(selectedRow.attributes['aria-pressed'],'true')
@@ -92,7 +94,7 @@ test('pause/resume retains selection and alias; hidden selection cannot be conne
  min.value='70';min.oninput();assert.equal(h.all().filter(e=>e.className==='connection-device').length,1)
  assert.equal(h.all().find(e=>e.tagName==='button'&&e.textContent==='连接并发现 TX/RX').disabled,false)
  min.value='';min.oninput();assert.equal(h.all().filter(e=>e.className==='connection-device').length,2)
- const q=h.field('名称 / 广播 UUID / 别名包含');q.value='no match';q.oninput()
+ const q=h.field('名称 / 广播 UUID / 别名 / 地址包含');q.value='no match';q.oninput()
  assert.equal(h.all().find(e=>e.tagName==='button'&&e.textContent==='连接并发现 TX/RX').disabled,true)
  q.value='alias';q.oninput();assert.equal(h.all().filter(e=>e.className==='connection-device').length,1)
  for(const value of ['-70','200']){
@@ -129,4 +131,48 @@ test('unfinished scan cleanup recovery explains retry instead of disconnecting a
  await retry.onclick();await flush();assert.equal(h.ble.canRetryRelease(),false)
  assert.equal(h.calls.some(c=>c.command==='ble_close'),false)
  h.close();await pending
+})
+test('clear list resets visible rows; double-click connects; FFE1/FFE2 default mapping auto-selects RX/TX',async()=>{
+ const ffe0='0000ffe0-0000-1000-8000-00805f9b34fb'
+ const ffe1='0000ffe1-0000-1000-8000-00805f9b34fb'
+ const ffe2='0000ffe2-0000-1000-8000-00805f9b34fb'
+ const ffeChars=[{id:0,service:ffe0,characteristic:ffe1,props:8|16},{id:1,service:ffe0,characteristic:ffe2,props:8|16}]
+ const h=setup({chars:ffeChars}),pending=h.source.requestPort('computer-ble');await flush()
+ const firstRow=h.all().find(e=>e.className==='connection-device')
+ assert.ok(firstRow.textContent.includes('刚刚'))
+ assert.ok(firstRow.textContent.includes('#1'))
+ await h.click('清空列表')
+ assert.equal(h.all().filter(e=>e.className==='connection-device').length,0)
+ h.advertise({deviceId:'fixture',name:'<Fixture>',services:[ffe0],rssi:-45})
+ const row=h.all().find(e=>e.className==='connection-device')
+ assert.ok(row)
+ await row.ondblclick();await flush()
+ assert.equal(h.field('TX · 电脑 → 设备').value,'1')
+ assert.equal(h.field('RX · 设备 → 电脑').value,'0')
+ h.close();await pending
+})
+test('saved device quick-connects on double-click and prompts inline when broadcast name changes',async()=>{
+ const pid='"addr-meter-1"'
+ const h=setup({persist:true,devices:[{deviceId:'m1',persistentId:pid,address:'AA:BB:CC:DD:EE:01',name:'Meter-Old',services:[u1],rssi:-50}]})
+ const first=h.source.requestPort('computer-ble');await flush()
+ const row=h.all().find(e=>e.className==='connection-device')
+ row.onclick();await h.click('连接并发现 TX/RX')
+ const alias=h.field('设备别名（保存到本机，下次可直接连接）');alias.value='产线1号表';alias.oninput()
+ await h.click('确认映射并开始透传')
+ const chosen=await first;assert.equal(chosen.port.getDisplayAlias(),'产线1号表')
+ await chosen.discard()
+ // Re-open picker when the same device broadcasts a new name -> inline confirmation required
+ const second=h.source.requestPort('computer-ble');await flush()
+ h.advertise({deviceId:'m1',persistentId:pid,address:'AA:BB:CC:DD:EE:01',name:'Meter-New',services:[u1],rssi:-48})
+ const updatedRow=h.all().find(e=>e.className==='connection-device')
+ assert.ok(updatedRow.textContent.includes('产线1号表'))
+ assert.ok(updatedRow.textContent.includes('原名：Meter-Old'))
+ await updatedRow.ondblclick();await flush()
+ // Inline alert should appear instead of connecting immediately
+ assert.equal(h.calls.filter(c=>c.command==='ble_open').length,1)
+ await h.click('继续连接并更新')
+ const reconnected=await second
+ assert.ok(reconnected&&reconnected.port)
+ assert.equal(h.ble.savedDevice(pid).broadcastName,'Meter-New')
+ await reconnected.discard();await h.ble.release()
 })
