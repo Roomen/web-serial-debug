@@ -187,12 +187,13 @@ jobs:
             console.log(`portable ZIP signed for version ${version[1]}`);
           }
           const out = mkdtempSync(join(tmpdir(), 'zip-check-'));
-          const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Expand-Archive -LiteralPath $env:Z -DestinationPath $env:D'], { env: { ...process.env, Z: zip, D: out } });
+          const unpacked = join(out, 'unpacked');
+          const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory($env:Z, $env:D)'], { env: { ...process.env, Z: zip, D: unpacked } });
           if (r.status !== 0) throw new Error('portable ZIP cannot be extracted');
-          const entries = readdirSync(out).sort();
+          const entries = readdirSync(unpacked).sort();
           const needed = ['Serial Debug.exe', 'README.txt', 'serial-debug-updater.exe'];
           for (const name of needed) if (!entries.includes(name)) throw new Error(`portable ZIP is missing ${name}`);
-          if (readFileSync(join(out, 'Serial Debug.exe')).length < 1024) throw new Error('portable ZIP program looks truncated');
+          if (readFileSync(join(unpacked, 'Serial Debug.exe')).length < 1024) throw new Error('portable ZIP program looks truncated');
           rmSync(out, { recursive: true, force: true });
           console.log('portable ZIP contents verified: ' + entries.join(', '));
           JS

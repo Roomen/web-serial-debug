@@ -160,7 +160,7 @@ test('Windows PowerShell produces an extractable ZIP with program, helper and RE
 	try {
 		const archive = packageWindows(options)
 		const extracted = join(options.desktop, 'extracted')
-		const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Expand-Archive -LiteralPath $env:SERIAL_ZIP_OUT -DestinationPath $env:SERIAL_ZIP_EXTRACT'], {
+		const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory($env:SERIAL_ZIP_OUT, $env:SERIAL_ZIP_EXTRACT)'], {
 			encoding: 'utf8', env: { ...process.env, SERIAL_ZIP_OUT: archive, SERIAL_ZIP_EXTRACT: extracted }
 		})
 		assert.equal(result.status, 0, result.stderr)
