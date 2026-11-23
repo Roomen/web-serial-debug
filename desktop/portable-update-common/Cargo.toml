@@ -22,6 +22,10 @@ windows-sys = { version = "0.61", features = [
 	"Win32_UI_WindowsAndMessaging",
 ] }
 
+# 与 src-tauri 同一口径：依赖不开调试信息(三个 crate 共用 desktop/src-tauri/target，产物越少越省)
+[profile.dev.package."*"]
+debug = 0
+
 [dev-dependencies]
 # 测试用临时密钥生成真实 minisign 签名(只验证成功/篡改/版本错配，不接触发布私钥)
 ring = "0.17"

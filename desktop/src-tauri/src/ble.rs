@@ -37,6 +37,8 @@ pub struct Profile {
 #[serde(rename_all = "camelCase")]
 pub struct DeviceView {
 	device_id: String,
+	persistent_id: String,
+	address: Option<String>,
 	name: String,
 	services: Vec<String>,
 	rssi: Option<i16>,
@@ -50,6 +52,7 @@ pub struct CharacteristicView {
 	props: u32,
 }
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Opened {
 	handle: u64,
 	characteristics: Vec<CharacteristicView>,
@@ -59,6 +62,7 @@ struct Device {
 	generation: u64,
 	id: DeviceId,
 	adapter: Adapter,
+	last_seen: Instant,
 }
 enum Request {
 	Write {
@@ -89,10 +93,46 @@ fn select(views: &[CharacteristicView], selector: &Selector, id: Option<usize>) 
 struct Task {
 	owner: String,
 	generation: u64,
+	device_id: Option<String>,
 	cancel: CancellationToken,
 	stop_scan: Option<CancellationToken>,
 	done: watch::Receiver<bool>,
 	writes: Option<mpsc::Sender<Request>>,
+}
+fn encode_persistent_id(id: &DeviceId) -> Result<String, String> {
+	serde_json::to_string(id).map_err(|_| "BLE 设备标识编码失败".to_string())
+}
+fn decode_persistent_id(raw: &str) -> Result<DeviceId, String> {
+	serde_json::from_str(raw).map_err(|_| "已保存的 BLE 设备标识无效，请重新扫描".to_string())
+}
+fn extract_mac_address(display: &str) -> Option<String> {
+	// Windows WinRT DeviceId ends with "-aa:bb:cc:dd:ee:ff" (or a standalone MAC); macOS uses a UUID.
+	let tail = display.rsplit('-').next().unwrap_or(display).trim();
+	let parts: Vec<&str> = tail.split(':').collect();
+	if parts.len() != 6 || !parts.iter().all(|p| p.len() == 2 && p.bytes().all(|b| b.is_ascii_hexdigit())) {
+		return None;
+	}
+	Some(tail.to_ascii_uppercase())
+}
+fn evict_oldest_device(registry: &mut Registry, owner: &str) -> bool {
+	let in_use: std::collections::HashSet<&str> = registry
+		.tasks
+		.values()
+		.filter(|t| t.owner == owner)
+		.filter_map(|t| t.device_id.as_deref())
+		.collect();
+	let oldest = registry
+		.devices
+		.iter()
+		.filter(|(id, d)| d.owner == owner && !in_use.contains(id.as_str()))
+		.min_by_key(|(_, d)| d.last_seen)
+		.map(|(id, _)| id.clone());
+	if let Some(id) = oldest {
+		registry.devices.remove(&id);
+		true
+	} else {
+		false
+	}
 }
 #[derive(Default)]
 struct Registry {
@@ -221,6 +261,7 @@ pub async fn ble_scan(webview: tauri::Webview, state: State<'_, BleState>, owner
 			Arc::new(Task {
 				owner: label.clone(),
 				generation: op.generation,
+				device_id: None,
 				cancel: cancel.clone(),
 				stop_scan: Some(stop.clone()),
 				done: done_rx,
@@ -274,20 +315,29 @@ pub async fn ble_scan(webview: tauri::Webview, state: State<'_, BleState>, owner
 							let mut r = state.registry.lock().unwrap();
 							current(&op, &cancel)?;
 							let key = adv.device.id();
-							let device_id = if let Some((id, _)) = r.devices.iter().find(|(_, d)| d.owner == label && d.generation == op.generation && d.id == key) {
+							let now = Instant::now();
+							let device_id = if let Some((id, d)) = r.devices.iter_mut().find(|(_, d)| d.owner == label && d.generation == op.generation && d.id == key) {
+								d.last_seen = now;
 								id.clone()
 							} else {
-								// Bound the whole owner registry, including pause/resume cycles.
+								// Bound the whole owner registry with LRU eviction, keeping active connections.
+								while r.devices.values().filter(|d| d.owner == label).count() >= 256 {
+									if !evict_oldest_device(&mut r, &label) {
+										break;
+									}
+								}
 								if r.devices.values().filter(|d| d.owner == label).count() >= 256 { continue; }
 								let id = format!("ble-{}", state.next.fetch_add(1, Ordering::Relaxed));
-								r.devices.insert(id.clone(), Device { owner: label.clone(), generation: op.generation, id: key, adapter: adapter.clone() });
+								r.devices.insert(id.clone(), Device { owner: label.clone(), generation: op.generation, id: key.clone(), adapter: adapter.clone(), last_seen: now });
 								id
 							};
+							let persistent_id = encode_persistent_id(&key).unwrap_or_default();
+							let address = extract_mac_address(&key.to_string());
 							let record = found.entry(device_id.clone()).or_insert_with(|| (String::new(), std::collections::BTreeSet::new(), None));
 							if let Some(name) = adv.adv_data.local_name.filter(|s| !s.is_empty()) { record.0 = name.chars().take(128).collect(); }
 							for uuid in adv.adv_data.services { if record.1.len() < 64 { record.1.insert(uuid); } }
 							record.2 = adv.rssi;
-							let view = DeviceView { device_id, name: record.0.clone(), services: record.1.iter().map(|s| s.to_string()).collect(), rssi: record.2 };
+							let view = DeviceView { device_id, persistent_id, address, name: record.0.clone(), services: record.1.iter().map(|s| s.to_string()).collect(), rssi: record.2 };
 							drop(r);
 							if on_device.send(serde_json::json!({ "type": "device", "device": view })).is_err() { break; }
 						}
@@ -344,24 +394,31 @@ pub async fn ble_open(
 	webview: tauri::Webview,
 	state: State<'_, BleState>,
 	device_id: String,
+	persistent_id: Option<String>,
 	owner_generation: u64,
 	on_data: Channel<InvokeResponseBody>,
 	on_event: Channel<serde_json::Value>,
 ) -> Result<Opened, String> {
 	let update = crate::updater::begin_device_operation(webview.app_handle())?;
 	let label = webview.label().to_string();
-	let (op, device_id, adapter, claim) = {
+	let (op, native_id, cached_adapter, claim) = {
 		let r = state.registry.lock().unwrap();
-		let d = r.devices.get(&device_id).ok_or("请重新扫描 BLE 设备")?;
-		if d.owner != label || d.generation != owner_generation {
-			return Err("BLE 设备已过期或不属于本窗口".into());
-		}
+		let (native_id, cached_adapter) = if let Some(d) = r.devices.get(&device_id) {
+			if d.owner != label || d.generation != owner_generation {
+				return Err("BLE 设备已过期或不属于本窗口".into());
+			}
+			(d.id.clone(), Some(d.adapter.clone()))
+		} else if let Some(raw) = persistent_id.as_deref().filter(|s| !s.is_empty()) {
+			(decode_persistent_id(raw)?, None)
+		} else {
+			return Err("请重新扫描 BLE 设备".into());
+		};
 		let op = state.owners.owner(&label).begin(Some(owner_generation))?;
 		let claim = state
 			.claims
 			.acquire("computer-ble", &label, op.generation)
 			.map_err(|_| "只支持一条 BLE 连接，请先关闭原连接")?;
-		(op, d.id.clone(), d.adapter.clone(), claim)
+		(op, native_id, cached_adapter, claim)
 	};
 	let id = state.next.fetch_add(1, Ordering::Relaxed);
 	let cancel = CancellationToken::new();
@@ -375,6 +432,7 @@ pub async fn ble_open(
 			Arc::new(Task {
 				owner: label,
 				generation: op.generation,
+				device_id: Some(device_id),
 				cancel: cancel.clone(),
 				stop_scan: None,
 				done: done_rx,
@@ -390,11 +448,37 @@ pub async fn ble_open(
 		let _claim = claim;
 		let mut reply = Some(reply);
 		let mut update = Some(update);
+		let adapter: Result<Adapter, String> = match cached_adapter {
+			Some(a) => Ok(a),
+			None => async {
+				let a = Adapter::default()
+					.await
+					.ok_or_else(|| "无法初始化电脑蓝牙，请检查系统蓝牙开关与权限".to_string())?;
+				current(&op, &cancel)?;
+				bounded(
+					async {
+						a.wait_available()
+							.await
+							.map_err(|_| "蓝牙尚未就绪，请检查系统蓝牙开关与访问权限".to_string())
+					},
+					&cancel,
+					BLE_CONNECT_TIMEOUT,
+					"等待蓝牙就绪超时：请打开系统蓝牙，并在系统设置中允许本应用访问蓝牙后重试",
+				)
+				.await?;
+				Ok(a)
+			}
+			.await,
+		};
 		// All Device/Service/Characteristic objects stay inside this actor. On Windows
 		// dropping ALL children is the OS disconnect operation; cache only DeviceId.
-		let device = adapter.open_device(&device_id).await;
+		let device = match &adapter {
+			Ok(a) => a.open_device(&native_id).await.map_err(|_| "BLE 设备已不可用，请确认设备已开机或在附近后重试".to_string()),
+			Err(e) => Err(e.clone()),
+		};
 		let result: Result<(), String> = async {
-			let device = device.as_ref().map_err(|_| "BLE 设备已不可用，请重新扫描")?;
+			let adapter = adapter.as_ref().map_err(|e| e.clone())?;
+			let device = device.as_ref().map_err(|e| e.clone())?;
 			current(&op, &cancel)?;
 			bounded(
 				async { adapter.connect_device(device).await.map_err(|_| "BLE 连接失败，请检查设备与系统权限".to_string()) },
@@ -587,7 +671,7 @@ pub async fn ble_open(
 		.await;
 		// All characteristic handles/notification guards above are dropped before close.
 		let _ = on_event.send(serde_json::json!({"type":"lost"}));
-		if let Ok(device) = &device {
+		if let (Ok(adapter), Ok(device)) = (&adapter, &device) {
 			// CoreBluetooth reports didDisconnect only for a live connection: calling
 			// disconnect_device after the link already dropped (or while a connect was just
 			// cancelled) waits forever. Only disconnect a connected device and bound each try;
@@ -806,6 +890,7 @@ mod tests {
 			Arc::new(Task {
 				owner: "fixture".into(),
 				generation: op.generation,
+				device_id: None,
 				cancel: cancel.clone(),
 				stop_scan: None,
 				done,
@@ -824,5 +909,16 @@ mod tests {
 		drop(op);
 		drop(claim);
 		assert!(again.wait_drained(Instant::now()));
+	}
+	#[test]
+	fn extract_mac_address_parses_windows_id_and_ignores_macos_uuid() {
+		assert_eq!(
+			extract_mac_address("BluetoothLE#BluetoothLE11:22:33:44:55:66-aa:bb:cc:dd:ee:ff").as_deref(),
+			Some("AA:BB:CC:DD:EE:FF")
+		);
+		assert_eq!(extract_mac_address("a1:b2:c3:d4:e5:f6").as_deref(), Some("A1:B2:C3:D4:E5:F6"));
+		assert_eq!(extract_mac_address("550e8400-e29b-41d4-a716-446655440000"), None);
+		assert_eq!(extract_mac_address("invalid"), None);
+		assert!(decode_persistent_id("not-json").is_err());
 	}
 }

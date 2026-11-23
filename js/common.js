@@ -445,13 +445,20 @@
 		})
 	}
 	// MCP 与 UI 共用：读某一路归一化后的参数(与打开时实际用的同一份配置)
+	function portTransport(port) {
+		try { return port && port.getInfo && port.getInfo().transport || 'serial' } catch (_) { return 'serial' }
+	}
 	function laneTransport(sid) {
-		const p = SerialHub.getPort(sid)
-		try { return p && p.getInfo && p.getInfo().transport || 'serial' } catch (_) { return 'serial' }
+		return portTransport(SerialHub.getPort(sid))
+	}
+	// 无线透传口(BLE)：设备侧断开后不自动重连，打开失败也不退避重试
+	function isBlePort(port) {
+		const t = portTransport(port)
+		return t === 'ble'
 	}
 	function laneParams(sid) {
 		const transport = laneTransport(sid)
-		if (transport !== 'serial') return { lane: sid, transport, options: null, summary: transport === 'bt-classic' ? 'SPP' : transport === 'ble-bridge' ? 'USB BLE 桥' : 'BLE', open: SerialHub.isOpen(sid), opening: SerialHub.isOpening(sid) }
+		if (transport !== 'serial') return { lane: sid, transport, options: null, summary: transport === 'bt-classic' ? 'SPP' : 'BLE', open: SerialHub.isOpen(sid), opening: SerialHub.isOpening(sid) }
 		const opts = sid === 'S' ? readSerialOptions(SERIAL_OPTIONS_KEY) : laneOptions[sid]
 		const norm = DualCfg.normalizeOptions(opts)
 		return { lane: sid, options: norm, summary: DualCfg.paramsSummary(norm), open: SerialHub.isOpen(sid), opening: SerialHub.isOpening(sid) }
@@ -1240,6 +1247,7 @@
 				findFrame: typeof skFindFrame === 'function' ? skFindFrame : null,
 				byteMap: typeof skByteMap === 'function' ? skByteMap : null,
 				buildDownFrame: typeof skBuildDownFrame === 'function' ? skBuildDownFrame : null,
+				updateFrameTime: typeof skUpdateFrameTime === 'function' ? skUpdateFrameTime : null,
 				presets: window.SK_DOWN_PRESETS || [],
 			})
 		}
@@ -1288,7 +1296,7 @@
 			}
 		}
 
-		// 暴露协议预设重建函数
+		// 暴露协议预设重建函数与下发帧时间更新函数
 		window.rebuildProtocolPresets = function () {
 			if (!window.SK_DOWN_PRESETS) return
 			var proto = window.getActiveProtocol()
@@ -1297,6 +1305,9 @@
 			window.SK_DOWN_PRESETS = presets
 			rebuildPresets(document.getElementById('serial-protocol-down-func').value)
 			window.SK_DOWN_PRESETS = oldSK
+		}
+		window.updateDownlinkFrameTime = function (bytes, now) {
+			return updateDownlinkFrameTime(bytes, now)
 		}
 	})()
 
@@ -2475,8 +2486,19 @@
 					if (!bytes) return
 				} else if (preset.param.type === 'hexbytes') {
 					const s = paramVal.value.trim()
-					if (!s) return
-					bytes = hexToBytes(s, preset.param.fillLen)
+					if (!s) {
+						if (preset.param.fillLen === 7 && preset.name && preset.name.includes('时间')) {
+							const d = new Date()
+							const pad = (n, l) => String(n).padStart(l, '0')
+							const digits = pad(d.getFullYear(), 4) + pad(d.getMonth() + 1, 2) + pad(d.getDate(), 2) +
+								pad(d.getHours(), 2) + pad(d.getMinutes(), 2) + pad(d.getSeconds(), 2)
+							bytes = hexToBytes(digits, 7)
+						} else {
+							return
+						}
+					} else {
+						bytes = hexToBytes(s, preset.param.fillLen)
+					}
 				} else if (preset.param.type === 'multi') {
 					bytes = multiParamToBytes(preset.param.fields)
 					if (!bytes || !bytes.length) return
@@ -3880,9 +3902,10 @@
 		// 释放旧口可能等了一秒多：这期间被取消就不再打开
 		if (cancelled()) return false
 		serialStatuChange('connecting', sid)
+		const blePort = isBlePort(port)
 		let openError = null
 		try {
-			//端口可能处于"已打开但本地状态丢失"的脏状态: releasePort 已尽量 close; 占用类错误退避重试
+			//端口可能处于"已打开但本地状态丢失"的脏状态: releasePort 已尽量 close; 占用类错误退避重试(BLE 不自动重试连接)
 			for (let attempt = 0; ; attempt++) {
 				if (attempt > 0 && cancelled()) break
 				try {
@@ -3891,7 +3914,7 @@
 					break
 				} catch (e) {
 					openError = e
-					const retryable = OPEN_RETRY_ERRORS.indexOf(e.name || '') !== -1
+					const retryable = !blePort && OPEN_RETRY_ERRORS.indexOf(e.name || '') !== -1
 					if (!retryable || attempt >= OPEN_RETRY_DELAYS.length) throw e
 					await new Promise(function (resolve) { setTimeout(resolve, OPEN_RETRY_DELAYS[attempt]) })
 					// 退避等待期间被取消：不再重试
@@ -3927,13 +3950,14 @@
 				addLogErr('权限错误：请检查浏览器串口权限设置')
 			} else if (errorType === 'InvalidStateError') {
 				addLogErr('串口状态错误：设备可能已被占用')
-			} else if (errorType === 'NetworkError') {
+			} else if (errorType === 'NetworkError' && !blePort) {
 				addLogErr(SERIAL_OPEN_FAIL_MSG)
 			}
 
 			//自动重连(刷新/重插)失败禁止弹窗只打日志; 手动打开失败给简短友好提示, 不甩原始错误
+			//BLE 例外：无线连接失败的原因具体(已取消、订阅期间断开等)，直接显示驱动给的文案
 			if (reason === 'user') {
-				showMsg(SERIAL_OPEN_FAIL_MSG)
+				showMsg(blePort && openError.message ? openError.message : SERIAL_OPEN_FAIL_MSG)
 			}
 			return false
 		}
@@ -4623,7 +4647,8 @@
 		const trimmed = String(name || '').trim().slice(0, 32)
 		if (port.setDisplayAlias) {
 			port.setDisplayAlias(trimmed)
-			showToast('别名仅本页面当前无线会话有效', 2000)
+			const saved = !!(port.isPersistentAlias && port.isPersistentAlias())
+			showToast(saved ? (trimmed ? '已保存设备别名' : '已清除设备别名') : '别名仅本页面当前无线会话有效', 2000)
 			return true
 		}
 		const ident = await resolvePortIdentity(port)
@@ -4758,6 +4783,9 @@
 		const sid = SerialHub.findSessionByPort(port)
 		if (!sid) return
 		addLogErr('设备断开连接 (' + getPortDisplayName(port) + ')', sid)
+		if (isBlePort(port)) {
+			SerialHub.setManualClose(sid, true)
+		}
 		await closeSerial(sid)
 		if (!SerialHub.isManualClose(sid)) {
 			addLogErr(sidName(sid) + ' 设备已断开，重新插入后将自动重连', sid)
@@ -4818,6 +4846,41 @@
 		}
 	}
 
+	// 下发报文若包含时间字段，在下发时自动更新为最新时间并同步重算校验
+	function updateDownlinkFrameTime(bytes, now, encKey) {
+		if (!bytes || bytes.length < 5) return false
+		const key = encKey || (typeof resolveToolEncKey === 'function' ? resolveToolEncKey() : null)
+		const active = window.getActiveProtocol && window.getActiveProtocol()
+		if (active && typeof active.updateFrameTime === 'function') {
+			try {
+				if (active.updateFrameTime(bytes, now, key)) return true
+			} catch (_) {}
+		}
+		if (window._protocols) {
+			for (const id in window._protocols) {
+				const p = window._protocols[id]
+				if (p && p !== active && typeof p.updateFrameTime === 'function') {
+					try {
+						if (p.updateFrameTime(bytes, now, key)) return true
+					} catch (_) {}
+				}
+			}
+		}
+		return false
+	}
+
+	function syncDownlinkPreviewIfMatch(oldHexCompact, newU8) {
+		const previewEl = document.getElementById('serial-protocol-down-preview')
+		if (!previewEl || !previewEl.value) return
+		if (previewEl.value.replace(/\s+/g, '').toUpperCase() === oldHexCompact.toUpperCase()) {
+			let hexArr = []
+			for (let i = 0; i < newU8.length; i++) {
+				hexArr.push(('0' + newU8[i].toString(16).toUpperCase()).slice(-2))
+			}
+			previewEl.value = hexArr.join(' ')
+		}
+	}
+
 	//发送HEX到串口（使用主发口）
 	async function sendHex(hex, sendName) {
 		const value = hex.replace(/\s+/g, '')
@@ -4826,7 +4889,11 @@
 			for (let i = 0; i < value.length; i = i + 2) {
 				data.push(parseInt(value.substring(i, i + 2), 16))
 			}
-			await writeData(Uint8Array.from(data), null, sendName || lookupQuickSendName(hex), { composed: true })
+			const u8 = Uint8Array.from(data)
+			if (updateDownlinkFrameTime(u8)) {
+				syncDownlinkPreviewIfMatch(value, u8)
+			}
+			await writeData(u8, null, sendName || lookupQuickSendName(hex), { composed: true })
 		} else {
 			addLogErr('HEX格式错误:' + hex)
 		}
@@ -5020,6 +5087,9 @@
 	function rxWatchSuppressed() {
 		return !!(window.serialApi && window.serialApi.suppressParse)
 	}
+	function isBleLane(sid) {
+		return isBlePort(SerialHub.getPort(sid))
+	}
 	function resetRxWatch(sid) {
 		const w = rxWatch(sid)
 		w.lastRxAt = 0
@@ -5040,6 +5110,24 @@
 		if (!SerialHub.getPort(sid)) return
 		if (SerialHub.isManualClose(sid)) return
 		if (SerialHub.isOpening(sid)) return
+		// BLE 设备主动断开后不自动重连：标记手动关闭并释放底层资源，保留已选设备供手动重连
+		if (isBleLane(sid)) {
+			const w = rxWatch(sid)
+			if (w.deferTimer) {
+				clearInterval(w.deferTimer)
+				w.deferTimer = null
+			}
+			reopenAttemptBySid[sid] = 0
+			SerialHub.setManualClose(sid, true)
+			SerialHub.setOpening(sid, true)
+			try {
+				addLogErr('BLE 设备已断开连接(' + sid + ')', sid)
+				await closeSerial(sid)
+			} finally {
+				SerialHub.setOpening(sid, false)
+			}
+			return
+		}
 		if (rxWatchSuppressed()) {
 			scheduleDeferredRecover(sid, reasonMsg)
 			return
@@ -5202,7 +5290,7 @@
 				backoffLevel = Math.min(backoffLevel + 1, READ_BACKOFF_DELAYS.length - 1)
 			}
 			if (!port.readable) {
-				addLogErr('串口读取流不可用(' + sid + ')，将尝试重新打开', sid)
+				if (!isBleLane(sid)) addLogErr('串口读取流不可用(' + sid + ')，将尝试重新打开', sid)
 				break
 			}
 			// Chromium 异步重建接收流，不能反复获取同一已关闭流的 reader。
@@ -5236,6 +5324,7 @@
 					const glitchAt = lineErrAt
 					lineErrAt = 0
 					if (done) {
+						if (isBleLane(sid) && !port.readable) break
 						noteFailure(null)
 						break
 					}
@@ -5255,6 +5344,7 @@
 				}
 			} catch (error) {
 				if (!alive()) return
+				if (isBleLane(sid) && !port.readable) break
 				noteFailure(error)
 			} finally {
 				if (SerialHub.getReader(sid) === r) SerialHub.setReader(sid, null)
@@ -7496,7 +7586,11 @@
 			pid: fp.pid || null,
 			sn: fp.sn || null,
 			slot: fp.siblingCount > 1 && fp.slot != null && fp.slot >= 0 ? fp.slot : null,
-			persistent: ident.keys.length > 0,
+			transport: info.transport || '',
+			bleSaved: !!info.bleSaved,
+			blePersistentId: info.blePersistentId || '',
+			bleAddress: info.bleAddress || '',
+			persistent: ident.keys.length > 0 || !!(port.isPersistentAlias && port.isPersistentAlias()),
 			excluded: isExcludedSerialPort(port),
 		}
 	}

@@ -233,6 +233,28 @@
 		return W.cjt188BuildDownFrame(Object.assign({}, opt, { extendedRead: true }))
 	}
 
+	// 下发帧时间更新：若是包含时间的 188 下行帧 (写标准时间)，将时间更新为当前最新时间并重算校验和 CS
+	W.cjt188UpdateFrameTime = function (bytes, now) {
+		if (!bytes || bytes.length < 23) return false
+		let p = 0
+		while (p < bytes.length && bytes[p] === 0xFE) p++
+		if (p >= bytes.length || bytes[p] !== 0x68) return false
+		if (bytes.length !== p + 23) return false
+		if ((bytes[p + 9] & 0x3f) !== 0x04) return false
+		if (bytes[p + 10] !== 0x0A) return false
+		const id0 = bytes[p + 11], id1 = bytes[p + 12]
+		if (!isTimeIdent(id0, id1)) return false
+		if (bytes[p + 22] !== END_BYTE) return false
+
+		const timeBytes = timeToBcdLe(now || new Date())
+		for (let i = 0; i < 7; i++) {
+			bytes[p + 14 + i] = timeBytes[i]
+		}
+		const cs = checksum(bytes.subarray(p), 21)
+		bytes[p + 21] = cs
+		return true
+	}
+
 	// 901E: TLV; 累计量为小端 uint32 m³ + uint16 L + 单位码。
 	function decodeExtended(content, errors) {
 		const names = ['软件版本', '正向累计流量', '反向累计流量', '瞬时流量', '水温', '环境温度', '压力', '电池电压', '状态', '净累计流量', '净流量方向']
@@ -512,6 +534,7 @@
 			findFrame: W.cjt188FindFrame,
 			byteMap: W.cjt188ByteMap,
 			buildDownFrame: W.cjt188BuildDownFrame,
+			updateFrameTime: W.cjt188UpdateFrameTime,
 			presets: [],
 		})
 		W.registerProtocol('sk-ultrasonic', {
@@ -522,6 +545,7 @@
 			findFrame: W.cjt188FindFrame,
 			byteMap: W.cjt188ByteMap,
 			buildDownFrame: W.skUltrasonicBuildDownFrame,
+			updateFrameTime: W.cjt188UpdateFrameTime,
 			presets: [],
 		})
 		const sel = document.getElementById('serial-protocol-select')

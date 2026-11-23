@@ -140,7 +140,7 @@
 	function platformTimeBytes(src) {
 		const pad = (n, l) => String(n).padStart(l, '0')
 		let digits
-		if (src instanceof Date && !isNaN(src.getTime())) {
+		if ((src instanceof Date || (src && typeof src.getTime === 'function')) && !isNaN(src.getTime())) {
 			digits = pad(src.getFullYear(), 4) + pad(src.getMonth() + 1, 2) + pad(src.getDate(), 2) +
 				pad(src.getHours(), 2) + pad(src.getMinutes(), 2) + pad(src.getSeconds(), 2)
 		} else if (typeof src === 'string') {
@@ -2635,6 +2635,111 @@
 		u16leWrite(head, crc)
 		head.push(0x16)
 		return new Uint8Array(head)
+	}
+
+	function updateSekTagItemsTime(tag, payload, timeBytes) {
+		if (tag !== 3 || !payload || !payload.length) return false
+		const defs = (W.SK_TAGS && W.SK_TAGS[3]) || []
+		const idMap = {}
+		for (let i = 0; i < defs.length; i++) idMap[defs[i].id] = defs[i]
+
+		let j = 0
+		let modified = false
+		while (j < payload.length) {
+			const id = payload[j++]
+			if (id === 20 && j + 7 <= payload.length) {
+				for (let k = 0; k < 7; k++) {
+					payload[j + k] = timeBytes[k]
+				}
+				j += 7
+				modified = true
+			} else {
+				const def = idMap[id]
+				const len = def ? typeLen(def.type) : null
+				if (len != null && len >= 0 && j + len <= payload.length) {
+					j += len
+				} else {
+					break
+				}
+			}
+		}
+		return modified
+	}
+
+	// 下发帧时间更新：若是包含时间的 SEK 下行帧，将时间更新为当前最新时间并重算 CRC
+	W.skUpdateFrameTime = function (bytes, now, encKey) {
+		if (!bytes || bytes.length < 19) return false
+		if (bytes[0] !== 0xA9 || bytes[1] !== 0x9A) return false
+		const declaredLen = bytes[14] | (bytes[15] << 8)
+		if (bytes.length !== 16 + declaredLen + 3) return false
+		if (bytes[bytes.length - 1] !== 0x16) return false
+		const fc = bytes[12]
+		// 上行帧功能码通常最高位为 1 (如 0x81/0x82/0x91) 或为 0x02 主动上报
+		if ((fc & 0x80) !== 0 || fc === 0x02) return false
+
+		const timeBytes = platformTimeBytes(now || new Date())
+		for (let i = 0; i < 7; i++) {
+			bytes[5 + i] = timeBytes[i]
+		}
+
+		// 若数据域包含 Tag3-ID20 (水表实时时间)，同步更新数据域载荷里的 7 字节时间
+		const ctrl = bytes[13]
+		const isEncrypted = (ctrl & 0x01) === 1
+		if (isEncrypted && declaredLen >= 16) {
+			const key = encKey || (typeof resolveToolEncKey === 'function' ? resolveToolEncKey() : null)
+			if (key && typeof W.skAesEcbDecrypt === 'function' && typeof W.skAesEcbEncrypt === 'function') {
+				try {
+					const cipher = bytes.subarray(16, 16 + declaredLen)
+					const plain = W.skAesEcbDecrypt(cipher, key)
+					if (plain && plain.length >= 2) {
+						let updatedTlv = false
+						const plainTlvLen = plain[0] | (plain[1] << 8)
+						const tlvEnd = Math.min(2 + plainTlvLen, plain.length)
+						let p = 2
+						while (p + 3 <= tlvEnd) {
+							const tag = plain[p]
+							const tagLen = plain[p + 1] | (plain[p + 2] << 8)
+							p += 3
+							const tagEnd = Math.min(p + tagLen, tlvEnd)
+							if (tag === 3) {
+								const payload = plain.subarray(p, tagEnd)
+								if (updateSekTagItemsTime(3, payload, timeBytes)) {
+									updatedTlv = true
+								}
+							}
+							p = tagEnd
+						}
+						if (updatedTlv) {
+							const validPlain = plain.subarray(0, 2 + plainTlvLen)
+							const newCipher = W.skAesEcbEncrypt(validPlain, key)
+							if (newCipher.length === declaredLen) {
+								bytes.set(newCipher, 16)
+							}
+						}
+					}
+				} catch (_) {}
+			}
+		} else if (!isEncrypted && declaredLen >= 2) {
+			const plainTlvLen = bytes[16] | (bytes[17] << 8)
+			const tlvEnd = Math.min(18 + plainTlvLen, 16 + declaredLen)
+			let p = 18
+			while (p + 3 <= tlvEnd) {
+				const tag = bytes[p]
+				const tagLen = bytes[p + 1] | (bytes[p + 2] << 8)
+				p += 3
+				const tagEnd = Math.min(p + tagLen, tlvEnd)
+				if (tag === 3) {
+					const payload = bytes.subarray(p, tagEnd)
+					updateSekTagItemsTime(3, payload, timeBytes)
+				}
+				p = tagEnd
+			}
+		}
+
+		const crc = W.skCrc16(bytes.subarray(0, 16 + declaredLen))
+		bytes[16 + declaredLen] = crc & 0xff
+		bytes[17 + declaredLen] = (crc >> 8) & 0xff
+		return true
 	}
 
 	// 绑定历史序列图表: 折线 + 悬停显示时间/流量

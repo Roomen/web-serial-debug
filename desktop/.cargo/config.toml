@@ -1,0 +1,6 @@
+# desktop 下三个 Rust crate(src-tauri、portable-update-common、portable-updater)共用一份编译产物：
+# 分别在各自目录跑 cargo test 时，cargo 会向上找到这份配置，产物都写进 src-tauri/target，不再各建一个 target/。
+# 相对路径以 .cargo 的父目录(desktop/)为基准。
+# 副作用：portable-updater 的 CARGO_TARGET_DIR 由 scripts/tauri.mjs 显式传入时优先，两边指同一目录。
+[build]
+target-dir = "src-tauri/target"

@@ -320,7 +320,7 @@
 				state = 'closed'
 			},
 		}
-		// 可选：取消进行中的 open(如 BLE 掉线后的自动重连卡在系统连接上)。open 照常以失败收尾，端口回到关闭
+		// 可选：取消进行中的 open(如 BLE 手动重连卡在系统连接上)。open 照常以失败收尾，端口回到关闭
 		if (typeof driver.abortOpen === 'function') {
 			port.abortOpen = function () {
 				if (state !== 'opening') return Promise.resolve()
