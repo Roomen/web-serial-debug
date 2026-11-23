@@ -88,9 +88,12 @@
 					ownedBle = true; content.replaceChildren()
 					const staleMs = (root.NativeBle && root.NativeBle.STALE_MS) || 15000
 					const filters = el('div', null, content, 'connection-filters')
-					const query = input(filters, '名称 / 广播 UUID / 别名 / 地址包含')
-					query.placeholder = '输入名称、别名、地址或 UUID…'
-					const minimum = input(filters, '最低 RSSI（输入正数，如 70 表示 ≥ -70 dBm；可选）'); minimum.type = 'number'; minimum.min = '1'; minimum.max = '127'; minimum.step = '1'; minimum.placeholder = '例如 70'
+					const query = input(filters, '筛选')
+					query.placeholder = '名称、别名、地址或 UUID…'
+					const minimum = input(filters, '最低信号 (-dBm)')
+					minimum.type = 'number'; minimum.min = '1'; minimum.max = '127'; minimum.step = '1'
+					minimum.placeholder = '如 70（≥ -70）'
+					minimum.title = '输入 1 到 127 的正数，例如 70 表示仅显示信号 ≥ -70 dBm 的设备（可选）'
 					const rssiThreshold = () => {
 						if (minimum.value === '') return ''
 						const magnitude = Number(minimum.value)
