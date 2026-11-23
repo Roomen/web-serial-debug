@@ -218,3 +218,105 @@ test('abort before the native handle is known closes it as soon as the opening e
  assert.ok(h.calls.some(c=>c.command==='ble_close'&&c.p.handle===77))
  assert.equal(h.service.isBusyForUpdate(),false);await h.service.release()
 })
+test('stale timeout filters silent devices and LRU eviction drops oldest inactive device at 256 limit',async()=>{
+ const now=100000
+ const list=[
+  {deviceId:'fresh',name:'M1',services:[],rssi:-50,seen:now-5000},
+  {deviceId:'stale',name:'M2',services:[],rssi:-40,seen:now-15001},
+ ]
+ assert.deepEqual(B.visibleDevices(list,'','','signal',{now,staleMs:B.STALE_MS}).map(d=>d.deviceId),['fresh'])
+ const h=setup(),job=h.service.scan();await flush()
+ for(let i=0;i<260;i++)h.advertise({...device,deviceId:'d-'+i,name:'Meter'})
+ const ids=h.service.devices().map(d=>d.deviceId)
+ assert.equal(ids.length,256)
+ assert.ok(ids.includes('d-259'))
+ h.service.clearDevices()
+ assert.equal(h.service.devices().length,0)
+ await h.service.stopScan();await job;await h.service.release()
+})
+test('defaultMapping selects FFE1=RX and FFE2=TX by default, respects properties and rejects ambiguous multi-service',()=>{
+ const svc='0000ffe0-0000-1000-8000-00805f9b34fb'
+ const ffe1='0000ffe1-0000-1000-8000-00805f9b34fb'
+ const ffe2='0000ffe2-0000-1000-8000-00805f9b34fb'
+ // Both support write+notify -> default FFE1=RX, FFE2=TX
+ assert.deepEqual(B.defaultMapping([
+  {id:0,service:svc,characteristic:ffe1,props:8|16},
+  {id:1,service:svc,characteristic:ffe2,props:8|16},
+ ]),{txId:1,rxId:0,response:true})
+ // Only writeWithoutResponse on FFE2 -> response=false
+ assert.deepEqual(B.defaultMapping([
+  {id:0,service:svc,characteristic:ffe1,props:16},
+  {id:1,service:svc,characteristic:ffe2,props:4},
+ ]),{txId:1,rxId:0,response:false})
+ // Strict reverse properties -> FFE1=TX, FFE2=RX
+ assert.deepEqual(B.defaultMapping([
+  {id:0,service:svc,characteristic:ffe1,props:8},
+  {id:1,service:svc,characteristic:ffe2,props:16},
+ ]),{txId:0,rxId:1,response:true})
+ // Ambiguous across two services -> null
+ assert.equal(B.defaultMapping([
+  {id:0,service:svc,characteristic:ffe1,props:16},
+  {id:1,service:svc,characteristic:ffe2,props:8},
+  {id:2,service:s1,characteristic:ffe1,props:16},
+  {id:3,service:s1,characteristic:ffe2,props:8},
+ ]),null)
+})
+test('saved BLE devices persist across instances, expose direct ports, avoid GAP name false-positives and merge multi-window writes',async()=>{
+ const store=new Map()
+ const storage={getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v)}
+ const pid='"550e8400-e29b-41d4-a716-446655440000"'
+ const pid2='"550e8400-e29b-41d4-a716-446655440001"'
+ const dev={deviceId:'ble-1',persistentId:pid,address:'AA:BB:CC:DD:EE:FF',name:'Meter-A',services:[s1]}
+ const dev2={deviceId:'ble-2',persistentId:pid2,address:'AA:BB:CC:DD:EE:02',name:'Meter-2',services:[s1]}
+ const profile=B.mapping(chars,0,1,true)
+ // Two windows share localStorage: saving in window B must not clobber window A's newly saved device
+ const mkSvc=(opts={})=>{
+  let scanCh,scanDone
+  const s=B.create({
+   createStreamPort:A.createStreamPort,Channel:class{},toBytes:b=>Uint8Array.from(b),blocked:()=>false,storage,
+   confirmNameChange:opts.confirmNameChange,
+   invoke:async(cmd,p)=>{
+    if(cmd==='ble_release_owned')return 1
+    if(cmd==='ble_scan'){scanCh=p.onDevice;scanCh.onmessage({type:'started'});await new Promise(r=>{scanDone=r})}
+    if(cmd==='ble_scan_stop'){if(scanDone)scanDone()}
+    if(cmd==='ble_open'){if(opts.onOpen)opts.onOpen(p);return{handle:9,characteristics:chars}}
+   },
+  })
+  return {s,adv:d=>scanCh.onmessage({type:'device',device:d})}
+ }
+ const winA=mkSvc(),winB=mkSvc()
+ winA.s.saveDevice(dev,{alias:'1号表',profile})
+ winB.s.saveDevice(dev2,{alias:'2号表',profile})
+ assert.equal(winA.s.savedDevices().length,2)
+ assert.equal(winB.s.savedDevices().length,2)
+ // Third session (simulated reload): direct connect without scan skips broadcast name comparison
+ let confirmed=[],allowChange=false,openedPayloads=[]
+ const winC=mkSvc({confirmNameChange:async info=>{confirmed.push(info);return allowChange},onOpen:p=>openedPayloads.push(p)})
+ const list=winC.s.ports()
+ assert.equal(list.length,2)
+ const p1=list.find(p=>p.getInfo().blePersistentId===pid)
+ assert.equal(p1.getDisplayAlias(),'1号表')
+ assert.equal(p1.isPersistentAlias(),true)
+ await p1.open({})
+ assert.equal(confirmed.length,0)
+ assert.equal(openedPayloads[0].persistentId,pid)
+ await p1.close()
+ // Once an actual advertisement with a different name is observed, direct connect prompts and updates only on confirm
+ const scanJob=winC.s.scan();await flush()
+ winC.adv({...dev,name:'Meter-B'})
+ await winC.s.stopScan();await scanJob
+ await assert.rejects(p1.open({}),/广播名已变化/)
+ assert.equal(confirmed.length,1);assert.equal(confirmed[0].savedName,'Meter-A');assert.equal(confirmed[0].currentName,'Meter-B')
+ assert.equal(winC.s.savedDevice(pid).broadcastName,'Meter-A')
+ allowChange=true
+ await p1.open({})
+ assert.equal(winC.s.savedDevice(pid).broadcastName,'Meter-B')
+ await p1.close()
+ assert.equal(winC.s.removeSavedDevice(pid),true)
+ assert.equal(winC.s.removeSavedDevice(pid2),true)
+ assert.equal(winC.s.ports().length,0)
+ // Cap saved devices at 128 entries
+ for(let i=0;i<135;i++)winC.s.saveDevice({deviceId:'s-'+i,persistentId:'"pid-'+i+'"',name:'M-'+i},{alias:'A'+i,profile})
+ assert.equal(winC.s.savedDevices().length,128)
+ await winA.s.release();await winB.s.release();await winC.s.release()
+})

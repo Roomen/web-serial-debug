@@ -47,6 +47,16 @@
 	if (root.NativeBle && ['windows', 'macos'].indexOf(P.os) !== -1) {
 		const computerBle = root.NativeBle.create({ invoke: T.core.invoke, Channel: T.core.Channel,
 			createStreamPort: root.SerialAdapter.createStreamPort, toBytes: toBytes,
+			storage: root.localStorage,
+			confirmNameChange: async info => {
+				if (!root.AppDialog || typeof root.AppDialog.confirm !== 'function') return true
+				const label = info.alias ? `「${info.alias}」` : '该设备'
+				const addr = info.address ? `\n设备地址：${info.address}` : ''
+				return root.AppDialog.confirm(
+					`检测到已保存的 BLE 设备${label}广播名发生变化：\n原广播名：${info.savedName}\n当前广播名：${info.currentName}${addr}\n\n是否继续连接并更新已保存的广播名？`,
+					{ title: 'BLE 广播名已变化', okText: '继续连接', cancelText: '取消' }
+				)
+			},
 			boundPorts: () => root.SerialHub ? ['S', 'A', 'B'].map(sid => root.SerialHub.getPort(sid)) : [],
 			blocked: () => updatePreparing || !!(root.__auth && !root.__auth.authed()),
 		})

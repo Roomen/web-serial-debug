@@ -4647,7 +4647,8 @@
 		const trimmed = String(name || '').trim().slice(0, 32)
 		if (port.setDisplayAlias) {
 			port.setDisplayAlias(trimmed)
-			showToast('别名仅本页面当前无线会话有效', 2000)
+			const saved = !!(port.isPersistentAlias && port.isPersistentAlias())
+			showToast(saved ? (trimmed ? '已保存设备别名' : '已清除设备别名') : '别名仅本页面当前无线会话有效', 2000)
 			return true
 		}
 		const ident = await resolvePortIdentity(port)
@@ -7585,7 +7586,11 @@
 			pid: fp.pid || null,
 			sn: fp.sn || null,
 			slot: fp.siblingCount > 1 && fp.slot != null && fp.slot >= 0 ? fp.slot : null,
-			persistent: ident.keys.length > 0,
+			transport: info.transport || '',
+			bleSaved: !!info.bleSaved,
+			blePersistentId: info.blePersistentId || '',
+			bleAddress: info.bleAddress || '',
+			persistent: ident.keys.length > 0 || !!(port.isPersistentAlias && port.isPersistentAlias()),
 			excluded: isExcludedSerialPort(port),
 		}
 	}

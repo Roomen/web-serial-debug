@@ -89,6 +89,12 @@
 	function portRowSub(m) {
 		m = m || {}
 		const out = []
+		if (m.transport === 'ble') {
+			if (m.bleSaved) out.push('已保存 BLE')
+			if (m.alias && m.defaultName) out.push(m.defaultName.replace(/\s*·\s*BLE$/, ''))
+			if (m.bleAddress) out.push(m.bleAddress)
+			return out.join(' · ')
+		}
 		if (m.portName && portRowTitle(m) !== m.portName) out.push(m.portName)
 		if (m.vid && m.pid) out.push(String(m.vid).toUpperCase() + ':' + String(m.pid).toUpperCase())
 		if (m.sn) out.push('SN ' + m.sn)
@@ -498,7 +504,8 @@
 		const main = mk('div', 'mdn-port-main')
 		main.append(mk('div', 'mdn-port-name', r.title))
 		if (r.sub) main.append(mk('div', 'mdn-port-sub', r.sub))
-		row.append(icon(r.source ? 'bi-bluetooth mdn-port-icon' : (r.absent ? 'bi-usb-plug mdn-port-icon' : 'bi-usb-symbol mdn-port-icon')), main)
+		const isWireless = r.source || r.meta.transport === 'ble' || r.meta.transport === 'bt-classic'
+		row.append(icon(isWireless ? 'bi-bluetooth mdn-port-icon' : (r.absent ? 'bi-usb-plug mdn-port-icon' : 'bi-usb-symbol mdn-port-icon')), main)
 		if (r.state.tag) row.append(mk('span', 'mdn-port-tag', r.state.tag))
 		const acts = mk('span', 'mdn-port-acts')
 		if (r.source) {
@@ -534,6 +541,13 @@
 				fg.setAttribute('aria-label', '取消选择 ' + r.title)
 				fg.append(icon('bi-x-circle'))
 				acts.append(fg)
+			} else if (r.meta.bleSaved && r.meta.blePersistentId && r.state.kind !== 'open' && r.state.kind !== 'opening') {
+				const rm = btn('mdn-port-act', '', '从本机移除已保存的 BLE 设备')
+				rm.dataset.act = 'remove-saved'
+				rm.tabIndex = -1
+				rm.setAttribute('aria-label', '移除已保存设备 ' + r.title)
+				rm.append(icon('bi-trash'))
+				acts.append(rm)
 			}
 		}
 		row.append(acts)
@@ -586,6 +600,10 @@
 			if (act.dataset.act === 'rename') startPortRename(st, r)
 			else if (act.dataset.act === 'clear') enqueuePort(st, function () { return lanes.setAlias(r.port, '') })
 			else if (act.dataset.act === 'forget') enqueuePort(st, function () { return lanes.forget(sid) })
+			else if (act.dataset.act === 'remove-saved') enqueuePort(st, function () {
+				const ble = window.AppPlatform && window.AppPlatform.service('computer-ble')
+				if (ble && ble.removeSavedDevice && r.meta.blePersistentId) ble.removeSavedDevice(r.meta.blePersistentId)
+			})
 			return
 		}
 		st.focusPort = r.port
