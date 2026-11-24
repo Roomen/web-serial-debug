@@ -642,6 +642,8 @@ window.SK_DOWN_PRESETS = [
 				tlv: [{ tag: 10, items: [{ id: 21, value: [] }] }] },
 			{ name: '查询LoraWan参数', func: '0x03', desc: 'Tag10-ID14 文档标注"响应返回待定", 实际应答格式未定',
 				tlv: [{ tag: 10, items: [{ id: 14 }] }] },
+			{ name: '查询eSIM信息', func: '0x03', desc: 'Tag10-ID66 查询EID/Profile列表/操作状态 响应Tag66',
+				tlv: [{ tag: 10, items: [{ id: 66 }] }] },
 		]
 	},
 ]

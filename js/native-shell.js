@@ -80,6 +80,20 @@
 		listen: function (name, cb) { return T.event.listen(name, function (e) { cb(e.payload || {}) }) },
 	})
 
+	// eSIM mode=1 SM-DP+ ES9+ HTTPS 代理：桌面端绕过浏览器 CORS 限制，保持 TLS 校验并逐字节透传
+	P.provide('esim-http', {
+		post: async function (req) {
+			const bytes = req && req.bodyBytes ? Array.from(toBytes(req.bodyBytes)) : []
+			const resp = await T.core.invoke('esim_smdp_post', {
+				req: { url: String(req && req.url || ''), bodyBytes: bytes },
+			})
+			return {
+				status: Number(resp && resp.status) || 0,
+				bodyBytes: toBytes(resp && resp.bodyBytes),
+			}
+		},
+	})
+
 	// ---------- 提示条 ----------
 	let timer = 0
 	function notify(text, isError, action) {

@@ -507,6 +507,94 @@
 		return parts.join(' ')
 	}
 
+	const ESIM_CLASS_MAP = { 0: '运营', 1: '预置/引导', 2: '测试', 3: '保留' }
+	const ESIM_MODE_MAP = { 0: '模组内联网', 1: '近端外部代理', 2: 'MCU自建HTTPS' }
+	const ESIM_OP_MAP = { 1: '启用(切卡)', 2: '禁用', 3: '删除' }
+	const ESIM_STATE_MAP = { 0: '空闲', 1: '执行中', 2: '成功', 3: '失败', 4: '部分成功' }
+	const ESIM_LAST_OP_MAP = { 0: '无', 1: '下载(内网)', 2: '下载(外部代理)', 3: '下载(MCU-HTTPS)', 4: '启用Profile', 5: '禁用Profile', 6: '删除Profile' }
+	const ESIM_FAIL_STAGE_MAP = { 0: '无错误', 1: '参数错', 2: '前置条件不满足', 3: 'AT错误', 4: '超时', 5: 'HTTP/网络错误', 6: '模组下载错误码', 7: 'ZMODEM/近端中断' }
+
+	function renderEsimEid(raw) {
+		if (!raw || raw.length < 16) return hexbytes(raw || []) + ' (不完整)'
+		const s = bcdDecodeNoReverse(raw.subarray(0, 16))
+		return /^0+$/.test(s) ? '(未就绪/空)' : s
+	}
+
+	function renderEsimProfiles(raw) {
+		if (!raw || raw.length < 1) return '(空)'
+		const n = raw[0] & 0xff
+		if (n === 0) return '0条'
+		const parts = ['共' + n + '条']
+		for (let i = 0; i < n; i++) {
+			const off = 1 + i * 22
+			if (off + 22 > raw.length) {
+				parts.push('#' + (i + 1) + '(截断)')
+				break
+			}
+			const iccid = ascii(raw.subarray(off, off + 20)) || '(空ICCID)'
+			const flags = u16leRead(raw, off + 20)
+			const tags = [(flags & 0x01) ? '启用' : '禁用', ESIM_CLASS_MAP[(flags >> 1) & 0x03] || '保留']
+			if (flags & 0x08) tags.push('禁禁PPR')
+			if (flags & 0x10) tags.push('禁删PPR')
+			if (flags & 0x20) tags.push('回退卡')
+			parts.push('#' + (i + 1) + ' ' + iccid + ' [' + tags.join(',') + ']')
+		}
+		return parts.join('; ')
+	}
+
+	function renderEsimDownload(raw) {
+		if (!raw || raw.length < 2) return '(不完整)'
+		const mode = raw[0] & 0xff
+		const acLen = raw[1] & 0xff
+		const ccOff = 2 + acLen
+		const ccLen = ccOff < raw.length ? (raw[ccOff] & 0xff) : 0
+		const modeName = ESIM_MODE_MAP[mode] != null ? ESIM_MODE_MAP[mode] : ('未知模式' + mode)
+		const ccText = ccOff >= raw.length ? '(不完整)' : (ccLen > 0 ? '[已脱敏,' + ccLen + 'B]' : '无')
+		return '模式:' + modeName + '(' + mode + ') AC:[已脱敏,' + acLen + 'B] CC:' + ccText
+	}
+
+	function renderEsimManage(raw) {
+		if (!raw || raw.length < 1) return '(不完整)'
+		const op = raw[0] & 0xff
+		const opName = ESIM_OP_MAP[op] != null ? ESIM_OP_MAP[op] : ('未知操作' + op)
+		const iccid = raw.length > 1 ? ascii(raw.subarray(1, Math.min(21, raw.length))) : ''
+		return opName + '(' + op + ') ICCID=' + (iccid || '(空)')
+	}
+
+	function renderEsimStatus(raw) {
+		if (!raw || raw.length < 12) return hexbytes(raw || []) + ' (不完整)'
+		const st = raw[0] & 0xff
+		const op = raw[1] & 0xff
+		const fs = raw[2] & 0xff
+		const err = u16leRead(raw, 3)
+		const stName = ESIM_STATE_MAP[st] != null ? ESIM_STATE_MAP[st] : ('未知' + st)
+		const opName = ESIM_LAST_OP_MAP[op] != null ? ESIM_LAST_OP_MAP[op] : ('未知' + op)
+		const fsName = ESIM_FAIL_STAGE_MAP[fs] != null ? ESIM_FAIL_STAGE_MAP[fs] : ('未知' + fs)
+		const errHex = err.toString(16).toUpperCase().padStart(4, '0')
+		const errText = err === 0 ? '0x0000' : ('0x' + errHex + ' (0x8500' + errHex + ')')
+		const timeText = bcdTimeOrEmpty(raw.subarray(5, 12))
+		return '状态:' + stName + ' 操作:' + opName + ' 失败阶段:' + fsName + ' 模组码:' + errText + ' 时间:' + timeText
+	}
+
+	function esimVarItemLen(id, payload, j) {
+		const remain = payload.length - j
+		if (id === 1) {
+			if (remain < 1) return { need: 0, partial: true }
+			const n = payload[j] & 0xff
+			const want = 1 + n * 22
+			return { need: Math.min(want, remain), partial: want > remain }
+		}
+		if (id === 2) {
+			if (remain < 2) return { need: remain, partial: true }
+			const acLen = payload[j + 1] & 0xff
+			if (2 + acLen >= remain) return { need: remain, partial: true }
+			const ccLen = payload[j + 2 + acLen] & 0xff
+			const want = 2 + acLen + 1 + ccLen
+			return { need: Math.min(want, remain), partial: want > remain }
+		}
+		return null
+	}
+
 	function renderValue(def, raw) {
 		if (!raw || raw.length === 0) return ''
 		const dec = def && def.dec
@@ -563,6 +651,11 @@
 				case 'busMeters': return renderBusMeters(raw, dec.rec || 14)
 				case 'imgPack': return renderImgPack(raw)
 				case 'faultRec': return renderFaultRec(raw)
+				case 'esimEid': return renderEsimEid(raw)
+				case 'esimProfiles': return renderEsimProfiles(raw)
+				case 'esimDownload': return renderEsimDownload(raw)
+				case 'esimManage': return renderEsimManage(raw)
+				case 'esimStatus': return renderEsimStatus(raw)
 			}
 		}
 		if (/YYYYMMDDhhmmss|YYMMDDhhmmss/.test(desc) || (def && def.unit === 'BCD' && (raw.length === 7 || raw.length === 6))) return bcdTime(raw)
@@ -1312,6 +1405,24 @@
 					span: 1 + raw.length
 				})
 				if (p20.error) break
+				continue
+			}
+			// Tag66 eSIM 变长字段: ID1 Profile列表, ID2 下载触发(脱敏); ID0(16B)/ID3(21B)/ID4(12B) 走定长
+			if (tag === 66 && (id === 1 || id === 2)) {
+				const ev = esimVarItemLen(id, payload, j)
+				const raw = payload.subarray(j, j + ev.need)
+				j += ev.need
+				const decoded = renderValue(def, raw) + (ev.partial ? ' (不完整)' : '')
+				items.push({
+					id,
+					name: def ? def.name : ('ID' + id),
+					raw: Array.from(raw),
+					decoded: decoded,
+					partial: ev.partial,
+					off: idOff,
+					span: 1 + raw.length
+				})
+				if (ev.partial) break
 				continue
 			}
 			// 总线表列表: 按个数×记录长度消费
@@ -2487,6 +2598,15 @@
 					const code = payload[j++] & 0xff
 					const tip = prefix + '数据域-' + tagName + ' ' + name + ' = ' + resultCodeName(code) + '(' + code + ')'
 					set(pBase + idOff, 2, tip, itemGrp)
+					continue
+				}
+				if (tag === 66 && (id === 1 || id === 2)) {
+					const ev = esimVarItemLen(id, payload, j)
+					const rawb = payload.subarray(j, j + ev.need)
+					const tip = prefix + '数据域-' + tagName + ' ' + name + ' = ' + renderValue(def, rawb) + (ev.partial ? ' (不完整)' : '')
+					set(pBase + idOff, 1 + ev.need, tip, itemGrp)
+					j += ev.need
+					if (ev.partial) break
 					continue
 				}
 				if (def && def.dec && def.dec.t === 'busMeters') {

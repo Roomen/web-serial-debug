@@ -13879,3 +13879,134 @@ html[data-layout='modern'] .mdn-pop-params[hidden] {
 @media (max-width: 640px) {
 	.connection-filters { grid-template-columns: minmax(0, 1fr); gap: 8px; }
 }
+
+/* ===== eSIM 管理面板 (Tag=66) ===== */
+.sk-esim-eid-box {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	padding: 4px 8px;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	background: var(--bg-subtle, rgba(128, 128, 128, 0.06));
+}
+.sk-esim-eid-val {
+	font-size: 0.78rem;
+	word-break: break-all;
+	color: var(--text-primary);
+}
+.sk-esim-kv-label {
+	font-size: 0.74rem;
+	color: var(--text-secondary);
+	margin-right: 4px;
+	white-space: nowrap;
+}
+.sk-esim-section {
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	padding: 8px;
+	background: var(--bg-card, transparent);
+}
+.sk-esim-sec-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	font-size: 0.8rem;
+	font-weight: 600;
+	margin-bottom: 6px;
+}
+.sk-esim-badge {
+	display: inline-block;
+	padding: 1px 7px;
+	border-radius: 999px;
+	font-size: 0.72rem;
+	font-weight: 600;
+	background: rgba(128, 128, 128, 0.16);
+	color: var(--text-secondary);
+}
+.sk-esim-badge.is-ok { background: rgba(25, 135, 84, 0.16); color: #198754; }
+.sk-esim-badge.is-warn { background: rgba(255, 193, 7, 0.2); color: #b58100; }
+.sk-esim-badge.is-bad { background: rgba(220, 53, 69, 0.16); color: #dc3545; }
+.sk-esim-status-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 4px 10px;
+	font-size: 0.78rem;
+}
+.sk-esim-err-hint {
+	margin-top: 6px;
+	padding: 4px 8px;
+	border-radius: 4px;
+	font-size: 0.75rem;
+	background: rgba(220, 53, 69, 0.1);
+	color: #dc3545;
+}
+.sk-esim-profile-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.sk-esim-empty {
+	font-size: 0.78rem;
+	color: var(--text-secondary);
+	padding: 6px 2px;
+}
+.sk-esim-profile-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	flex-wrap: wrap;
+	padding: 6px 8px;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+}
+.sk-esim-profile-meta {
+	min-width: 0;
+	flex: 1 1 160px;
+}
+.sk-esim-iccid {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 0.78rem;
+	font-weight: 600;
+	word-break: break-all;
+}
+.sk-esim-tags {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	margin-top: 3px;
+}
+.sk-esim-tag {
+	font-size: 0.7rem;
+	padding: 0 5px;
+	border-radius: 4px;
+	background: rgba(128, 128, 128, 0.14);
+	color: var(--text-secondary);
+}
+.sk-esim-tag.is-ok { background: rgba(25, 135, 84, 0.16); color: #198754; }
+.sk-esim-tag.is-warn { background: rgba(255, 193, 7, 0.2); color: #b58100; }
+.sk-esim-tag.is-info { background: rgba(13, 110, 253, 0.16); color: #0d6efd; }
+.sk-esim-profile-acts {
+	display: flex;
+	gap: 4px;
+	flex-shrink: 0;
+}
+.sk-esim-notice {
+	font-size: 0.76rem;
+	padding: 5px 8px;
+	border-radius: 5px;
+}
+.sk-esim-notice.is-ok { background: rgba(25, 135, 84, 0.12); color: #198754; }
+.sk-esim-notice.is-warn { background: rgba(255, 193, 7, 0.16); color: #9c6f00; }
+.sk-esim-log-line {
+	font-size: 0.74rem;
+	line-height: 1.4;
+	word-break: break-word;
+}
+.sk-esim-log-line.is-ok { color: #198754; }
+.sk-esim-log-line.is-warn { color: #b58100; }
+.sk-esim-log-line.is-bad { color: #dc3545; }
+
