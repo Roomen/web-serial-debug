@@ -35,6 +35,8 @@ futures-util = "0.3"
 uuid = { version = "1", features = ["serde"] }
 subtle = "2"
 schemars = "1"
+# eSIM 近端外部代理 SM-DP+ ES9+ HTTPS POST（桌面端免 CORS）
+reqwest = "0.13"
 # Windows 便携版应用内更新：计划/结果格式、载荷读取与验签、进程查询与 helper 共用
 portable-update-common = { path = "../portable-update-common" }
 
@@ -43,7 +45,6 @@ portable-update-common = { path = "../portable-update-common" }
 zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # 真实 MCP 客户端(仅测试)：对假窗口桥做协议互通验证
 rmcp = { version = "3.8", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
-reqwest = "0.13"
 tower = { version = "0.5", features = ["util"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

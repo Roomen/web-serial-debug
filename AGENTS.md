@@ -44,6 +44,8 @@ CIU 上电后只 `WOR_INIT` 一次：启动时先查 `WOR_GET_STATUS`，未初�
 
 固件升级接收以本轮成功的新版本通知 ACK 为门槛，最多暂存 16 条去重下载消息，覆盖粘包与写入期间的请求；轮次结束、停止、断线清除队列与残帧。CRC / 协议版本必须正确，ACK / 请求 / 结果按 PCP 解析器最低长度接纳扩展字段，目标版本按 `versionToBytes` → `bytesToVersion` 的线上表示比较，版本不符不推进传输；丢弃原因每轮去重且最多 10 类，只记原因，不输出版本或载荷。只对 `serialLanes.transportOf` 确认为 `ble` 的链路免去分片回复前的 200ms 等待，其余（含未知）保持等待；不得按 UA 猜传输、扩大 BLE 分片或切换用户写模式。握手须等响应与写完成；已经服务过的分片仍允许设备重请求，不应无证据压掉合法重传。`serialApi.writeRawTo` 返回 `{ startedAt, completedAt, durationMs, bytes }`，升级只读 `fw-upgrade` 的 `write` 事件另含 `code`；原始 TX 时间仍是开始写，后端兑现不代表空口送达或设备处理完成。停止取消等待为信息提示，断线为断线错误，不能伪报超时；在飞 OS 写入仍须正常收尾。
 
+eSIM 管理（SEK `Tag=66` 与 `Tag=10 ID=66`）以 Workbench 独立面板 `#sk-esim-card`（`panel.esim`，桌面开启、移动端关闭，只在 SEK 协议下可用）接入：`js/zmodem.js` 实现停等 `ZCRCW` + CRC32 ZMODEM（含独立 `initialWaitMs` 初始等待预算），`js/esim-core.js` 封装 Tag=66 编解码（ID4 严格 12B 含 7B BCD 时间、ID2 脱敏）与 `mode=1` 四轮 ES9+ 代理状态机（锁定 AC 主机、失败/取消发 `CAN*5`），`js/esim-panel.js` 负责界面、单/双路 `pinSession` 钉扎、ZMODEM 期间屏蔽解析与摘要占位日志，严禁落盘或明文打印 AC/CC；桌面端由 `desktop/src-tauri/src/esim_http.rs`（仅限 HTTPS、禁止重定向、限定 `/gsma/rsp2/es9plus/` 路径）经 `js/native-shell.js` 提供 `AppPlatform.service('esim-http')` 绕过浏览器 CORS，网页端未配置本地代理时门控提示。
+
 ## 运行与测试
 
 - `python3 -m http.server 8000` 起本地静态服务后用 Chrome 或 Edge 打开（Web Serial API 只有 Chromium 系支持）；`open index.html` 走 `file://` 只适合快速看布局。
@@ -52,6 +54,7 @@ CIU 上电后只 `WOR_INIT` 一次：启动时先查 `WOR_GET_STATUS`，未初�
 - `node tests/sts-ciu-protocol.cjs`：STS 应用层协议（`js/sts-ciu-protocol.js`）的编解码、接收判定与边界回归，改该文件后必须跑。
 - `node tests/hostproto-protocol.cjs`：hostProto 模组指令层（`js/hostproto-protocol.js`）的 CRC/组帧/找帧重同步/解析展示，以及事务层（`js/hostproto-transaction.js`，假时钟）回归，改这两个文件后必须跑。
 - `node tests/parse-view.cjs`：日志「解析」渲染器（`js/parse-view.js`）的转义、折叠、键值对拆分，以及 SEK / 工装 / W-MBUS 三个协议 `logView` 的模型回归，改渲染器或这些 `logView` 后必须跑。
+- `node tests/esim.cjs`：eSIM `Tag=66` / `Tag=10 ID=66` 编解码与脱敏、ID4 12B BCD、ZMODEM 环回与 `initialWaitMs`、以及 `mode=1` 四轮 ES9+（HTTP 200/204、主机校验、取消/失败 `CAN*5`）回归，改 `js/zmodem.js`、`js/esim-core.js` 或 Tag=66 编解码后必须跑；改 `desktop/src-tauri/src/esim_http.rs` 后同时跑 `cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib esim_http::`。
 - `node tests/serial-line-split.cjs`：接收分包（`js/common.js` 里 `//单个合并包的字节上限` 到 `//对外暴露的串口接口` 之间，按锚点注释截取，别删）的按超时 / 按换行两种方式及协议帧保护（含双路两路协议不同）回归，改这段后必须跑。
 - `node tests/serial-close.cjs`：串口关闭与在飞写入的合成回归：中止写入后释放锁、关闭失败/超时与重试、迟到任务隔离、按路残包输出；改释放或发送路径后必须跑。
 - `node tests/serial-adapter.cjs`：串口接入适配层（`js/serial-adapter.js`）的后端切换与按种类 `pick`、事件转发（含 `change`）、可选枚举（`canEnumerate` / `listPorts` / `grantPort` 与退化为 `getPorts`）与 `createStreamPort` 端口契约（打开前后流的有无、读错误换流、设备丢失释放、锁住或打开中拒绝关闭、驱动关闭失败保持打开、写失败换流、溢出、迟到数据隔离）回归，改该文件后必须跑。

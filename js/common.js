@@ -5486,10 +5486,12 @@
 		noteSerialRx(sid)
 		SerialHub._sess(sid).rxBytes += data.length
 		// 先组装并记录本次 RX，再通知可能同步发出 TX 的订阅者，避免发送前 flush 拆掉上一块半帧。
-		try {
-			logReceivedData(data, sid, meta)
-		} catch (e) {
-			addLogErrSafe('记录接收数据出错(' + sid + '): ' + (e && e.message ? e.message : e), sid)
+		if (!(window.serialApi && typeof window.serialApi.isRxLogSuppressed === 'function' && window.serialApi.isRxLogSuppressed(sid))) {
+			try {
+				logReceivedData(data, sid, meta)
+			} catch (e) {
+				addLogErrSafe('记录接收数据出错(' + sid + '): ' + (e && e.message ? e.message : e), sid)
+			}
 		}
 		//立即把原始字节交给固件升级/协议测试等模块,由其自行按协议帧边界组装
 		// 只转发当前可见模式的会话，隐藏模式的口继续收日志但不污染 serialApi
@@ -5654,6 +5656,16 @@
 		},
 		//升级进行中时禁止第三方协议解析日志,避免干扰
 		suppressParse: false,
+		// 按路暂停 RX 日志写入与持久化（如 eSIM ZMODEM 独占会话期间），不影响 onReceiveFrom 与收字节计数
+		_suppressRxLogSids: Object.create(null),
+		setSuppressRxLog(sid, on) {
+			if (sid !== 'S' && sid !== 'A' && sid !== 'B') return
+			if (on) this._suppressRxLogSids[sid] = true
+			else delete this._suppressRxLogSids[sid]
+		},
+		isRxLogSuppressed(sid) {
+			return !!(sid && this._suppressRxLogSids[sid])
+		},
 		_onReceive: null,
 		_receivers: [],
 		onReceive(cb) {
