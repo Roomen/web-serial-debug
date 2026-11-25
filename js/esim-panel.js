@@ -89,6 +89,8 @@
 		let abortCtrl = null
 
 		function syncProtocolVisibility() {
+			// 由 ProtocolSubTabs 统一管理 #sk-esim-card 在 SEK 协议内的显隐；无子页控制器时兜底按当前协议切换
+			if (window.ProtocolSubTabs) return
 			const active = window._activeProtocol || 'sek'
 			el.card.style.display = active === 'sek' ? '' : 'none'
 		}

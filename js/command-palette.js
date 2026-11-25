@@ -303,6 +303,9 @@
 					run: function () {
 						ensureSerialView()
 						if (!window.Workbench || !window.Workbench.open('protocol')) return
+						if (window.ProtocolSubTabs && typeof window.ProtocolSubTabs.select === 'function') {
+							window.ProtocolSubTabs.select(window._activeProtocol || 'sek', 'downlink')
+						}
 						//功能码必须先设对，否则预设下拉里没有该项
 						if (item.func && !setValue('serial-protocol-down-func', item.func)) return
 						setValue('serial-protocol-down-preset', item.name)
@@ -388,6 +391,42 @@
 					run: function () { window.Workbench.toggle(p.id) }
 				})
 			})
+			if (typeof window.Workbench.openProtocolSubTab === 'function') {
+				list.push({
+					group: '视图',
+					feature: 'panel.esim',
+					title: '打开：eSIM 管理（SEK）',
+					detail: '协议 → SEK',
+					alias: 'esim sim tag66 sek',
+					run: function () { window.Workbench.openProtocolSubTab('sek', 'esim') }
+				})
+				list.push({
+					group: '视图',
+					feature: 'panel.sts-sim',
+					title: '打开：STS 表端 / CIU 模拟（hostProto）',
+					detail: '协议 → hostProto',
+					alias: 'sts ciu hostproto moni sim',
+					run: function () { window.Workbench.openProtocolSubTab('hostproto', 'sts-sim') }
+				})
+			}
+			if (typeof window.Workbench.openAutomationTab === 'function') {
+				list.push({
+					group: '视图',
+					feature: 'panel.batch',
+					title: '打开：批量指令下发',
+					detail: '批量交互',
+					alias: 'piliang peizhi batch xiafa',
+					run: function () { window.Workbench.openAutomationTab('batch') }
+				})
+				list.push({
+					group: '视图',
+					feature: 'panel.rw',
+					title: '打开：随机读写测试',
+					detail: '批量交互',
+					alias: 'suiji duxie rw random test',
+					run: function () { window.Workbench.openAutomationTab('rw') }
+				})
+			}
 		}
 		return list
 	}

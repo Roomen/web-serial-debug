@@ -813,6 +813,29 @@ test('命令面板：注册「协议管理」与动态「切换协议：<名称>
 	assert.ok(mob.listBox.innerHTML.includes('切换协议：默认 TLV 协议'))
 })
 
+test('协议管理：复制开发提示词按钮与 buildDevPrompt 契约覆盖 JSON / JS / 完整规范', async () => {
+	const h = makeManagerHarness()
+	const copied = []
+	h.win.navigator = {
+		clipboard: {
+			writeText(text) {
+				copied.push(text)
+				return Promise.resolve()
+			},
+		},
+	}
+	assert.equal(h.win.ProtocolManager.open('installed'), true)
+	const body = h.body
+	const btns = findAllNodes(body, el => el.className && el.className.includes('pm-prompt-btn'))
+	assert.equal(btns.length, 3, '应提供 JSON / JS / 完整规范 三个复制提示词按钮')
+	for (const b of btns) b.click()
+	await new Promise(r => setTimeout(r, 10))
+	assert.equal(copied.length, 3)
+	assert.ok(copied[0].includes('schemaVersion') && copied[0].includes('checksum') && copied[0].includes('presets'))
+	assert.ok(copied[1].includes('registerProtocol') && copied[1].includes('logView') && copied[1].includes('randomTest') && copied[1].includes('subTabs'))
+	assert.ok(copied[2].includes('schemaVersion') && copied[2].includes('registerProtocol'))
+})
+
 ;(async () => {
 	let failed = 0
 	for (const t of tests) {

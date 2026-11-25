@@ -599,11 +599,11 @@ class FakeCustomEvent {
 	assert.equal(els['sk-esim-card'].style.display, '')
 	assert.equal(encWrap.style.display, '')
 
-	// 切到 hostproto：隐藏 SEK 专属卡片和加密开关，复用 #sk-down-card 通用模式并自动生成预览
+	// 切到 hostproto：隐藏 SEK 专属（eSIM 与高级加解密）和加密开关，通用批量/随机卡片不受 SEK 隐藏；复用 #sk-down-card 通用模式并自动生成预览
 	sandbox._activeProtocol = 'hostproto'
 	sandbox.ProtocolRegistry.activatePanel('hostproto')
-	assert.equal(els['sk-rw-card'].style.display, 'none')
-	assert.equal(els['sk-batch-card'].style.display, 'none')
+	assert.equal(els['sk-rw-card'].style.display, '')
+	assert.equal(els['sk-batch-card'].style.display, '')
 	assert.equal(els['sk-esim-card'].style.display, 'none')
 	assert.equal(els['serial-protocol-advanced'].style.display, 'none')
 	assert.equal(downCard.style.display, '')

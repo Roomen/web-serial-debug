@@ -327,14 +327,77 @@
 		renderBar()
 	}
 
+	const AUTO_TAB_KEY = 'workbenchAutoTab'
+
+	function setAutomationTab(tabId) {
+		const target = tabId === 'rw' && (!window.AppPlatform || window.AppPlatform.has('panel.rw')) ? 'rw' : 'batch'
+		const batchCard = $('sk-batch-card')
+		const rwCard = $('sk-rw-card')
+		if (batchCard) batchCard.hidden = target !== 'batch'
+		if (rwCard) rwCard.hidden = target !== 'rw'
+		const bBtn = $('auto-tab-batch')
+		const rBtn = $('auto-tab-rw')
+		if (bBtn) bBtn.setAttribute('aria-pressed', String(target === 'batch'))
+		if (rBtn) rBtn.setAttribute('aria-pressed', String(target === 'rw'))
+		try { localStorage.setItem(AUTO_TAB_KEY, target) } catch (e) { /* 忽略 */ }
+		return target
+	}
+
+	function initAutomationTabs() {
+		const bar = $('auto-mode-tabs')
+		if (!bar || bar.dataset.bound) return
+		bar.dataset.bound = '1'
+		bar.addEventListener('click', function (e) {
+			const btn = e.target.closest('button[data-auto-tab]')
+			if (!btn || btn.disabled) return
+			setAutomationTab(btn.dataset.autoTab)
+		})
+		let saved = 'batch'
+		try { saved = localStorage.getItem(AUTO_TAB_KEY) || 'batch' } catch (e) { /* 忽略 */ }
+		setAutomationTab(saved)
+	}
+
+	function openAutomationTab(tabId) {
+		setAutomationTab(tabId)
+		return open('batch')
+	}
+
+	function openProtocolSubTab(protoId, tabId) {
+		if (protoId && window._activeProtocol !== protoId) {
+			if (window.ProtocolRegistry && typeof window.ProtocolRegistry.isHidden === 'function' && window.ProtocolRegistry.isHidden(protoId)) {
+				window.ProtocolRegistry.setHidden(protoId, false)
+			}
+			if (window.serialLanes && typeof window.serialLanes.setProtocol === 'function') {
+				const target = typeof window.serialLanes.singleTarget === 'function' ? window.serialLanes.singleTarget() : 'S'
+				window.serialLanes.setProtocol(target, protoId)
+			} else {
+				const sel = $('serial-protocol-select')
+				if (sel && Array.prototype.some.call(sel.options, function (o) { return o.value === protoId })) {
+					sel.value = protoId
+					sel.dispatchEvent(new Event('change', { bubbles: true }))
+				}
+			}
+		}
+		const ok = open('protocol')
+		if (ok && tabId && window.ProtocolSubTabs && typeof window.ProtocolSubTabs.select === 'function') {
+			window.ProtocolSubTabs.select(protoId || window._activeProtocol || 'sek', tabId)
+		}
+		return ok
+	}
+
 	function registerBuiltins() {
 		const qs = $('nav-quick-send')
 		if (qs) registerPanel({ id: 'quick-send', title: '快捷发送', icon: 'bi-lightning-charge', el: qs, order: 10 })
 		const proto = $('nav-protocol')
 		if (proto) registerPanel({ id: 'protocol', title: '协议设置与下发', label: '协议', icon: 'bi-braces', el: proto, order: 20 })
-		standalonePanel('rw', '随机读写测试', '随机读写', 'bi-shuffle', 'sk-rw-card', 30, '当前协议不支持随机读写测试，在顶栏把协议切换到 SEK 后可用')
-		standalonePanel('batch', '批量配置写入', '批量配置', 'bi-list-check', 'sk-batch-card', 40, '当前协议不支持批量配置写入，在顶栏把协议切换到 SEK 后可用')
-		standalonePanel('esim', 'eSIM 管理', 'eSIM', 'bi-sim', 'sk-esim-card', 45, '当前协议不支持 eSIM 管理，在顶栏把协议切换到 SEK 后可用')
+		const autoPane = $('nav-automation')
+		if (autoPane) {
+			registerPanel({ id: 'batch', title: '批量交互', label: '批量', icon: 'bi-collection-play', el: autoPane, order: 30 })
+			initAutomationTabs()
+		} else {
+			standalonePanel('rw', '随机读写测试', '随机读写', 'bi-shuffle', 'sk-rw-card', 30, '当前协议不支持随机读写测试')
+			standalonePanel('batch', '批量配置写入', '批量配置', 'bi-list-check', 'sk-batch-card', 40, '当前协议不支持批量配置写入')
+		}
 		const fw = $('nav-firmware')
 		if (fw) registerPanel({ id: 'firmware', title: '固件升级', icon: 'bi-cpu', el: fw, order: 50 })
 		const parse = $('serial-parse-body')
@@ -414,10 +477,18 @@
 				if (item) item.click()
 			},
 		},
-		panelTask('rw', 'sk-rw-stop', 'sk-rw-progress-bar', '随机读写'),
-		panelTask('batch', 'sk-batch-stop', 'sk-batch-progress-bar', '批量配置'),
-		panelTask('esim', 'sk-esim-stop', 'sk-esim-progress-bar', 'eSIM'),
-		panelTask('protocol', 'gz-auto-stop', 'gz-auto-progress-bar', '工位测试'),
+		Object.assign(panelTask('batch', 'sk-rw-stop', 'sk-rw-progress-bar', '随机读写'), {
+			open: function () { openAutomationTab('rw') },
+		}),
+		Object.assign(panelTask('batch', 'sk-batch-stop', 'sk-batch-progress-bar', '批量下发'), {
+			open: function () { openAutomationTab('batch') },
+		}),
+		Object.assign(panelTask('protocol', 'sk-esim-stop', 'sk-esim-progress-bar', 'eSIM'), {
+			open: function () { openProtocolSubTab('sek', 'esim') },
+		}),
+		Object.assign(panelTask('protocol', 'gz-auto-stop', 'gz-auto-progress-bar', '工位测试'), {
+			open: function () { openProtocolSubTab('gz', 'auto') },
+		}),
 		panelTask('firmware', 'fw-stop', 'fw-progress', '固件升级'),
 		{
 			label: '循环发送',
@@ -450,7 +521,10 @@
 				const n = document.querySelectorAll('.sts-sim-head > .ctl-toggle[aria-pressed="true"]').length
 				return 'STS 模拟' + (n > 1 ? ' ×' + n : '') + ' 运行中'
 			},
-			open: function () { open('sts-sim') },
+			open: function () {
+				if (find('sts-sim')) open('sts-sim')
+				else openProtocolSubTab('hostproto', 'sts-sim')
+			},
 		},
 		{
 			// 本地 MCP 服务(js/mcp-service.js)：只有平台提供了服务且已启用才显示，未启用不占位。
@@ -810,6 +884,8 @@
 		inspectorView: function () { return inspector ? inspector.view : null },
 		registerPanel: registerPanel,
 		open: open,
+		openAutomationTab: openAutomationTab,
+		openProtocolSubTab: openProtocolSubTab,
 		toggle: toggle,
 		move: move,
 		isShown: function (id) {

@@ -39,6 +39,8 @@
 		const saved = loadCollapseMap()
 
 		cards.forEach(function (card) {
+			// eSIM 与一键工位测试现在作为协议子页独占一屏，不加折叠头
+			if (card.id === 'sk-esim-card' || card.id === 'gz-auto-card') return
 			const header = card.querySelector(':scope > h6.pane-section-title')
 			if (!header || header.querySelector('.collapsible-chevron')) return
 
