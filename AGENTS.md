@@ -54,6 +54,7 @@ eSIM 管理（SEK `Tag=66` 与 `Tag=10 ID=66`）以 Workbench 独立面板 `#sk-
 - `node tests/sts-ciu-protocol.cjs`：STS 应用层协议（`js/sts-ciu-protocol.js`）的编解码、接收判定与边界回归，改该文件后必须跑。
 - `node tests/hostproto-protocol.cjs`：hostProto 模组指令层（`js/hostproto-protocol.js`）的 CRC/组帧/找帧重同步/解析展示，以及事务层（`js/hostproto-transaction.js`，假时钟）回归，改这两个文件后必须跑。
 - `node tests/parse-view.cjs`：日志「解析」渲染器（`js/parse-view.js`）的转义、折叠、键值对拆分，以及 SEK / 工装 / W-MBUS 三个协议 `logView` 的模型回归，改渲染器或这些 `logView` 后必须跑。
+- `node tests/sek-presets.cjs`：SEK 常用指令预设（`js/protocol-presets.js`）的 0x01 参数输入框完整性、`SK_PRESET_CODEC.largeFlowM3ToBytes` 按基准水量换算及与 `js/protocol.js` 解析往返一致、非法/越界拦截与多关键字指令筛选回归，改 `js/protocol-presets.js` 后必须跑。
 - `node tests/esim.cjs`：eSIM `Tag=66` / `Tag=10 ID=66` 编解码与脱敏、ID4 12B BCD、ZMODEM 环回与 `initialWaitMs`、以及 `mode=1` 四轮 ES9+（HTTP 200/204、主机校验、取消/失败 `CAN*5`）回归，改 `js/zmodem.js`、`js/esim-core.js` 或 Tag=66 编解码后必须跑；改 `desktop/src-tauri/src/esim_http.rs` 后同时跑 `cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib esim_http::`。
 - `node tests/serial-line-split.cjs`：接收分包（`js/common.js` 里 `//单个合并包的字节上限` 到 `//对外暴露的串口接口` 之间，按锚点注释截取，别删）的按超时 / 按换行两种方式及协议帧保护（含双路两路协议不同）回归，改这段后必须跑。
 - `node tests/serial-close.cjs`：串口关闭与在飞写入的合成回归：中止写入后释放锁、关闭失败/超时与重试、迟到任务隔离、按路残包输出；改释放或发送路径后必须跑。

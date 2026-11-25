@@ -625,29 +625,40 @@
                                     </div>
                                     <div class="protocol-down-card mb-2" id="sk-down-card">
                                         <h6 class="pane-section-title"><i class="bi bi-arrow-down-circle"></i> 下行下发</h6>
-                                        <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
-                                            <div class="input-group input-group-sm" style="width: auto; flex-shrink: 0;">
-                                                <span class="input-group-text">功能码</span>
-                                                <select class="form-select" id="serial-protocol-down-func">
-                                                    <option value="0x03" selected>信息查询 0x03</option>
-                                                    <option value="0x01">参数设置 0x01</option>
-                                                    <option value="0x11">指令操作 0x11</option>
-                                                </select>
+                                        <div class="ctl-seg sk-func-tabs mb-2" id="serial-protocol-down-func-tabs" role="group" aria-label="功能码">
+                                            <button type="button" data-func="0x03" aria-pressed="true">信息查询<span class="sk-func-code">0x03</span></button>
+                                            <button type="button" data-func="0x01" aria-pressed="false">参数设置<span class="sk-func-code">0x01</span></button>
+                                            <button type="button" data-func="0x11" aria-pressed="false">指令操作<span class="sk-func-code">0x11</span></button>
+                                        </div>
+                                        <select class="form-select form-select-sm" id="serial-protocol-down-func" hidden aria-hidden="true">
+                                            <option value="0x03" selected>信息查询 0x03</option>
+                                            <option value="0x01">参数设置 0x01</option>
+                                            <option value="0x11">指令操作 0x11</option>
+                                        </select>
+                                        <div class="sk-preset-row mb-2">
+                                            <div class="input-group input-group-sm sk-preset-search">
+                                                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                                                <input type="text" class="form-control" id="serial-protocol-down-preset-search"
+                                                    placeholder="筛选指令 / Tag…" autocomplete="off" aria-label="筛选常用指令">
+                                                <button class="btn btn-outline-secondary" type="button" id="serial-protocol-down-preset-search-clear" hidden title="清空筛选" aria-label="清空筛选">
+                                                    <i class="bi bi-x"></i>
+                                                </button>
                                             </div>
-                                            <div class="input-group input-group-sm" style="width: auto; min-width: 120px;">
-                                                <span class="input-group-text">常用指令</span>
+                                            <div class="input-group input-group-sm sk-preset-select-wrap">
+                                                <span class="input-group-text">指令</span>
                                                 <select class="form-select" id="serial-protocol-down-preset" title="选择常用指令">
                                                 </select>
                                             </div>
-                                            <div class="input-group input-group-sm" id="serial-protocol-down-param-group" style="display:none;flex:0 0 100%;">
-                                                <span class="input-group-text" id="serial-protocol-down-param-label">参数</span>
-                                                <input type="text" class="form-control" id="serial-protocol-down-param-val" style="width:100px;" placeholder="值">
-                                                <select class="form-select form-select-sm" id="serial-protocol-down-param-sel" style="display:none;width:130px;"></select>
-                                                <span class="input-group-text" id="serial-protocol-down-param-unit" style="font-size:0.7rem;"></span>
-                                                <div id="serial-protocol-down-param-multi" style="display:none;flex:0 0 100%;margin-top:4px;"></div>
-                                            </div>
                                         </div>
-                                        <textarea class="form-control form-control-sm" rows="4" id="serial-protocol-down-tlv"
+                                        <div class="sk-down-desc mb-2" id="serial-protocol-down-desc" hidden></div>
+                                        <div class="input-group input-group-sm mb-2 sk-param-group" id="serial-protocol-down-param-group" style="display:none;">
+                                            <span class="input-group-text" id="serial-protocol-down-param-label">参数</span>
+                                            <input type="text" class="form-control" id="serial-protocol-down-param-val" style="width:100px;" placeholder="值">
+                                            <select class="form-select form-select-sm" id="serial-protocol-down-param-sel" style="display:none;width:130px;"></select>
+                                            <span class="input-group-text sk-param-unit" id="serial-protocol-down-param-unit"></span>
+                                            <div class="sk-param-multi-grid" id="serial-protocol-down-param-multi" style="display:none;"></div>
+                                        </div>
+                                        <textarea class="form-control form-control-sm" rows="3" id="serial-protocol-down-tlv"
                                             placeholder='TLV JSON，例如：[{"tag":10,"items":[{"id":1,"value":[]}]}]，value 可为空数组(查询) 或 十六进制字符串 或 字节数组'></textarea>
                                         <div class="d-flex flex-wrap align-items-center gap-2 mt-1">
                                             <div class="form-check form-switch ctl-switch" title="关闭时始终明文下发(ctrl 不置加密位)；开启后用上方密钥加密数据域。解析/解密密钥可单独保留。">
