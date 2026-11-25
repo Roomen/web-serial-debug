@@ -921,6 +921,9 @@
 		if (typeof W.registerProtocol === 'function') {
 			W.registerProtocol('hostproto', {
 				name: 'hostProto 模组',
+				builtin: true,
+				source: 'builtin',
+				description: '模组指令帧编解码与常用无参命令',
 				parseFrame: parseFrame,
 				formatFrame: formatFrame,
 				logView: logView,

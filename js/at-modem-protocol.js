@@ -1687,6 +1687,9 @@
 		if (typeof root.registerProtocol === 'function') {
 			root.registerProtocol('cellular-at', {
 				name: '蜂窝模组 AT',
+				builtin: true,
+				source: 'builtin',
+				description: '蜂窝模组 AT 指令与网络状态日志解析',
 				parseFrame: parseFrame,
 				formatFrame: formatFrame,
 				logView: logView,
@@ -1699,8 +1702,6 @@
 				if (sel.value !== 'cellular-at') {
 					sel.value = 'cellular-at'
 					sel.dispatchEvent(new Event('change'))
-				} else {
-					applyVisibility()
 				}
 			}
 			return
@@ -1708,24 +1709,6 @@
 		if (typeof setTimeout === 'function' && retry < 100) {
 			setTimeout(function () { tryRegister(retry + 1) }, 50)
 		}
-	}
-
-	function applyVisibility() {
-		if (typeof document === "undefined") return
-		const sel = document.getElementById("serial-protocol-select")
-		const v = sel ? sel.value : "sek"
-		if (v === "cellular-at") {
-			const sekOnly = ["sk-down-card", "sk-rw-card", "sk-batch-card", "serial-protocol-advanced"]
-			for (let i = 0; i < sekOnly.length; i++) {
-				const el = document.getElementById(sekOnly[i])
-				if (el) el.style.display = "none"
-			}
-		}
-	}
-	if (typeof document !== "undefined") {
-		const protoSel = document.getElementById("serial-protocol-select")
-		if (protoSel) protoSel.addEventListener("change", applyVisibility)
-		applyVisibility()
 	}
 
 	tryRegister(0)

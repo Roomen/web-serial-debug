@@ -117,6 +117,8 @@
                         <span class="rail-label">配置</span>
                     </button>
                     <ul class="dropdown-menu rail-config-menu" aria-labelledby="rail-config-btn">
+                        <li><button class="dropdown-item" type="button" id="serial-protocol-manage" data-feature="protocol.manage"><i class="bi bi-sliders2-vertical"></i> 协议管理…</button></li>
+                        <li><hr class="dropdown-divider" data-feature="protocol.manage"></li>
                         <li><button class="dropdown-item" type="button" id="serial-import"><i class="bi bi-folder-plus"></i> 导入配置…</button></li>
                         <li><button class="dropdown-item" type="button" id="serial-export"><i class="bi bi-folder-symlink"></i> 导出配置</button></li>
                         <li><hr class="dropdown-divider"></li>
@@ -586,6 +588,7 @@
                                                     <label class="form-check-label" for="serial-protocol-hover">悬停提示</label>
                                                 </div>
                                             </div>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" id="serial-protocol-manage-inline" data-feature="protocol.manage"><i class="bi bi-sliders2-vertical"></i> 协议管理</button>
                                         </div>
                                         <details class="protocol-advanced" id="serial-protocol-advanced">
                                             <summary class="protocol-advanced-summary">
@@ -624,7 +627,7 @@
                                         </details>
                                     </div>
                                     <div class="protocol-down-card mb-2" id="sk-down-card">
-                                        <h6 class="pane-section-title"><i class="bi bi-arrow-down-circle"></i> 下行下发</h6>
+                                        <h6 class="pane-section-title"><i class="bi bi-arrow-down-circle"></i> <span class="sk-down-title-text">下行下发</span></h6>
                                         <div class="ctl-seg sk-func-tabs mb-2" id="serial-protocol-down-func-tabs" role="group" aria-label="功能码">
                                             <button type="button" data-func="0x03" aria-pressed="true">信息查询<span class="sk-func-code">0x03</span></button>
                                             <button type="button" data-func="0x01" aria-pressed="false">参数设置<span class="sk-func-code">0x01</span></button>
@@ -670,6 +673,9 @@
                                         </div>
                                         <textarea class="form-control form-control-sm mt-1 sk-hex-copyable" rows="3" id="serial-protocol-down-preview"
                                             readonly placeholder="待发送的完整 HEX（空格分隔，点击可复制）" title="点击复制生成的 HEX"></textarea>
+                                    </div>
+                                    <div class="protocol-down-card mb-2 proto-parse-only-hint" id="proto-parse-only-hint" style="display:none;">
+                                        <div class="sk-rw-hint">当前协议仅提供日志解析与字节悬停提示，无专用下行下发面板，可使用下方串口发送或快捷发送。</div>
                                     </div>
                                     <div class="protocol-down-card mb-2" id="gz-down-card" style="display:none;">
                                         <h6 class="pane-section-title"><i class="bi bi-arrow-down-circle"></i> 工装下行下发</h6>
@@ -1862,6 +1868,7 @@
     <script src="js/connection-source.js"></script>
     <script src="js/dual-config.js"></script>
     <script src="js/text-byte-encoder.js"></script>
+    <script src="js/protocol-registry.js"></script>
     <script src="js/common.js"></script>
     <script src="js/wmbus-protocol.js"></script>
     <script src="js/wmbus-transaction.js"></script>
@@ -1872,6 +1879,10 @@
     <script src="js/hostproto-protocol.js"></script>
     <script src="js/hostproto-transaction.js"></script>
     <script src="js/at-modem-protocol.js"></script>
+    <script src="js/protocol-downlink.js"></script>
+    <script src="js/json-protocol.js"></script>
+    <script src="js/js-protocol-plugin.js"></script>
+    <script src="js/protocol-manager.js"></script>
     <script src="js/sts-sim.js"></script>
     <script src="js/sts-sim-panel.js"></script>
     <script src="js/sek-transaction.js"></script>

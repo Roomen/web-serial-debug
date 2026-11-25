@@ -94,6 +94,12 @@
 		},
 	})
 
+	// 桌面端本地协议插件目录(<app_data_dir>/protocols/)：扫描 .json / .js 与打开目录
+	P.provide('protocol-plugins', {
+		list: function () { return T.core.invoke('protocol_plugins_list') },
+		openDir: function () { return T.core.invoke('protocol_plugins_open_dir') },
+	})
+
 	// ---------- 提示条 ----------
 	let timer = 0
 	function notify(text, isError, action) {

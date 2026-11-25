@@ -8,6 +8,7 @@ mod lease;
 mod mcp;
 mod menu;
 mod portable;
+mod protocol_plugins;
 mod serial;
 mod updater;
 mod winstate;
@@ -259,6 +260,8 @@ pub fn run() {
 			mcp::mcp_commit,
 			mcp::mcp_reply,
 			esim_http::esim_smdp_post,
+			protocol_plugins::protocol_plugins_list,
+			protocol_plugins::protocol_plugins_open_dir,
 			titlebar_double_click
 		])
 		.on_window_event(|window, event| {

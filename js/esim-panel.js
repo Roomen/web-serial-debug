@@ -93,8 +93,6 @@
 			el.card.style.display = active === 'sek' ? '' : 'none'
 		}
 		syncProtocolVisibility()
-		const protoSel = $('serial-protocol-select')
-		if (protoSel) protoSel.addEventListener('change', syncProtocolVisibility)
 
 		function hasNativeHttp() {
 			return !!(P && typeof P.service === 'function' && P.service('esim-http'))
