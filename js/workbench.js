@@ -334,6 +334,7 @@
 		if (proto) registerPanel({ id: 'protocol', title: '协议设置与下发', label: '协议', icon: 'bi-braces', el: proto, order: 20 })
 		standalonePanel('rw', '随机读写测试', '随机读写', 'bi-shuffle', 'sk-rw-card', 30, '当前协议不支持随机读写测试，在顶栏把协议切换到 SEK 后可用')
 		standalonePanel('batch', '批量配置写入', '批量配置', 'bi-list-check', 'sk-batch-card', 40, '当前协议不支持批量配置写入，在顶栏把协议切换到 SEK 后可用')
+		standalonePanel('esim', 'eSIM 管理', 'eSIM', 'bi-sim', 'sk-esim-card', 45, '当前协议不支持 eSIM 管理，在顶栏把协议切换到 SEK 后可用')
 		const fw = $('nav-firmware')
 		if (fw) registerPanel({ id: 'firmware', title: '固件升级', icon: 'bi-cpu', el: fw, order: 50 })
 		const parse = $('serial-parse-body')
@@ -415,6 +416,7 @@
 		},
 		panelTask('rw', 'sk-rw-stop', 'sk-rw-progress-bar', '随机读写'),
 		panelTask('batch', 'sk-batch-stop', 'sk-batch-progress-bar', '批量配置'),
+		panelTask('esim', 'sk-esim-stop', 'sk-esim-progress-bar', 'eSIM'),
 		panelTask('protocol', 'gz-auto-stop', 'gz-auto-progress-bar', '工位测试'),
 		panelTask('firmware', 'fw-stop', 'fw-progress', '固件升级'),
 		{

@@ -2114,9 +2114,114 @@
 			downPreview._copyT = setTimeout(() => downPreview.classList.remove('is-copied'), 800)
 		})
 	}
+	// 读取当前主发路会话已记录的基准水量(当量)
+	function getActiveLaneBaseWater() {
+		const sid = SerialHub.activeSendPhys()
+		return inLiveLane(sid, () => {
+			const g = typeof skSess === 'function' ? skSess() : window.skSession
+			if (!g || typeof g.hasBase !== 'function') return { has: false, code: null, label: null }
+			return { has: g.hasBase(), code: g.baseCode, label: g.baseLabel }
+		})
+	}
+	// 大口径底度下发前先向设备查询基准水量(Tag10-ID3 终端参数，缺失则回退 Tag10-ID2 核心数据)
+	async function queryDeviceBaseWater() {
+		if (!window.sekTx || typeof window.sekTx.sendAndWait !== 'function') {
+			throw new Error('SEK 事务层未就绪')
+		}
+		const sid = SerialHub.activeSendPhys()
+		if (!SerialHub.isOpen(sid)) {
+			throw new Error('串口未打开')
+		}
+		let code = null
+		let source = null
+		try {
+			const res3 = await window.sekTx.sendAndWait({
+				buildOpts: { funcCode: 0x03, tlv: [{ tag: 10, items: [{ id: 3, value: [] }] }] },
+				expectFunc: 0x83,
+				timeoutMs: 5000,
+				match: (f) => window.sekTx.hasTag(f, 3) || window.sekTx.hasTag(f, 2)
+			})
+			const it3 = window.sekTx.findTlvItem(res3.frame, 3, 29)
+			const it2 = !it3 ? window.sekTx.findTlvItem(res3.frame, 2, 29) : null
+			const it = it3 || it2
+			if (it && it.raw && it.raw.length && it.raw[0] >= 0 && it.raw[0] <= 6) {
+				code = it.raw[0] & 0xff
+				source = it3 ? 'Tag3-ID29' : 'Tag2-ID29'
+			}
+		} catch (e) {
+			// Tag10-ID3 超时或无响应时，再尝试一次 Tag10-ID2(核心数据)
+		}
+		if (code == null) {
+			const res2 = await window.sekTx.sendAndWait({
+				buildOpts: { funcCode: 0x03, tlv: [{ tag: 10, items: [{ id: 2, value: [] }] }] },
+				expectFunc: 0x83,
+				timeoutMs: 5000,
+				match: (f) => window.sekTx.hasTag(f, 2)
+			})
+			const it2 = window.sekTx.findTlvItem(res2.frame, 2, 29)
+			if (it2 && it2.raw && it2.raw.length && it2.raw[0] >= 0 && it2.raw[0] <= 6) {
+				code = it2.raw[0] & 0xff
+				source = 'Tag2-ID29'
+			}
+		}
+		if (code == null) {
+			throw new Error('应答中未找到基准水量(Tag2/3-ID29)')
+		}
+		inLiveLane(sid, () => {
+			const g = typeof skSess === 'function' ? skSess() : window.skSession
+			if (g && typeof g.setBase === 'function') g.setBase(code, source)
+		})
+		return { code, source }
+	}
 	//立即下发
-	document.getElementById('serial-protocol-send').addEventListener('click', (e) => {
+	let _largeFlowSending = false
+	const sendProtoBtn = document.getElementById('serial-protocol-send')
+	sendProtoBtn.addEventListener('click', async (e) => {
 		const previewEl = document.getElementById('serial-protocol-down-preview')
+		// 大口径底度(m³)：下发前先向设备读基准水量(当量)，再按真实当量换算并下发
+		if (window._activeProtocol === 'sek' && presetSel && presetSel.value) {
+			const activePreset = presetItemByName(presetSel.value)
+			if (activePreset && activePreset.param && activePreset.param.type === 'largeFlow') {
+				if (_largeFlowSending) return
+				const paramValEl = document.getElementById('serial-protocol-down-param-val')
+				const m3Str = paramValEl ? paramValEl.value.trim() : ''
+				const check = window.SK_PRESET_CODEC ? window.SK_PRESET_CODEC.largeFlowM3ToBytes(m3Str, 3) : null
+				if (!check || check.error) {
+					addLogErr(check && check.error ? check.error : '底度输入无效')
+					return
+				}
+				if (!SerialHub.isOpen(SerialHub.activeSendPhys())) {
+					addLogErr('请先打开串口再下发大口径底度（需先读取设备当量）')
+					return
+				}
+				const targetPresetName = presetSel.value
+				_largeFlowSending = true
+				const origText = sendProtoBtn.textContent
+				sendProtoBtn.disabled = true
+				sendProtoBtn.textContent = '读取当量中…'
+				try {
+					const base = await queryDeviceBaseWater()
+					if (window._activeProtocol !== 'sek' || presetSel.value !== targetPresetName) {
+						addLogErr('读取当量期间指令或协议已切换，已中止下发')
+						return
+					}
+					previewEl.value = ''
+					if (typeof _buildWithParamRef === 'function') _buildWithParamRef(base.code)
+					if (!previewEl.value) {
+						addLogErr('按当量生成大口径底度帧失败')
+						return
+					}
+					await sendHex(previewEl.value)
+				} catch (err) {
+					addLogErr('读取设备当量(基准水量)失败: ' + (err && err.message ? err.message : String(err)) + '，已中止下发')
+				} finally {
+					_largeFlowSending = false
+					sendProtoBtn.disabled = false
+					sendProtoBtn.textContent = origText
+				}
+				return
+			}
+		}
 		if (!previewEl.value && document.getElementById('serial-protocol-down-tlv').value.trim()) {
 			document.getElementById('serial-protocol-build').click()
 		}
@@ -2130,22 +2235,39 @@
 	//常用指令(下行下发)初始化
 	const presetSel = document.getElementById('serial-protocol-down-preset')
 	const funcSel = document.getElementById('serial-protocol-down-func')
+	const funcTabs = document.getElementById('serial-protocol-down-func-tabs')
+	const presetSearch = document.getElementById('serial-protocol-down-preset-search')
+	const presetSearchClear = document.getElementById('serial-protocol-down-preset-search-clear')
+	const presetDescEl = document.getElementById('serial-protocol-down-desc')
+	let _buildWithParamRef = null
+
+	function syncFuncTabs(funcCode) {
+		if (!funcTabs) return
+		funcTabs.querySelectorAll('button[data-func]').forEach((btn) => {
+			btn.setAttribute('aria-pressed', btn.dataset.func === funcCode ? 'true' : 'false')
+		})
+	}
 
 	function rebuildPresets(funcCode) {
 		if (!presetSel) return
 		var proto = window.getActiveProtocol()
 		var presets = (proto && proto.presets) ? proto.presets : (window.SK_DOWN_PRESETS || [])
-		var matchingGroups = []
-		for (const grp of presets) {
-			const filtered = grp.items.filter(it => it.func === funcCode)
-			if (filtered.length) matchingGroups.push({ grp, filtered })
+		var query = presetSearch ? presetSearch.value : ''
+		var matchingGroups = window.SK_PRESET_CODEC && typeof window.SK_PRESET_CODEC.filterPresets === 'function'
+			? window.SK_PRESET_CODEC.filterPresets(presets, funcCode, query)
+			: []
+		if (!window.SK_PRESET_CODEC) {
+			for (const grp of presets) {
+				const filtered = grp.items.filter(it => it.func === funcCode)
+				if (filtered.length) matchingGroups.push({ grp, filtered })
+			}
 		}
 		const keep = presetSel.value
 		presetSel.innerHTML = ''
 		if (!matchingGroups.length) {
 			const ph = document.createElement('option')
 			ph.value = ''
-			ph.textContent = '无可用指令'
+			ph.textContent = query && query.trim() ? '无匹配指令' : '无可用指令'
 			presetSel.appendChild(ph)
 		}
 		for (const { grp, filtered } of matchingGroups) {
@@ -2177,10 +2299,48 @@
 	}
 
 	let _skipFuncEvent = false
+	if (funcTabs && funcSel) {
+		funcTabs.addEventListener('click', (e) => {
+			const btn = e.target.closest('button[data-func]')
+			if (!btn) return
+			const nextFunc = btn.dataset.func
+			if (!nextFunc || funcSel.value === nextFunc) return
+			if (presetSearch && presetSearch.value) {
+				presetSearch.value = ''
+				if (presetSearchClear) presetSearchClear.hidden = true
+			}
+			funcSel.value = nextFunc
+			funcSel.dispatchEvent(new Event('change'))
+		})
+	}
+	if (presetSearch) {
+		const onSearchInput = () => {
+			if (presetSearchClear) presetSearchClear.hidden = !presetSearch.value
+			const prev = presetSel ? presetSel.value : ''
+			rebuildPresets(funcSel ? funcSel.value : '0x03')
+			if (presetSel && presetSel.value !== prev) {
+				presetSel.dispatchEvent(new Event('change'))
+			}
+		}
+		presetSearch.addEventListener('input', onSearchInput)
+		if (presetSearchClear) {
+			presetSearchClear.addEventListener('click', () => {
+				presetSearch.value = ''
+				onSearchInput()
+				presetSearch.focus()
+			})
+		}
+	}
 	if (funcSel) {
+		syncFuncTabs(funcSel.value)
 		rebuildPresets(funcSel.value)
 		funcSel.addEventListener('change', () => {
+			syncFuncTabs(funcSel.value)
 			if (_skipFuncEvent) { _skipFuncEvent = false; return }
+			if (presetSearch && presetSearch.value) {
+				presetSearch.value = ''
+				if (presetSearchClear) presetSearchClear.hidden = true
+			}
 			presetSel.value = ''
 			rebuildPresets(funcSel.value)
 			if (presetSel.value) presetSel.dispatchEvent(new Event('change'))
@@ -2238,15 +2398,10 @@
 		container.innerHTML = ''
 		fields.forEach((f, idx) => {
 			const wrap = document.createElement('div')
-			wrap.style.display = 'inline-flex'
-			wrap.style.alignItems = 'center'
-			wrap.style.gap = '2px'
-			wrap.style.marginRight = '8px'
-			wrap.style.marginBottom = '4px'
+			wrap.className = 'sk-param-multi-item'
 			const lbl = document.createElement('span')
+			lbl.className = 'sk-param-multi-label'
 			lbl.textContent = f.label || ''
-			lbl.style.fontSize = '0.7rem'
-			lbl.style.color = '#6c757d'
 			wrap.appendChild(lbl)
 			if (f.type === 'enum' && f.options) {
 				const sel = document.createElement('select')
@@ -2260,11 +2415,11 @@
 					if (String(k) === String(f.default || Object.keys(f.options)[0])) op.selected = true
 					sel.appendChild(op)
 				}
-				sel.addEventListener('change', () => { if (_currentParamType === 'multi') buildWithParam() })
+				sel.addEventListener('change', () => { if (_buildWithParamRef) _buildWithParamRef() })
 				wrap.appendChild(sel)
 			} else {
 				const inp = document.createElement('input')
-				inp.type = f.type === 'uint8' || f.type === 'uint16le' || f.type === 'int8' ? 'number' : 'text'
+				inp.type = f.type === 'uint8' || f.type === 'uint16le' || f.type === 'uint32le' || f.type === 'int8' ? 'number' : 'text'
 				inp.className = 'form-control form-control-sm'
 				inp.style.width = f.width || '100px'
 				inp.dataset.index = idx
@@ -2272,7 +2427,7 @@
 				if (f.min != null) inp.min = f.min
 				if (f.max != null) inp.max = f.max
 				if (f.placeholder) inp.placeholder = f.placeholder
-				inp.addEventListener('input', () => { if (_currentParamType === 'multi') buildWithParam() })
+				inp.addEventListener('input', () => { if (_buildWithParamRef) _buildWithParamRef() })
 				wrap.appendChild(inp)
 			}
 			container.appendChild(wrap)
@@ -2337,7 +2492,7 @@
 				val = el.value.trim()
 				if (!val) return
 			}
-			if (f.type === 'uint8' || f.type === 'int8') {
+			if (f.type === 'uint8' || f.type === 'int8' || f.type === 'enum') {
 				let n = parseInt(val, 10)
 				if (isNaN(n)) return
 				if (f.type === 'int8') n = n & 0xff
@@ -2346,6 +2501,11 @@
 				let n = parseInt(val, 10)
 				if (isNaN(n)) return
 				bytes.push(n & 0xff, (n >> 8) & 0xff)
+			} else if (f.type === 'uint32le') {
+				let n = parseInt(val, 10)
+				if (isNaN(n) || n < 0 || n > 0xffffffff) return
+				const u = n >>> 0
+				bytes.push(u & 0xff, (u >>> 8) & 0xff, (u >>> 16) & 0xff, (u >>> 24) & 0xff)
 			} else if (f.type === 'hexbytes') {
 				const hb = hexToBytes(val, f.fillLen)
 				bytes.push(...hb)
@@ -2445,7 +2605,13 @@
 		const paramUnit = document.getElementById('serial-protocol-down-param-unit')
 		let _currentParamType = ''
 
-		function buildWithParam() {
+		function setParamUnit(text, isError) {
+			paramUnit.textContent = text || ''
+			paramUnit.style.display = text ? '' : 'none'
+			paramUnit.classList.toggle('is-error', !!isError)
+		}
+
+		function buildWithParam(overrideBaseCode) {
 			const name = presetSel.value
 			if (!name) return
 			const preset = presetItemByName(name)
@@ -2455,6 +2621,7 @@
 			if (funcSel.value !== preset.func) {
 				_skipFuncEvent = true
 				document.getElementById('serial-protocol-down-func').value = preset.func
+				syncFuncTabs(preset.func)
 			}
 			const tlv = JSON.parse(JSON.stringify(preset.tlv || []))
 			if (preset.param) {
@@ -2499,6 +2666,25 @@
 					} else {
 						bytes = hexToBytes(s, preset.param.fillLen)
 					}
+				} else if (preset.param.type === 'largeFlow') {
+					const s = paramVal.value.trim()
+					if (!s) {
+						setParamUnit('下发前自动读当量', false)
+						return
+					}
+					const laneBase = overrideBaseCode != null ? { has: true, code: overrideBaseCode } : getActiveLaneBaseWater()
+					const useCode = laneBase.has && laneBase.code != null ? laneBase.code : 3
+					const res = window.SK_PRESET_CODEC ? window.SK_PRESET_CODEC.largeFlowM3ToBytes(s, useCode) : null
+					if (!res || res.error) {
+						setParamUnit(res && res.error ? res.error : '底度无效', true)
+						return
+					}
+					if (laneBase.has) {
+						setParamUnit(res.baseLabel + ' · ' + res.units + '圈', false)
+					} else {
+						setParamUnit('暂按1L预览 · 下发前自动读当量', false)
+					}
+					bytes = res.bytes
 				} else if (preset.param.type === 'multi') {
 					bytes = multiParamToBytes(preset.param.fields)
 					if (!bytes || !bytes.length) return
@@ -2519,18 +2705,33 @@
 			document.getElementById('serial-protocol-down-tlv').value = tlvStr
 			document.getElementById('serial-protocol-build').click()
 		}
+		_buildWithParamRef = buildWithParam
 
 		presetSel.addEventListener('change', (e) => {
 			const name = e.target.value
-			if (!name) { paramGroup.style.display = 'none'; return }
+			if (!name) {
+				paramGroup.style.display = 'none'
+				if (presetDescEl) { presetDescEl.textContent = ''; presetDescEl.hidden = true }
+				return
+			}
 			const preset = presetItemByName(name)
-			if (!preset) { paramGroup.style.display = 'none'; return }
+			if (!preset) {
+				paramGroup.style.display = 'none'
+				if (presetDescEl) { presetDescEl.textContent = ''; presetDescEl.hidden = true }
+				return
+			}
+			if (presetDescEl) {
+				presetDescEl.textContent = preset.desc || ''
+				presetDescEl.hidden = !preset.desc
+			}
 			if (preset.param) {
 				paramGroup.style.display = ''
+				paramLabel.style.display = preset.param.type === 'multi' ? 'none' : ''
 				paramLabel.textContent = preset.param.label || '参数'
 				// 切换非 multi 预设时隐藏 multi 容器，避免残留
 				const multiContainer = document.getElementById('serial-protocol-down-param-multi')
 				if (multiContainer) { multiContainer.style.display = 'none'; multiContainer.innerHTML = '' }
+				paramVal.removeAttribute('inputmode')
 				if (preset.param.type === 'enum') {
 					paramVal.style.display = 'none'
 					paramVal.type = 'text'
@@ -2546,7 +2747,7 @@
 						if (String(k) === String(def)) op.selected = true
 						paramSelEnum.appendChild(op)
 					}
-					paramUnit.textContent = ''
+					setParamUnit('', false)
 					_currentParamType = 'uint8'
 				} else if (preset.param.type === 'ascii') {
 					paramVal.type = 'text'
@@ -2555,7 +2756,7 @@
 					paramSelEnum.style.display = 'none'
 					paramVal.value = preset.param.default || ''
 					paramVal.placeholder = preset.param.placeholder || '值'
-					paramUnit.textContent = ''
+					setParamUnit('', false)
 					_currentParamType = 'ascii'
 				} else if (preset.param.type === 'bcd') {
 					paramVal.type = 'text'
@@ -2563,7 +2764,8 @@
 					paramVal.style.width = '180px'
 					paramSelEnum.style.display = 'none'
 					paramVal.value = preset.param.default || ''
-					paramUnit.textContent = '(BCD LE)'
+					paramVal.placeholder = preset.param.placeholder || '纯数字'
+					setParamUnit('(BCD LE)', false)
 					_currentParamType = 'bcd'
 				} else if (preset.param.type === 'dailyQuery') {
 					paramVal.type = 'number'
@@ -2573,7 +2775,7 @@
 					paramVal.min = '1'
 					paramVal.max = String(preset.param.max || 60)
 					paramVal.value = preset.param.default || '30'
-					paramUnit.textContent = '天(日起=今天,≤60)'
+					setParamUnit('天(日起=今天,≤60)', false)
 					_currentParamType = 'dailyQuery'
 				} else if (preset.param.type === 'errLogQuery') {
 					paramVal.type = 'number'
@@ -2583,7 +2785,7 @@
 					paramVal.removeAttribute('min')
 					paramVal.removeAttribute('max')
 					paramVal.value = preset.param.default || '4'
-					paramUnit.textContent = '条(起点=现在)'
+					setParamUnit('条(起点=现在)', false)
 					_currentParamType = 'errLogQuery'
 				} else if (preset.param.type === 'histDate') {
 					const b = histDateBounds(preset.param.maxDays || 60)
@@ -2594,7 +2796,7 @@
 					paramVal.min = b.min
 					paramVal.max = b.max
 					paramVal.value = preset.param.default || b.default
-					paramUnit.textContent = '近' + (preset.param.maxDays || 60) + '日可选'
+					setParamUnit('近' + (preset.param.maxDays || 60) + '日可选', false)
 					_currentParamType = 'histDate'
 				} else if (preset.param.type === 'hexbytes') {
 					paramVal.type = 'text'
@@ -2603,12 +2805,24 @@
 					paramSelEnum.style.display = 'none'
 					paramVal.value = preset.param.default || ''
 					paramVal.placeholder = preset.param.placeholder || 'HEX, 如 01:02:03:04:05:06'
-					paramUnit.textContent = preset.param.fillLen ? ('(' + preset.param.fillLen + 'B)') : ''
+					setParamUnit(preset.param.fillLen ? ('(' + preset.param.fillLen + 'B)') : '', false)
 					_currentParamType = 'hexbytes'
+				} else if (preset.param.type === 'largeFlow') {
+					paramVal.type = 'text'
+					paramVal.inputMode = 'decimal'
+					paramVal.style.display = ''
+					paramVal.style.width = '120px'
+					paramSelEnum.style.display = 'none'
+					paramVal.removeAttribute('min')
+					paramVal.removeAttribute('max')
+					paramVal.value = preset.param.default != null ? String(preset.param.default) : '0'
+					paramVal.placeholder = preset.param.placeholder || '输入 m³，如 123.456'
+					setParamUnit('下发前自动读当量', false)
+					_currentParamType = 'largeFlow'
 				} else if (preset.param.type === 'multi') {
 					paramVal.style.display = 'none'
 					paramSelEnum.style.display = 'none'
-					paramUnit.textContent = ''
+					setParamUnit('', false)
 					renderMultiFields(preset.param.fields)
 					_currentParamType = 'multi'
 				} else {
@@ -2619,7 +2833,8 @@
 					paramVal.removeAttribute('min')
 					paramVal.removeAttribute('max')
 					paramVal.value = preset.param.default || '0'
-					paramUnit.textContent = preset.param.type === 'uint32le' ? '(uint32 LE)' : preset.param.type === 'uint16le' ? '(uint16 LE)' : '(u8)'
+					paramVal.placeholder = preset.param.placeholder || '值'
+					setParamUnit(preset.param.type === 'uint32le' ? '(uint32 LE)' : preset.param.type === 'uint16le' ? '(uint16 LE)' : '(u8)', false)
 					_currentParamType = preset.param.type
 				}
 			} else {
@@ -5486,10 +5701,12 @@
 		noteSerialRx(sid)
 		SerialHub._sess(sid).rxBytes += data.length
 		// 先组装并记录本次 RX，再通知可能同步发出 TX 的订阅者，避免发送前 flush 拆掉上一块半帧。
-		try {
-			logReceivedData(data, sid, meta)
-		} catch (e) {
-			addLogErrSafe('记录接收数据出错(' + sid + '): ' + (e && e.message ? e.message : e), sid)
+		if (!(window.serialApi && typeof window.serialApi.isRxLogSuppressed === 'function' && window.serialApi.isRxLogSuppressed(sid))) {
+			try {
+				logReceivedData(data, sid, meta)
+			} catch (e) {
+				addLogErrSafe('记录接收数据出错(' + sid + '): ' + (e && e.message ? e.message : e), sid)
+			}
 		}
 		//立即把原始字节交给固件升级/协议测试等模块,由其自行按协议帧边界组装
 		// 只转发当前可见模式的会话，隐藏模式的口继续收日志但不污染 serialApi
@@ -5654,6 +5871,16 @@
 		},
 		//升级进行中时禁止第三方协议解析日志,避免干扰
 		suppressParse: false,
+		// 按路暂停 RX 日志写入与持久化（如 eSIM ZMODEM 独占会话期间），不影响 onReceiveFrom 与收字节计数
+		_suppressRxLogSids: Object.create(null),
+		setSuppressRxLog(sid, on) {
+			if (sid !== 'S' && sid !== 'A' && sid !== 'B') return
+			if (on) this._suppressRxLogSids[sid] = true
+			else delete this._suppressRxLogSids[sid]
+		},
+		isRxLogSuppressed(sid) {
+			return !!(sid && this._suppressRxLogSids[sid])
+		},
 		_onReceive: null,
 		_receivers: [],
 		onReceive(cb) {

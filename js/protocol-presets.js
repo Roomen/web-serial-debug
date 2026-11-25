@@ -1,5 +1,5 @@
 // 下行下发常用指令模板 (协议版本固定v2)
-// param.type: uint32le | uint16le | uint8 | enum | ascii
+// param.type: uint32le | uint16le | uint8 | enum | ascii | bcd | hexbytes | multi | largeFlow | dailyQuery | errLogQuery | histDate
 // param.options: { key: label } 仅 type=enum 时有效
 window.SK_DOWN_PRESETS = [
 	{
@@ -14,18 +14,28 @@ window.SK_DOWN_PRESETS = [
 			{ name: '配置APN', func: '0x01', desc: 'Tag3-ID7 APN信息 ASCII',
 				param: { label: 'APN', type: 'ascii', default: '', fillLen: 32 },
 				tlv: [{ tag: 3, items: [{ id: 7 }] }] },
-			{ name: '设置上报时间参数', func: '0x01', desc: 'Tag3-ID8 起始DD+hh+最大上报时长(预留) 见TLV',
-				tlv: [{ tag: 3, items: [{ id: 8, value: [] }] }] },
+			{ name: '设置上报时间参数', func: '0x01', desc: 'Tag3-ID8 起始日(1-31)+起始时(0-23)+最大上报时长(分钟,预留)',
+				param: { type: 'multi', fields: [
+					{ label: '起始日', type: 'uint8', default: '1', min: '1', max: '31', width: '70px' },
+					{ label: '起始时', type: 'uint8', default: '0', min: '0', max: '23', width: '70px' },
+					{ label: '最大时长(分)', type: 'uint16le', default: '0', min: '0', max: '65535', width: '85px' }
+				] },
+				tlv: [{ tag: 3, items: [{ id: 8 }] }] },
 			{ name: '设置上报重发次数', func: '0x01', desc: 'Tag3-ID10 上报重发次数 0-4',
 				param: { label: '次数', type: 'uint8', default: '1' },
 				tlv: [{ tag: 3, items: [{ id: 10 }] }] },
 			{ name: '设置上报重发间隔', func: '0x01', desc: 'Tag3-ID11 上报重发间隔(分钟)',
 				param: { label: '间隔(分钟)', type: 'uint8', default: '20' },
 				tlv: [{ tag: 3, items: [{ id: 11 }] }] },
-			{ name: '设置通信方式', func: '0x01', desc: 'Tag3-ID23 bit7-5运营商 bit4-0协议 见TLV',
-				tlv: [{ tag: 3, items: [{ id: 23, value: [] }] }] },
-			{ name: '设置上报定时点', func: '0x01', desc: 'Tag3-ID44 6组定时点(时+分各1B)共12B 见TLV',
-				tlv: [{ tag: 3, items: [{ id: 44, value: [] }] }] },
+			{ name: '设置通信方式', func: '0x01', desc: 'Tag3-ID23 bit7-5运营商 bit4-0协议',
+				param: { type: 'multi', fields: [
+					{ label: '运营商', type: 'enum', bits: [7, 5], default: '0', width: '90px', options: { 0: '通用', 1: '移动', 2: '电信', 3: '联通' } },
+					{ label: '协议', type: 'enum', bits: [4, 0], default: '0', width: '115px', options: { 0: 'UDP直连', 1: 'TCP', 2: 'OneNet', 3: 'OCCoap', 4: 'AEP', 5: 'MQTT', 6: 'SSL', 7: 'DTSL', 8: 'MQTT_SSL', 9: 'LwM2M', 10: 'HTTP', 11: 'BLE' } }
+				] },
+				tlv: [{ tag: 3, items: [{ id: 23 }] }] },
+			{ name: '设置上报定时点', func: '0x01', desc: 'Tag3-ID44 6组定时点(每组时1B+分1B) 共12B',
+				param: { label: '定时点HEX', type: 'hexbytes', default: '', fillLen: 12, placeholder: '6组时分 如 0800 1200…' },
+				tlv: [{ tag: 3, items: [{ id: 44 }] }] },
 		]
 	},
 	{
@@ -37,8 +47,13 @@ window.SK_DOWN_PRESETS = [
 			{ name: '配置维护平台IP', func: '0x01', desc: 'Tag3-ID21 维护后台地址端口 ASCII 建议ip/域名,端口',
 				param: { label: '地址', type: 'ascii', default: '', fillLen: 32, placeholder: '建议: host,port' },
 				tlv: [{ tag: 3, items: [{ id: 21 }] }] },
-			{ name: '设置维护上报时间参数', func: '0x01', desc: 'Tag3-ID27 起始DD+hh+最大上报时长(预留) 见TLV',
-				tlv: [{ tag: 3, items: [{ id: 27, value: [] }] }] },
+			{ name: '设置维护上报时间参数', func: '0x01', desc: 'Tag3-ID27 起始日(1-31)+起始时(0-23)+最大上报时长(分钟,预留)',
+				param: { type: 'multi', fields: [
+					{ label: '起始日', type: 'uint8', default: '1', min: '1', max: '31', width: '70px' },
+					{ label: '起始时', type: 'uint8', default: '0', min: '0', max: '23', width: '70px' },
+					{ label: '最大时长(分)', type: 'uint16le', default: '0', min: '0', max: '65535', width: '85px' }
+				] },
+				tlv: [{ tag: 3, items: [{ id: 27 }] }] },
 			{ name: '设置维护平台连接模式', func: '0x01', desc: 'Tag3-ID40 维护平台连接模式',
 				param: { label: '连接模式', type: 'enum', default: '0', options: { 0: 'IPV4', 1: 'IPV6' } },
 				tlv: [{ tag: 3, items: [{ id: 40 }] }] },
@@ -62,8 +77,9 @@ window.SK_DOWN_PRESETS = [
 			{ name: '设置电压告警阈值', func: '0x01', desc: 'Tag3-ID4 电压告警阈值(0.01V)',
 				param: { label: '阈值(0.01V)', type: 'uint16le', default: '0' },
 				tlv: [{ tag: 3, items: [{ id: 4 }] }] },
-			{ name: '设置即时告警ID', func: '0x01', desc: 'Tag3-ID5 16位位域(HEX) 见TLV编辑',
-				tlv: [{ tag: 3, items: [{ id: 5, value: [] }] }] },
+			{ name: '设置即时告警ID', func: '0x01', desc: 'Tag3-ID5 16位位域(2B HEX)',
+				param: { label: '告警位域', type: 'hexbytes', default: '', fillLen: 2, placeholder: '2B HEX 如 07 00' },
+				tlv: [{ tag: 3, items: [{ id: 5 }] }] },
 			{ name: '设置环境温度报警阈值', func: '0x01', desc: 'Tag3-ID33 低温+高温(℃) int8各1B',
 				param: { type: 'multi', fields: [
 					{ label: '低温(℃)', type: 'int8', default: '0', min: '-40', max: '85' },
@@ -78,10 +94,12 @@ window.SK_DOWN_PRESETS = [
 			{ name: '设置计量底度', func: '0x01', desc: 'Tag3-ID17 计量底度(L)',
 				param: { label: '底度(L)', type: 'uint32le', default: '0' },
 				tlv: [{ tag: 3, items: [{ id: 17 }] }] },
-			{ name: '设置计量底度正累积(大口径)', func: '0x01', desc: 'Tag3-ID35 大口径正累积底度 状态+7B值 见TLV',
-				tlv: [{ tag: 3, items: [{ id: 35, value: [] }] }] },
-			{ name: '设置计量底度逆累积(大口径)', func: '0x01', desc: 'Tag3-ID36 大口径逆累积底度 状态+7B值 见TLV',
-				tlv: [{ tag: 3, items: [{ id: 36, value: [] }] }] },
+			{ name: '设置计量底度正累积(大口径)', func: '0x01', desc: 'Tag3-ID35 大口径正累积底度(m³)，下发前自动读当量换算',
+				param: { label: '底度(m³)', type: 'largeFlow', default: '0', placeholder: '输入 m³，如 123.456' },
+				tlv: [{ tag: 3, items: [{ id: 35 }] }] },
+			{ name: '设置计量底度逆累积(大口径)', func: '0x01', desc: 'Tag3-ID36 大口径逆累积底度(m³)，下发前自动读当量换算',
+				param: { label: '底度(m³)', type: 'largeFlow', default: '0', placeholder: '输入 m³，如 0' },
+				tlv: [{ tag: 3, items: [{ id: 36 }] }] },
 			{ name: '设置水表口径', func: '0x01', desc: 'Tag3-ID18 水表口径',
 				param: { label: '口径', type: 'enum', default: '5', options: { 1: '15mm', 2: '20mm', 3: '25mm', 4: '32mm', 5: '40mm', 6: '50mm', 7: '65mm', 8: '80mm', 9: '100mm', 10: '125mm', 11: '150mm', 12: '200mm', 13: '250mm', 14: '300mm' } },
 				tlv: [{ tag: 3, items: [{ id: 18 }] }] },
@@ -149,8 +167,12 @@ window.SK_DOWN_PRESETS = [
 			{ name: '设置设备校时类型', func: '0x01', desc: 'Tag3-ID32 校时类型',
 				param: { label: '校时类型', type: 'enum', default: '1', options: { 0: '基站校时', 1: '服务器校时' } },
 				tlv: [{ tag: 3, items: [{ id: 32 }] }] },
-			{ name: '设置电池参数', func: '0x01', desc: 'Tag3-ID39 总容量+起始容量 uint16各2B 见TLV',
-				tlv: [{ tag: 3, items: [{ id: 39, value: [] }] }] },
+			{ name: '设置电池参数', func: '0x01', desc: 'Tag3-ID39 总容量+起始容量(10mAh) 各2B LE',
+				param: { type: 'multi', fields: [
+					{ label: '总容量(10mAh)', type: 'uint16le', default: '0', min: '0', max: '65535', width: '90px' },
+					{ label: '起始容量(10mAh)', type: 'uint16le', default: '0', min: '0', max: '65535', width: '90px' }
+				] },
+				tlv: [{ tag: 3, items: [{ id: 39 }] }] },
 			{ name: '设置结算日参数', func: '0x01', desc: 'Tag3-ID13 起始日+结算日间隔(天) 各1B',
 				param: { type: 'multi', fields: [
 					{ label: '起始日', type: 'uint8', default: '1', min: '1', max: '31' },
@@ -165,8 +187,9 @@ window.SK_DOWN_PRESETS = [
 	{
 		group: '参数设置-TAG32摄像表 (0x01)',
 		items: [
-			{ name: '设置坐标', func: '0x01', desc: 'Tag32-ID1 Y X1-X8 各16bit LE 共18B 见TLV',
-				tlv: [{ tag: 32, items: [{ id: 1, value: [] }] }] },
+			{ name: '设置坐标', func: '0x01', desc: 'Tag32-ID1 Y X1-X8 各16bit LE 共18B',
+				param: { label: '坐标HEX', type: 'hexbytes', default: '', fillLen: 18, placeholder: '18B HEX (Y+X1..X8)' },
+				tlv: [{ tag: 32, items: [{ id: 1 }] }] },
 			{ name: '设置字轮宽', func: '0x01', desc: 'Tag32-ID2 字轮宽 0-25',
 				param: { label: '宽度', type: 'uint16le', default: '0' },
 				tlv: [{ tag: 32, items: [{ id: 2 }] }] },
@@ -224,10 +247,12 @@ window.SK_DOWN_PRESETS = [
 			{ name: '设置总线表组', func: '0x01', desc: 'Tag33-ID0 总线表组 默认0',
 				param: { label: '组号', type: 'uint8', default: '0' },
 				tlv: [{ tag: 33, items: [{ id: 0 }] }] },
-			{ name: '设置总线表地址1', func: '0x01', desc: 'Tag33-ID1 地址BCD小端 7B 0/全FF删除 见TLV',
-				tlv: [{ tag: 33, items: [{ id: 1, value: [] }] }] },
-			{ name: '设置抄表日期(旧)', func: '0x01', desc: 'Tag33-ID21 BYTE[N]=1表示日期N需抄表 32B 见TLV',
-				tlv: [{ tag: 33, items: [{ id: 21, value: [] }] }] },
+			{ name: '设置总线表地址1', func: '0x01', desc: 'Tag33-ID1 地址BCD小端 7B (0或全FF删除)',
+				param: { label: '表地址(数字)', type: 'bcd', default: '', fillLen: 7 },
+				tlv: [{ tag: 33, items: [{ id: 1 }] }] },
+			{ name: '设置抄表日期(旧)', func: '0x01', desc: 'Tag33-ID21 BYTE[N]=1表示日期N需抄表 32B',
+				param: { label: '日期HEX', type: 'hexbytes', default: '', fillLen: 32, placeholder: '32B HEX' },
+				tlv: [{ tag: 33, items: [{ id: 21 }] }] },
 			{ name: '设置抄表定时点', func: '0x01', desc: 'Tag33-ID22 0-23时',
 				param: { label: '定时点(时)', type: 'uint8', default: '0' },
 				tlv: [{ tag: 33, items: [{ id: 22 }] }] },
@@ -268,8 +293,15 @@ window.SK_DOWN_PRESETS = [
 			{ name: '设置计量过滤模式', func: '0x01', desc: 'Tag34-ID2 计量过滤模式',
 				param: { label: '过滤模式', type: 'enum', default: '0', options: { 0: '常规', 1: '开猫16ms滤波', 2: '开猫32ms滤波', 3: '开猫不计量' } },
 				tlv: [{ tag: 34, items: [{ id: 2 }] }] },
-			{ name: '设置SENSOR参数', func: '0x01', desc: 'Tag34-ID3 BADJ1+BAJD2+采样周期+预留+测量时长 6B 见TLV',
-				tlv: [{ tag: 34, items: [{ id: 3, value: [] }] }] },
+			{ name: '设置SENSOR参数', func: '0x01', desc: 'Tag34-ID3 BADJ1+BADJ2+采样周期+预留+测量时长(2B)',
+				param: { type: 'multi', fields: [
+					{ label: 'BADJ1', type: 'uint8', default: '0', min: '0', max: '255', width: '65px' },
+					{ label: 'BADJ2', type: 'uint8', default: '0', min: '0', max: '255', width: '65px' },
+					{ label: '采样周期', type: 'uint8', default: '0', min: '0', max: '255', width: '65px' },
+					{ label: '预留', type: 'uint8', default: '0', min: '0', max: '255', width: '65px' },
+					{ label: '测量时长', type: 'uint16le', default: '0', min: '0', max: '65535', width: '80px' }
+				] },
+				tlv: [{ tag: 34, items: [{ id: 3 }] }] },
 			{ name: '设置采样距离', func: '0x01', desc: 'Tag34-ID5 采样距离(mm)',
 				param: { label: '距离(mm)', type: 'uint8', default: '0' },
 				tlv: [{ tag: 34, items: [{ id: 5 }] }] },
@@ -290,8 +322,9 @@ window.SK_DOWN_PRESETS = [
 			{ name: '设置网络ID', func: '0x01', desc: 'Tag35-ID3 2字节网络ID高字节在前',
 				param: { label: '网络ID', type: 'hexbytes', default: '', fillLen: 2, placeholder: '如 00:01' },
 				tlv: [{ tag: 35, items: [{ id: 3 }] }] },
-			{ name: '设置参数配置', func: '0x01', desc: 'Tag35-ID4 8B:第三方抄表+低压关阀+除锈+通信时间 见TLV',
-				tlv: [{ tag: 35, items: [{ id: 4, value: [] }] }] },
+			{ name: '设置参数配置', func: '0x01', desc: 'Tag35-ID4 8B:第三方抄表+低压关阀+除锈+通信时间',
+				param: { label: '参数HEX', type: 'hexbytes', default: '', fillLen: 8, placeholder: '8B HEX' },
+				tlv: [{ tag: 35, items: [{ id: 4 }] }] },
 		]
 	},
 	{
@@ -327,10 +360,15 @@ window.SK_DOWN_PRESETS = [
 			{ name: '设置磁干扰关阀周期', func: '0x01', desc: 'Tag36-ID10 天 1-15 默认7',
 				param: { label: '周期(天)', type: 'uint8', default: '7' },
 				tlv: [{ tag: 36, items: [{ id: 10 }] }] },
-			{ name: '设置关阀高频上报起止时间', func: '0x01', desc: 'Tag36-ID11 起始时+结束时 默认6-18 见TLV',
-				tlv: [{ tag: 36, items: [{ id: 11, value: [] }] }] },
-			{ name: '设置开度调整时间参数', func: '0x01', desc: 'Tag36-ID12 频率天+4时段(起hh起mm开度) 16B 见TLV',
-				tlv: [{ tag: 36, items: [{ id: 12, value: [] }] }] },
+			{ name: '设置关阀高频上报起止时间', func: '0x01', desc: 'Tag36-ID11 起始时+结束时 默认6-18',
+				param: { type: 'multi', fields: [
+					{ label: '起始时(0-23)', type: 'uint8', default: '6', min: '0', max: '23', width: '70px' },
+					{ label: '结束时(0-23)', type: 'uint8', default: '18', min: '0', max: '23', width: '70px' }
+				] },
+				tlv: [{ tag: 36, items: [{ id: 11 }] }] },
+			{ name: '设置开度调整时间参数', func: '0x01', desc: 'Tag36-ID12 频率天+4时段(起hh起mm开度) 16B',
+				param: { label: '参数HEX', type: 'hexbytes', default: '', fillLen: 16, placeholder: '16B HEX' },
+				tlv: [{ tag: 36, items: [{ id: 12 }] }] },
 			{ name: '设置阀控功能开关', func: '0x01', desc: 'Tag36-ID13 1开启 0关闭 默认1',
 				param: { label: '阀控功能', type: 'enum', default: '1', options: { 0: '关闭', 1: '开启' } },
 				tlv: [{ tag: 36, items: [{ id: 13 }] }] },
@@ -391,38 +429,79 @@ window.SK_DOWN_PRESETS = [
 	{
 		group: '参数设置-TAG39告警 (0x01)',
 		items: [
-			{ name: '设置突发大用水告警参数', func: '0x01', desc: 'Tag39-ID1 使能1B+持续时间2B(M)+阈值4B(L)+判断阈值1B(L) 见TLV',
-				tlv: [{ tag: 39, items: [{ id: 1, value: [] }] }] },
-			{ name: '设置分时段低流量告警参数', func: '0x01', desc: 'Tag39-ID2 使能1B+4分段(起止2B+流量4B) 见TLV',
-				tlv: [{ tag: 39, items: [{ id: 2, value: [] }] }] },
-			{ name: '设置持续小流量告警参数', func: '0x01', desc: 'Tag39-ID3 持续时间2B(min)+流量阈值2B(L) 见TLV',
-				tlv: [{ tag: 39, items: [{ id: 3, value: [] }] }] },
-			{ name: '设置逆流阶段预警阈值参数', func: '0x01', desc: 'Tag39-ID4 使能1B+一级/二级/三级阈值各4B(L) 13B 见TLV',
-				tlv: [{ tag: 39, items: [{ id: 4, value: [] }] }] },
+			{ name: '设置突发大用水告警参数', func: '0x01', desc: 'Tag39-ID1 使能1B+持续时间2B(分)+阈值4B(L)+判断阈值1B(L)',
+				param: { type: 'multi', fields: [
+					{ label: '使能', type: 'enum', default: '1', width: '80px', options: { 0: '关闭', 1: '开启' } },
+					{ label: '持续时间(分)', type: 'uint16le', default: '0', min: '0', max: '65535', width: '80px' },
+					{ label: '阈值(L)', type: 'uint32le', default: '0', min: '0', width: '90px' },
+					{ label: '判断阈值(L)', type: 'uint8', default: '0', min: '0', max: '255', width: '70px' }
+				] },
+				tlv: [{ tag: 39, items: [{ id: 1 }] }] },
+			{ name: '设置分时段低流量告警参数', func: '0x01', desc: 'Tag39-ID2 使能1B+4分段(起止2B+流量4B) 33B',
+				param: { label: '参数HEX', type: 'hexbytes', default: '', fillLen: 33, placeholder: '33B HEX' },
+				tlv: [{ tag: 39, items: [{ id: 2 }] }] },
+			{ name: '设置持续小流量告警参数', func: '0x01', desc: 'Tag39-ID3 持续时间2B(min)+流量阈值2B(L)',
+				param: { type: 'multi', fields: [
+					{ label: '持续时间(分)', type: 'uint16le', default: '0', min: '0', max: '65535', width: '85px' },
+					{ label: '流量阈值(L)', type: 'uint16le', default: '0', min: '0', max: '65535', width: '85px' }
+				] },
+				tlv: [{ tag: 39, items: [{ id: 3 }] }] },
+			{ name: '设置逆流阶段预警阈值参数', func: '0x01', desc: 'Tag39-ID4 使能1B+一级/二级/三级阈值各4B(L) 13B',
+				param: { type: 'multi', fields: [
+					{ label: '使能', type: 'enum', default: '1', width: '80px', options: { 0: '关闭', 1: '开启' } },
+					{ label: '一级(L)', type: 'uint32le', default: '10', min: '0', width: '80px' },
+					{ label: '二级(L)', type: 'uint32le', default: '50', min: '0', width: '80px' },
+					{ label: '三级(L)', type: 'uint32le', default: '100', min: '0', width: '80px' }
+				] },
+				tlv: [{ tag: 39, items: [{ id: 4 }] }] },
 		]
 	},
 	{
 		group: '参数设置-TAG30超声波 (0x01)',
 		items: [
-			{ name: '设置流量点', func: '0x01', desc: 'Tag30-ID1 7个4字节流量值 28B 见TLV',
-				tlv: [{ tag: 30, items: [{ id: 1, value: [] }] }] },
-			{ name: '设置正向时差', func: '0x01', desc: 'Tag30-ID2 7个4字节正向值 28B 见TLV',
-				tlv: [{ tag: 30, items: [{ id: 2, value: [] }] }] },
-			{ name: '设置反向时差', func: '0x01', desc: 'Tag30-ID3 7个4字节反向值 28B 见TLV',
-				tlv: [{ tag: 30, items: [{ id: 3, value: [] }] }] },
-			{ name: '设置通道1声速比值、补偿值', func: '0x01', desc: 'Tag30-ID4 声速比值2B+补偿值2B 见TLV',
-				tlv: [{ tag: 30, items: [{ id: 4, value: [] }] }] },
-			{ name: '设置通道2声速比值、补偿值', func: '0x01', desc: 'Tag30-ID5 声速比值2B+补偿值2B 见TLV',
-				tlv: [{ tag: 30, items: [{ id: 5, value: [] }] }] },
-			{ name: '设置通道3声速比值、补偿值', func: '0x01', desc: 'Tag30-ID6 声速比值2B+补偿值2B 见TLV',
-				tlv: [{ tag: 30, items: [{ id: 6, value: [] }] }] },
-			{ name: '设置通道4声速比值、补偿值', func: '0x01', desc: 'Tag30-ID7 声速比值2B+补偿值2B 见TLV',
-				tlv: [{ tag: 30, items: [{ id: 7, value: [] }] }] },
+			{ name: '设置流量点', func: '0x01', desc: 'Tag30-ID1 7个4字节流量值 28B',
+				param: { label: '流量点HEX', type: 'hexbytes', default: '', fillLen: 28, placeholder: '28B HEX' },
+				tlv: [{ tag: 30, items: [{ id: 1 }] }] },
+			{ name: '设置正向时差', func: '0x01', desc: 'Tag30-ID2 7个4字节正向值 28B',
+				param: { label: '正向时差HEX', type: 'hexbytes', default: '', fillLen: 28, placeholder: '28B HEX' },
+				tlv: [{ tag: 30, items: [{ id: 2 }] }] },
+			{ name: '设置反向时差', func: '0x01', desc: 'Tag30-ID3 7个4字节反向值 28B',
+				param: { label: '反向时差HEX', type: 'hexbytes', default: '', fillLen: 28, placeholder: '28B HEX' },
+				tlv: [{ tag: 30, items: [{ id: 3 }] }] },
+			{ name: '设置通道1声速比值、补偿值', func: '0x01', desc: 'Tag30-ID4 声速比值2B+补偿值2B',
+				param: { type: 'multi', fields: [
+					{ label: '声速比值', type: 'uint16le', default: '0', width: '85px' },
+					{ label: '补偿值', type: 'uint16le', default: '0', width: '85px' }
+				] },
+				tlv: [{ tag: 30, items: [{ id: 4 }] }] },
+			{ name: '设置通道2声速比值、补偿值', func: '0x01', desc: 'Tag30-ID5 声速比值2B+补偿值2B',
+				param: { type: 'multi', fields: [
+					{ label: '声速比值', type: 'uint16le', default: '0', width: '85px' },
+					{ label: '补偿值', type: 'uint16le', default: '0', width: '85px' }
+				] },
+				tlv: [{ tag: 30, items: [{ id: 5 }] }] },
+			{ name: '设置通道3声速比值、补偿值', func: '0x01', desc: 'Tag30-ID6 声速比值2B+补偿值2B',
+				param: { type: 'multi', fields: [
+					{ label: '声速比值', type: 'uint16le', default: '0', width: '85px' },
+					{ label: '补偿值', type: 'uint16le', default: '0', width: '85px' }
+				] },
+				tlv: [{ tag: 30, items: [{ id: 6 }] }] },
+			{ name: '设置通道4声速比值、补偿值', func: '0x01', desc: 'Tag30-ID7 声速比值2B+补偿值2B',
+				param: { type: 'multi', fields: [
+					{ label: '声速比值', type: 'uint16le', default: '0', width: '85px' },
+					{ label: '补偿值', type: 'uint16le', default: '0', width: '85px' }
+				] },
+				tlv: [{ tag: 30, items: [{ id: 7 }] }] },
 			{ name: '设置窗口延时时间', func: '0x01', desc: 'Tag30-ID8 0.1us',
 				param: { label: '延时(0.1us)', type: 'uint16le', default: '0' },
 				tlv: [{ tag: 30, items: [{ id: 8 }] }] },
-			{ name: '设置流量补偿值', func: '0x01', desc: 'Tag30-ID9 高温/常温/低温 各2B 见TLV',
-				tlv: [{ tag: 30, items: [{ id: 9, value: [] }] }] },
+			{ name: '设置流量补偿值', func: '0x01', desc: 'Tag30-ID9 高温/常温/低温 各2B',
+				param: { type: 'multi', fields: [
+					{ label: '高温', type: 'uint16le', default: '0', width: '75px' },
+					{ label: '常温', type: 'uint16le', default: '0', width: '75px' },
+					{ label: '低温', type: 'uint16le', default: '0', width: '75px' }
+				] },
+				tlv: [{ tag: 30, items: [{ id: 9 }] }] },
 			{ name: '设置阈值电压', func: '0x01', desc: 'Tag30-ID10 范围10-250',
 				param: { label: '阈值电压', type: 'uint8', default: '10' },
 				tlv: [{ tag: 30, items: [{ id: 10 }] }] },
@@ -435,8 +514,14 @@ window.SK_DOWN_PRESETS = [
 			{ name: '设置压力启用状态', func: '0x01', desc: 'Tag30-ID13 1启动 0未启用',
 				param: { label: '启用状态', type: 'enum', default: '0', options: { 0: '未启用', 1: '启动' } },
 				tlv: [{ tag: 30, items: [{ id: 13 }] }] },
-			{ name: '设置通道初始时间', func: '0x01', desc: 'Tag30-ID14 通道1-4初始时间各2B 见TLV',
-				tlv: [{ tag: 30, items: [{ id: 14, value: [] }] }] },
+			{ name: '设置通道初始时间', func: '0x01', desc: 'Tag30-ID14 通道1-4初始时间各2B',
+				param: { type: 'multi', fields: [
+					{ label: '通道1', type: 'uint16le', default: '0', width: '70px' },
+					{ label: '通道2', type: 'uint16le', default: '0', width: '70px' },
+					{ label: '通道3', type: 'uint16le', default: '0', width: '70px' },
+					{ label: '通道4', type: 'uint16le', default: '0', width: '70px' }
+				] },
+				tlv: [{ tag: 30, items: [{ id: 14 }] }] },
 			{ name: '设置始动静态阈值', func: '0x01', desc: 'Tag30-ID15 10ps',
 				param: { label: '阈值(10ps)', type: 'uint16le', default: '0' },
 				tlv: [{ tag: 30, items: [{ id: 15 }] }] },
@@ -449,10 +534,12 @@ window.SK_DOWN_PRESETS = [
 			{ name: '设置显示范围', func: '0x01', desc: 'Tag30-ID18 0电子式带正负 1机械式倒流减至全9',
 				param: { label: '显示范围', type: 'enum', default: '0', options: { 0: '电子式带正负', 1: '机械式倒流减至全9' } },
 				tlv: [{ tag: 30, items: [{ id: 18 }] }] },
-			{ name: '设置东剑管道正流系数', func: '0x01', desc: 'Tag30-ID19 float×7 小到大流量 28B 见TLV',
-				tlv: [{ tag: 30, items: [{ id: 19, value: [] }] }] },
-			{ name: '设置东剑管道反流系数', func: '0x01', desc: 'Tag30-ID20 float×7 小到大流量 28B 见TLV',
-				tlv: [{ tag: 30, items: [{ id: 20, value: [] }] }] },
+			{ name: '设置东剑管道正流系数', func: '0x01', desc: 'Tag30-ID19 float×7 小到大流量 28B',
+				param: { label: '正流系数HEX', type: 'hexbytes', default: '', fillLen: 28, placeholder: '28B HEX' },
+				tlv: [{ tag: 30, items: [{ id: 19 }] }] },
+			{ name: '设置东剑管道反流系数', func: '0x01', desc: 'Tag30-ID20 float×7 小到大流量 28B',
+				param: { label: '反流系数HEX', type: 'hexbytes', default: '', fillLen: 28, placeholder: '28B HEX' },
+				tlv: [{ tag: 30, items: [{ id: 20 }] }] },
 		]
 	},
 	{
@@ -509,8 +596,9 @@ window.SK_DOWN_PRESETS = [
 			{ name: '初始化', func: '0x11', desc: 'Tag93 初始化(协议0-3; FlowLogic C 现为1-4请按设备确认)',
 				param: { label: '初始化类型', type: 'enum', default: '0', options: { 0: '数据初始化', 1: '参数初始化', 2: '恢复出厂', 3: '信息初始化' } },
 				tlv: [{ tag: 93, items: [{ id: 2 }] }] },
-			{ name: '总线表阀门控制', func: '0x11', desc: 'Tag93-ID10 总线表阀门(详见TLV)',
-				tlv: [{ tag: 93, items: [{ id: 10, value: [] }] }] },
+			{ name: '总线表阀门控制', func: '0x11', desc: 'Tag93-ID10 表数1B+每表(地址7B BCD小端+动作1B)',
+				param: { label: '控制HEX', type: 'hexbytes', default: '', placeholder: '表数1B+地址7B+动作1B' },
+				tlv: [{ tag: 93, items: [{ id: 10 }] }] },
 			{ name: '阀门开阀度控制', func: '0x11', desc: 'Tag93-ID17 开阀度0-100',
 				param: { label: '开阀度(0-100)', type: 'uint8', default: '100' },
 				tlv: [{ tag: 93, items: [{ id: 17 }] }] },
@@ -526,8 +614,9 @@ window.SK_DOWN_PRESETS = [
 			{ name: '启动模组FOTA', func: '0x11', desc: 'Tag93-ID4 预留(文档未定义取值,按需填写)',
 				param: { label: '值', type: 'uint8', default: '1' },
 				tlv: [{ tag: 93, items: [{ id: 4 }] }] },
-			{ name: '总线表底度设置', func: '0x11', desc: 'Tag93-ID5 表数量1B+每表:地址7B高字节在前+底度4B(L) 见TLV',
-				tlv: [{ tag: 93, items: [{ id: 5, value: [] }] }] },
+			{ name: '总线表底度设置', func: '0x11', desc: 'Tag93-ID5 表数量1B+每表(地址7B+底度4B L)',
+				param: { label: '底度HEX', type: 'hexbytes', default: '', placeholder: '表数1B+地址7B+底度4B' },
+				tlv: [{ tag: 93, items: [{ id: 5 }] }] },
 			{ name: '摄像表自动定位', func: '0x11', desc: 'Tag93-ID6=1 自动定位',
 				tlv: [{ tag: 93, items: [{ id: 6, value: [0x01] }] }] },
 			{ name: '注册', func: '0x11', desc: 'Tag93-ID7 1业务平台 2维护平台 3业务&维护平台',
@@ -588,8 +677,9 @@ window.SK_DOWN_PRESETS = [
 				tlv: [{ tag: 10, items: [{ id: 11 }] }] },
 			{ name: '查询蓝牙表参数', func: '0x03', desc: 'Tag37 蓝牙',
 				tlv: [{ tag: 10, items: [{ id: 18 }] }] },
-			{ name: '查询指定ID数据', func: '0x03', desc: 'Tag10-ID0 2B一组(tag+id) 共16组 见TLV',
-				tlv: [{ tag: 10, items: [{ id: 0, value: [] }] }] },
+			{ name: '查询指定ID数据', func: '0x03', desc: 'Tag10-ID0 2B一组(tag+id) 最多16组',
+				param: { label: 'Tag+ID HEX', type: 'hexbytes', default: '', placeholder: '如 03 1D (查Tag3-ID29)' },
+				tlv: [{ tag: 10, items: [{ id: 0 }] }] },
 			// 历史数据(最长可查近2个月): 日冻结按月片 + 指定日历史
 			{ name: '查询历史冻结数据', func: '0x03',
 				desc: 'Tag10-ID24 日冻结累计(Tag5间隔1440min) 近2个月分两片查询',
@@ -638,10 +728,93 @@ window.SK_DOWN_PRESETS = [
 			{ name: '查询总线采集器地址(批量)', func: '0x03', desc: 'Tag10-ID17 当前第几包(索引0起) 响应Tag33-ID28',
 				param: { label: '包序号', type: 'uint8', default: '0' },
 				tlv: [{ tag: 10, items: [{ id: 17 }] }] },
-			{ name: '查询渗漏仪音频数据', func: '0x03', desc: 'Tag10-ID21 分体/一体+日期/最新+包序号 见TLV 响应Tag63',
-				tlv: [{ tag: 10, items: [{ id: 21, value: [] }] }] },
+			{ name: '查询渗漏仪音频数据', func: '0x03', desc: 'Tag10-ID21 分体/一体+日期/最新+包序号 响应Tag63',
+				param: { type: 'multi', fields: [
+					{ label: '类型', type: 'enum', default: '0', width: '80px', options: { 0: '分体', 1: '一体' } },
+					{ label: '日期/最新', type: 'uint8', default: '0', min: '0', max: '255', width: '75px' },
+					{ label: '包序号', type: 'uint16le', default: '0', min: '0', max: '65535', width: '80px' }
+				] },
+				tlv: [{ tag: 10, items: [{ id: 21 }] }] },
 			{ name: '查询LoraWan参数', func: '0x03', desc: 'Tag10-ID14 文档标注"响应返回待定", 实际应答格式未定',
 				tlv: [{ tag: 10, items: [{ id: 14 }] }] },
+			{ name: '查询eSIM信息', func: '0x03', desc: 'Tag10-ID66 查询EID/Profile列表/操作状态 响应Tag66',
+				tlv: [{ tag: 10, items: [{ id: 66 }] }] },
 		]
 	},
 ]
+
+// SEK 常用指令纯函数工具：大口径底度(m³)按基准水量(当量)换算、指令搜索过滤
+window.SK_PRESET_CODEC = (function () {
+	'use strict'
+	const BASE_WATER_LABEL = {
+		0: '1000L/圈', 1: '100L/圈', 2: '10L/圈', 3: '1L/圈',
+		4: '100mL/圈', 5: '10mL/圈', 6: '1mL/圈'
+	}
+	const MAX_U56 = (1n << 56n) - 1n
+
+	// m³(十进制字符串或数字) + 基准水量码(0..6, 1m³ = 10^code 单位) → BYTE[1+7](0x00状态 + 7B无符号LE)
+	function largeFlowM3ToBytes(m3Input, baseCode) {
+		const code = Number(baseCode)
+		if (!Number.isInteger(code) || code < 0 || code > 6) {
+			return { error: '无效的基准水量码: ' + baseCode }
+		}
+		const s = String(m3Input == null ? '' : m3Input).trim()
+		if (!s) return { error: '请输入底度(m³)' }
+		const m = s.match(/^(\d+)(?:\.(\d+))?$/)
+		if (!m) return { error: '底度格式无效，请输入非负数字(m³)' }
+		const intPart = m[1]
+		const fracPart = m[2] || ''
+		let units
+		if (fracPart.length <= code) {
+			const scaled = intPart + fracPart.padEnd(code, '0')
+			units = BigInt(scaled)
+		} else {
+			const keep = fracPart.slice(0, code)
+			const nextDigit = fracPart.charCodeAt(code) - 48
+			units = BigInt(intPart + keep) + (nextDigit >= 5 ? 1n : 0n)
+		}
+		if (units > MAX_U56) {
+			return { error: '换算后的计数值超出 7 字节无符号整数上限' }
+		}
+		const bytes = [0x00]
+		let tmp = units
+		for (let i = 0; i < 7; i++) {
+			bytes.push(Number(tmp & 0xffn))
+			tmp >>= 8n
+		}
+		return {
+			bytes: bytes,
+			units: units.toString(),
+			baseCode: code,
+			baseLabel: BASE_WATER_LABEL[code] || String(code)
+		}
+	}
+
+	// 按功能码和关键字(空格分隔多词全匹配)过滤常用指令分组
+	function filterPresets(presets, funcCode, query) {
+		const list = Array.isArray(presets) ? presets : []
+		const tokens = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean)
+		const out = []
+		for (let i = 0; i < list.length; i++) {
+			const grp = list[i]
+			const grpText = String(grp.group || '').toLowerCase()
+			const filtered = (grp.items || []).filter(function (it) {
+				if (funcCode && it.func !== funcCode) return false
+				if (!tokens.length) return true
+				const hay = (String(it.name || '') + ' ' + String(it.desc || '') + ' ' + grpText).toLowerCase()
+				for (let k = 0; k < tokens.length; k++) {
+					if (hay.indexOf(tokens[k]) < 0) return false
+				}
+				return true
+			})
+			if (filtered.length) out.push({ grp: grp, filtered: filtered })
+		}
+		return out
+	}
+
+	return {
+		BASE_WATER_LABEL: BASE_WATER_LABEL,
+		largeFlowM3ToBytes: largeFlowM3ToBytes,
+		filterPresets: filterPresets
+	}
+})()

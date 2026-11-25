@@ -625,29 +625,40 @@
                                     </div>
                                     <div class="protocol-down-card mb-2" id="sk-down-card">
                                         <h6 class="pane-section-title"><i class="bi bi-arrow-down-circle"></i> 下行下发</h6>
-                                        <div class="d-flex flex-wrap align-items-center mb-2 gap-2">
-                                            <div class="input-group input-group-sm" style="width: auto; flex-shrink: 0;">
-                                                <span class="input-group-text">功能码</span>
-                                                <select class="form-select" id="serial-protocol-down-func">
-                                                    <option value="0x03" selected>信息查询 0x03</option>
-                                                    <option value="0x01">参数设置 0x01</option>
-                                                    <option value="0x11">指令操作 0x11</option>
-                                                </select>
+                                        <div class="ctl-seg sk-func-tabs mb-2" id="serial-protocol-down-func-tabs" role="group" aria-label="功能码">
+                                            <button type="button" data-func="0x03" aria-pressed="true">信息查询<span class="sk-func-code">0x03</span></button>
+                                            <button type="button" data-func="0x01" aria-pressed="false">参数设置<span class="sk-func-code">0x01</span></button>
+                                            <button type="button" data-func="0x11" aria-pressed="false">指令操作<span class="sk-func-code">0x11</span></button>
+                                        </div>
+                                        <select class="form-select form-select-sm" id="serial-protocol-down-func" hidden aria-hidden="true">
+                                            <option value="0x03" selected>信息查询 0x03</option>
+                                            <option value="0x01">参数设置 0x01</option>
+                                            <option value="0x11">指令操作 0x11</option>
+                                        </select>
+                                        <div class="sk-preset-row mb-2">
+                                            <div class="input-group input-group-sm sk-preset-search">
+                                                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                                                <input type="text" class="form-control" id="serial-protocol-down-preset-search"
+                                                    placeholder="筛选指令 / Tag…" autocomplete="off" aria-label="筛选常用指令">
+                                                <button class="btn btn-outline-secondary" type="button" id="serial-protocol-down-preset-search-clear" hidden title="清空筛选" aria-label="清空筛选">
+                                                    <i class="bi bi-x"></i>
+                                                </button>
                                             </div>
-                                            <div class="input-group input-group-sm" style="width: auto; min-width: 120px;">
-                                                <span class="input-group-text">常用指令</span>
+                                            <div class="input-group input-group-sm sk-preset-select-wrap">
+                                                <span class="input-group-text">指令</span>
                                                 <select class="form-select" id="serial-protocol-down-preset" title="选择常用指令">
                                                 </select>
                                             </div>
-                                            <div class="input-group input-group-sm" id="serial-protocol-down-param-group" style="display:none;flex:0 0 100%;">
-                                                <span class="input-group-text" id="serial-protocol-down-param-label">参数</span>
-                                                <input type="text" class="form-control" id="serial-protocol-down-param-val" style="width:100px;" placeholder="值">
-                                                <select class="form-select form-select-sm" id="serial-protocol-down-param-sel" style="display:none;width:130px;"></select>
-                                                <span class="input-group-text" id="serial-protocol-down-param-unit" style="font-size:0.7rem;"></span>
-                                                <div id="serial-protocol-down-param-multi" style="display:none;flex:0 0 100%;margin-top:4px;"></div>
-                                            </div>
                                         </div>
-                                        <textarea class="form-control form-control-sm" rows="4" id="serial-protocol-down-tlv"
+                                        <div class="sk-down-desc mb-2" id="serial-protocol-down-desc" hidden></div>
+                                        <div class="input-group input-group-sm mb-2 sk-param-group" id="serial-protocol-down-param-group" style="display:none;">
+                                            <span class="input-group-text" id="serial-protocol-down-param-label">参数</span>
+                                            <input type="text" class="form-control" id="serial-protocol-down-param-val" style="width:100px;" placeholder="值">
+                                            <select class="form-select form-select-sm" id="serial-protocol-down-param-sel" style="display:none;width:130px;"></select>
+                                            <span class="input-group-text sk-param-unit" id="serial-protocol-down-param-unit"></span>
+                                            <div class="sk-param-multi-grid" id="serial-protocol-down-param-multi" style="display:none;"></div>
+                                        </div>
+                                        <textarea class="form-control form-control-sm" rows="3" id="serial-protocol-down-tlv"
                                             placeholder='TLV JSON，例如：[{"tag":10,"items":[{"id":1,"value":[]}]}]，value 可为空数组(查询) 或 十六进制字符串 或 字节数组'></textarea>
                                         <div class="d-flex flex-wrap align-items-center gap-2 mt-1">
                                             <div class="form-check form-switch ctl-switch" title="关闭时始终明文下发(ctrl 不置加密位)；开启后用上方密钥加密数据域。解析/解密密钥可单独保留。">
@@ -967,6 +978,86 @@
                                         <div class="sk-rw-summary" id="sk-batch-summary"></div>
                                         <div class="sk-batch-readback" id="sk-batch-readback"></div>
                                         <div class="sk-rw-log" id="sk-batch-log"></div>
+                                    </div>
+                                    <div class="protocol-down-card mb-2 sk-rw-card sk-esim-card" id="sk-esim-card" data-dock-own="esim">
+                                        <h6 class="pane-section-title">
+                                            <i class="bi bi-sim"></i> eSIM 管理
+                                            <span class="sk-rw-proto-badge">Tag 66 · SEK</span>
+                                        </h6>
+                                        <div class="sk-esim-topbar d-flex flex-wrap align-items-center gap-2 mb-2">
+                                            <div class="sk-esim-eid-box flex-grow-1">
+                                                <span class="sk-esim-kv-label">EID</span>
+                                                <code class="sk-esim-eid-val" id="sk-esim-eid">--</code>
+                                            </div>
+                                            <button class="btn btn-sm btn-primary" id="sk-esim-refresh" type="button">刷新信息</button>
+                                            <button class="btn btn-sm btn-outline-secondary" id="sk-esim-poll" type="button" title="持续轮询 ID4 状态直到执行完成">轮询状态</button>
+                                            <button class="btn btn-sm btn-outline-danger" id="sk-esim-stop" type="button" disabled>停止</button>
+                                        </div>
+                                        <div class="sk-esim-section mb-2">
+                                            <div class="sk-esim-sec-head">
+                                                <span>操作状态 (ID4)</span>
+                                                <span class="sk-esim-badge" id="sk-esim-state-badge">未知</span>
+                                            </div>
+                                            <div class="sk-esim-status-grid">
+                                                <div><span class="sk-esim-kv-label">上次操作</span><span id="sk-esim-last-op">--</span></div>
+                                                <div><span class="sk-esim-kv-label">失败阶段</span><span id="sk-esim-fail-stage">--</span></div>
+                                                <div><span class="sk-esim-kv-label">模组码</span><code id="sk-esim-err-code">--</code></div>
+                                                <div><span class="sk-esim-kv-label">更新时间</span><span id="sk-esim-status-time">--</span></div>
+                                            </div>
+                                            <div class="sk-esim-err-hint" id="sk-esim-err-hint" hidden></div>
+                                        </div>
+                                        <div class="sk-esim-section mb-2">
+                                            <div class="sk-esim-sec-head">
+                                                <span>Profile 列表 (ID1)</span>
+                                                <span class="sk-esim-count">共 <b id="sk-esim-profile-count">0</b> 条</span>
+                                            </div>
+                                            <div class="sk-esim-profile-list" id="sk-esim-profile-list">
+                                                <div class="sk-esim-empty">点击「刷新信息」读取设备 EID 与 Profile 列表</div>
+                                            </div>
+                                        </div>
+                                        <div class="sk-esim-section mb-2">
+                                            <div class="sk-esim-sec-head">
+                                                <span>Profile 下载 (ID2)</span>
+                                            </div>
+                                            <div class="mb-2">
+                                                <div class="input-group input-group-sm">
+                                                    <span class="input-group-text">模式</span>
+                                                    <select class="form-select" id="sk-esim-mode">
+                                                        <option value="0">mode=0 · 模组内联网直连 SM-DP+</option>
+                                                        <option value="1">mode=1 · 近端外部代理 + ZMODEM 四轮 ES9+</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <div class="mb-2" id="sk-esim-proxy-row" hidden>
+                                                <div class="sk-esim-notice mb-1" id="sk-esim-proxy-notice"></div>
+                                                <div class="input-group input-group-sm">
+                                                    <span class="input-group-text">代理基址</span>
+                                                    <input type="url" class="form-control" id="sk-esim-proxy-url" placeholder="可选：自定义 CORS 转发代理，如 https://127.0.0.1:8443" autocomplete="off">
+                                                </div>
+                                            </div>
+                                            <div class="mb-2">
+                                                <div class="input-group input-group-sm">
+                                                    <span class="input-group-text">激活码 AC</span>
+                                                    <input type="password" class="form-control" id="sk-esim-ac" placeholder="LPA:1$smdp.example.com$MATCHING-ID（不落盘、不写明文日志）" autocomplete="off" spellcheck="false">
+                                                </div>
+                                            </div>
+                                            <div class="mb-2">
+                                                <div class="input-group input-group-sm">
+                                                    <span class="input-group-text">确认码 CC</span>
+                                                    <input type="password" class="form-control" id="sk-esim-cc" placeholder="可选，最多 64 字节（不落盘）" autocomplete="off" spellcheck="false">
+                                                </div>
+                                            </div>
+                                            <button class="btn btn-sm btn-primary w-100 mb-2" id="sk-esim-download" type="button">触发下载</button>
+                                            <div class="sk-rw-progress mb-1">
+                                                <div class="sk-rw-progress-bar" id="sk-esim-progress-bar">0%</div>
+                                            </div>
+                                            <div class="sk-rw-status" id="sk-esim-status">就绪</div>
+                                        </div>
+                                        <div class="sk-esim-log-head d-flex align-items-center justify-content-between mb-1">
+                                            <span class="sk-esim-kv-label">操作日志（凭证已脱敏）</span>
+                                            <button class="btn btn-xs btn-outline-secondary" id="sk-esim-log-clear" type="button">清空</button>
+                                        </div>
+                                        <div class="sk-rw-log sk-esim-log" id="sk-esim-log"></div>
                                     </div>
                                 </div>
                                 <div class="tab-pane d-flex flex-column" id="nav-firmware" role="tabpanel">
@@ -1784,6 +1875,9 @@
     <script src="js/sts-sim.js"></script>
     <script src="js/sts-sim-panel.js"></script>
     <script src="js/sek-transaction.js"></script>
+    <script src="js/zmodem.js"></script>
+    <script src="js/esim-core.js"></script>
+    <script src="js/esim-panel.js"></script>
     <script src="js/random-rw-test.js"></script>
     <script src="js/batch-config.js"></script>
     <script src="js/collapsible-cards.js"></script>

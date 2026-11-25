@@ -18,6 +18,7 @@
 		'panel.protocol', // 协议设置与下发
 		'panel.rw', // 随机读写测试
 		'panel.batch', // 批量配置写入
+		'panel.esim', // eSIM 管理(Tag=66)
 		'panel.firmware', // 固件升级
 		'panel.parse', // 协议解析
 		'panel.sts-sim', // STS 模拟

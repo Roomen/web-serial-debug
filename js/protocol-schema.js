@@ -11,6 +11,7 @@ window.SK_TAG_NAME = {
 	'35': 'LoRa/LoRaWAN参数', '36': '阀控参数', '37': '蓝牙参数',
 	'38': '通讯认证参数', '39': '告警参数',
 	'62': '渗漏噪声数据', '63': '渗漏音频数据', '64': '渗漏仪运行参数',
+	'66': 'eSIM管理',
 	'90': '总线采集器数据',
 	'91': '设备运行信息', '92': '设备上行信息', '93': '控制指令',
 	'94': '总线表周期数据', '95': '总线表周期数据', '96': '总线表周期数据',
@@ -34,9 +35,9 @@ window.SK_PLATFORM_REPLY = {
 }
 
 window.SK_FUNC_CODES = {
-	'0x01': { name: '参数设置', reqTags: [3, 31, 32, 33, 34, 35, 36, 37, 38, 39], ack: '0x81' },
+	'0x01': { name: '参数设置', reqTags: [3, 31, 32, 33, 34, 35, 36, 37, 38, 39, 66], ack: '0x81' },
 	'0x02': { name: '终端数据上报', ack: '0x82', ackTag: 12 },
-	'0x03': { name: '信息查询', reqTag: 10, ack: '0x83', ackTags: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21, 22, 23, 24, 25, 26, 27, 31, 32, 33, 34, 35, 36, 37, 38, 39, 62, 63, 64, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 254] },
+	'0x03': { name: '信息查询', reqTag: 10, ack: '0x83', ackTags: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21, 22, 23, 24, 25, 26, 27, 31, 32, 33, 34, 35, 36, 37, 38, 39, 62, 63, 64, 66, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 254] },
 	'0x04': { name: '数据透传', reqTag: 7, ack: '0x84', ackTag: 7 },
 	'0x11': { name: '指令操作', reqTag: 93, ack: '0x91', ackTag: 93 },
 	// 应答功能码: 0x81/0x91 的 TLV Value 为处理结果码(见 Tag11), 非参数原值
@@ -589,7 +590,15 @@ window.SK_TAGS = {
 		{ id: 30, name: '超声波表参数', type: 'NULL', desc: '响应返回tag30' },
 		{ id: 31, name: '超声波表状态参数', type: 'NULL', desc: '响应返回tag31' },
 		{ id: 34, name: '无磁传感器参数', type: 'NULL', desc: '响应返回tag34' },
-		{ id: 35, name: 'Lora参数', type: 'NULL', desc: '响应返回tag35' }
+		{ id: 35, name: 'Lora参数', type: 'NULL', desc: '响应返回tag35' },
+		{ id: 66, name: 'eSIM信息', type: 'NULL', desc: '响应返回tag66 (ID0/ID1/ID4)' }
+	],
+	'66': [
+		{ id: 0, name: 'EID', type: 'BYTE[16]', desc: '32位数字BCD 高位在前 全0x00表示未就绪', dec: { t: 'esimEid' } },
+		{ id: 1, name: 'Profile列表', type: 'BYTE[1+22*n]', desc: '数量n(1B,0-8)+n*(20B ASCII ICCID+2B状态位域LE: bit0启禁用 bit2-1类型0运营1预置2测试3保留 bit3禁禁PPR bit4禁删PPR bit5回退卡)', dec: { t: 'esimProfiles' } },
+		{ id: 2, name: 'Profile下载触发', type: 'BYTE[n]', desc: 'mode(1B:0内网1外部代理2MCU-HTTPS)+acLen(1B)+AC(ASCII,脱敏)+ccLen(1B)+CC(ASCII,脱敏)', dec: { t: 'esimDownload' } },
+		{ id: 3, name: 'Profile管理', type: 'BYTE[21]', desc: 'op(1B:1启用2禁用3删除)+20B ASCII ICCID', dec: { t: 'esimManage' } },
+		{ id: 4, name: 'eSIM操作状态', type: 'BYTE[12]', desc: 'state(1B)+lastOp(1B)+failStage(1B)+moduleErrCode(2B LE)+时间(7B BCD YYYYMMDDhhmmss, 空闲全0)', dec: { t: 'esimStatus' } }
 	],
 	'11': [
 		{ id: 0, name: '信息收到处理中', type: 'BYTE', desc: '结果码0' },
