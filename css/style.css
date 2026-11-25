@@ -14525,4 +14525,85 @@ html[data-layout='modern'] .mdn-pop-params[hidden] {
 	}
 }
 
+/* ========== 协议子页与批量交互面板重组 ========== */
+.proto-subtabs .ctl-seg,
+.auto-mode-tabs .ctl-seg {
+	display: flex;
+	width: 100%;
+}
+.proto-subtabs .ctl-seg > button,
+.auto-mode-tabs .ctl-seg > button {
+	flex: 1 1 0;
+	justify-content: center;
+	gap: 5px;
+	font-size: 0.78rem;
+	padding: 4px 8px;
+}
+
+.proto-subpane {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+.sts-sim.sts-sim-embedded {
+	container: sts-sim / inline-size;
+	padding: 0;
+}
+.sts-sim-lanesync {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	flex-wrap: wrap;
+	padding: 8px 10px;
+	border: 1px solid color-mix(in srgb, var(--warning, #d97706) 45%, transparent);
+	border-radius: var(--radius-sm);
+	background: color-mix(in srgb, var(--warning, #d97706) 10%, transparent);
+}
+
+.sk-batch-item-row.is-custom {
+	grid-template-columns: 1.5rem 5.4rem minmax(0, 1fr) auto auto;
+}
+.sk-batch-custom-mode {
+	font-size: 0.72rem;
+	padding-left: 6px;
+	padding-right: 18px;
+}
+.sk-batch-wait {
+	margin: 0;
+	white-space: nowrap;
+}
+.sk-batch-item-noparam {
+	font-size: 0.73rem;
+	color: var(--text-muted);
+	padding: 0 4px;
+}
+
+/* 协议管理顶部栏与复制开发提示词按钮组 */
+.pm-topbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+.pm-prompt-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+.pm-prompt-label {
+	font-size: 0.75rem;
+	color: var(--text-muted);
+}
+.pm-prompt-btn {
+	font-size: 0.74rem;
+	padding: 2px 8px;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+
+
 

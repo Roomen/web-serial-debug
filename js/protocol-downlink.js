@@ -351,9 +351,6 @@
 	const SEK_ONLY_IDS = [
 		'serial-protocol-advanced',
 		'sk-down-card',
-		'sk-rw-card',
-		'sk-batch-card',
-		'sk-esim-card',
 	]
 	const SEK_TLV_PLACEHOLDER = 'TLV JSON，例如：[{"tag":10,"items":[{"id":1,"value":[]}]}]，value 可为空数组(查询) 或 十六进制字符串 或 字节数组'
 	const GENERIC_PAYLOAD_PLACEHOLDER = '载荷 HEX（空格可有可无）或构建参数 JSON，例如：01 02 或 {"cmd":"0x01","payloadHex":"01"}'
@@ -1230,12 +1227,143 @@
 		}
 	}
 
+	// ---- 协议子页控制器（如 SEK: 下行下发 / eSIM；hostProto: 命令下发 / STS 模拟；工装: 下行下发 / 工位测试） ----
+	const SUBTAB_STATE_KEY = 'protocolSubTabState'
+	let _subTabProtoId = ''
+	let _subTabs = []
+	let _activeSubTabId = ''
+
+	function loadSubTabState() {
+		try {
+			const raw = localStorage.getItem(SUBTAB_STATE_KEY)
+			const obj = raw ? JSON.parse(raw) : null
+			return obj && typeof obj === 'object' ? obj : {}
+		} catch (e) {
+			return {}
+		}
+	}
+
+	function saveSubTabState(protoId, tabId) {
+		if (!protoId || !tabId) return
+		try {
+			const st = loadSubTabState()
+			st[protoId] = tabId
+			localStorage.setItem(SUBTAB_STATE_KEY, JSON.stringify(st))
+		} catch (e) { /* 忽略 */ }
+	}
+
+	function featureEnabled(feat) {
+		if (!feat) return true
+		return !root.AppPlatform || typeof root.AppPlatform.has !== 'function' || !!root.AppPlatform.has(feat)
+	}
+
+	function renderSubTabBar() {
+		const wrap = $('protocol-subtabs')
+		const seg = $('protocol-subtabs-seg')
+		if (!wrap || !seg) return
+		if (_subTabs.length <= 1) {
+			wrap.hidden = true
+			seg.textContent = ''
+			return
+		}
+		wrap.hidden = false
+		seg.textContent = ''
+		_subTabs.forEach(function (tab) {
+			const btn = doc.createElement('button')
+			btn.type = 'button'
+			btn.setAttribute('role', 'tab')
+			btn.dataset.subtab = tab.id
+			btn.setAttribute('aria-pressed', String(tab.id === _activeSubTabId))
+			if (tab.icon) {
+				const ic = doc.createElement('i')
+				ic.className = 'bi ' + tab.icon
+				ic.setAttribute('aria-hidden', 'true')
+				btn.appendChild(ic)
+				btn.appendChild(doc.createTextNode(' '))
+			}
+			btn.appendChild(doc.createTextNode(tab.label || tab.id))
+			btn.addEventListener('click', function () {
+				selectSubTab(_subTabProtoId, tab.id)
+			})
+			seg.appendChild(btn)
+		})
+	}
+
+	function applySubTabVisibility() {
+		_subTabs.forEach(function (tab) {
+			const active = tab.id === _activeSubTabId
+			try {
+				if (active && typeof tab.show === 'function') tab.show()
+				else if (!active && typeof tab.hide === 'function') tab.hide()
+			} catch (e) { /* ignore */ }
+		})
+		const seg = $('protocol-subtabs-seg')
+		if (seg) {
+			seg.querySelectorAll('button[data-subtab]').forEach(function (btn) {
+				btn.setAttribute('aria-pressed', String(btn.dataset.subtab === _activeSubTabId))
+			})
+		}
+	}
+
+	function mountSubTabs(protoId, tabs) {
+		unmountSubTabs()
+		_subTabProtoId = String(protoId || '')
+		_subTabs = (Array.isArray(tabs) ? tabs : []).filter(function (t) {
+			return t && t.id && featureEnabled(t.feature)
+		})
+		if (!_subTabs.length) return
+		const saved = loadSubTabState()[_subTabProtoId]
+		const hit = _subTabs.some(function (t) { return t.id === saved })
+		_activeSubTabId = hit ? saved : _subTabs[0].id
+		renderSubTabBar()
+		applySubTabVisibility()
+	}
+
+	function selectSubTab(protoId, tabId) {
+		if (!_subTabs.length) return false
+		if (protoId && _subTabProtoId && protoId !== _subTabProtoId) return false
+		const found = _subTabs.some(function (t) { return t.id === tabId })
+		if (!found) return false
+		_activeSubTabId = tabId
+		saveSubTabState(_subTabProtoId, tabId)
+		applySubTabVisibility()
+		return true
+	}
+
+	function unmountSubTabs(protoId) {
+		if (protoId && _subTabProtoId && protoId !== _subTabProtoId) return
+		_subTabs.forEach(function (tab) {
+			try { if (typeof tab.hide === 'function') tab.hide() } catch (e) { /* ignore */ }
+		})
+		_subTabProtoId = ''
+		_subTabs = []
+		_activeSubTabId = ''
+		const wrap = $('protocol-subtabs')
+		const seg = $('protocol-subtabs-seg')
+		if (wrap) wrap.hidden = true
+		if (seg) seg.textContent = ''
+	}
+
+	root.ProtocolSubTabs = {
+		mount: mountSubTabs,
+		unmount: unmountSubTabs,
+		select: selectSubTab,
+		active: function (protoId) {
+			if (protoId && protoId !== _subTabProtoId) return ''
+			return _activeSubTabId
+		},
+	}
+
 	// ---- 面板挂载/卸载 ----
 	function setSekCardsVisible(visible) {
 		const disp = visible ? '' : 'none'
 		for (let i = 0; i < SEK_ONLY_IDS.length; i++) {
 			const el = $(SEK_ONLY_IDS[i])
 			if (el) el.style.display = disp
+		}
+		if (!visible) {
+			const esim = $('sk-esim-card')
+			if (esim) esim.style.display = 'none'
 		}
 	}
 
@@ -1252,40 +1380,113 @@
 		if (presetSel && presetSel.value) {
 			presetSel.dispatchEvent(new Event('change'))
 		}
+		const esimCard = $('sk-esim-card')
+		const advEl = $('serial-protocol-advanced')
+		if (esimCard && $('protocol-subtabs')) {
+			mountSubTabs('sek', [
+				{
+					id: 'downlink',
+					label: '下行下发',
+					icon: 'bi-arrow-down-circle',
+					show: function () {
+						if (downCard) downCard.style.display = ''
+						if (advEl) advEl.style.display = ''
+					},
+					hide: function () {
+						if (downCard) downCard.style.display = 'none'
+						if (advEl) advEl.style.display = 'none'
+					},
+				},
+				{
+					id: 'esim',
+					label: 'eSIM 管理',
+					icon: 'bi-sim',
+					feature: 'panel.esim',
+					show: function () { esimCard.style.display = '' },
+					hide: function () { esimCard.style.display = 'none' },
+				},
+			])
+		} else if (esimCard) {
+			esimCard.style.display = featureEnabled('panel.esim') ? '' : 'none'
+		}
 	}
 
 	function unmountSekPanel() {
+		unmountSubTabs('sek')
 		setSekCardsVisible(false)
 	}
 
 	function mountGenericPanel(proto) {
+		unmountSubTabs()
 		setSekCardsVisible(false)
+		const stsHost = $('hostproto-sts-host')
+		if (stsHost) stsHost.style.display = 'none'
 		const hasDownlink = !!(proto && (
 			(Array.isArray(proto.presets) && proto.presets.length > 0) ||
 			typeof proto.buildDownFrame === 'function'
 		))
-		if (!hasDownlink) {
+		if (hasDownlink) {
+			setParseOnlyHintVisible(false)
+			if (downCard) downCard.style.display = ''
+			configureCardForMode('generic', proto)
+			if (funcSel) {
+				syncFuncTabs(funcSel.value)
+				if (presetSel) presetSel.value = ''
+				rebuildPresets(funcSel.value)
+			}
+			if (tlvInput) tlvInput.value = ''
+			if (previewEl) previewEl.value = ''
+			if (presetSel && presetSel.value) {
+				presetSel.dispatchEvent(new Event('change'))
+			}
+		} else {
 			if (downCard) downCard.style.display = 'none'
 			setParseOnlyHintVisible(true)
+		}
+
+		// hostProto 内置 STS 模拟子页
+		if (proto && proto.id === 'hostproto' && stsHost && $('protocol-subtabs')) {
+			mountSubTabs('hostproto', [
+				{
+					id: 'downlink',
+					label: '命令下发',
+					icon: 'bi-arrow-down-circle',
+					show: function () { if (downCard) downCard.style.display = '' },
+					hide: function () { if (downCard) downCard.style.display = 'none' },
+				},
+				{
+					id: 'sts-sim',
+					label: 'STS 模拟',
+					icon: 'bi-broadcast',
+					feature: 'panel.sts-sim',
+					show: function () { stsHost.style.display = '' },
+					hide: function () { stsHost.style.display = 'none' },
+				},
+			])
 			return
 		}
-		setParseOnlyHintVisible(false)
-		if (downCard) downCard.style.display = ''
-		configureCardForMode('generic', proto)
-		if (funcSel) {
-			syncFuncTabs(funcSel.value)
-			if (presetSel) presetSel.value = ''
-			rebuildPresets(funcSel.value)
-		}
-		if (tlvInput) tlvInput.value = ''
-		if (previewEl) previewEl.value = ''
-		if (presetSel && presetSel.value) {
-			presetSel.dispatchEvent(new Event('change'))
+		// 外部 JS 插件可声明自定义 subTabs: [{ id, label, icon, feature, show, hide }]
+		if (proto && Array.isArray(proto.subTabs) && proto.subTabs.length && $('protocol-subtabs')) {
+			const tabs = []
+			if (hasDownlink) {
+				tabs.push({
+					id: 'downlink',
+					label: '下行下发',
+					icon: 'bi-arrow-down-circle',
+					show: function () { if (downCard) downCard.style.display = '' },
+					hide: function () { if (downCard) downCard.style.display = 'none' },
+				})
+			}
+			proto.subTabs.forEach(function (t) { if (t && t.id) tabs.push(t) })
+			mountSubTabs(proto.id, tabs)
 		}
 	}
 
 	function unmountGenericPanel() {
+		unmountSubTabs()
 		if (downCard) downCard.style.display = 'none'
+		const stsHost = $('hostproto-sts-host')
+		if (stsHost) stsHost.style.display = 'none'
 		setParseOnlyHintVisible(false)
 	}
 

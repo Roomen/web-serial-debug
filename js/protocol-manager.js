@@ -13,6 +13,184 @@
 	const ARMED_TIMEOUT_MS = 5000
 	const SECURITY_WARNING = '外部 JS 插件拥有与本页面相同的全部权限（包括串口收发、读取本地存储中的密钥与配置、操作页面 DOM），请仅信任你亲自审阅过的代码；文件内容变更后需重新确认信任。'
 
+	function buildDevPrompt(kind) {
+		const mode = kind === 'json' || kind === 'js' ? kind : 'all'
+		const jsonSpec = [
+			'## 声明式 JSON 协议（Schema v1）开发规范',
+			'适用于固定帧头、长度字段/定长、标准校验和、结构化字段解析与常规下行指令的二进制协议（免写 JS，零安全风险）。',
+			'',
+			'### 顶层必填字段',
+			'- `schemaVersion`: 固定为 `1`',
+			'- `id`: 唯一标识，仅允许小写字母、数字、`-`、`_`，以字母或数字开头（1~48 字符），不能占用已有内置协议 ID',
+			'- `name`: 展示名称；`version`: 版本号（如 `"1.0.0"`）；`description`: 简短说明',
+			'',
+			'### 帧边界与校验 (`framing` / `checksum`)',
+			'- `framing`: `{ head: "AA 55", tail: "0D 0A"(可选), fixedLength: 16 }` 或动态长度 `length: { offset, size: 1|2, endian: "le"|"be", totalDelta: 0 }`（总帧长 = 长度字段值 + totalDelta），配合 `minLength` / `maxLength`',
+			'- `checksum`: `{ algorithm, offset, start, end, endian }`，支持算法：`none`、`sum8`、`xor8`、`lrc8`、`crc8`、`crc16-modbus`、`crc16-ccitt`、`crc16-xmodem`、`crc16-ibm`、`crc16-custom`（负偏移如 `-2` 表示从帧尾倒数）',
+			'',
+			'### 字段解析 (`fields`)',
+			'- 支持类型：`uint8`、`int8`、`uint16le`、`uint16be`、`int16le`、`int16be`、`uint32le`、`uint32be`、`int32le`、`int32be`、`hex`、`ascii`、`bcd`、`bcd_le`、`bcd_be`、`bitfield`',
+			'- 每项可配：`name`、`offset`、`length`（变长类型必填）、`type`、`scale`、`unit`、`format`（`"hex"` 等）、`enum`（映射对象 `{"0":"关闭","1":"开启"}`）、`bits`（位域数组）',
+			'',
+			'### 下行预设 (`presets`)',
+			'- 配置 `presets` 后，工具会自动生成「协议」面板下行界面，并自动接入「批量交互（批量下发 / 随机读写）」：',
+			'  `[{ "group": "常用指令", "items": [{ "name": "读状态", "func": "0x03", "desc": "查询设备状态", "payloadHex": "00 01" }] }]`',
+			'- 需要用户输入参数时在 item 中增加 `param: { label, type, default, fillLen, options }`',
+			'',
+			'### 最小可运行 JSON 例程',
+			'```json',
+			'{',
+			'  "schemaVersion": 1,',
+			'  "id": "demo-sensor-v1",',
+			'  "name": "示例传感器协议",',
+			'  "version": "1.0.0",',
+			'  "description": "AA 55 + Cmd(1B) + Len(1B) + Payload + CRC16-Modbus(2B LE)",',
+			'  "framing": {',
+			'    "head": "AA 55",',
+			'    "length": { "offset": 3, "size": 1, "endian": "be", "totalDelta": 6 },',
+			'    "minLength": 6,',
+			'    "maxLength": 260',
+			'  },',
+			'  "checksum": { "algorithm": "crc16-modbus", "offset": -2, "start": 0, "end": -2, "endian": "le" },',
+			'  "fields": [',
+			'    { "name": "命令码", "offset": 2, "type": "uint8", "format": "hex" },',
+			'    { "name": "载荷长度", "offset": 3, "type": "uint8" }',
+			'  ],',
+			'  "presets": [',
+			'    {',
+			'      "group": "基础查询",',
+			'      "items": [',
+			'        { "name": "读版本", "func": "0x01", "cmd": "0x01", "payloadHex": "" }',
+			'      ]',
+			'    }',
+			'  ]',
+			'}',
+			'```',
+		].join('\n')
+
+		const jsSpec = [
+			'## 外部 JS 协议插件开发规范',
+			'适用于复杂变长 TLV、动态加解密、自定义状态机、专属子页工具或自定义随机测试逻辑的协议。',
+			'',
+			'### 注册入口',
+			'调用 `registerProtocol(id, impl)`（或 `module.exports = { id, ...impl }`）：',
+			'- `id`: 唯一标识（`/^[a-z0-9][a-z0-9_-]{0,47}$/`，不能覆盖内置协议 ID）',
+			'- `name`, `version`, `description`: 协议展示信息',
+			'',
+			'### 核心方法契约',
+			'1. `findFrame(bytes)`：从字节流 `Uint8Array` 中定位完整帧；找到返回 `{ found: true, frame: Uint8Array, offset, length, prefix, suffix }`，否则返回 `{ found: false }`',
+			'2. `parseFrame(bytes)`：解析单帧，返回 `{ ok: boolean, raw: Uint8Array, errors?: string[], ...自定义解析字段 }`',
+			'3. `logView(parsed)`：返回检查器与日志「解析」视图模型（单帧对象或数组，不识别返回 `null`）：',
+			'   `{ title, code?, badges?: [{ text, kind: "ok"|"bad"|"warn"|"info" }], meta?: [[k, v]], sections?: [{ title, pairs?: [[k, v, hint?, kind?]], pre? }], notes?: [{ text, kind }], errors?: string[] }`',
+			'   注意：外部插件严禁使用 `section.html`（会被宿主自动降级为纯文本），所有文本由渲染器统一转义。',
+			'4. `byteMap(bytes, parsed)`（可选）：返回与帧等长的数组 `[{ grp, tip }]`，实现 HEX 字节悬停高亮与字段说明',
+			'5. `buildDownFrame(opts)`（可选）：构建下行帧，返回 `Uint8Array` 或 `{ frame: Uint8Array }`',
+			'6. `presets` / `funcTabs`（可选）：声明常用指令预设与功能码分页，自动接入「协议下发」与「批量交互」面板',
+			'7. `randomTest`（可选）：自定义随机读写压测 `{ supportsWrite: boolean, hint?: string, cases: [{ name, build(rng), verify?(res) }] }`；不提供时框架会自动从 `presets` 提取可用指令进行随机压测',
+			'8. `subTabs`（可选）：在「协议」面板内扩展协议专属子页 `[{ id, label, icon, show(), hide() }]`',
+			'',
+			'### 最小可运行 JS 插件例程',
+			'```js',
+			'registerProtocol(\'demo-custom-proto\', {',
+			'  name: \'示例自定义协议\',',
+			'  version: \'1.0.0\',',
+			'  description: \'5A A5 + Cmd(1B) + Len(1B) + Payload + XOR8(1B)\',',
+			'  findFrame(bytes) {',
+			'    const b = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes || [])',
+			'    for (let i = 0; i <= b.length - 5; i++) {',
+			'      if (b[i] !== 0x5A || b[i + 1] !== 0xA5) continue',
+			'      const len = b[i + 3], total = 5 + len',
+			'      if (i + total > b.length) continue',
+			'      let x = 0; for (let k = 0; k < total - 1; k++) x ^= b[i + k]',
+			'      if ((x & 0xff) !== b[i + total - 1]) continue',
+			'      return { found: true, frame: b.slice(i, i + total), offset: i, length: total, prefix: i, suffix: b.length - i - total }',
+			'    }',
+			'    return { found: false }',
+			'  },',
+			'  parseFrame(bytes) {',
+			'    const b = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes || [])',
+			'    if (b.length < 5 || b[0] !== 0x5A || b[1] !== 0xA5) return { ok: false, raw: b, errors: [\'非本协议帧\'] }',
+			'    const cmd = b[2], len = b[3], payload = b.slice(4, 4 + len)',
+			'    return { ok: true, raw: b, cmd, len, payload }',
+			'  },',
+			'  logView(r) {',
+			'    if (!r || !r.ok) return null',
+			'    return {',
+			'      title: \'自定义帧\',',
+			'      code: \'0x\' + r.cmd.toString(16).toUpperCase().padStart(2, \'0\'),',
+			'      badges: [{ text: \'XOR OK\', kind: \'ok\' }],',
+			'      sections: [{ title: \'字段\', pairs: [[\'载荷长度\', r.len + \' B\']] }],',
+			'    }',
+			'  },',
+			'  buildDownFrame(opts) {',
+			'    const cmd = Number(opts && opts.cmd != null ? opts.cmd : 0x01) & 0xff',
+			'    const payload = Array.isArray(opts && opts.payload) ? opts.payload : []',
+			'    const out = new Uint8Array(5 + payload.length)',
+			'    out[0] = 0x5A; out[1] = 0xA5; out[2] = cmd; out[3] = payload.length',
+			'    for (let i = 0; i < payload.length; i++) out[4 + i] = payload[i] & 0xff',
+			'    let x = 0; for (let i = 0; i < out.length - 1; i++) x ^= out[i]',
+			'    out[out.length - 1] = x & 0xff',
+			'    return out',
+			'  },',
+			'  presets: [{ group: \'基础指令\', items: [{ name: \'心跳查询\', func: \'0x01\', cmd: 0x01, payload: [] }] }],',
+			'})',
+			'```',
+		].join('\n')
+
+		if (mode === 'json') {
+			return [
+				'请根据我提供的通信协议文档，生成一个可直接导入「Web Serial Debug → 协议管理 → JSON 协议」的声明式 JSON 协议文件。',
+				'要求：严格遵守以下 Schema v1 规范，只输出合法 JSON（不要附加多余解释），并补齐常用指令 `presets` 以便直接支持下行下发和批量交互。',
+				'',
+				jsonSpec,
+			].join('\n')
+		}
+		if (mode === 'js') {
+			return [
+				'请根据我提供的通信协议文档，编写一个可直接导入「Web Serial Debug → 协议管理 → JS 插件」的协议插件 `.js` 文件。',
+				'要求：严格遵守以下 `registerProtocol` 契约，不依赖外部第三方库，不使用 `section.html` / `innerHTML`，并实现 `findFrame`、`parseFrame`、`logView`、`byteMap`、`buildDownFrame` 与 `presets`。',
+				'',
+				jsSpec,
+			].join('\n')
+		}
+		return [
+			'请根据我提供的通信协议文档，为「Web Serial Debug」开发对应的协议适配文件。',
+			'选型建议：若协议为固定帧头 + 长度/定长 + 标准校验和 + 常规字段，请优先输出「声明式 JSON 协议」；若包含复杂 TLV、自定义加密/状态机或动态子页，请输出「JS 协议插件」。',
+			'',
+			jsonSpec,
+			'',
+			'---',
+			'',
+			jsSpec,
+		].join('\n')
+	}
+
+	function copyText(text) {
+		const nav = root.navigator
+		if (nav && nav.clipboard && typeof nav.clipboard.writeText === 'function') {
+			return Promise.resolve(nav.clipboard.writeText(text)).then(function () { return true }, function () { return fallbackCopy(text) })
+		}
+		return Promise.resolve(fallbackCopy(text))
+	}
+
+	function fallbackCopy(text) {
+		const doc = getDoc()
+		if (!doc || !doc.body || typeof doc.execCommand !== 'function') return false
+		const ta = doc.createElement('textarea')
+		ta.value = text
+		ta.style.position = 'fixed'
+		ta.style.opacity = '0'
+		doc.body.appendChild(ta)
+		try {
+			ta.select()
+			return !!doc.execCommand('copy')
+		} catch (e) {
+			return false
+		} finally {
+			if (typeof ta.remove === 'function') ta.remove()
+		}
+	}
+
 	let session = null
 	let boundDoc = null
 
@@ -1178,6 +1356,7 @@
 	function buildPanel(body, s) {
 		body.classList.toggle('pm-panel', true)
 
+		const topBar = mk('div', 'pm-topbar')
 		const seg = mk('div', 'ctl-seg pm-tabs')
 		seg.setAttribute('role', 'group')
 		seg.setAttribute('aria-label', '协议管理分页')
@@ -1191,7 +1370,40 @@
 			seg.appendChild(btn)
 			return btn
 		})
-		body.appendChild(seg)
+		topBar.appendChild(seg)
+
+		// 一键复制 AI 协议/插件开发提示词
+		const promptWrap = mk('div', 'pm-prompt-actions')
+		const promptLabel = mk('span', 'pm-prompt-label', '复制开发提示词:')
+		promptWrap.appendChild(promptLabel)
+		;[
+			{ kind: 'json', label: 'JSON 协议', title: '复制声明式 JSON 协议开发提示词（贴给 AI + 协议文档即可生成）' },
+			{ kind: 'js', label: 'JS 插件', title: '复制 JS 协议插件开发提示词（贴给 AI + 协议文档即可生成）' },
+			{ kind: 'all', label: '完整规范', title: '复制包含选型指南、JSON Schema 与 JS 插件契约的完整提示词' },
+		].forEach(function (item) {
+			const b = mk('button', 'btn btn-sm btn-outline-secondary pm-prompt-btn')
+			b.type = 'button'
+			b.dataset.promptKind = item.kind
+			b.title = item.title
+			const ic = mk('i', 'bi bi-clipboard-check')
+			ic.setAttribute('aria-hidden', 'true')
+			b.appendChild(ic)
+			b.appendChild(mk('span', '', item.label))
+			b.addEventListener('click', function () {
+				const text = buildDevPrompt(item.kind)
+				copyText(text).then(function (ok) {
+					if (s.closed) return
+					if (ok) {
+						setNotice(s, 'ok', '已复制「' + item.label + '开发提示词」（' + text.length + ' 字），可直接粘贴给 AI 并附上协议文档生成适配插件')
+					} else {
+						setNotice(s, 'error', '复制失败：当前环境不允许访问剪贴板')
+					}
+				})
+			})
+			promptWrap.appendChild(b)
+		})
+		topBar.appendChild(promptWrap)
+		body.appendChild(topBar)
 
 		const noticeEl = mk('div', 'pm-notice')
 		noticeEl.hidden = true
@@ -1300,6 +1512,7 @@
 	const api = {
 		open: open,
 		isOpen: isOpen,
+		buildDevPrompt: buildDevPrompt,
 	}
 
 	if (typeof module !== 'undefined' && module.exports) module.exports = api

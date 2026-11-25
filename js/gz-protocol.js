@@ -982,8 +982,34 @@
 				return r.frame
 			},
 			presets: [],
-			mountPanel: function () { setGzCardsVisible(true) },
-			unmountPanel: function () { setGzCardsVisible(false) },
+			mountPanel: function () {
+				if (W.ProtocolSubTabs && typeof W.ProtocolSubTabs.mount === 'function') {
+					W.ProtocolSubTabs.mount('gz', [
+						{
+							id: 'downlink',
+							label: '下行下发',
+							icon: 'bi-arrow-down-circle',
+							show: function () { const el = $('gz-down-card'); if (el) el.style.display = '' },
+							hide: function () { const el = $('gz-down-card'); if (el) el.style.display = 'none' },
+						},
+						{
+							id: 'auto',
+							label: '工位测试',
+							icon: 'bi-play-circle',
+							show: function () { const el = $('gz-auto-card'); if (el) el.style.display = '' },
+							hide: function () { const el = $('gz-auto-card'); if (el) el.style.display = 'none' },
+						},
+					])
+					return
+				}
+				setGzCardsVisible(true)
+			},
+			unmountPanel: function () {
+				if (W.ProtocolSubTabs && typeof W.ProtocolSubTabs.unmount === 'function') {
+					W.ProtocolSubTabs.unmount('gz')
+				}
+				setGzCardsVisible(false)
+			},
 		})
 		const sel = document.getElementById('serial-protocol-select')
 		if (sel && W._activeProtocol === 'gz' && sel.value !== 'gz') sel.value = 'gz'

@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "id": "demo-modbus-rtu",
+  "name": "Modbus-RTU 示例（参考例程）",
+  "version": "1.0.0",
+  "description": "标准 Modbus-RTU 帧参考例程：Addr(1B) + Func(1B) + Data + CRC16-Modbus(2B LE)",
+  "framing": {
+    "head": "01",
+    "length": { "offset": 2, "size": 1, "endian": "be", "totalDelta": 5 },
+    "minLength": 5,
+    "maxLength": 256
+  },
+  "checksum": {
+    "algorithm": "crc16-modbus",
+    "offset": -2,
+    "start": 0,
+    "end": -2,
+    "endian": "le"
+  },
+  "fields": [
+    { "name": "从站地址", "offset": 0, "type": "uint8", "format": "hex" },
+    {
+      "name": "功能码",
+      "offset": 1,
+      "type": "uint8",
+      "format": "hex",
+      "enum": {
+        "3": "0x03 读保持寄存器",
+        "4": "0x04 读输入寄存器",
+        "6": "0x06 写单个寄存器",
+        "16": "0x10 写多个寄存器"
+      }
+    }
+  ],
+  "presets": [
+    {
+      "group": "常用查询",
+      "items": [
+        {
+          "name": "读保持寄存器 (0x03, 0x0000×2)",
+          "func": "0x03",
+          "cmd": "0x03",
+          "payloadHex": "00 00 00 02",
+          "desc": "从站 0x01，起始地址 0x0000，读取 2 个寄存器"
+        },
+        {
+          "name": "读输入寄存器 (0x04, 0x0000×2)",
+          "func": "0x04",
+          "cmd": "0x04",
+          "payloadHex": "00 00 00 02",
+          "desc": "从站 0x01，起始地址 0x0000，读取 2 个输入寄存器"
+        }
+      ]
+    }
+  ]
+}

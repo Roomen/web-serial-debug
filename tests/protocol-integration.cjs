@@ -651,8 +651,8 @@ async function run() {
 		assert.equal(els.protoSelect.value, sensorSpec.id, '顶栏下拉框应同步选中自定义 JSON 协议')
 		assert.equal(els.downCard.style.display, '', '通用下行卡片应显示')
 		assert.equal(els.downCard.dataset.mode, 'generic', '应进入通用下行模式而非 SEK 模式')
-		assert.equal(els.rwCard.style.display, 'none', 'SEK 专属卡片应隐藏')
-		assert.equal(els.esimCard.style.display, 'none', 'eSIM 卡片应隐藏')
+		assert.equal(els.rwCard.style.display, '', '跨协议随机测试卡片不应随 SEK 隐藏')
+		assert.equal(els.esimCard.style.display, 'none', 'SEK 专属 eSIM 卡片应隐藏')
 		assert.equal(els.adv.style.display, 'none', 'SEK 高级加解密应隐藏')
 		assert.ok(els.previewEl.value.length > 0, '启动挂载自定义 JSON 协议时应自动生成初始下行 HEX')
 	}

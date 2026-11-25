@@ -1096,10 +1096,28 @@
 	})
 	dualbar.appendChild(summary)
 
+	// 双路模式下如果有一路不是 hostproto，给出轻量提示并允许一键同步两路协议（不后台静默篡改）
+	const laneSyncBar = mk('div', 'sts-sim-lanesync')
+	laneSyncBar.hidden = true
+	const laneSyncText = mk('span', 'sts-sim-hint small', '双路模式下另一路当前不是 hostProto 协议，可能无法解析其帧。')
+	const laneSyncBtn = mk('button', 'btn btn-sm btn-outline-primary', '两路均设为 hostProto')
+	laneSyncBtn.type = 'button'
+	laneSyncBtn.addEventListener('click', function () {
+		const lanes = W.serialLanes
+		if (!lanes || typeof lanes.setProtocol !== 'function') return
+		;['A', 'B'].forEach(function (sid) {
+			if (lanes.protocolOf(sid) !== 'hostproto') lanes.setProtocol(sid, 'hostproto')
+		})
+		refresh()
+	})
+	laneSyncBar.append(laneSyncText, laneSyncBtn)
+
 	const grid = mk('div', 'sts-sim-grid')
 	;['S', 'A', 'B'].forEach(function (sid) { grid.appendChild(panels[sid].root) })
 
-	root.append(help, dualbar, grid)
+	root.append(help, laneSyncBar, dualbar, grid)
+
+	let embeddedInHostProto = false
 
 	function readLabel(fn) {
 		try { const hub = W.SerialHub; return hub && typeof hub[fn] === 'function' ? String(hub[fn]() || '') : '' } catch (e) { return '' }
@@ -1120,7 +1138,16 @@
 			grid.classList.remove('is-dual', 'is-single')
 			grid.classList.add(dual ? 'is-dual' : 'is-single')
 		}
-		syncProtocol()
+		if (embeddedInHostProto) {
+			let needSync = false
+			if (dual && W.serialLanes && typeof W.serialLanes.protocolOf === 'function') {
+				needSync = W.serialLanes.protocolOf('A') !== 'hostproto' || W.serialLanes.protocolOf('B') !== 'hostproto'
+			}
+			if (laneSyncBar.hidden !== !needSync) laneSyncBar.hidden = !needSync
+		} else {
+			if (laneSyncBar.hidden !== true) laneSyncBar.hidden = true
+			syncProtocol()
+		}
 	}
 
 	// 打开面板时把当前模式下每一路(单路 S，双路 A 与 B)的协议都切到 hostproto，关闭后按路恢复打开前的协议：
@@ -1218,10 +1245,19 @@
 	refresh()
 	setInterval(refresh, 500)
 
-	// Workbench 可能尚未就绪（脚本在 workbench.js 之前加载）: 等 DOMContentLoaded 之后再注册，仍未就绪就轮询
+	// 优先挂载进 hostProto 协议面板的子页宿主 #hostproto-sts-host；
+	// 若宿主不存在（如独立单测沙箱），则兼容回退到 Workbench.registerPanel('sts-sim')。
 	function register(root) {
 		let tries = 0
 		const attempt = function () {
+			const host = document.getElementById('hostproto-sts-host')
+			if (host) {
+				embeddedInHostProto = true
+				root.className = 'd-flex flex-column sts-sim sts-sim-embedded'
+				host.appendChild(root)
+				refresh()
+				return
+			}
 			if (W.Workbench && typeof W.Workbench.registerPanel === 'function') {
 				W.Workbench.registerPanel({
 					id: 'sts-sim', title: 'STS 表端 / CIU 模拟', label: 'STS 模拟', icon: 'bi-broadcast',

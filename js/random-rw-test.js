@@ -8,7 +8,9 @@
 	const IR_KEEPALIVE_TIMEOUT = 4000
 	const DEFAULT_STEP_TIMEOUT = 5000
 	const DEFAULT_GAP_MS = 200
-	const SUPPORTED_PROTOCOLS = { sek: true }
+	const SUPPORTED_PROTOCOLS = { sek: true, hostproto: true, cjt188: true, 'sk-ultrasonic': true }
+	const customProviders = {}
+	let activeCancelWait = null
 
 	// ---------- SEK 用例目录 ----------
 	const SEK_CASES = {
@@ -177,37 +179,174 @@
 		}
 	}
 
-	// ---------- 协议 ----------
+	// ---------- 协议与跨协议 Provider ----------
 	function getActiveProtoId() {
 		return window._activeProtocol ||
 			(document.getElementById('serial-protocol-select') || {}).value ||
 			'sek'
 	}
 
+	function getActiveProto() {
+		if (typeof window.getActiveProtocol === 'function') {
+			try { return window.getActiveProtocol() } catch (e) { /* ignore */ }
+		}
+		const id = getActiveProtoId()
+		return (window._protocols && window._protocols[id]) || null
+	}
+
 	function getActiveProtoName() {
-		const p = typeof window.getActiveProtocol === 'function' ? window.getActiveProtocol() : null
+		const p = getActiveProto()
 		if (p && p.name) return p.name
 		const id = getActiveProtoId()
 		return id ? id.toUpperCase() : '?'
 	}
 
+	function extractPresetCases(proto) {
+		if (!proto || typeof proto.buildDownFrame !== 'function' || !Array.isArray(proto.presets)) return []
+		const groups = (proto.presets[0] && Array.isArray(proto.presets[0].items))
+			? proto.presets
+			: [{ group: '常用指令', items: proto.presets }]
+		const cases = []
+		groups.forEach(function (g) {
+			;(g.items || []).forEach(function (it) {
+				if (!it || !it.name) return
+				// 自动随机池仅纳入无参或有默认值的指令，避免无默认参数导致组帧失败
+				if (it.param && it.param.default == null && it.param.type !== 'enum') return
+				cases.push({
+					name: it.name,
+					build: function () {
+						const opts = Object.assign({}, it)
+						if (it.param && it.param.default != null) opts.value = it.param.default
+						const built = proto.buildDownFrame(opts)
+						return built && built.frame ? Array.from(built.frame) : (built ? Array.from(built) : [])
+					},
+				})
+			})
+		})
+		return cases
+	}
+
+	function sendAndWaitGeneric(proto, frameBytes, timeoutMs) {
+		return new Promise(function (resolve, reject) {
+			if (stopFlag) { reject(new Error('测试已停止')); return }
+			const api = window.serialApi
+			if (!api || !api.isOpen()) { reject(new Error('串口未打开')); return }
+			const targetSid = typeof api.getActiveSendSid === 'function' ? api.getActiveSendSid() : 'S'
+			let done = false
+			let buf = []
+			let timer = null
+			let unsub = null
+
+			function finish(err, res) {
+				if (done) return
+				done = true
+				if (timer) { clearTimeout(timer); timer = null }
+				if (unsub) { try { unsub() } catch (e) {} unsub = null }
+				if (activeCancelWait === cancel) activeCancelWait = null
+				if (err) reject(err)
+				else resolve(res)
+			}
+			function cancel(reason) { finish(new Error(reason || '测试已停止')) }
+			activeCancelWait = cancel
+
+			timer = setTimeout(function () { finish(new Error('应答超时(' + timeoutMs + 'ms)')) }, timeoutMs)
+
+			if (typeof api.onReceive === 'function') {
+				unsub = api.onReceive(function (chunk, sid) {
+					if (done) return
+					if (sid && targetSid && sid !== targetSid) return
+					const arr = Array.from(chunk || [])
+					if (!arr.length) return
+					for (let i = 0; i < arr.length; i++) buf.push(arr[i])
+					if (buf.length > 65536) buf = buf.slice(buf.length - 16384)
+					if (proto && typeof proto.findFrame === 'function') {
+						while (buf.length > 0) {
+							let found = null
+							try { found = proto.findFrame(Uint8Array.from(buf)) } catch (e) { found = null }
+							if (!found || !found.found || !found.frame) break
+							const endPos = (found.offset || 0) + (found.length || found.frame.length)
+							buf = buf.slice(Math.max(1, endPos))
+							let parsed = null
+							if (typeof proto.parseFrame === 'function') {
+								try { parsed = proto.parseFrame(found.frame) } catch (e) { parsed = null }
+							}
+							if (!parsed || parsed.ok !== false) {
+								finish(null, { frame: Array.from(found.frame), parsed: parsed })
+								return
+							}
+						}
+						return
+					}
+					finish(null, { frame: buf.slice(), parsed: null })
+				})
+			}
+
+			Promise.resolve(api.writeRaw(Uint8Array.from(frameBytes))).catch(function (e) {
+				finish(new Error('发送失败: ' + (e && e.message ? e.message : e)))
+			})
+		})
+	}
+
+	function resolveProvider(protoId) {
+		const id = protoId || getActiveProtoId()
+		if (id === 'sek') {
+			return {
+				id: 'sek',
+				mode: 'sek',
+				supportsWrite: true,
+				hint: '协议 SEK · 真随机读/写/查询交错 · seed=随机序列种子(相同seed可复现) · 不含开猫/复位/表号/IP/时间',
+			}
+		}
+		if (customProviders[id]) return customProviders[id]
+		const proto = getActiveProto()
+		if (proto && proto.randomTest && Array.isArray(proto.randomTest.cases) && proto.randomTest.cases.length) {
+			return Object.assign({ id: id, mode: 'cases', supportsWrite: !!proto.randomTest.supportsWrite }, proto.randomTest)
+		}
+		if (id === 'cjt188' || id === 'sk-ultrasonic') {
+			if (typeof window.cjt188BuildDownFrame === 'function') {
+				return {
+					id: id,
+					mode: 'cases',
+					supportsWrite: false,
+					hint: '协议 ' + getActiveProtoName() + ' · 随机查询压测（读表号 0x03 / 读数据 0x01）· seed 可复现',
+					cases: [
+						{ name: '读表号(0x03)', build: function () { return Array.from(window.cjt188BuildDownFrame({ cmd: '0x03' }).frame || []) } },
+						{ name: '读数据(0x01)', build: function () { return Array.from(window.cjt188BuildDownFrame({ cmd: '0x01' }).frame || []) } },
+					],
+				}
+			}
+		}
+		const presetCases = extractPresetCases(proto)
+		if (presetCases.length) {
+			return {
+				id: id,
+				mode: 'cases',
+				supportsWrite: false,
+				hint: '协议 ' + getActiveProtoName() + ' · 从协议预设提取 ' + presetCases.length + ' 条安全指令随机交错压测 · seed 可复现',
+				cases: presetCases,
+			}
+		}
+		return null
+	}
+
 	function isProtoSupported() {
-		return !!SUPPORTED_PROTOCOLS[getActiveProtoId()]
+		return !!resolveProvider(getActiveProtoId())
 	}
 
 	function refreshProtoUi() {
 		const id = getActiveProtoId()
 		const name = getActiveProtoName()
-		const ok = isProtoSupported()
+		const prov = resolveProvider(id)
+		const ok = !!prov
 		if (el.titleProto) el.titleProto.textContent = name
 		if (el.hint) {
 			if (!ok) {
-				el.hint.textContent = '当前协议「' + name + '」暂不支持随机读写测试'
+				el.hint.textContent = '当前协议「' + name + '」无预设构建指令，可切到「批量下发」编排自定义指令序列'
 			} else {
-				el.hint.textContent = '协议 ' + name +
-					' · 真随机读/写/查询交错 · seed=随机序列种子(相同seed可复现) · 不含开猫/复位/表号/IP/时间'
+				el.hint.textContent = prov.hint || ('协议 ' + name + ' · 随机指令序列压测 · seed 可复现')
 			}
 		}
+		if (el.restoreWrap) el.restoreWrap.hidden = !!(prov && !prov.supportsWrite)
 		if (el.start && !running) el.start.disabled = !ok
 		if (el.card) el.card.classList.toggle('is-disabled', !ok)
 	}
@@ -506,19 +645,101 @@
 			' / 恢复失败 ' + lists.restoreFail.length, lists.fail.length || lists.restoreFail.length ? 'fail' : 'pass')
 	}
 
+	// ---------- 通用跨协议随机执行 ----------
+	async function runGenericCases(prov, proto, protoName, rng, stepsN, gapMs, timeoutMs, seed, continueOnFail) {
+		const cases = prov.cases || []
+		const total = stepsN
+		let done = 0
+		const lists = { fail: [], skip: [], unsupported: [], restoreFail: [], passCount: 0 }
+
+		logLine('开始随机测试 协议=' + protoName + ' seed=' + seed + ' 步数=' + total + ' 用例池=' + cases.length + ' 项', 'info')
+		logLine('seed=伪随机种子，相同 seed 会生成相同指令序列，便于复现问题', 'info')
+
+		for (let i = 0; i < total; i++) {
+			if (stopFlag) {
+				logLine('用户停止', 'warn')
+				break
+			}
+			if (!window.serialApi || !window.serialApi.isOpen()) {
+				logLine('串口已关闭, 测试中止', 'warn')
+				stopFlag = true
+				break
+			}
+			const c = pick(rng, cases)
+			const label = '[' + (i + 1) + '/' + total + '] ' + c.name
+			setStatus(label, 'run')
+			const t0 = Date.now()
+			let ok = false
+			let detail = ''
+			try {
+				if (typeof prov.runStep === 'function') {
+					const r = await prov.runStep(c, { rng: rng, timeoutMs: timeoutMs, proto: proto, sendAndWait: sendAndWaitGeneric })
+					ok = !!(r && r.ok !== false && r.status !== 'fail')
+					detail = (r && r.detail) || ''
+				} else {
+					const frameBytes = typeof c.build === 'function' ? c.build(rng) : (c.bytes || [])
+					if (!frameBytes || !frameBytes.length) throw new Error('构建帧为空')
+					const res = await sendAndWaitGeneric(proto, frameBytes, timeoutMs)
+					if (typeof c.verify === 'function') {
+						const vr = c.verify(res)
+						ok = vr !== false
+						detail = typeof vr === 'string' ? vr : ('应答 ' + (res && res.frame ? res.frame.length : 0) + 'B')
+					} else if (res && res.parsed && res.parsed.status != null && res.parsed.status !== 0) {
+						ok = false
+						detail = '状态码=' + res.parsed.status
+					} else {
+						ok = true
+						detail = '应答 ' + (res && res.frame ? res.frame.length : 0) + 'B'
+					}
+				}
+			} catch (e) {
+				ok = false
+				detail = e && e.message ? e.message : String(e)
+				if (stopFlag || /串口未打开|测试已停止/.test(detail)) {
+					lists.fail.push(label + ' — ' + detail)
+					logLine('✗ ' + label + ' ' + detail, 'fail')
+					stopFlag = true
+					break
+				}
+			}
+			const ms = Date.now() - t0
+			done++
+			setProgress(done, total)
+			const line = label + ' (' + ms + 'ms) ' + detail
+			if (ok) {
+				lists.passCount++
+				logLine('✓ ' + line, 'pass')
+			} else {
+				lists.fail.push(line)
+				logLine('✗ ' + line, 'fail')
+				if (!continueOnFail) {
+					logLine('遇失败已停止', 'warn')
+					break
+				}
+			}
+			if (gapMs > 0 && i < total - 1) await sleep(gapMs)
+		}
+
+		printReport(lists, seed, stopFlag)
+		finishRun(stopFlag, lists, seed, done, total)
+	}
+
 	// ---------- 主流程 ----------
 	async function runAll() {
 		if (running) return
-		if (!isProtoSupported()) {
-			setStatus('当前协议不支持', 'err')
-			logLine('协议「' + getActiveProtoName() + '」无随机读写实现', 'fail')
+		const protoId = getActiveProtoId()
+		const proto = getActiveProto()
+		const prov = resolveProvider(protoId)
+		if (!prov) {
+			setStatus('当前协议无可用随机用例', 'err')
+			logLine('协议「' + getActiveProtoName() + '」无预设构建指令，可在「批量下发」中编排自定义指令', 'fail')
 			return
 		}
 		if (!window.serialApi || !window.serialApi.isOpen()) {
 			setStatus('请先打开串口', 'err')
 			return
 		}
-		if (!window.sekTx) {
+		if (prov.mode === 'sek' && !window.sekTx) {
 			setStatus('事务层未加载', 'err')
 			return
 		}
@@ -537,7 +758,7 @@
 			const stepsN = Number.isFinite(requestedSteps) ? Math.min(500, Math.max(5, requestedSteps)) : 40
 			el.steps.value = String(stepsN)
 			const gapMs = Math.max(0, parseInt(el.gap.value, 10) || DEFAULT_GAP_MS)
-			const timeoutMs = Math.max(1000, parseInt(el.timeout.value, 10) || DEFAULT_STEP_TIMEOUT)
+			const timeoutMs = Math.max(500, parseInt(el.timeout.value, 10) || DEFAULT_STEP_TIMEOUT)
 			let seed = parseInt(el.seed.value, 10)
 			if (isNaN(seed)) {
 				seed = (Date.now() ^ (Math.random() * 0x7fffffff)) >>> 0
@@ -547,6 +768,12 @@
 			const doRestore = !(el.restore && !el.restore.checked)
 			const rng = mulberry32(seed)
 			const protoName = getActiveProtoName()
+
+			if (prov.mode !== 'sek') {
+				await runGenericCases(prov, proto, protoName, rng, stepsN, gapMs, timeoutMs, seed, continueOnFail)
+				return
+			}
+
 			const catalog = SEK_CASES
 	
 			const plan = buildRandomPlan(rng, catalog, stepsN)
@@ -700,6 +927,9 @@
 	function stopAll() {
 		stopFlag = true
 		setStatus('正在停止…', 'warn')
+		if (activeCancelWait) {
+			try { activeCancelWait('测试已停止') } catch (e) { /* */ }
+		}
 		if (window.sekTx && typeof window.sekTx.cancelAll === 'function') {
 			try { window.sekTx.cancelAll('测试已停止') } catch (e) { /* */ }
 		}
@@ -716,6 +946,7 @@
 		el.seed = $('sk-rw-seed')
 		el.continueOnFail = $('sk-rw-continue')
 		el.restore = $('sk-rw-restore')
+		el.restoreWrap = $('sk-rw-restore-wrap')
 		el.progress = $('sk-rw-progress-bar')
 		el.status = $('sk-rw-status')
 		el.log = $('sk-rw-log')
@@ -740,6 +971,9 @@
 		if (sel) {
 			sel.addEventListener('change', refreshProtoUi)
 		}
+		if (window.ProtocolRegistry && typeof window.ProtocolRegistry.onChange === 'function') {
+			window.ProtocolRegistry.onChange(refreshProtoUi)
+		}
 		refreshProtoUi()
 	}
 
@@ -752,6 +986,14 @@
 	window.skRandomRw = {
 		runAll: runAll,
 		stop: stopAll,
+		refreshProtoUi: refreshProtoUi,
+		resolveProvider: resolveProvider,
+		registerProvider: function (protoId, provider) {
+			if (!protoId || !provider) return
+			customProviders[protoId] = provider
+			SUPPORTED_PROTOCOLS[protoId] = true
+			refreshProtoUi()
+		},
 		SUPPORTED_PROTOCOLS: SUPPORTED_PROTOCOLS
 	}
 })()
