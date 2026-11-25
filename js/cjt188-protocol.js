@@ -524,10 +524,29 @@
 	}
 
 	// ===== 协议注册 =====
+	function mountCjt188Panel(protoId) {
+		const isUltra = protoId === 'sk-ultrasonic'
+		const title = document.getElementById('cjt188-down-title')
+		if (title) title.textContent = isUltra ? '188协议（超声）下行下发' : '188协议下行下发'
+		const cmdSel = document.getElementById('cjt188-down-cmd')
+		const readOption = cmdSel ? cmdSel.querySelector('option[value="0x01"]') : null
+		if (readOption) readOption.textContent = isUltra ? '0x01 拓展读流量 (901E)' : '0x01 读数据'
+		const preview = document.getElementById('cjt188-down-preview')
+		if (preview) preview.value = ''
+		const card = document.getElementById('cjt188-down-card')
+		if (card) card.style.display = ''
+	}
+	function unmountCjt188Panel() {
+		const card = document.getElementById('cjt188-down-card')
+		if (card) card.style.display = 'none'
+	}
 	function tryRegister() {
 		if (typeof W.registerProtocol !== 'function') { setTimeout(tryRegister, 50); return }
 		W.registerProtocol('cjt188', {
 			name: '188协议',
+			builtin: true,
+			source: 'builtin',
+			description: 'CJ/T 188 户用计量仪表通信协议',
 			parseFrame: W.cjt188ParseFrame,
 			formatFrame: W.cjt188FormatFrame,
 			logView: W.cjt188LogView,
@@ -536,9 +555,14 @@
 			buildDownFrame: W.cjt188BuildDownFrame,
 			updateFrameTime: W.cjt188UpdateFrameTime,
 			presets: [],
+			mountPanel: function () { mountCjt188Panel('cjt188') },
+			unmountPanel: unmountCjt188Panel,
 		})
 		W.registerProtocol('sk-ultrasonic', {
 			name: '188协议（超声）',
+			builtin: true,
+			source: 'builtin',
+			description: 'CJ/T 188 超声拓展协议（901E 流量读取）',
 			parseFrame: W.cjt188ParseFrame,
 			formatFrame: W.cjt188FormatFrame,
 			logView: W.cjt188LogView,
@@ -547,6 +571,8 @@
 			buildDownFrame: W.skUltrasonicBuildDownFrame,
 			updateFrameTime: W.cjt188UpdateFrameTime,
 			presets: [],
+			mountPanel: function () { mountCjt188Panel('sk-ultrasonic') },
+			unmountPanel: unmountCjt188Panel,
 		})
 		const sel = document.getElementById('serial-protocol-select')
 		if (sel && ['cjt188', 'sk-ultrasonic'].includes(W._activeProtocol)) sel.value = W._activeProtocol
@@ -679,28 +705,6 @@
 			const sendEl = document.getElementById('serial-protocol-send')
 			if (sendEl) sendEl.click()
 		})
-
-		// 与其余协议卡片互斥显示; SEK 专属卡片集中在 sekOnly
-		function applyVisibility() {
-			const sel = document.getElementById('serial-protocol-select')
-			const v = sel ? sel.value : 'sek'
-			const isCjt188 = v === 'cjt188' || v === 'sk-ultrasonic'
-			const title = document.getElementById('cjt188-down-title')
-			if (title) title.textContent = v === 'sk-ultrasonic' ? '188协议（超声）下行下发' : '188协议下行下发'
-			const readOption = cmdSel.querySelector('option[value="0x01"]')
-			if (readOption) readOption.textContent = v === 'sk-ultrasonic' ? '0x01 拓展读流量 (901E)' : '0x01 读数据'
-			if (preview) preview.value = ''
-			const isSek = v === 'sek'
-			const card = document.getElementById('cjt188-down-card')
-			if (card) card.style.display = isCjt188 ? '' : 'none'
-			;['sk-down-card', 'sk-rw-card', 'sk-batch-card', 'serial-protocol-advanced'].forEach(function (id) {
-				const el = document.getElementById(id)
-				if (el) el.style.display = isSek ? '' : 'none'
-			})
-		}
-		const protoSel = document.getElementById('serial-protocol-select')
-		if (protoSel) protoSel.addEventListener('change', applyVisibility)
-		applyVisibility()
 	}
 
 	tryRegister()

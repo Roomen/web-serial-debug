@@ -763,11 +763,18 @@
 		return out
 	}
 
-	// ===== 协议注册 (common.js 的 window.registerProtocol 挂表, 供协议下拉框选择) =====
+	// ===== 协议注册 (ProtocolRegistry 挂表, 供协议下拉框选择) =====
+	function setWmbusCardVisible(visible) {
+		const wm = document.getElementById('wmbus-down-card')
+		if (wm) wm.style.display = visible ? '' : 'none'
+	}
 	function tryRegister() {
 		if (typeof W.registerProtocol !== 'function') { setTimeout(tryRegister, 50); return }
 		W.registerProtocol('wmbus', {
 			name: 'W-MBUS',
+			builtin: true,
+			source: 'builtin',
+			description: 'W-MBUS EN13757-3/-7 私有 profile（AES-128-CBC + CMAC）',
 			parseFrame: W.wmbusParseFrame,
 			formatFrame: W.wmbusFormatFrame,
 			logView: W.wmbusLogView,
@@ -775,6 +782,8 @@
 			byteMap: W.wmbusByteMap,
 			buildDownFrame: W.wmbusBuildDownFrame,
 			presets: [],
+			mountPanel: function () { setWmbusCardVisible(true) },
+			unmountPanel: function () { setWmbusCardVisible(false) },
 		})
 		// common.js 在恢复 toolOptions.skProtocol 时可能早于本模块注册执行(见下方脚本加载顺序),
 		// 此时下拉框里还没有 wmbus 选项、_activeProtocol 却已被置为 'wmbus'；这里补一次同步。
@@ -1294,21 +1303,6 @@
 				}
 			}
 		})
-
-		// 与 SK/工装卡片互斥: 仅当前协议为 wmbus 时显示本卡片; SEK 卡片仅 sek 显示
-		function applyVisibility() {
-			const sel = document.getElementById('serial-protocol-select')
-			const v = sel ? sel.value : 'sek'
-			const isWmbus = v === 'wmbus'
-			const isSek = v === 'sek'
-			const sekOnly = ['sk-down-card', 'sk-rw-card', 'sk-batch-card', 'serial-protocol-advanced']
-			for (const id of sekOnly) { const el = document.getElementById(id); if (el) el.style.display = isSek ? '' : 'none' }
-			const wm = document.getElementById('wmbus-down-card')
-			if (wm) wm.style.display = isWmbus ? '' : 'none'
-		}
-		const protoSel = document.getElementById('serial-protocol-select')
-		if (protoSel) protoSel.addEventListener('change', applyVisibility)
-		applyVisibility()
 	}
 
 	tryRegister()

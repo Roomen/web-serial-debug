@@ -1149,7 +1149,7 @@
 	}
 
 	// ---- 协议注册表 ----
-	window._protocols = {}
+	if (!window._protocols || typeof window._protocols !== 'object') window._protocols = {}
 	window._activeProtocol = 'sek'
 
 	// ---- 按路协议 ----
@@ -1193,8 +1193,64 @@
 		try { localStorage.setItem('toolOptions', JSON.stringify(toolOptions)) } catch (e) {}
 		return true
 	}
-	// 改某一路的协议：改的正是顶栏代表的那一路(单路的 S、双路的主发路)时走顶栏(各协议模块只在顶栏的 change 里切面板)，否则只改该路并重渲它的解析段
+	// 当某协议被隐藏或注销时，检查单路与双路：指向不可选协议的路自动回退到 fallbackProtocolId()
+	function reconcileProtocolFallback(unavailableId) {
+		const reg = window.ProtocolRegistry
+		if (!reg) return
+		const fb = reg.fallbackProtocolId()
+		if (!fb) return
+		const bad = function (id) {
+			if (!id) return false
+			if (unavailableId && id === unavailableId) return true
+			return !reg.isSelectable(id)
+		}
+		let changedSingle = false
+		let changedDual = false
+		if (bad(singleProtocolId) || bad(toolOptions.skProtocol)) {
+			if (singleProtocolId !== fb || toolOptions.skProtocol !== fb) {
+				singleProtocolId = fb
+				toolOptions.skProtocol = fb
+				try { localStorage.setItem('toolOptions', JSON.stringify(toolOptions)) } catch (e) {}
+				changedSingle = true
+			}
+		}
+		if (laneProtocols) {
+			;['A', 'B'].forEach(function (sid) {
+				if (bad(laneProtocols[sid]) && laneProtocols[sid] !== fb) {
+					laneProtocols[sid] = fb
+					changedDual = true
+				}
+			})
+			if (changedDual) persistLaneProtocols()
+		}
+		const prevActive = window._activeProtocol
+		const activeChanged = bad(prevActive)
+		const targetActive = SerialHub.mode === 'dual' ? protocolIdForSid(SerialHub.activeSendId) : singleProtocolId
+		const nextActive = bad(targetActive) ? fb : targetActive
+		const activeSwitched = activeChanged || prevActive !== nextActive
+		if (window._activeProtocol !== nextActive) window._activeProtocol = nextActive
+		const sel = document.getElementById('serial-protocol-select')
+		if (sel && protocolExists(sel, nextActive) && sel.value !== nextActive) {
+			sel.value = nextActive
+		}
+		if (activeSwitched) {
+			// 主发路回退时清空共享下发 HEX 缓冲，防止发出旧协议残留帧
+			const downPreviewEl = document.getElementById('serial-protocol-down-preview')
+			if (downPreviewEl) downPreviewEl.value = ''
+		}
+		reg.activatePanel(nextActive)
+		if (changedSingle || changedDual || activeSwitched) {
+			rerenderParseRows()
+			notifyLaneConfig()
+		}
+	}
+	// 改某一路的协议：程序化切到已注册但当前隐藏的协议（如 STS 模拟切 hostproto）时自动取消隐藏；
+	// 改的正是顶栏代表的那一路(单路的 S、双路的主发路)时走顶栏，否则只改该路并重渲它的解析段
 	function setLaneProtocol(sid, id) {
+		const reg = window.ProtocolRegistry
+		if (reg && reg.has(id) && reg.isHidden(id)) {
+			reg.setHidden(id, false)
+		}
 		const top = document.getElementById('serial-protocol-select')
 		const viaTop = SerialHub.mode === 'dual' ? sid === SerialHub.activeSendId : sid === 'S'
 		if (viaTop && protocolExists(top, id)) {
@@ -1219,104 +1275,127 @@
 		sel.value = want
 		sel.dispatchEvent(new Event('change'))
 	}
-	window.registerProtocol = function (id, impl) {
-		// 平台画像外的协议不进注册表与下拉框(移动端只有 SEK)；各协议模块照常加载，只是选不到
-		if (!platformAllowsProtocol(id)) return
-		window._protocols[id] = impl
-		// 当前协议晚于日志恢复才注册(启动时 gz/wmbus 等脚本在 common.js 之后加载): 已有的解析段按它重渲
-		if (id === window._activeProtocol || (laneProtocols && (laneProtocols.A === id || laneProtocols.B === id))) scheduleParseRerender()
-		if (!document.getElementById('serial-protocol-select')) return
-		var sel = document.getElementById('serial-protocol-select')
-		var exists = Array.from(sel.options).some(function (o) { return o.value === id })
-		if (!exists) {
-			var opt = document.createElement('option')
-			opt.value = id
-			opt.textContent = impl.name || id
-			sel.appendChild(opt)
+	// 按路协议到此为止（别删）
+	let _genericPanelHandlers = { mountGenericPanel: null, unmountGenericPanel: null }
+	if (window.ProtocolRegistry) {
+		window.ProtocolRegistry.setHost({
+			onRegistered: function (id) {
+				if (id === window._activeProtocol || (laneProtocols && (laneProtocols.A === id || laneProtocols.B === id))) {
+					scheduleParseRerender()
+				}
+			},
+			onUnavailable: function (id) {
+				reconcileProtocolFallback(id)
+			},
+			onReconcile: function () {
+				reconcileProtocolFallback(null)
+			},
+			mountGenericPanel: function (proto, ctx) {
+				if (typeof _genericPanelHandlers.mountGenericPanel === 'function') {
+					_genericPanelHandlers.mountGenericPanel(proto, ctx)
+				}
+			},
+			unmountGenericPanel: function (ctx) {
+				if (typeof _genericPanelHandlers.unmountGenericPanel === 'function') {
+					_genericPanelHandlers.unmountGenericPanel(ctx)
+				}
+			},
+		})
+	} else {
+		window.registerProtocol = function (id, impl) {
+			if (!platformAllowsProtocol(id)) return false
+			window._protocols[id] = impl
+			if (id === window._activeProtocol || (laneProtocols && (laneProtocols.A === id || laneProtocols.B === id))) scheduleParseRerender()
+			const sel = document.getElementById('serial-protocol-select')
+			if (!sel) return true
+			const exists = Array.from(sel.options).some(function (o) { return o.value === id })
+			if (!exists) {
+				const opt = document.createElement('option')
+				opt.value = id
+				opt.textContent = impl.name || id
+				sel.appendChild(opt)
+			}
+			return true
 		}
 	}
 
-	// 初始化 SEK 协议（延迟注册，等 protocol.js 加载后函数可用）
-	function _initProtocolRegistry() {
-		if (typeof skParseFrame === 'function') {
-			window.registerProtocol('sek', {
-				name: 'SEK',
-				parseFrame: skParseFrame,
-				formatFrame: skFormatFrame,
-				logView: typeof skLogView === 'function' ? skLogView : null,
-				findFrame: typeof skFindFrame === 'function' ? skFindFrame : null,
-				byteMap: typeof skByteMap === 'function' ? skByteMap : null,
-				buildDownFrame: typeof skBuildDownFrame === 'function' ? skBuildDownFrame : null,
-				updateFrameTime: typeof skUpdateFrameTime === 'function' ? skUpdateFrameTime : null,
-				presets: window.SK_DOWN_PRESETS || [],
-			})
-		}
+	// 将全局函数替换为协议代理，根据 activeProtocol 分发；同时保存原始默认协议实现供 protocol-downlink.js 注册
+	const _rawSekImpl = {
+		parseFrame: typeof skParseFrame === 'function' ? skParseFrame : null,
+		formatFrame: typeof skFormatFrame === 'function' ? skFormatFrame : null,
+		logView: typeof skLogView === 'function' ? skLogView : null,
+		findFrame: typeof skFindFrame === 'function' ? skFindFrame : null,
+		byteMap: typeof skByteMap === 'function' ? skByteMap : null,
+		buildDownFrame: typeof skBuildDownFrame === 'function' ? skBuildDownFrame : null,
+		updateFrameTime: typeof skUpdateFrameTime === 'function' ? skUpdateFrameTime : null,
 	}
-
-	// 将全局函数替换为协议代理，根据 activeProtocol 分发
 	;(function () {
-		var _parse = typeof skParseFrame === 'function' ? skParseFrame : null
-		var _fmt = typeof skFormatFrame === 'function' ? skFormatFrame : null
-		var _find = typeof skFindFrame === 'function' ? skFindFrame : null
-		var _bmap = typeof skByteMap === 'function' ? skByteMap : null
-		var _build = typeof skBuildDownFrame === 'function' ? skBuildDownFrame : null
-
-		_initProtocolRegistry()
+		const _parse = _rawSekImpl.parseFrame
+		const _fmt = _rawSekImpl.formatFrame
+		const _find = _rawSekImpl.findFrame
+		const _bmap = _rawSekImpl.byteMap
+		const _build = _rawSekImpl.buildDownFrame
 
 		skParseFrame = function (data, opts) {
-			var p = window.getActiveProtocol()
+			const p = window.getActiveProtocol()
 			if (p && p.parseFrame) return p.parseFrame(data, opts)
 			if (_parse) return _parse(data, opts)
 			return { errors: ['当前协议无解析器'] }
 		}
 		skFormatFrame = function (r) {
-			var p = window.getActiveProtocol()
+			const p = window.getActiveProtocol()
 			if (p && p.formatFrame) return p.formatFrame(r)
 			if (_fmt) return _fmt(r)
 			return ''
 		}
 		skFindFrame = function (data, opts) {
-			var p = window.getActiveProtocol()
+			const p = window.getActiveProtocol()
 			if (p && p.findFrame) return p.findFrame(data, opts)
 			if (_find) return _find(data, opts)
 			return null
 		}
 		if (_bmap) {
 			skByteMap = function (r) {
-				var p = window.getActiveProtocol()
+				const p = window.getActiveProtocol()
 				if (p && p.byteMap) return p.byteMap(r)
 				return _bmap(r)
 			}
 		}
 		if (_build) {
 			skBuildDownFrame = function (opts) {
-				var p = window.getActiveProtocol()
+				const p = window.getActiveProtocol()
 				if (p && p.buildDownFrame) return p.buildDownFrame(opts)
 				return _build(opts)
 			}
 		}
 
-		// 暴露协议预设重建函数与下发帧时间更新函数
-		window.rebuildProtocolPresets = function () {
-			if (!window.SK_DOWN_PRESETS) return
-			var proto = window.getActiveProtocol()
-			var presets = (proto && proto.presets) ? proto.presets : window.SK_DOWN_PRESETS
-			var oldSK = window.SK_DOWN_PRESETS
-			window.SK_DOWN_PRESETS = presets
-			rebuildPresets(document.getElementById('serial-protocol-down-func').value)
-			window.SK_DOWN_PRESETS = oldSK
-		}
 		window.updateDownlinkFrameTime = function (bytes, now) {
 			return updateDownlinkFrameTime(bytes, now)
 		}
 	})()
+
+	// 提供给 js/protocol-downlink.js 的宿主桥
+	window._serialProtocolHost = {
+		rawSek: _rawSekImpl,
+		sendHex: function (hex) { return sendHex(hex) },
+		addLogErr: function (msg) { return addLogErr(msg) },
+		copyText: function (text) { return copyText(text) },
+		getToolOptions: function () { return toolOptions },
+		resolveToolEncKey: function () { return resolveToolEncKey() },
+		getDownlinkEncKey: function () { return getDownlinkEncKey() },
+		getActiveLaneBaseWater: function () { return getActiveLaneBaseWater() },
+		inLiveLane: function (sid, fn) { return inLiveLane(sid, fn) },
+		setGenericPanelHandlers: function (handlers) {
+			_genericPanelHandlers = handlers || { mountGenericPanel: null, unmountGenericPanel: null }
+		},
+	}
 
 	window.getActiveProtocol = function () {
 		return window._protocols[window._activeProtocol] || null
 	}
 
 	// 协议选择器变更
-	var protocolSelectEl = document.getElementById('serial-protocol-select')
+	const protocolSelectEl = document.getElementById('serial-protocol-select')
 	if (protocolSelectEl) {
 		protocolSelectEl.addEventListener('change', function () {
 			if (SerialHub.mode === 'dual') {
@@ -1327,18 +1406,22 @@
 				notifyLaneConfig()
 			} else {
 				window._activeProtocol = this.value
+				singleProtocolId = this.value
 				toolOptions.skProtocol = this.value
 				localStorage.setItem('toolOptions', JSON.stringify(toolOptions))
 				rerenderParseRows()
 			}
-			// 刷新常用指令列表
-			if (typeof rebuildProtocolPresets === 'function') rebuildProtocolPresets()
 			// 下发 HEX 框是各协议共用的发送缓冲(188/WMBUS 下发也写它)，切协议后留着旧帧会被「立即下发」原样发出
 			const downPreviewEl = document.getElementById('serial-protocol-down-preview')
 			if (downPreviewEl) downPreviewEl.value = ''
-			// 再按新协议当前选中的常用指令重新生成, 不用手动点「生成HEX」
-			const downPresetEl = document.getElementById('serial-protocol-down-preset')
-			if (downPresetEl && downPresetEl.value) downPresetEl.dispatchEvent(new Event('change'))
+			// 统一经 ProtocolRegistry 切换协议面板（卸载旧面板 -> 挂载新面板 / 通用下行面板）
+			if (window.ProtocolRegistry) {
+				window.ProtocolRegistry.activatePanel(this.value)
+			} else {
+				if (typeof window.rebuildProtocolPresets === 'function') window.rebuildProtocolPresets()
+				const downPresetEl = document.getElementById('serial-protocol-down-preset')
+				if (downPresetEl && downPresetEl.value) downPresetEl.dispatchEvent(new Event('change'))
+			}
 		})
 	}
 
@@ -1666,6 +1749,10 @@
 		localStorage.removeItem('toolOptions')
 		localStorage.removeItem(TOOL_OPTIONS_DUAL_KEY)
 		localStorage.removeItem('quickSendList')
+		localStorage.removeItem('protocolHiddenIds')
+		localStorage.removeItem('customJsonProtocols')
+		localStorage.removeItem('customJsProtocols')
+		localStorage.removeItem('trustedJsPluginHashes')
 		location.reload()
 	})
 	//导出参数
@@ -1678,6 +1765,8 @@
 			toolOptions: localStorage.getItem('toolOptions'),
 			toolOptionsDual: localStorage.getItem(TOOL_OPTIONS_DUAL_KEY),
 			quickSendList: localStorage.getItem('quickSendList'),
+			protocolHiddenIds: localStorage.getItem('protocolHiddenIds'),
+			customJsonProtocols: localStorage.getItem('customJsonProtocols'),
 		}
 		let blob = new Blob([JSON.stringify(data)], { type: 'text/plain' })
 		saveAs(blob, 'web-serial-debug.json')
@@ -1709,6 +1798,21 @@
 				setParam('toolOptions', obj.toolOptions)
 				setParam(TOOL_OPTIONS_DUAL_KEY, obj.toolOptionsDual)
 				setParam('quickSendList', obj.quickSendList)
+				setParam('protocolHiddenIds', obj.protocolHiddenIds == null ? null : (typeof obj.protocolHiddenIds === 'string' ? obj.protocolHiddenIds : JSON.stringify(obj.protocolHiddenIds)))
+				setParam('customJsonProtocols', obj.customJsonProtocols == null ? null : (typeof obj.customJsonProtocols === 'string' ? obj.customJsonProtocols : JSON.stringify(obj.customJsonProtocols)))
+				// 安全策略：若导入包包含外部 JS 插件，一律强制置为未启用并清除信任哈希，绝不静默执行
+				if (obj.customJsProtocols != null) {
+					try {
+						const rawJs = typeof obj.customJsProtocols === 'string' ? JSON.parse(obj.customJsProtocols) : obj.customJsProtocols
+						if (Array.isArray(rawJs)) {
+							const disabledList = rawJs.map(function (it) {
+								return it && typeof it === 'object' ? Object.assign({}, it, { enabled: false }) : it
+							})
+							localStorage.setItem('customJsProtocols', JSON.stringify(disabledList))
+						}
+					} catch (jsErr) { /* 忽略非法 JS 插件列表 */ }
+					localStorage.removeItem('trustedJsPluginHashes')
+				}
 				location.reload()
 			} catch (e) {
 				showMsg('导入失败:' + e.message)
@@ -2058,63 +2162,10 @@
 			ro.observe(protocolHexView)
 		}
 	}
-	//生成下发HEX
-	let _downSeq = 1
-	document.getElementById('serial-protocol-build').addEventListener('click', (e) => {
-		// 先清掉旧帧: 生成失败时不能留着上一帧被「立即下发」原样发出
-		document.getElementById('serial-protocol-down-preview').value = ''
-		let tlv
-		try {
-			tlv = JSON.parse(document.getElementById('serial-protocol-down-tlv').value || '[]')
-		} catch (err) {
-			addLogErr('TLV JSON解析失败:' + err.toString())
-			return
-		}
-		try {
-			if (toolOptions.skDownEncrypt && !resolveToolEncKey()) {
-				addLogErr('已勾选下发加密, 但密钥无效或为空(请填写高级·密钥)')
-				return
-			}
-			const encKey = getDownlinkEncKey()
-			const frame = skBuildDownFrame({
-				funcCode: document.getElementById('serial-protocol-down-func').value,
-				version: 2,
-				time: new Date(),
-				frameSeq: _downSeq++,
-				tlv: tlv,
-				encKey: encKey,
-			})
-			let hex = []
-			for (const b of frame) {
-				hex.push(('0' + b.toString(16).toUpperCase()).slice(-2))
-			}
-			document.getElementById('serial-protocol-down-preview').value = hex.join(' ')
-			if (encKey) {
-				addLogErr('已生成加密下行帧 (ctrl 加密位=1)')
-			}
-		} catch (err) {
-			addLogErr('生成帧失败:' + err.toString())
-		}
-	})
-	// 加密开关或密钥变了, 按新设置重生成当前帧, 避免发出旧的明文/旧密钥帧
+	// 协议下行下发逻辑已抽离至 js/protocol-downlink.js；此处保留密钥变更重生成桥接与当前主发路当量读取
 	function rebuildDownPreview() {
-		// 预览框各协议共用, 只有 SEK 的帧才按 SEK 的 TLV 重生成
-		if (window._activeProtocol !== 'sek') return
-		if (document.getElementById('serial-protocol-down-tlv').value.trim()) document.getElementById('serial-protocol-build').click()
+		if (typeof window.rebuildDownPreview === 'function') window.rebuildDownPreview()
 	}
-	//点击生成的 HEX 预览即可复制
-	const downPreview = document.getElementById('serial-protocol-down-preview')
-	if (downPreview) {
-		downPreview.addEventListener('click', () => {
-			const text = (downPreview.value || '').trim()
-			if (!text) return
-			copyText(text)
-			downPreview.classList.add('is-copied')
-			clearTimeout(downPreview._copyT)
-			downPreview._copyT = setTimeout(() => downPreview.classList.remove('is-copied'), 800)
-		})
-	}
-	// 读取当前主发路会话已记录的基准水量(当量)
 	function getActiveLaneBaseWater() {
 		const sid = SerialHub.activeSendPhys()
 		return inLiveLane(sid, () => {
@@ -2122,737 +2173,6 @@
 			if (!g || typeof g.hasBase !== 'function') return { has: false, code: null, label: null }
 			return { has: g.hasBase(), code: g.baseCode, label: g.baseLabel }
 		})
-	}
-	// 大口径底度下发前先向设备查询基准水量(Tag10-ID3 终端参数，缺失则回退 Tag10-ID2 核心数据)
-	async function queryDeviceBaseWater() {
-		if (!window.sekTx || typeof window.sekTx.sendAndWait !== 'function') {
-			throw new Error('SEK 事务层未就绪')
-		}
-		const sid = SerialHub.activeSendPhys()
-		if (!SerialHub.isOpen(sid)) {
-			throw new Error('串口未打开')
-		}
-		let code = null
-		let source = null
-		try {
-			const res3 = await window.sekTx.sendAndWait({
-				buildOpts: { funcCode: 0x03, tlv: [{ tag: 10, items: [{ id: 3, value: [] }] }] },
-				expectFunc: 0x83,
-				timeoutMs: 5000,
-				match: (f) => window.sekTx.hasTag(f, 3) || window.sekTx.hasTag(f, 2)
-			})
-			const it3 = window.sekTx.findTlvItem(res3.frame, 3, 29)
-			const it2 = !it3 ? window.sekTx.findTlvItem(res3.frame, 2, 29) : null
-			const it = it3 || it2
-			if (it && it.raw && it.raw.length && it.raw[0] >= 0 && it.raw[0] <= 6) {
-				code = it.raw[0] & 0xff
-				source = it3 ? 'Tag3-ID29' : 'Tag2-ID29'
-			}
-		} catch (e) {
-			// Tag10-ID3 超时或无响应时，再尝试一次 Tag10-ID2(核心数据)
-		}
-		if (code == null) {
-			const res2 = await window.sekTx.sendAndWait({
-				buildOpts: { funcCode: 0x03, tlv: [{ tag: 10, items: [{ id: 2, value: [] }] }] },
-				expectFunc: 0x83,
-				timeoutMs: 5000,
-				match: (f) => window.sekTx.hasTag(f, 2)
-			})
-			const it2 = window.sekTx.findTlvItem(res2.frame, 2, 29)
-			if (it2 && it2.raw && it2.raw.length && it2.raw[0] >= 0 && it2.raw[0] <= 6) {
-				code = it2.raw[0] & 0xff
-				source = 'Tag2-ID29'
-			}
-		}
-		if (code == null) {
-			throw new Error('应答中未找到基准水量(Tag2/3-ID29)')
-		}
-		inLiveLane(sid, () => {
-			const g = typeof skSess === 'function' ? skSess() : window.skSession
-			if (g && typeof g.setBase === 'function') g.setBase(code, source)
-		})
-		return { code, source }
-	}
-	//立即下发
-	let _largeFlowSending = false
-	const sendProtoBtn = document.getElementById('serial-protocol-send')
-	sendProtoBtn.addEventListener('click', async (e) => {
-		const previewEl = document.getElementById('serial-protocol-down-preview')
-		// 大口径底度(m³)：下发前先向设备读基准水量(当量)，再按真实当量换算并下发
-		if (window._activeProtocol === 'sek' && presetSel && presetSel.value) {
-			const activePreset = presetItemByName(presetSel.value)
-			if (activePreset && activePreset.param && activePreset.param.type === 'largeFlow') {
-				if (_largeFlowSending) return
-				const paramValEl = document.getElementById('serial-protocol-down-param-val')
-				const m3Str = paramValEl ? paramValEl.value.trim() : ''
-				const check = window.SK_PRESET_CODEC ? window.SK_PRESET_CODEC.largeFlowM3ToBytes(m3Str, 3) : null
-				if (!check || check.error) {
-					addLogErr(check && check.error ? check.error : '底度输入无效')
-					return
-				}
-				if (!SerialHub.isOpen(SerialHub.activeSendPhys())) {
-					addLogErr('请先打开串口再下发大口径底度（需先读取设备当量）')
-					return
-				}
-				const targetPresetName = presetSel.value
-				_largeFlowSending = true
-				const origText = sendProtoBtn.textContent
-				sendProtoBtn.disabled = true
-				sendProtoBtn.textContent = '读取当量中…'
-				try {
-					const base = await queryDeviceBaseWater()
-					if (window._activeProtocol !== 'sek' || presetSel.value !== targetPresetName) {
-						addLogErr('读取当量期间指令或协议已切换，已中止下发')
-						return
-					}
-					previewEl.value = ''
-					if (typeof _buildWithParamRef === 'function') _buildWithParamRef(base.code)
-					if (!previewEl.value) {
-						addLogErr('按当量生成大口径底度帧失败')
-						return
-					}
-					await sendHex(previewEl.value)
-				} catch (err) {
-					addLogErr('读取设备当量(基准水量)失败: ' + (err && err.message ? err.message : String(err)) + '，已中止下发')
-				} finally {
-					_largeFlowSending = false
-					sendProtoBtn.disabled = false
-					sendProtoBtn.textContent = origText
-				}
-				return
-			}
-		}
-		if (!previewEl.value && document.getElementById('serial-protocol-down-tlv').value.trim()) {
-			document.getElementById('serial-protocol-build').click()
-		}
-		if (!previewEl.value) {
-			addLogErr('请先生成HEX再下发')
-			return
-		}
-		sendHex(previewEl.value)
-	})
-
-	//常用指令(下行下发)初始化
-	const presetSel = document.getElementById('serial-protocol-down-preset')
-	const funcSel = document.getElementById('serial-protocol-down-func')
-	const funcTabs = document.getElementById('serial-protocol-down-func-tabs')
-	const presetSearch = document.getElementById('serial-protocol-down-preset-search')
-	const presetSearchClear = document.getElementById('serial-protocol-down-preset-search-clear')
-	const presetDescEl = document.getElementById('serial-protocol-down-desc')
-	let _buildWithParamRef = null
-
-	function syncFuncTabs(funcCode) {
-		if (!funcTabs) return
-		funcTabs.querySelectorAll('button[data-func]').forEach((btn) => {
-			btn.setAttribute('aria-pressed', btn.dataset.func === funcCode ? 'true' : 'false')
-		})
-	}
-
-	function rebuildPresets(funcCode) {
-		if (!presetSel) return
-		var proto = window.getActiveProtocol()
-		var presets = (proto && proto.presets) ? proto.presets : (window.SK_DOWN_PRESETS || [])
-		var query = presetSearch ? presetSearch.value : ''
-		var matchingGroups = window.SK_PRESET_CODEC && typeof window.SK_PRESET_CODEC.filterPresets === 'function'
-			? window.SK_PRESET_CODEC.filterPresets(presets, funcCode, query)
-			: []
-		if (!window.SK_PRESET_CODEC) {
-			for (const grp of presets) {
-				const filtered = grp.items.filter(it => it.func === funcCode)
-				if (filtered.length) matchingGroups.push({ grp, filtered })
-			}
-		}
-		const keep = presetSel.value
-		presetSel.innerHTML = ''
-		if (!matchingGroups.length) {
-			const ph = document.createElement('option')
-			ph.value = ''
-			ph.textContent = query && query.trim() ? '无匹配指令' : '无可用指令'
-			presetSel.appendChild(ph)
-		}
-		for (const { grp, filtered } of matchingGroups) {
-			// 单分组时不加 optgroup 标题，避免菜单里出现一条无意义的分组行
-			const parent = matchingGroups.length > 1 ? document.createElement('optgroup') : presetSel
-			if (parent !== presetSel) {
-				parent.label = shortGroupName(grp.group, funcCode)
-				presetSel.appendChild(parent)
-			}
-			for (const it of filtered) {
-				const opt = document.createElement('option')
-				opt.value = it.name
-				opt.textContent = it.name
-				parent.appendChild(opt)
-			}
-		}
-		presetSel.value = keep
-		if (presetSel.selectedIndex < 0) presetSel.selectedIndex = 0
-	}
-
-	// 分组名形如「参数设置-告警阈值 (0x01)」，功能码已由上方选择框决定，
-	// 这里去掉重复的功能码名前缀和 (0xNN) 后缀，只留下真正区分分组的部分
-	function shortGroupName(name, funcCode) {
-		let s = String(name).replace(/\s*\(0x[0-9a-fA-F]+\)\s*$/, '')
-		const opt = funcSel ? funcSel.options[funcSel.selectedIndex] : null
-		const funcName = opt ? opt.textContent.replace(/\s*0x[0-9a-fA-F]+\s*$/, '').trim() : ''
-		if (funcName && s.startsWith(funcName + '-')) s = s.slice(funcName.length + 1)
-		return s || name
-	}
-
-	let _skipFuncEvent = false
-	if (funcTabs && funcSel) {
-		funcTabs.addEventListener('click', (e) => {
-			const btn = e.target.closest('button[data-func]')
-			if (!btn) return
-			const nextFunc = btn.dataset.func
-			if (!nextFunc || funcSel.value === nextFunc) return
-			if (presetSearch && presetSearch.value) {
-				presetSearch.value = ''
-				if (presetSearchClear) presetSearchClear.hidden = true
-			}
-			funcSel.value = nextFunc
-			funcSel.dispatchEvent(new Event('change'))
-		})
-	}
-	if (presetSearch) {
-		const onSearchInput = () => {
-			if (presetSearchClear) presetSearchClear.hidden = !presetSearch.value
-			const prev = presetSel ? presetSel.value : ''
-			rebuildPresets(funcSel ? funcSel.value : '0x03')
-			if (presetSel && presetSel.value !== prev) {
-				presetSel.dispatchEvent(new Event('change'))
-			}
-		}
-		presetSearch.addEventListener('input', onSearchInput)
-		if (presetSearchClear) {
-			presetSearchClear.addEventListener('click', () => {
-				presetSearch.value = ''
-				onSearchInput()
-				presetSearch.focus()
-			})
-		}
-	}
-	if (funcSel) {
-		syncFuncTabs(funcSel.value)
-		rebuildPresets(funcSel.value)
-		funcSel.addEventListener('change', () => {
-			syncFuncTabs(funcSel.value)
-			if (_skipFuncEvent) { _skipFuncEvent = false; return }
-			if (presetSearch && presetSearch.value) {
-				presetSearch.value = ''
-				if (presetSearchClear) presetSearchClear.hidden = true
-			}
-			presetSel.value = ''
-			rebuildPresets(funcSel.value)
-			if (presetSel.value) presetSel.dispatchEvent(new Event('change'))
-		})
-	}
-	function presetItemByName(name) {
-		var proto = window.getActiveProtocol()
-		var presets = (proto && proto.presets) ? proto.presets : (window.SK_DOWN_PRESETS || [])
-		for (const grp of presets) {
-			for (const it of grp.items) {
-				if (it.name === name) return it
-			}
-		}
-		return null
-	}
-	function asciiToHexBytes(s, fillLen) {
-		let a = []
-		const n = fillLen != null ? Math.min(s.length, fillLen) : s.length
-		for (let i = 0; i < n; i++) a.push(s.charCodeAt(i) & 0xff)
-		if (fillLen != null) {
-			while (a.length < fillLen) a.push(0x00)
-		}
-		return a
-	}
-	function bcdToBytes(s, fillLen) {
-		let digits = s.replace(/\D/g, '')
-		if (!digits) return []
-		if (digits.length % 2 !== 0) digits = '0' + digits
-		let a = []
-		for (let i = digits.length - 2; i >= 0; i -= 2) {
-			a.push((parseInt(digits.charAt(i), 10) << 4) | parseInt(digits.charAt(i + 1), 10))
-		}
-		if (fillLen != null) {
-			while (a.length < fillLen) a.push(0x00)
-		}
-		return a
-	}
-	// HEX 字符串（支持冒号分隔或连续）→ 字节数组，不足 fillLen 补 0x00
-	function hexToBytes(s, fillLen) {
-		if (!s) return []
-		let hex = s.replace(/[^0-9a-fA-F]/g, '')
-		if (hex.length % 2 !== 0) hex = '0' + hex
-		const a = []
-		for (let i = 0; i < hex.length; i += 2) a.push(parseInt(hex.substr(i, 2), 16))
-		if (fillLen != null) {
-			while (a.length < fillLen) a.push(0x00)
-		}
-		return a
-	}
-	// 多字段参数：渲染动态输入框
-	function renderMultiFields(fields) {
-		const container = document.getElementById('serial-protocol-down-param-multi')
-		if (!container) return
-		container.style.display = ''
-		container.innerHTML = ''
-		fields.forEach((f, idx) => {
-			const wrap = document.createElement('div')
-			wrap.className = 'sk-param-multi-item'
-			const lbl = document.createElement('span')
-			lbl.className = 'sk-param-multi-label'
-			lbl.textContent = f.label || ''
-			wrap.appendChild(lbl)
-			if (f.type === 'enum' && f.options) {
-				const sel = document.createElement('select')
-				sel.className = 'form-select form-select-sm'
-				sel.style.width = f.width || '120px'
-				sel.dataset.index = idx
-				for (const [k, v] of Object.entries(f.options)) {
-					const op = document.createElement('option')
-					op.value = k
-					op.textContent = v
-					if (String(k) === String(f.default || Object.keys(f.options)[0])) op.selected = true
-					sel.appendChild(op)
-				}
-				sel.addEventListener('change', () => { if (_buildWithParamRef) _buildWithParamRef() })
-				wrap.appendChild(sel)
-			} else {
-				const inp = document.createElement('input')
-				inp.type = f.type === 'uint8' || f.type === 'uint16le' || f.type === 'uint32le' || f.type === 'int8' ? 'number' : 'text'
-				inp.className = 'form-control form-control-sm'
-				inp.style.width = f.width || '100px'
-				inp.dataset.index = idx
-				inp.value = f.default || ''
-				if (f.min != null) inp.min = f.min
-				if (f.max != null) inp.max = f.max
-				if (f.placeholder) inp.placeholder = f.placeholder
-				inp.addEventListener('input', () => { if (_buildWithParamRef) _buildWithParamRef() })
-				wrap.appendChild(inp)
-			}
-			container.appendChild(wrap)
-		})
-	}
-	// 多字段参数：收集动态输入框的值并转为字节数组（小端序）
-	function multiParamToBytes(fields) {
-		const container = document.getElementById('serial-protocol-down-param-multi')
-		if (!container) return []
-		// 检查是否有字段带 bits 属性（位域打包模式）
-		const hasBits = fields.some(f => f.bits != null)
-		if (hasBits) {
-			// 位域打包：计算总字节数
-			let maxBit = 0
-			fields.forEach(f => {
-				if (f.bits) {
-					const hi = f.bits[0]
-					if (hi > maxBit) maxBit = hi
-				}
-			})
-			const totalBytes = Math.floor(maxBit / 8) + 1
-			const bytes = new Array(totalBytes).fill(0)
-			fields.forEach((f, idx) => {
-				const el = container.querySelector('[data-index="' + idx + '"]')
-				if (!el) return
-				let val
-				if (el.tagName === 'SELECT') {
-					val = parseInt(el.value, 10)
-					if (isNaN(val)) return
-				} else {
-					val = parseInt(el.value.trim(), 10)
-					if (isNaN(val)) return
-				}
-				if (f.bits) {
-					const hi = f.bits[0], lo = f.bits[1]
-					const width = hi - lo + 1
-					const mask = (1 << width) - 1
-					const v = val & mask
-					// 小端序：bit0 在 byte0 的 LSB
-					for (let b = 0; b < totalBytes; b++) {
-						const bitLo = b * 8
-						const bitHi = b * 8 + 7
-						if (bitHi < lo || bitLo > hi) continue
-						const shift = lo - bitLo
-						const subMask = Math.min(mask, (1 << (Math.min(bitHi, hi) - Math.max(bitLo, lo) + 1)) - 1)
-						bytes[b] |= (v & subMask) << shift
-					}
-				}
-			})
-			return bytes
-		}
-		// 无位域：各字段独立占字节/字（原有逻辑）
-		const bytes = []
-		fields.forEach((f, idx) => {
-			const el = container.querySelector('[data-index="' + idx + '"]')
-			if (!el) return
-			let val
-			if (el.tagName === 'SELECT') {
-				val = parseInt(el.value, 10)
-				if (isNaN(val)) return
-			} else {
-				val = el.value.trim()
-				if (!val) return
-			}
-			if (f.type === 'uint8' || f.type === 'int8' || f.type === 'enum') {
-				let n = parseInt(val, 10)
-				if (isNaN(n)) return
-				if (f.type === 'int8') n = n & 0xff
-				bytes.push(n & 0xff)
-			} else if (f.type === 'uint16le') {
-				let n = parseInt(val, 10)
-				if (isNaN(n)) return
-				bytes.push(n & 0xff, (n >> 8) & 0xff)
-			} else if (f.type === 'uint32le') {
-				let n = parseInt(val, 10)
-				if (isNaN(n) || n < 0 || n > 0xffffffff) return
-				const u = n >>> 0
-				bytes.push(u & 0xff, (u >>> 8) & 0xff, (u >>> 16) & 0xff, (u >>> 24) & 0xff)
-			} else if (f.type === 'hexbytes') {
-				const hb = hexToBytes(val, f.fillLen)
-				bytes.push(...hb)
-			} else {
-				let n = parseInt(val, 10)
-				if (isNaN(n)) return
-				bytes.push(n & 0xff)
-			}
-		})
-		return bytes
-	}
-	function numToBytes(val, type) {
-		switch (type) {
-			case 'uint32le': return [val & 0xff, (val >> 8) & 0xff, (val >> 16) & 0xff, (val >> 24) & 0xff]
-			case 'uint16le': return [val & 0xff, (val >> 8) & 0xff]
-			case 'uint8': return [val & 0xff]
-			default: return []
-		}
-	}
-	// BCD 一字节：十进制 0-99 → 0xNN
-	function toBcdByte(n) {
-		n = Math.max(0, Math.min(99, n | 0))
-		return ((Math.floor(n / 10) & 0xf) << 4) | (n % 10)
-	}
-	// Tag10-ID9 日结：YY MM DD(各1B BCD) + 个数1B
-	function dailyQueryBytes(count) {
-		const d = new Date()
-		const yy = d.getFullYear() % 100
-		const n = Math.max(1, Math.min(60, count | 0))
-		return [toBcdByte(yy), toBcdByte(d.getMonth() + 1), toBcdByte(d.getDate()), n & 0xff]
-	}
-	// Tag10-ID23 错误日志：YYMMDDhhmmss 6B BCD + 条数1B
-	function errLogQueryBytes(count) {
-		const d = new Date()
-		const yy = d.getFullYear() % 100
-		return [
-			toBcdByte(yy), toBcdByte(d.getMonth() + 1), toBcdByte(d.getDate()),
-			toBcdByte(d.getHours()), toBcdByte(d.getMinutes()), toBcdByte(d.getSeconds()),
-			(count | 0) & 0xff
-		]
-	}
-	// Tag10-ID5 历史数据：YYYYMMDDhhmmss 7B BCD(高位在前) 当日 00:00:00
-	function histDateQueryBytes(isoDate) {
-		const m = String(isoDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
-		if (!m) return null
-		const y = parseInt(m[1], 10)
-		const mo = parseInt(m[2], 10)
-		const day = parseInt(m[3], 10)
-		if (mo < 1 || mo > 12 || day < 1 || day > 31) return null
-		// 用 Date 再校验非法日(如 2/30)
-		const chk = new Date(y, mo - 1, day)
-		if (chk.getFullYear() !== y || chk.getMonth() !== mo - 1 || chk.getDate() !== day) return null
-		return [
-			toBcdByte(Math.floor(y / 100)),
-			toBcdByte(y % 100),
-			toBcdByte(mo),
-			toBcdByte(day),
-			0x00, 0x00, 0x00
-		]
-	}
-	function histDateBounds(maxDays) {
-		const max = Math.max(1, Math.min(60, maxDays || 60))
-		const pad = function (n) { return String(n).padStart(2, '0') }
-		const fmt = function (d) {
-			return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
-		}
-		const today = new Date()
-		const minD = new Date(today.getFullYear(), today.getMonth(), today.getDate() - max)
-		const yest = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1)
-		return { min: fmt(minD), max: fmt(today), default: fmt(yest) }
-	}
-	function presetToTlvJson(preset) {
-		const out = []
-		for (const blk of (preset.tlv || [])) {
-			const items = []
-			for (const it of (blk.items || [])) {
-				let value
-				if (it.ascii != null) {
-					value = asciiToHexBytes(it.ascii, it.fillLen).map(b => ('0' + b.toString(16).toUpperCase()).slice(-2)).join('')
-				} else if (it.value != null) {
-					value = it.value.map(b => ('0' + (b & 0xff).toString(16).toUpperCase()).slice(-2)).join('')
-				} else {
-					value = []
-				}
-				const item = { id: it.id, value: value }
-				items.push(item)
-			}
-			out.push({ tag: blk.tag, items: items })
-		}
-		return JSON.stringify(out, null, 0)
-	}
-		if (presetSel) {
-		const paramGroup = document.getElementById('serial-protocol-down-param-group')
-		const paramVal = document.getElementById('serial-protocol-down-param-val')
-		const paramSelEnum = document.getElementById('serial-protocol-down-param-sel')
-		const paramLabel = document.getElementById('serial-protocol-down-param-label')
-		const paramUnit = document.getElementById('serial-protocol-down-param-unit')
-		let _currentParamType = ''
-
-		function setParamUnit(text, isError) {
-			paramUnit.textContent = text || ''
-			paramUnit.style.display = text ? '' : 'none'
-			paramUnit.classList.toggle('is-error', !!isError)
-		}
-
-		function buildWithParam(overrideBaseCode) {
-			const name = presetSel.value
-			if (!name) return
-			const preset = presetItemByName(name)
-			if (!preset) return
-			// 参数不完整时下面会提前返回, 不能留着上一条指令的帧
-			document.getElementById('serial-protocol-down-preview').value = ''
-			if (funcSel.value !== preset.func) {
-				_skipFuncEvent = true
-				document.getElementById('serial-protocol-down-func').value = preset.func
-				syncFuncTabs(preset.func)
-			}
-			const tlv = JSON.parse(JSON.stringify(preset.tlv || []))
-			if (preset.param) {
-				let bytes
-				if (preset.param.type === 'enum') {
-					const rawVal = parseInt(paramSelEnum.value, 10)
-					if (isNaN(rawVal)) return
-					bytes = numToBytes(rawVal, 'uint8')
-				} else if (preset.param.type === 'ascii') {
-					const s = paramVal.value
-					if (!s) return
-					bytes = asciiToHexBytes(s, preset.param.fillLen)
-				} else if (preset.param.type === 'bcd') {
-					const s = paramVal.value
-					if (!s) return
-					bytes = bcdToBytes(s, preset.param.fillLen)
-				} else if (preset.param.type === 'dailyQuery') {
-					const rawVal = parseInt(paramVal.value.trim(), 10)
-					if (isNaN(rawVal)) return
-					bytes = dailyQueryBytes(rawVal)
-				} else if (preset.param.type === 'errLogQuery') {
-					const rawVal = parseInt(paramVal.value.trim(), 10)
-					if (isNaN(rawVal)) return
-					bytes = errLogQueryBytes(rawVal)
-				} else if (preset.param.type === 'histDate') {
-					const iso = paramVal.value.trim()
-					if (!iso) return
-					bytes = histDateQueryBytes(iso)
-					if (!bytes) return
-				} else if (preset.param.type === 'hexbytes') {
-					const s = paramVal.value.trim()
-					if (!s) {
-						if (preset.param.fillLen === 7 && preset.name && preset.name.includes('时间')) {
-							const d = new Date()
-							const pad = (n, l) => String(n).padStart(l, '0')
-							const digits = pad(d.getFullYear(), 4) + pad(d.getMonth() + 1, 2) + pad(d.getDate(), 2) +
-								pad(d.getHours(), 2) + pad(d.getMinutes(), 2) + pad(d.getSeconds(), 2)
-							bytes = hexToBytes(digits, 7)
-						} else {
-							return
-						}
-					} else {
-						bytes = hexToBytes(s, preset.param.fillLen)
-					}
-				} else if (preset.param.type === 'largeFlow') {
-					const s = paramVal.value.trim()
-					if (!s) {
-						setParamUnit('下发前自动读当量', false)
-						return
-					}
-					const laneBase = overrideBaseCode != null ? { has: true, code: overrideBaseCode } : getActiveLaneBaseWater()
-					const useCode = laneBase.has && laneBase.code != null ? laneBase.code : 3
-					const res = window.SK_PRESET_CODEC ? window.SK_PRESET_CODEC.largeFlowM3ToBytes(s, useCode) : null
-					if (!res || res.error) {
-						setParamUnit(res && res.error ? res.error : '底度无效', true)
-						return
-					}
-					if (laneBase.has) {
-						setParamUnit(res.baseLabel + ' · ' + res.units + '圈', false)
-					} else {
-						setParamUnit('暂按1L预览 · 下发前自动读当量', false)
-					}
-					bytes = res.bytes
-				} else if (preset.param.type === 'multi') {
-					bytes = multiParamToBytes(preset.param.fields)
-					if (!bytes || !bytes.length) return
-				} else {
-					const rawVal = parseInt(paramVal.value.trim(), 10)
-					if (isNaN(rawVal)) return
-					bytes = numToBytes(rawVal, _currentParamType)
-				}
-				if (!bytes || !bytes.length) return
-				for (const blk of tlv) {
-					for (const it of (blk.items || [])) {
-						if (!it.value || it.value.length === 0) it.value = bytes
-					}
-				}
-			}
-			const presetClone = { func: preset.func, tlv: tlv }
-			const tlvStr = presetToTlvJson(presetClone)
-			document.getElementById('serial-protocol-down-tlv').value = tlvStr
-			document.getElementById('serial-protocol-build').click()
-		}
-		_buildWithParamRef = buildWithParam
-
-		presetSel.addEventListener('change', (e) => {
-			const name = e.target.value
-			if (!name) {
-				paramGroup.style.display = 'none'
-				if (presetDescEl) { presetDescEl.textContent = ''; presetDescEl.hidden = true }
-				return
-			}
-			const preset = presetItemByName(name)
-			if (!preset) {
-				paramGroup.style.display = 'none'
-				if (presetDescEl) { presetDescEl.textContent = ''; presetDescEl.hidden = true }
-				return
-			}
-			if (presetDescEl) {
-				presetDescEl.textContent = preset.desc || ''
-				presetDescEl.hidden = !preset.desc
-			}
-			if (preset.param) {
-				paramGroup.style.display = ''
-				paramLabel.style.display = preset.param.type === 'multi' ? 'none' : ''
-				paramLabel.textContent = preset.param.label || '参数'
-				// 切换非 multi 预设时隐藏 multi 容器，避免残留
-				const multiContainer = document.getElementById('serial-protocol-down-param-multi')
-				if (multiContainer) { multiContainer.style.display = 'none'; multiContainer.innerHTML = '' }
-				paramVal.removeAttribute('inputmode')
-				if (preset.param.type === 'enum') {
-					paramVal.style.display = 'none'
-					paramVal.type = 'text'
-					paramSelEnum.style.display = ''
-					paramSelEnum.innerHTML = ''
-					const opts = preset.param.options || {}
-					const def = preset.param.default || Object.keys(opts)[0] || '0'
-					for (const [k, v] of Object.entries(opts)) {
-						const op = document.createElement('option')
-						op.value = k
-						// 文案优先展示中文说明，值仍用数字 key
-						op.textContent = v ? (String(v)) : String(k)
-						if (String(k) === String(def)) op.selected = true
-						paramSelEnum.appendChild(op)
-					}
-					setParamUnit('', false)
-					_currentParamType = 'uint8'
-				} else if (preset.param.type === 'ascii') {
-					paramVal.type = 'text'
-					paramVal.style.display = ''
-					paramVal.style.width = '180px'
-					paramSelEnum.style.display = 'none'
-					paramVal.value = preset.param.default || ''
-					paramVal.placeholder = preset.param.placeholder || '值'
-					setParamUnit('', false)
-					_currentParamType = 'ascii'
-				} else if (preset.param.type === 'bcd') {
-					paramVal.type = 'text'
-					paramVal.style.display = ''
-					paramVal.style.width = '180px'
-					paramSelEnum.style.display = 'none'
-					paramVal.value = preset.param.default || ''
-					paramVal.placeholder = preset.param.placeholder || '纯数字'
-					setParamUnit('(BCD LE)', false)
-					_currentParamType = 'bcd'
-				} else if (preset.param.type === 'dailyQuery') {
-					paramVal.type = 'number'
-					paramVal.style.display = ''
-					paramVal.style.width = '80px'
-					paramSelEnum.style.display = 'none'
-					paramVal.min = '1'
-					paramVal.max = String(preset.param.max || 60)
-					paramVal.value = preset.param.default || '30'
-					setParamUnit('天(日起=今天,≤60)', false)
-					_currentParamType = 'dailyQuery'
-				} else if (preset.param.type === 'errLogQuery') {
-					paramVal.type = 'number'
-					paramVal.style.display = ''
-					paramVal.style.width = '80px'
-					paramSelEnum.style.display = 'none'
-					paramVal.removeAttribute('min')
-					paramVal.removeAttribute('max')
-					paramVal.value = preset.param.default || '4'
-					setParamUnit('条(起点=现在)', false)
-					_currentParamType = 'errLogQuery'
-				} else if (preset.param.type === 'histDate') {
-					const b = histDateBounds(preset.param.maxDays || 60)
-					paramVal.type = 'date'
-					paramVal.style.display = ''
-					paramVal.style.width = '150px'
-					paramSelEnum.style.display = 'none'
-					paramVal.min = b.min
-					paramVal.max = b.max
-					paramVal.value = preset.param.default || b.default
-					setParamUnit('近' + (preset.param.maxDays || 60) + '日可选', false)
-					_currentParamType = 'histDate'
-				} else if (preset.param.type === 'hexbytes') {
-					paramVal.type = 'text'
-					paramVal.style.display = ''
-					paramVal.style.width = '180px'
-					paramSelEnum.style.display = 'none'
-					paramVal.value = preset.param.default || ''
-					paramVal.placeholder = preset.param.placeholder || 'HEX, 如 01:02:03:04:05:06'
-					setParamUnit(preset.param.fillLen ? ('(' + preset.param.fillLen + 'B)') : '', false)
-					_currentParamType = 'hexbytes'
-				} else if (preset.param.type === 'largeFlow') {
-					paramVal.type = 'text'
-					paramVal.inputMode = 'decimal'
-					paramVal.style.display = ''
-					paramVal.style.width = '120px'
-					paramSelEnum.style.display = 'none'
-					paramVal.removeAttribute('min')
-					paramVal.removeAttribute('max')
-					paramVal.value = preset.param.default != null ? String(preset.param.default) : '0'
-					paramVal.placeholder = preset.param.placeholder || '输入 m³，如 123.456'
-					setParamUnit('下发前自动读当量', false)
-					_currentParamType = 'largeFlow'
-				} else if (preset.param.type === 'multi') {
-					paramVal.style.display = 'none'
-					paramSelEnum.style.display = 'none'
-					setParamUnit('', false)
-					renderMultiFields(preset.param.fields)
-					_currentParamType = 'multi'
-				} else {
-					paramVal.type = 'text'
-					paramVal.style.display = ''
-					paramVal.style.width = '100px'
-					paramSelEnum.style.display = 'none'
-					paramVal.removeAttribute('min')
-					paramVal.removeAttribute('max')
-					paramVal.value = preset.param.default || '0'
-					paramVal.placeholder = preset.param.placeholder || '值'
-					setParamUnit(preset.param.type === 'uint32le' ? '(uint32 LE)' : preset.param.type === 'uint16le' ? '(uint16 LE)' : '(u8)', false)
-					_currentParamType = preset.param.type
-				}
-			} else {
-				paramGroup.style.display = 'none'
-				_currentParamType = ''
-			}
-			buildWithParam()
-		})
-		paramVal.addEventListener('input', () => {
-			if (_currentParamType) buildWithParam()
-		})
-		paramVal.addEventListener('keydown', (e) => {
-			if (e.key === 'Enter') { e.preventDefault(); document.getElementById('serial-protocol-send').click() }
-		})
-		paramSelEnum.addEventListener('change', () => {
-			buildWithParam()
-		})
-		if (presetSel.value) presetSel.dispatchEvent(new Event('change'))
 	}
 	//读取参数：单路/双路各自独立的串口参数，按当前模式刷新 dropdown
 	applySerialParamsToUI()
@@ -7618,7 +6938,7 @@
 			showToast('事务进行中，暂不能套用预设', 2000)
 			return { ok: false }
 		}
-		const plan = DualCfg.planApply(preset, dualSnapshot(), function (id) { return !!window._protocols[id] })
+		const plan = DualCfg.planApply(preset, dualSnapshot(), function (id) { return window.ProtocolRegistry ? window.ProtocolRegistry.isSelectable(id) : !!window._protocols[id] })
 		applyingPreset = true
 		try {
 			;['A', 'B'].forEach(function (sid) {
@@ -7673,7 +6993,7 @@
 			return { ok: false }
 		}
 		const sid = singlePresetTarget()
-		const plan = DualCfg.planApply(preset, { S: laneSnapshot(sid) }, function (id) { return !!window._protocols[id] })
+		const plan = DualCfg.planApply(preset, { S: laneSnapshot(sid) }, function (id) { return window.ProtocolRegistry ? window.ProtocolRegistry.isSelectable(id) : !!window._protocols[id] })
 		const p = plan.lanes.S
 		applyingPreset = true
 		try {

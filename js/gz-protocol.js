@@ -958,10 +958,20 @@
 	W.GZ_FLOW_STEPS = FLOW_STEPS
 
 	// ===== 协议注册 =====
+	function setGzCardsVisible(visible) {
+		const disp = visible ? '' : 'none'
+		const down = $('gz-down-card')
+		const auto = $('gz-auto-card')
+		if (down) down.style.display = disp
+		if (auto) auto.style.display = disp
+	}
 	function tryRegister() {
 		if (typeof W.registerProtocol !== 'function') { setTimeout(tryRegister, 50); return }
 		W.registerProtocol('gz', {
 			name: '工装通信协议',
+			builtin: true,
+			source: 'builtin',
+			description: '红外空口产测协议（支持单帧下发与一键工位测试）',
 			parseFrame: parseFrame,
 			formatFrame: formatFrame,
 			logView: logView,
@@ -972,6 +982,8 @@
 				return r.frame
 			},
 			presets: [],
+			mountPanel: function () { setGzCardsVisible(true) },
+			unmountPanel: function () { setGzCardsVisible(false) },
 		})
 		const sel = document.getElementById('serial-protocol-select')
 		if (sel && W._activeProtocol === 'gz' && sel.value !== 'gz') sel.value = 'gz'
@@ -1496,28 +1508,6 @@
 			autoStopFlag = true
 			if (W.gzTx) W.gzTx.cancelAll('用户停止')
 		})
-
-		// 协议面板互斥显隐
-		function applyVisibility() {
-			const sel = document.getElementById('serial-protocol-select')
-			const v = sel ? sel.value : 'sek'
-			const isGz = v === 'gz'
-			const isSek = v === 'sek'
-			const isWmbus = v === 'wmbus'
-			const down = $('gz-down-card')
-			const auto = $('gz-auto-card')
-			if (down) down.style.display = isGz ? '' : 'none'
-			if (auto) auto.style.display = isGz ? '' : 'none'
-			;['sk-down-card', 'sk-rw-card', 'sk-batch-card', 'serial-protocol-advanced'].forEach(function (id) {
-				const el = document.getElementById(id)
-				if (el) el.style.display = isSek ? '' : 'none'
-			})
-			const wm = document.getElementById('wmbus-down-card')
-			if (wm) wm.style.display = isWmbus ? '' : 'none'
-		}
-		const protoSel = document.getElementById('serial-protocol-select')
-		if (protoSel) protoSel.addEventListener('change', applyVisibility)
-		applyVisibility()
 
 		refreshDevOptions()
 		refreshCmdOptions()

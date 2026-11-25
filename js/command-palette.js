@@ -421,9 +421,59 @@
 		return out
 	}
 
+	function protocolCommands() {
+		const list = []
+		list.push({
+			group: '协议',
+			title: '协议管理（增删 / 导入导出 / 启停协议）',
+			feature: 'protocol.manage',
+			alias: 'xieyi guanli protocol manager plugin json custom',
+			run: function () {
+				if (window.ProtocolManager && typeof window.ProtocolManager.open === 'function') {
+					window.ProtocolManager.open()
+				}
+			}
+		})
+		let items = []
+		if (window.ProtocolRegistry && typeof window.ProtocolRegistry.list === 'function') {
+			try { items = window.ProtocolRegistry.list() || [] } catch (e) { items = [] }
+		}
+		if (!items.length) {
+			const sel = el('serial-protocol-select')
+			if (sel && sel.options) {
+				Array.prototype.forEach.call(sel.options, function (opt) {
+					if (!opt || !opt.value) return
+					items.push({ id: opt.value, name: opt.textContent || opt.value })
+				})
+			}
+		}
+		const activeId = (typeof window._activeProtocol === 'string' && window._activeProtocol) || ((el('serial-protocol-select') || {}).value || '')
+		items.forEach(function (item) {
+			if (!item || !item.id) return
+			const pid = String(item.id)
+			const pname = String(item.name || pid)
+			list.push({
+				group: '协议',
+				title: '切换协议：' + pname,
+				detail: activeId === pid ? '当前' : pid,
+				alias: 'xieyi qiehuan protocol ' + pid + ' ' + pname,
+				run: function () {
+					if (window.serialLanes && typeof window.serialLanes.setProtocol === 'function') {
+						const target = typeof window.serialLanes.singleTarget === 'function' ? window.serialLanes.singleTarget() : 'S'
+						window.serialLanes.setProtocol(target, pid)
+						return
+					}
+					setValue('serial-protocol-select', pid)
+				}
+			})
+		})
+		return list
+	}
+
 	function collectCommands() {
 		const all = []
 		all.push.apply(all, serialCommands())
+		all.push.apply(all, protocolCommands())
 		all.push.apply(all, logCommands())
 		all.push.apply(all, quickSendCommands())
 		all.push.apply(all, presetCommands())
@@ -438,7 +488,7 @@
 	}
 
 	//---- 面板 UI ----
-	const GROUP_ORDER = ['串口', '日志', '快捷发送', '常用指令', '视图']
+	const GROUP_ORDER = ['串口', '协议', '日志', '快捷发送', '常用指令', '视图']
 
 	let overlay = null
 	let input = null
