@@ -2247,6 +2247,78 @@ details.pv-fold[open] > summary::before {
   transition: background-color var(--transition-normal), border-color var(--transition-normal);
 }
 
+.sk-func-tabs {
+  display: flex;
+  width: 100%;
+}
+
+.sk-func-tabs > button {
+  flex: 1 1 0;
+  padding: 5px 8px;
+  text-align: center;
+}
+
+.sk-func-code {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 500;
+  opacity: 0.72;
+  margin-left: 4px;
+}
+
+.sk-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.sk-preset-search {
+  flex: 1 1 120px;
+  min-width: 110px;
+}
+
+.sk-preset-select-wrap {
+  flex: 2 1 180px;
+  min-width: 160px;
+}
+
+.sk-down-desc {
+  font-size: 0.74rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  padding: 2px 4px;
+}
+
+.sk-param-unit {
+  font-size: 0.72rem;
+}
+
+.sk-param-unit.is-error {
+  color: var(--danger);
+}
+
+.sk-param-multi-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  flex: 0 0 100%;
+  margin-top: 4px;
+}
+
+.sk-param-multi-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sk-param-multi-label {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
 .sk-hex-copyable {
   font-family: var(--font-mono);
   letter-spacing: 0.02em;
