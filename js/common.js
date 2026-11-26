@@ -1408,7 +1408,6 @@
 				window._activeProtocol = this.value
 				const sid = SerialHub.activeSendId
 				if (writeLaneProtocol(sid, this.value) && SerialHub.logModeOf(sid) === 'dual') rerenderParseRows()
-				notifyLaneConfig()
 			} else {
 				window._activeProtocol = this.value
 				singleProtocolId = this.value
@@ -1416,6 +1415,7 @@
 				localStorage.setItem('toolOptions', JSON.stringify(toolOptions))
 				rerenderParseRows()
 			}
+			notifyLaneConfig()
 			// 下发 HEX 框是各协议共用的发送缓冲(188/WMBUS 下发也写它)，切协议后留着旧帧会被「立即下发」原样发出
 			const downPreviewEl = document.getElementById('serial-protocol-down-preview')
 			if (downPreviewEl) downPreviewEl.value = ''

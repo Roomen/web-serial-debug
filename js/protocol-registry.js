@@ -532,6 +532,14 @@
 		return out
 	}
 
+	function normalizeFirmware(firmware, device) {
+		if (!isPlainObject(firmware) || !hasOwn(firmware, 'method') || firmware.method !== 'pcp') return null
+		const normalized = { method: 'pcp' }
+		const key = hasOwn(firmware, 'versionKey') ? devKey(firmware.versionKey) : ''
+		if (key && device && hasOwn(device.fieldMap, key)) normalized.versionKey = key
+		return normalized
+	}
+
 	function wrapExternalProtocol(norm, env) {
 		const origLogView = typeof norm.logView === 'function' ? norm.logView : null
 		const origFormatFrame = typeof norm.formatFrame === 'function' ? norm.formatFrame : null
@@ -828,6 +836,7 @@
 
 		function normalizeImpl(id, impl, isBuiltin) {
 			const source = isBuiltin ? 'builtin' : (impl.source || 'js-local')
+			const device = normalizeDevice(impl.device, { id: id })
 			const norm = {
 				id: id,
 				name: String(impl.name || id),
@@ -848,7 +857,8 @@
 				funcTabs: Array.isArray(impl.funcTabs) ? impl.funcTabs : null,
 				mountPanel: typeof impl.mountPanel === 'function' ? impl.mountPanel : null,
 				unmountPanel: typeof impl.unmountPanel === 'function' ? impl.unmountPanel : null,
-				device: normalizeDevice(impl.device, { id: id }),
+				device: device,
+				firmware: normalizeFirmware(impl.firmware, device),
 			}
 			return isBuiltin ? norm : wrapExternalProtocol(norm, env)
 		}

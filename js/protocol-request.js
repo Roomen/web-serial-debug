@@ -89,7 +89,7 @@
 			})
 		}
 
-		// 协议实际变更的信号：按路配置变更、注册表变更、顶栏协议 change（单路改协议不派发 serial-lane-config）、连接事件。
+		// 监听按路配置变更（单路改顶栏协议也派发 serial-lane-config）、注册表变更和连接事件；顶栏 change 仅作兜底。
 		// 返回退订函数
 		function watchProtocol(fn) {
 			if (!doc || typeof doc.addEventListener !== 'function') return function () {}

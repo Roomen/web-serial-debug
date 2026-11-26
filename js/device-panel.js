@@ -610,6 +610,15 @@
 			else if (w.type === 'dayBitmap') blocks.push(renderDayBitmap(c, w))
 			else if (w.type === 'kv') blocks.push(renderKv(c, w))
 		})
+		const protocol = protocolEntry(c.pid)
+		const firmware = protocol && protocol.firmware
+		if (firmware && window.Workbench) {
+			const key = firmware.versionKey
+			blocks.push(h('div', { class: 'dp-ids d-flex flex-wrap align-items-center gap-2' },
+				key && c.dev.fieldMap[key] && h('span', { class: 'd-inline-flex align-items-center gap-2' },
+					h('span', { class: 'dp-meta', text: '当前固件版本' }), valBtn(c, key)),
+				h('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', text: '固件升级', onclick: function () { window.Workbench.open('firmware') } })))
+		}
 		const groups = h('div', { class: 'dp-groups' }, c.dev.readSets.status.map(function (gid) { return groupLine(c, gid) }))
 		return h('div', { class: 'dp-status' }, metrics.length && h('div', { class: 'dp-metrics' }, metrics), blocks, groups)
 	}

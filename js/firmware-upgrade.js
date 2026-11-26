@@ -24,6 +24,7 @@
 	let fw = null                 // 解析后的固件信息
 	let fwFileBuffer = null       // 固件 ArrayBuffer
 	let running = false
+	let querying = false
 	let stopFlag = false
 	let recvBuffer = []
 	let recvOffset = 0
@@ -46,6 +47,7 @@
 		start: document.getElementById('fw-start'),
 		stop: document.getElementById('fw-stop'),
 		query: document.getElementById('fw-query'),
+		protocolReason: document.getElementById('fw-protocol-reason'),
 		clearLog: document.getElementById('fw-clear-log'),
 		status: document.getElementById('fw-status'),
 		progress: document.getElementById('fw-progress'),
@@ -57,6 +59,31 @@
 	// 只读事件：固件页的升级流水线(js/modern-firmware.js)据此显示进度、分块与校验，不影响升级流程与时序
 	function emit(detail) {
 		try { document.dispatchEvent(new CustomEvent('fw-upgrade', { detail: detail })) } catch (e) { /* 事件只供界面使用 */ }
+	}
+
+	function unsupportedReason() {
+		const hub = window.SerialHub
+		const lanes = window.serialLanes
+		const registry = window.ProtocolRegistry
+		const pid = hub && lanes ? lanes.protocolOf(hub.activeSendPhys()) : null
+		const protocol = registry && pid ? registry.get(pid) : null
+		if (protocol && protocol.firmware && protocol.firmware.method === 'pcp') return ''
+		return '当前协议（' + (protocol ? protocol.name : pid || '未选择') + '）不支持固件升级，切到支持的协议后可用'
+	}
+
+	function syncControls() {
+		const wasQueryDisabled = el.query.disabled
+		if (running || querying) {
+			el.start.disabled = true
+			el.query.disabled = true
+		} else {
+			const reason = unsupportedReason()
+			el.start.disabled = !!reason || !fw || !serialApi.isOpen()
+			el.query.disabled = !!reason
+			el.protocolReason.textContent = reason
+			el.protocolReason.hidden = !reason
+		}
+		if (wasQueryDisabled !== el.query.disabled) emit({ type: 'controls' })
 	}
 	let lastError = ''
 	let outcomeOk = false
@@ -202,7 +229,7 @@
 		el.file.value = ''
 		el.info.textContent = ''
 		el.version.value = ''
-		el.start.disabled = true
+		syncControls()
 		log('已清除固件文件', 'info')
 		emit({ type: 'parsed', ok: false, error: '' })
 	})
@@ -245,7 +272,7 @@
 			el.info.textContent = manualInfoText(name, fw.firmwareData.length, fw.version)
 			log('已载入固件(不解析包头), ' + fw.firmwareData.length + ' 字节', 'success')
 			emit({ type: 'parsed', ok: true, raw: true, version: fw.version, size: fw.firmwareData.length })
-			el.start.disabled = !serialApi.isOpen()
+			syncControls()
 			return
 		}
 		const bytes = new Uint8Array(fwFileBuffer)
@@ -256,7 +283,7 @@
 			log('原始固件, 内嵌版本 ' + kind.version + '；开始升级时按设备版本自动差分或压缩', 'success')
 			saveToLibrary(fw.fileName, bytes)
 			emit({ type: 'parsed', ok: true, raw: false, auto: true, version: kind.version, pkgType: '原始固件（自动差分 / 压缩）', size: bytes.length })
-			el.start.disabled = !serialApi.isOpen()
+			syncControls()
 			return
 		}
 		const r = FirmwareParser.parse(fwFileBuffer)
@@ -264,7 +291,7 @@
 			log('固件解析失败: ' + r.error, 'error')
 			emit({ type: 'parsed', ok: false, error: r.error })
 			fw = null
-			el.start.disabled = true
+			syncControls()
 			return
 		}
 		r.fileName = el.fileName.dataset.name
@@ -272,7 +299,7 @@
 		el.info.textContent = FirmwareParser.diagnose(r)
 		log('固件解析成功, 版本: ' + r.version, 'success')
 		emit({ type: 'parsed', ok: true, raw: false, version: r.version, pkgType: r.pkgTypeName, size: r.firmwareData.length })
-		el.start.disabled = !serialApi.isOpen()
+		syncControls()
 	})
 
 	el.diagnose.addEventListener('click', () => {
@@ -292,12 +319,15 @@
 	})
 
 	el.query.addEventListener('click', async () => {
+		if (running || querying || unsupportedReason()) return
 		if (!serialApi.isOpen()) {
 			log('请先打开串口', 'error')
 			return
 		}
-		window.serialApi.suppressParse = true
 		serialApi.pinSession(serialApi.getActiveSendSid())
+		window.serialApi.suppressParse = true
+		querying = true
+		syncControls()
 		emit({ type: 'query-start' })
 		try {
 			const resp = await sendAndWait(PCP.buildQueryVersionRequest(), PCPMessageCode.QUERY_VERSION, 5000)
@@ -316,6 +346,8 @@
 		} finally {
 			serialApi.unpinSession()
 			window.serialApi.suppressParse = false
+			querying = false
+			syncControls()
 		}
 	})
 
@@ -336,7 +368,7 @@
 			// 模式变了, 已载入的文件要按新模式重新处理
 			fw = null
 			el.info.textContent = ''
-			el.start.disabled = true
+			syncControls()
 			if (fwFileBuffer) el.parse.click()
 		})
 		el.version.addEventListener('input', function () {
@@ -348,6 +380,7 @@
 	})()
 
 	el.start.addEventListener('click', async () => {
+		if (running || querying || unsupportedReason()) return
 		if (!fw) {
 			log(parseInfoEnabled() ? '请先解析固件' : '请先载入固件', 'error')
 			return
@@ -365,17 +398,16 @@
 			log('版本号超过 16 字节', 'error')
 			return
 		}
+		// 升级事务钉扎主发口: 期间切主发口被拦, 下发与 RX 等待稳定在同一设备
+		serialApi.pinSession(serialApi.getActiveSendSid())
 		running = true
 		lastError = ''
 		outcomeOk = false
 		emit({ type: 'start', version: ver, chunkSize: parseInt(el.chunkSize.value) || 128, size: fw.auto ? fw.rawData.length : fw.firmwareData.length })
 		stopFlag = false
 		window.serialApi.suppressParse = true
-		// 升级事务钉扎主发口: 期间切主发口被拦, 下发与 RX 等待稳定在同一设备
-		serialApi.pinSession(serialApi.getActiveSendSid())
-		el.start.disabled = true
 		el.stop.disabled = false
-		el.query.disabled = true
+		syncControls()
 		setProgress(0)
 		try {
 			if (fw.auto) await runAuto(fw)
@@ -386,9 +418,8 @@
 			cancelFirmwareWaiters(new StopError('升级已结束'))
 			serialApi.unpinSession()
 			window.serialApi.suppressParse = false
-			el.start.disabled = false
 			el.stop.disabled = true
-			el.query.disabled = false
+			syncControls()
 			recvBuffer = []
 			recvOffset = 0
 			emit({ type: 'end', ok: outcomeOk, stopped: stopFlag && !outcomeOk, error: lastError })
@@ -944,11 +975,6 @@
 		return new Promise(r => setTimeout(r, ms))
 	}
 
-	// 串口打开状态变化时同步按钮
-	const syncStartBtn = () => {
-		el.start.disabled = !(fw && serialApi.isOpen())
-	}
-
 	// 供固件打包工具调用的外部接口
 	window.setFwUpgradeFile = function (arrayBuffer, fileName) {
 		fw = null
@@ -971,6 +997,9 @@
 		})
 	}
 	refreshLibrarySummary()
+	document.addEventListener('serial-lane-config', syncControls)
+	document.addEventListener('serial-protocol-registry-change', syncControls)
+	syncControls()
 
 	// 监听 serialApi 状态: 简单轮询 open 状态变化
 	let lastOpen = serialApi.isOpen()
@@ -978,7 +1007,7 @@
 		const open = serialApi.isOpen()
 		if (open !== lastOpen) {
 			lastOpen = open
-			syncStartBtn()
+			syncControls()
 			if (!open && running) {
 				clearTransferInbox()
 				cancelFirmwareWaiters(new StopError('串口已断开', true))

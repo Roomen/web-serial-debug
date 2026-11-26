@@ -63,18 +63,26 @@ function makeHarness(device, opts) {
 		CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail } },
 	}
 	ctx.window = ctx
-	if (!opts.noLanes) ctx.serialLanes = { transportOf(sid) {
+	const protocols = { supported: { name: '支持升级', firmware: { method: 'pcp' } }, other: { name: '<不支持升级>' } }
+	const main = { sid: 'S', protocolOf: { S: 'supported', A: 'supported', B: 'other' } }
+	ctx.SerialHub = { activeSendPhys: () => main.sid }
+	ctx.ProtocolRegistry = { get: id => protocols[id] }
+	ctx.serialLanes = { protocolOf: sid => main.protocolOf[sid] }
+	if (!opts.noTransportLookup) ctx.serialLanes.transportOf = function (sid) {
 		assert.equal(sid, 'S')
 		if (opts.transportThrows) throw new Error('synthetic info failure')
 		return Object.hasOwn(opts, 'transport') ? opts.transport : 'ble'
-	} }
+	}
+	const listeners = new Map()
 	ctx.document = {
 		currentScript: { src: 'http://localhost/js/firmware-upgrade.js' },
 		getElementById(id) { return els[id] || (els[id] = stubEl(id)) },
 		createElement() { return stubEl('') },
+		addEventListener(type, fn) { listeners.set(type, (listeners.get(type) || []).concat(fn)) },
 		dispatchEvent(e) {
 			events.push(e.detail)
 			if (e.detail && e.detail.type === 'log') logs.push(e.detail.msg)
+			for (const fn of listeners.get(e.type) || []) fn(e)
 		},
 	}
 	ctx.confirm = () => true
@@ -111,7 +119,7 @@ function makeHarness(device, opts) {
 	vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/firmware-upgrade.js'), 'utf8'), ctx)
 	els['fw-chunk-size'].value = '500'
 	return {
-		ctx, els, events, logs, waits, pins, hostCodes, link, library: ctx.FirmwareLibrary,
+		ctx, els, events, logs, waits, pins, hostCodes, link, main, library: ctx.FirmwareLibrary,
 		async waitFor(pred, ms) {
 			for (let i = 0; i < (ms || 2000); i++) { if (pred()) return true; await new Promise((r) => setTimeout(r, 1)) }
 			return false
@@ -187,8 +195,53 @@ function makeDevice(current, opts) {
 	const V1other = rawFirmware('V1.0.0', 0x4100, 9) // 同版本另一份构建
 	const V2 = rawFirmware('V2.0.0', 0x4180, 2)
 
+	{
+		const dev = makeDevice(V1)
+		const h = makeHarness(dev)
+		dev.parser = h.ctx.FirmwareParser
+		const start = h.els['fw-start']
+		const query = h.els['fw-query']
+		const reason = h.els['fw-protocol-reason']
+		const notify = () => h.ctx.document.dispatchEvent({ type: 'serial-lane-config' })
+		h.main.sid = 'B'
+		notify()
+		h.load(V2, 'V2.bin')
+		assert.ok(h.events.some(event => event && event.type === 'parsed' && event.ok), '未声明固件的协议仍可解析本地文件')
+		assert.equal(start.disabled, true)
+		assert.equal(query.disabled, true)
+		assert.equal(reason.hidden, false)
+		assert.equal(reason.textContent, '当前协议（<不支持升级>）不支持固件升级，切到支持的协议后可用')
+		start.click()
+		query.click()
+		assert.deepEqual(h.hostCodes, [], '即使直接调用原处理器也不能发送')
+		assert.equal(h.pins.depth, 0)
+		h.main.sid = 'A'
+		notify()
+		assert.equal(start.disabled, false)
+		assert.equal(query.disabled, false)
+		h.main.sid = 'S'
+		notify()
+		const end = await h.upgrade(() => {
+			assert.equal(h.pins.depth, 1)
+			h.main.protocolOf.S = 'other'
+			notify()
+			assert.equal(reason.hidden, true, '升级中不按切换后的协议刷新门控')
+			assert.equal(h.els['fw-stop'].disabled, false)
+		})
+		assert.equal(end.ok, true)
+		assert.equal(h.pins.depth, 0)
+		assert.equal(reason.hidden, false)
+		assert.equal(start.disabled, true)
+		assert.equal(query.disabled, true)
+		h.main.protocolOf.S = 'supported'
+		h.ctx.document.dispatchEvent({ type: 'serial-protocol-registry-change' })
+		assert.equal(reason.hidden, true)
+		assert.equal(start.disabled, false)
+		assert.equal(query.disabled, false)
+	}
+
 	// Only confirmed BLE links skip the pre-existing 200ms turnaround, including conservative fallbacks.
-	for (const opts of [{ transport: 'ble' }, { transport: 'serial' }, { transport: 'bt-classic' }, { transport: 'unknown' }, { transport: undefined }, { noLanes: true }, { transportThrows: true }]) {
+	for (const opts of [{ transport: 'ble' }, { transport: 'serial' }, { transport: 'bt-classic' }, { transport: 'unknown' }, { transport: undefined }, { noTransportLookup: true }, { transportThrows: true }]) {
 		const dev = makeDevice(V1)
 		const h = makeHarness(dev, opts)
 		dev.parser = h.ctx.FirmwareParser

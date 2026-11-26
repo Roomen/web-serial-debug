@@ -1887,6 +1887,7 @@
 			presets: presets,
 			funcTabs: funcTabs,
 			device: compileDevice(spec.device),
+			firmware: rawSpec.firmware,
 			rawSpec: JSON.parse(JSON.stringify(rawSpec)),
 		}
 	}
