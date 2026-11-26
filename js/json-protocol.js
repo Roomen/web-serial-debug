@@ -493,6 +493,8 @@
 		return 'text'
 	}
 
+	// device.log：设备面板里底部「通信记录」条的初始偏好（与注册表 normalizeDevice 同一白名单，非法值丢弃）
+	const DEVICE_LOG_PREFS = ['collapsed', 'strip', 'tall']
 	function validateDeviceSpec(dev, ctx, errors) {
 		if (dev === undefined || dev === null) return null
 		if (typeof dev !== 'object' || Array.isArray(dev)) {
@@ -520,6 +522,7 @@
 			title: typeof dev.title === 'string' ? dev.title.trim().slice(0, 64) : '',
 			nameKey: typeof dev.nameKey === 'string' ? dev.nameKey.trim() : '',
 			timeoutMs: dev.timeoutMs == null ? 5000 : parseIntStrict(dev.timeoutMs),
+			log: null,
 			groups: [],
 			fields: [],
 			readSets: rsIn ? {
@@ -530,6 +533,8 @@
 			categories: [],
 		}
 		if (Number.isNaN(out.timeoutMs) || out.timeoutMs < 200 || out.timeoutMs > 60000) errors.push('device.timeoutMs 必须为 200~60000 的整数')
+		// 与注册表 normalizeDevice 一致：非法值丢弃、不拒绝整份协议（校验没有非阻断的提示通道）
+		if (DEVICE_LOG_PREFS.indexOf(dev.log) >= 0) out.log = dev.log
 		const groupIds = []
 		if (!Array.isArray(dev.groups) || !dev.groups.length) {
 			errors.push('device.groups 必须为非空数组')
@@ -1598,6 +1603,7 @@
 				title: dv.title,
 				nameKey: dv.nameKey || null,
 				timeoutMs: dv.timeoutMs,
+				log: dv.log || null,
 				fields: dv.fields,
 				groups: dv.groups,
 				readSets: dv.readSets,

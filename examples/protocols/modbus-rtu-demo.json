@@ -96,6 +96,7 @@
   "device": {
     "title": "Modbus 从站 0x01",
     "timeoutMs": 2000,
+    "log": "collapsed",
     "groups": [
       {
         "id": "hold",

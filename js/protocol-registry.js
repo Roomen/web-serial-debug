@@ -353,6 +353,11 @@
 	}
 
 	// opts.errors：可选数组，收集拒绝原因。返回规范化的 device，或 null（没有 / 不合格）
+	// device.log：设备面板子视图里底部「通信记录」条的初始偏好（只在用户从未调整过该协议时生效，见 js/log-layout.js），非法值丢弃
+	const DEVICE_LOG_PREFS = ['collapsed', 'strip', 'tall']
+	function devLogPref(v) {
+		return typeof v === 'string' && DEVICE_LOG_PREFS.indexOf(v) >= 0 ? v : null
+	}
 	function normalizeDevice(dev, opts) {
 		const label = (opts && opts.id) || ''
 		const errors = (opts && Array.isArray(opts.errors)) ? opts.errors : []
@@ -435,6 +440,7 @@
 			title: devText(dev.title, 64),
 			nameKey: nameKey && hasOwn(fieldMap, nameKey) ? nameKey : null,
 			timeoutMs: devNum(dev.timeoutMs, 200, 60000, 5000),
+			log: devLogPref(dev.log),
 			queryable: canQuery,
 			fields: fields,
 			fieldMap: fieldMap,
