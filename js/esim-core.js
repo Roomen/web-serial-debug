@@ -33,22 +33,350 @@
 		7: 'ZMODEM/近端中断',
 	}
 
-	// EG800Z +QESIM 低 16 位常见错误码及排查建议（高 16 位恒为 0x8500）
+	// EG800Z +QESIM 低 16 位常见错误码及排查建议（高 16 位恒为 0x8500，仅识别到 EG800Z 模组时启用）
+	const QESIM_HTTP_TLS_ERR = { name: 'HTTP / TLS / 网络传输错误', hint: '检查蜂窝数据链路、APN、DNS 与 SM-DP+ TLS 连通性' }
 	const QESIM_ERROR_HINTS = {
-		0x0004: { name: '操作超时', hint: '模组/eUICC 响应超时' },
-		0x0005: { name: '参数/序号或业务状态错误', hint: '检查每轮 seq 是否从 0 重置，或服务端已返回 Failed' },
-		0x0008: { name: 'eUICC 休眠/无卡', hint: '检查 CFUN=1 且已发送 AT+ECSIMSLEEP=0' },
-		0x000E: { name: '文件系统/响应体格式错误', hint: '确认只回灌纯 JSON body，不含 HTTP 响应头' },
-		0x0102: { name: 'Profile 已处于启用态', hint: '目标卡已启用，无需重复启用' },
-		0x0105: { name: 'eUICC 卡应用繁忙', hint: '软复位无效，必须对模组/整机断电重启后复测' },
-		0x0203: { name: 'PPR 策略禁止禁用', hint: '该 Profile 受 eUICC PPR 保护，不允许禁用' },
-		0x0204: { name: 'eUICC 卡应用繁忙', hint: '软复位无效，必须对模组/整机断电重启后复测' },
-		0x0302: { name: '启用态不可删除', hint: '请先禁用该 Profile 后再删除' },
-		0x0303: { name: 'PPR 策略禁止删除', hint: '该 Profile 受 eUICC PPR 保护，不允许删除' },
-		0x0705: { name: '无效 OID', hint: '激活码不得包含无效 OID 段，请向发卡侧核对 AC；勿盲目重试' },
-		0x0706: { name: 'Challenge 不匹配', hint: '不可复用旧会话响应；勿盲目重试' },
-		0x0909: { name: 'ICCID 已存在', hint: '卡内已有相同 ICCID 的 Profile；勿盲目重试' },
-		0x090C: { name: 'PE 处理错误', hint: '卡内可能残留同订单 Profile，请先清理后再下发；勿盲目重试' },
+		0x0004: { name: '操作超时（卡无响应）', hint: '模组/eUICC 响应超时' },
+		0x0005: { name: '通用错误（流程异常或服务器返回 Failed）', hint: '检查每轮 seq 是否从 0 重置，或确认服务端是否返回 Failed' },
+		0x0008: { name: '消息发送错误（eUICC 休眠、飞行模式或无卡）', hint: '检查 CFUN=1 且已发送 AT+ECSIMSLEEP=0，确认 eUICC 在位' },
+		0x000B: { name: 'APDU 解析错误（普通 USIM 或参数不合法）', hint: '确认设备装配的是 eUICC 而非普通 USIM，并核对指令参数' },
+		0x000E: { name: '文件系统操作错误（如回灌含 HTTP 头响应）', hint: '确认只回灌纯 JSON body，不含 HTTP 响应头' },
+		0x000F: QESIM_HTTP_TLS_ERR,
+		0x0010: QESIM_HTTP_TLS_ERR,
+		0x0011: QESIM_HTTP_TLS_ERR,
+		0x0012: QESIM_HTTP_TLS_ERR,
+		0x0013: QESIM_HTTP_TLS_ERR,
+		0x0014: QESIM_HTTP_TLS_ERR,
+		0x0015: QESIM_HTTP_TLS_ERR,
+		0x0016: { name: 'SM-DP+ 返回错误（内网模式服务器侧拒绝）', hint: 'SM-DP+ 拒绝了本次请求，请核对激活码、订单状态与服务器配置' },
+		0x0017: { name: '网络/连接超时', hint: '蜂窝网络或 SM-DP+ 连接超时，请检查信号质量与网络环境' },
+		0x0018: { name: '网络/连接超时', hint: '蜂窝网络或 SM-DP+ 连接超时，请检查信号质量与网络环境' },
+		0x0019: { name: '网络错误', hint: '检查蜂窝网络注册、PDP 激活状态与信号质量' },
+		0x0102: { name: '启用失败：Profile 已处于启用态', hint: '目标卡已启用，无需重复启用' },
+		0x0105: { name: '启用失败：卡应用繁忙（需整机/模组断电重启）', hint: '软复位无效，必须对模组/整机断电重启后复测' },
+		0x0203: { name: '禁用失败：PPR 策略禁止禁用', hint: '该 Profile 受 eUICC PPR 保护，不允许禁用' },
+		0x0204: { name: '禁用失败：卡应用繁忙', hint: '软复位无效，必须对模组/整机断电重启后复测' },
+		0x0302: { name: '删除失败：目标 Profile 仍处于启用态', hint: '请先禁用该 Profile 后再删除' },
+		0x0303: { name: '删除失败：PPR 策略禁止删除', hint: '该 Profile 受 eUICC PPR 保护，不允许删除' },
+		0x0704: { name: '认证服务器错误：无会话上下文', hint: '会话上下文已失效，请重新发起下载流程' },
+		0x0705: { name: '认证服务器错误：无效 OID（证书/OID 不匹配）', hint: '激活码含无效 OID 或证书不匹配，请向发卡侧核对 AC；勿盲目重试' },
+		0x0706: { name: 'eUICC Challenge 不匹配（复用旧会话响应）', hint: '不可复用旧会话响应；请重新发起流程，勿盲目重试' },
+		0x0909: { name: '安装失败：ICCID 已存在（重复下载同订单）', hint: '卡内已有相同 ICCID 的 Profile；勿盲目重试' },
+		0x090C: { name: '安装失败：PE 处理错误（卡内残留同订单 Profile 或空间冲突）', hint: '卡内可能残留同订单 Profile 或空间冲突，请先清理后再下发；勿盲目重试' },
+		0x0B03: { name: '客户端认证错误：eUICC 证书无效', hint: '请核对 eUICC 证书链与 SM-DP+ 环境（正式/测试 CI）是否匹配' },
+		0x0B04: { name: '客户端认证错误：eUICC 证书已过期', hint: '请核对设备或证书有效期及发卡环境' },
+		0x0B05: { name: '客户端认证错误：eUICC 签名无效', hint: 'eUICC 签名校验未通过，请核对证书链与卡片状态' },
+		0x0B06: { name: '客户端认证错误：MatchingID 被拒绝', hint: '请向发卡侧核对激活码中的 MatchingID 及订单状态；勿盲目重试' },
+		0x0B07: { name: '客户端认证错误：EID 不匹配', hint: '当前设备 EID 与订单绑定 EID 不一致，请核对 EID；勿盲目重试' },
+		0x0B08: { name: '客户端认证错误：没有符合条件的 Profile', hint: '发卡平台无匹配当前设备的可下载 Profile，请核对订单' },
+		0x0B09: { name: '客户端认证错误：未知的 CI 公钥', hint: 'SM-DP+ 与 eUICC 根证书（CI）不匹配，请确认测试/正式环境' },
+		0x0B0A: { name: '客户端认证错误：交易 ID 未知', hint: '交易 ID 已过期或不存在，请重新发起下载' },
+		0x0B0B: { name: '客户端认证错误：eUICC 存储空间不足', hint: '请先清理无用的禁用态 Profile 释放 eUICC 存储空间' },
+	}
+
+	// 0xE1xx：模组 +CME ERROR 常见数字码说明
+	const CME_ERROR_HINTS = {
+		10: { name: 'SIM 未插入', hint: '检查 SIM/eUICC 接触、供电或卡槽' },
+		13: { name: 'SIM 故障', hint: '检查 eUICC 状态或尝试对模组断电重启' },
+		53: { name: '参数非法', hint: '检查 AT 指令参数格式或长度（如大包回灌 totallen）' },
+	}
+
+	// 0xE2xx：mode=0 上电/入网与前置步骤失败
+	const PRECOND_ERROR_HINTS = {
+		0xE201: { name: '模组上电失败（commuEnable）', hint: '检查模组供电、电源控制引脚与硬件连接' },
+		0xE202: { name: '模组未就绪或 AT+CFUN=1 失败', hint: '检查模组串口通信、启动状态与射频使能' },
+		0xE203: { name: 'AT+CEREG 驻网超时/预算耗尽', hint: '检查天线、信号覆盖与当前启用 Profile 的运营商驻网能力' },
+		0xE204: { name: 'AT+CGATT PS 附着超时/预算耗尽', hint: '检查当前 Profile 数据业务状态与蜂窝网络覆盖' },
+		0xE205: { name: 'AT+QIACT=1 PDP 激活失败（常见于 APN 错误或未签约）', hint: '核对设备 APN 配置及当前 Profile 的数据业务签约状态' },
+		0xE206: { name: 'AT+QIACT? PDP 激活查询超时/预算耗尽', hint: '检查蜂窝网络稳定性，稍后重试 PDP 激活' },
+		0xE207: { name: 'AT+CSQ/AT+QENG 信号查询失败', hint: '检查模组信号质量与驻网状态' },
+		0xE208: { name: 'mode=1 近端代理通道未就绪', hint: '检查近端通信通道状态及固件近端代理能力开关' },
+	}
+
+	// 0xE3se：AT+QESIM 会话状态机内部错误
+	const QESIM_FSM_STATES = {
+		0x0: 'IDLE',
+		0x1: 'WAIT_ATE0_OK',
+		0x2: 'WAIT_CMEE_OK',
+		0x3: 'WAIT_CFUN_OK',
+		0x4: 'WAIT_SIMSLEEP_OK',
+		0x5: 'WAIT_DOWNLOAD_OK',
+		0x6: 'WAIT_URC',
+		0x7: 'TRANS_PENDING',
+		0x8: 'REINJECTING',
+		0x9: 'WAIT_FINAL_RESULT',
+		0xA: 'DONE',
+		0xB: 'ABORTED',
+	}
+	const QESIM_FSM_ERRORS = {
+		0x1: { name: '参数错', hint: '核对下发参数与命令长度' },
+		0x2: { name: '前置条件不满足', hint: '检查模组就绪状态与执行前提' },
+		0x3: { name: 'AC 格式错', hint: '核对激活码格式 LPA:1$<host>$<matchingId>' },
+		0x4: { name: '缓冲/长度溢出', hint: '响应或命令超出固件静态缓冲上限' },
+		0x5: { name: '会话忙', hint: '当前已有进行中的 eSIM 会话，请等待结束后重试' },
+		0x6: { name: '串口发送失败', hint: '检查 MCU 与模组之间的串口通信' },
+		0x7: { name: '超时', hint: '等待模组 AT 应答或 URC 超时，检查模组与网络状态' },
+		0x8: { name: 'AT 返回 ERROR', hint: '模组返回 AT ERROR，请结合中止状态排查对应 AT 指令' },
+		0x9: { name: '协议格式错', hint: '模组返回 URC 或应答格式不符合预期' },
+		0xA: { name: '轮次乱序', hint: 'ES9+ 四轮交互顺序异常，请重新发起下载' },
+		0xB: { name: 'HTTP 状态码非法', hint: '第 1~3 轮期望 HTTP 200，第 4 轮期望 HTTP 204' },
+		0xC: { name: '响应含 HTTP 头', hint: '回灌数据只能是纯 JSON body，不能包含 HTTP 响应头' },
+		0xD: { name: 'EOF 长度不符', hint: '实际接收字节数与声明长度不一致，请重新传输' },
+		0xE: { name: '下载错误码', hint: '模组下载流程返回错误码' },
+		0xF: { name: '部分中止', hint: '流程中途异常中止，请核对 Profile 列表确认是否已落盘' },
+	}
+
+	// 0xE4rn：mode=1 近端 ZMODEM 传输失败
+	const ZMODEM_ERRORS = {
+		0x1: { name: '参数错', hint: '检查 ZMODEM 传输参数配置' },
+		0x2: { name: '读超时', hint: '等待对端 ZMODEM 数据超时，请检查近端代理状态与链路连接' },
+		0x3: { name: 'I/O 断开', hint: '近端通信链路断开（如 BLE 断连），请重连后刷新 ID4 核对终态' },
+		0x4: { name: 'CRC 校验错', hint: '传输发生误码，请检查串口参数或近端信号质量' },
+		0x5: { name: 'ZDLE 转义错', hint: '传输帧转义序列异常，可能存在字节丢失或链路干扰' },
+		0x6: { name: '子包超长溢出', hint: '单块 ZMODEM 子包超过固件接收缓冲上限' },
+		0x7: { name: 'EOF/长度错', hint: '实际传输长度与 ZFILE 声明长度不符' },
+		0x8: { name: '偏移错位', hint: '传输偏移不同步，请重新发起下载' },
+		0x9: { name: '不支持帧型', hint: '收到固件不支持的 ZMODEM 帧类型' },
+		0xA: { name: '写入回调失败', hint: 'MCU 流式回灌写入回调失败，可能为模组返回错误或响应体异常' },
+		0xB: { name: '对端 CAN 取消（如 SM-DP+ 业务失败中止）', hint: '近端代理主动中止会话，请查看上位机操作日志中的 SM-DP+ 错误原因' },
+		0xC: { name: '重试耗尽', hint: '连续重传失败，请检查通信链路稳定性' },
+		0xD: { name: '协议违例', hint: 'ZMODEM 交互状态违例，请重新发起下载' },
+		0xE: { name: '未收到 ZFILE', hint: '未收到对端 ZFILE 文件头，请检查近端代理是否正常响应' },
+	}
+
+	const UNIDENTIFIED_MODULE_HINT = '未识别当前模组型号，暂不套用 EG800Z 专属错误码表；如需解析模组原码，请先查询基础数据（Tag1）获取模组版本号'
+
+	function cleanModuleText(str) {
+		const s = String(str == null ? '' : str).replace(/\x00/g, '').trim()
+		if (!s) return ''
+		for (let i = 0; i < s.length; i++) {
+			const c = s.charCodeAt(i)
+			if (c < 0x20 || c > 0x7e) return ''
+		}
+		if (/^[-_0.\s]+$/.test(s)) return ''
+		return s
+	}
+
+	function extractModulePrefix(str) {
+		const s = cleanModuleText(str)
+		if (!s) return ''
+		const stripped = s.replace(/^quectel[\s_-]+/i, '')
+		const m = /^([A-Za-z]{2,4}\d{2,4}[A-Za-z]?)/.exec(stripped)
+		return m ? m[1].toUpperCase() : stripped.split(/[\s_/-]/)[0].toUpperCase()
+	}
+
+	function isEg800zPrefix(ver, model) {
+		const v = cleanModuleText(ver)
+		const m = cleanModuleText(model)
+		return /^eg800z/i.test(v) || /^(?:quectel[\s_-]*)?eg800z/i.test(m)
+	}
+
+	function detectModuleProfile(input) {
+		if (!input) {
+			return { known: false, isEg800z: false, family: 'unknown', modelPrefix: '', label: '', moduleVersion: '', moduleModel: '' }
+		}
+		if (typeof input === 'string') {
+			const ver = cleanModuleText(input)
+			if (!ver) return { known: false, isEg800z: false, family: 'unknown', modelPrefix: '', label: '', moduleVersion: '', moduleModel: '' }
+			const isEg800z = isEg800zPrefix(ver, '')
+			const modelPrefix = isEg800z ? 'EG800Z' : extractModulePrefix(ver)
+			return { known: true, isEg800z, family: isEg800z ? 'eg800z' : 'other', modelPrefix, label: modelPrefix || ver, moduleVersion: ver, moduleModel: '' }
+		}
+		if (typeof input === 'object') {
+			const src = input.moduleInfo && typeof input.moduleInfo === 'object' ? input.moduleInfo : input
+			const ver = cleanModuleText(src.moduleVersion != null ? src.moduleVersion : src.version)
+			const model = cleanModuleText(src.moduleModel != null ? src.moduleModel : src.model)
+			if (ver || model) {
+				const isEg800z = isEg800zPrefix(ver, model)
+				const modelPrefix = isEg800z ? 'EG800Z' : (extractModulePrefix(model) || extractModulePrefix(ver))
+				return {
+					known: true,
+					isEg800z,
+					family: isEg800z ? 'eg800z' : 'other',
+					modelPrefix,
+					label: modelPrefix || model || ver,
+					moduleVersion: ver,
+					moduleModel: model,
+				}
+			}
+			if (typeof src.isEg800z === 'boolean') {
+				const known = src.known !== undefined ? !!src.known : src.isEg800z
+				if (!known) return { known: false, isEg800z: false, family: 'unknown', modelPrefix: '', label: '', moduleVersion: '', moduleModel: '' }
+				const prefix = src.isEg800z ? 'EG800Z' : cleanModuleText(src.modelPrefix || src.label)
+				return {
+					known: true,
+					isEg800z: src.isEg800z,
+					family: src.isEg800z ? 'eg800z' : 'other',
+					modelPrefix: prefix,
+					label: prefix,
+					moduleVersion: '',
+					moduleModel: '',
+				}
+			}
+		}
+		return { known: false, isEg800z: false, family: 'unknown', modelPrefix: '', label: '', moduleVersion: '', moduleModel: '' }
+	}
+
+	function decodeModuleErrCode(rawCode, moduleInput) {
+		const code = (Number(rawCode) || 0) & 0xffff
+		const errHex = code.toString(16).toUpperCase().padStart(4, '0')
+		const hex = '0x' + errHex
+		const mod = detectModuleProfile(moduleInput)
+
+		if (code === 0) {
+			return {
+				code: 0,
+				hex: '0x0000',
+				category: 'none',
+				qesimFullCode: '',
+				name: '',
+				hint: '',
+				displayText: '0x0000',
+				detail: null,
+				module: mod,
+			}
+		}
+
+		// 1) 0xE1xx：模组 +CME ERROR: <n>
+		if ((code & 0xff00) === 0xe100) {
+			const cme = code & 0xff
+			const saturated = cme === 0xff
+			const info = !saturated ? (CME_ERROR_HINTS[cme] || null) : null
+			const name = saturated
+				? '+CME ERROR: ≥255'
+				: ('+CME ERROR: ' + cme + (info ? ' (' + info.name + ')' : ''))
+			return {
+				code,
+				hex,
+				category: 'cme',
+				qesimFullCode: '',
+				name,
+				hint: info ? info.hint : '',
+				displayText: hex + ' (' + name + ')',
+				detail: { cmeCode: cme, saturated },
+				module: mod,
+			}
+		}
+
+		// 2) 0xE2xx：mode=0 上电/入网与前置步骤失败
+		if ((code & 0xff00) === 0xe200) {
+			const info = PRECOND_ERROR_HINTS[code] || null
+			const name = info ? info.name : ('前置/入网步骤失败 (' + hex + ')')
+			return {
+				code,
+				hex,
+				category: 'precond',
+				qesimFullCode: '',
+				name,
+				hint: info ? info.hint : '',
+				displayText: hex + ' (' + name + ')',
+				detail: { stepCode: code & 0xff },
+				module: mod,
+			}
+		}
+
+		// 3) 0xE3se：AT+QESIM 会话状态机内部错误
+		if ((code & 0xff00) === 0xe300) {
+			const stateCode = (code >>> 4) & 0x0f
+			const statusCode = code & 0x0f
+			const stateName = QESIM_FSM_STATES[stateCode] || ('STATE_0x' + stateCode.toString(16).toUpperCase())
+			const errInfo = QESIM_FSM_ERRORS[statusCode] || null
+			const statusName = errInfo ? errInfo.name : ('未知错误(' + statusCode + ')')
+			const name = 'AT+QESIM 状态机[' + stateName + ']：' + statusName
+			return {
+				code,
+				hex,
+				category: 'qesim-fsm',
+				qesimFullCode: '',
+				name,
+				hint: errInfo ? errInfo.hint : '',
+				displayText: hex + ' (' + name + ')',
+				detail: { stateCode, stateName, statusCode, statusName },
+				module: mod,
+			}
+		}
+
+		// 4) 0xE4rn：mode=1 近端 ZMODEM 传输失败
+		if ((code & 0xff00) === 0xe400) {
+			const r = (code >>> 4) & 0x0f
+			const dir = (r >>> 3) & 0x01
+			const round = r & 0x07
+			const zCode = code & 0x0f
+			const dirLabel = dir === 0 ? 'MCU→Host 发请求' : 'Host→MCU 收响应'
+			const roundLabel = round >= 1 && round <= 4 ? ('第 ' + round + ' 轮') : (round === 0 ? '未知轮次' : ('轮次' + round))
+			const zInfo = ZMODEM_ERRORS[zCode] || null
+			const zName = zInfo ? zInfo.name : ('未知错误(0x' + zCode.toString(16).toUpperCase() + ')')
+			const name = 'ZMODEM ' + roundLabel + '·' + dirLabel + '：' + zName
+			return {
+				code,
+				hex,
+				category: 'zmodem',
+				qesimFullCode: '',
+				name,
+				hint: zInfo ? zInfo.hint : '',
+				displayText: hex + ' (' + name + ')',
+				detail: { dir, dirLabel, round, roundLabel, zmodemCode: zCode, zmodemName: zName },
+				module: mod,
+			}
+		}
+
+		// 5) 0x0001 ~ 0x117F：EG800Z +QESIM 原始 32 位码低 16 位（仅在已识别为 EG800Z 模组时映射）
+		if (code >= 0x0001 && code <= 0x117f) {
+			if (mod.isEg800z) {
+				const qesimFullCode = '0x8500' + errHex
+				const info = QESIM_ERROR_HINTS[code] || null
+				const name = info ? info.name : ''
+				const displayText = hex + ' (' + qesimFullCode + (name ? ' · ' + name : '') + ')'
+				return {
+					code,
+					hex,
+					category: 'qesim',
+					qesimFullCode,
+					name,
+					hint: info ? info.hint : '',
+					displayText,
+					detail: { fullCode: qesimFullCode },
+					module: mod,
+				}
+			}
+			if (!mod.known) {
+				return {
+					code,
+					hex,
+					category: 'module-unidentified',
+					qesimFullCode: '',
+					name: '',
+					hint: UNIDENTIFIED_MODULE_HINT,
+					displayText: hex + '（未识别模组）',
+					detail: null,
+					module: mod,
+				}
+			}
+			return {
+				code,
+				hex,
+				category: 'module-other',
+				qesimFullCode: '',
+				name: '',
+				hint: '',
+				displayText: hex,
+				detail: null,
+				module: mod,
+			}
+		}
+
+		// 6) 其他未定义区间
+		return {
+			code,
+			hex,
+			category: 'unknown',
+			qesimFullCode: '',
+			name: '',
+			hint: '',
+			displayText: hex,
+			detail: null,
+			module: mod,
+		}
 	}
 
 	function mapAtProfileClassToId1(atClass) {
@@ -200,7 +528,7 @@
 		return { count, profiles, truncated }
 	}
 
-	function decodeStatus(raw) {
+	function decodeStatus(raw, opts) {
 		const u8 = raw instanceof Uint8Array ? raw : Uint8Array.from(raw || [])
 		if (u8.length < 12) return null
 		const state = u8[0] & 0xff
@@ -221,8 +549,7 @@
 		const timeText = (!allZeroTime && validBcd)
 			? (d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) + ' ' + d.slice(8, 10) + ':' + d.slice(10, 12) + ':' + d.slice(12, 14))
 			: ''
-		const errHex = moduleErrCode.toString(16).toUpperCase().padStart(4, '0')
-		const errInfo = moduleErrCode ? (QESIM_ERROR_HINTS[moduleErrCode] || null) : null
+		const errDecoded = decodeModuleErrCode(moduleErrCode, opts)
 		return {
 			state,
 			stateLabel: STATE_LABELS[state] || ('未知(' + state + ')'),
@@ -231,10 +558,14 @@
 			failStage,
 			failStageLabel: FAIL_STAGE_LABELS[failStage] || ('未知(' + failStage + ')'),
 			moduleErrCode,
-			moduleErrHex: moduleErrCode ? ('0x' + errHex) : '0x0000',
-			qesimFullCode: moduleErrCode ? ('0x8500' + errHex) : '',
-			errName: errInfo ? errInfo.name : '',
-			errHint: errInfo ? errInfo.hint : '',
+			moduleErrHex: errDecoded.hex,
+			qesimFullCode: errDecoded.qesimFullCode,
+			errCategory: errDecoded.category,
+			errName: errDecoded.name,
+			errHint: errDecoded.hint,
+			errDisplay: errDecoded.displayText,
+			errDetail: errDecoded.detail,
+			moduleInfo: errDecoded.module,
 			timeText,
 		}
 	}
@@ -523,6 +854,13 @@
 		LAST_OP_LABELS,
 		FAIL_STAGE_LABELS,
 		QESIM_ERROR_HINTS,
+		CME_ERROR_HINTS,
+		PRECOND_ERROR_HINTS,
+		QESIM_FSM_STATES,
+		QESIM_FSM_ERRORS,
+		ZMODEM_ERRORS,
+		detectModuleProfile,
+		decodeModuleErrCode,
 		mapAtProfileClassToId1,
 		decodeProfileFlags,
 		encodeProfileFlags,

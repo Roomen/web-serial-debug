@@ -5253,6 +5253,45 @@
 		getActiveSendSid() {
 			return SerialHub.activeSendSid()
 		},
+		getActiveLaneModuleInfo(sid) {
+			const targetSid = (sid === 'S' || sid === 'A' || sid === 'B') ? sid : SerialHub.activeSendPhys()
+			return inLiveLane(targetSid, function () {
+				const g = typeof skSess === 'function' ? skSess() : window.skSession
+				if (!g) return { known: false, isEg800z: false, family: 'unknown', modelPrefix: '', label: '', moduleVersion: '', moduleModel: '', source: '' }
+				if (typeof g.getModuleInfo === 'function') return g.getModuleInfo()
+				const ver = g.moduleVersion || ''
+				const model = g.moduleModel || ''
+				const known = !!(ver || model)
+				const isEg800z = known && (/^eg800z/i.test(ver) || /^(?:quectel[\s_-]*)?eg800z/i.test(model))
+				return {
+					known: known,
+					isEg800z: isEg800z,
+					family: !known ? 'unknown' : (isEg800z ? 'eg800z' : 'other'),
+					modelPrefix: isEg800z ? 'EG800Z' : '',
+					label: isEg800z ? 'EG800Z' : (model || ver),
+					moduleVersion: ver,
+					moduleModel: model,
+					source: g.moduleSource || '',
+				}
+			})
+		},
+		setActiveLaneModuleInfo(sid, info) {
+			if (!info || typeof info !== 'object') return false
+			const targetSid = (sid === 'S' || sid === 'A' || sid === 'B') ? sid : SerialHub.activeSendPhys()
+			return inLiveLane(targetSid, function () {
+				const g = typeof skSess === 'function' ? skSess() : window.skSession
+				if (!g) return false
+				if (info.deviceUid != null && typeof g.touchDevice === 'function') g.touchDevice(info.deviceUid)
+				let changed = false
+				if (info.moduleVersion && typeof g.setModuleVersion === 'function') {
+					changed = g.setModuleVersion(info.moduleVersion, info.source || 'Tag1-ID10') || changed
+				}
+				if (info.moduleModel && typeof g.setModuleModel === 'function') {
+					changed = g.setModuleModel(info.moduleModel, info.source || 'Tag1-ID12') || changed
+				}
+				return changed
+			})
+		},
 		// 事务钉扎: pin 期间 activeSendSid()/writeData/isOpen/RX 转发均锁定到钉扎会话
 		pinSession(sid) {
 			if (this.updatePreparing) throw new Error('正在安装应用更新，暂不能开始事务')
@@ -5601,6 +5640,7 @@
 	function freshSessSnap(g) {
 		const live = g.snapshot()
 		g.resetBase()
+		if (typeof g.resetModule === 'function') g.resetModule()
 		g.deviceUid = null
 		const fresh = g.snapshot()
 		g.restore(live)
@@ -5651,6 +5691,7 @@
 		if (!g) return
 		try {
 			g.resetBase()
+			if (typeof g.resetModule === 'function') g.resetModule()
 			g.deviceUid = null
 		} catch (e) { /* */ }
 	}

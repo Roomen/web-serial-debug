@@ -9,8 +9,8 @@ const vm = require('node:vm')
 const Zmodem = require('../js/zmodem.js')
 const EsimCore = require('../js/esim-core.js')
 
-// 加载 SEK 协议脚本做帧编解码与 logView 回归
-const window = { registerProtocol() {} }
+// 加载 SEK 协议脚本做帧编解码与 logView 回归（同步注入 EsimCore，与浏览器一致）
+const window = { registerProtocol() {}, EsimCore }
 const ctx = {
 	window,
 	Uint8Array,
@@ -26,16 +26,21 @@ for (const f of ['parse-view', 'protocol-schema', 'protocol-crypto', 'protocol']
 	vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/' + f + '.js'), 'utf8'), ctx)
 }
 
-function sekUp(fc, tlv) {
+function sekUpWithUid(fc, tlv, uidBytes) {
+	const uid = uidBytes || [0x00, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12]
 	const head = [
 		0xA9, 0x9A, 0x11, 0x00, 0x02, 0x01, 0x10,
-		0x00, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12,
+	].concat(uid, [
 		0x9C, 0xFF, 0x0A, 0x00, 0x00, 0x1A, fc, 0x00,
-	]
+	])
 	const data = [tlv.length & 255, tlv.length >> 8].concat(tlv)
 	const f = head.concat([data.length & 255, data.length >> 8]).concat(data)
 	const c = window.skCrc16(Uint8Array.from(f))
 	return Uint8Array.from(f.concat([c & 255, c >> 8, 0x16]))
+}
+
+function sekUp(fc, tlv) {
+	return sekUpWithUid(fc, tlv)
 }
 
 function tlvBlock(tag, items) {
@@ -96,35 +101,105 @@ function asciiPadded(s, len) {
 		[1].concat(id1Val),
 		[4].concat(id4Val),
 	]))
+	// 2a. 未查过模组版本时，0x090C 仅显示原始十六进制并标注未识别模组，不套用 EG800Z 0x8500xxxx 文案
+	window.skSession.resetModule()
+	const parsedUnknown = window.skParseFrame(up)
+	assert.equal(parsedUnknown.ok, true)
+	assert.equal(parsedUnknown.tlv.length, 1)
+	assert.equal(parsedUnknown.tlv[0].tag, 66)
+	assert.equal(parsedUnknown.tlv[0].name, 'eSIM管理')
+	assert.equal(parsedUnknown.tlv[0].items.length, 3)
+	assert.equal(parsedUnknown.tlv[0].items[0].decoded, '89049032000000000000000012345678')
+	assert.ok(parsedUnknown.tlv[0].items[1].decoded.includes('89860011223344556677'))
+	assert.ok(parsedUnknown.tlv[0].items[1].decoded.includes('启用,运营'))
+	assert.ok(parsedUnknown.tlv[0].items[1].decoded.includes('禁用,预置/引导,禁删PPR'))
+	assert.ok(parsedUnknown.tlv[0].items[2].decoded.includes('0x090C（未识别模组）'))
+	assert.ok(!parsedUnknown.tlv[0].items[2].decoded.includes('0x8500090C'), '未识别模组时绝不可套用 EG800Z 0x8500xxxx')
+	assert.ok(!parsedUnknown.tlv[0].items[2].decoded.includes('PE 处理错误'), '未识别模组时绝不可套用 EG800Z 文案')
+	const lvUnknown = window.skLogView(parsedUnknown)
+	assert.ok(lvUnknown && lvUnknown.sections.length === 1)
+	assert.equal(lvUnknown.sections[0].title, 'Tag66 eSIM管理')
+	assert.equal(lvUnknown.sections[0].pairs.length, 3)
+	assert.ok(lvUnknown.notes.some((n) => n.kind === 'warn' && n.text.includes('未识别模组')), '未识别模组遇到 0x0001~0x117F 时 logView 应给出提示')
+
+	// 2b. 通过 Tag=1 ID=10 识别到 EG800Z 模组后，启用 EG800Z +QESIM 专属码表与 0x8500xxxx
+	const tag1Eg800z = sekUp(0x83, tlvBlock(1, [
+		[10].concat(asciiPadded('EG800ZEULAR09A01M04_BETA261020_E', 32)),
+	]))
+	const parsedTag1 = window.skParseFrame(tag1Eg800z)
+	assert.equal(parsedTag1.ok, true)
+	assert.equal(window.skSession.isEg800z(), true)
+	assert.equal(window.skSession.moduleVersion, 'EG800ZEULAR09A01M04_BETA261020_E')
+
 	const parsed = window.skParseFrame(up)
 	assert.equal(parsed.ok, true)
-	assert.equal(parsed.tlv.length, 1)
-	assert.equal(parsed.tlv[0].tag, 66)
-	assert.equal(parsed.tlv[0].name, 'eSIM管理')
-	assert.equal(parsed.tlv[0].items.length, 3)
-
-	assert.equal(parsed.tlv[0].items[0].decoded, '89049032000000000000000012345678')
-	assert.ok(parsed.tlv[0].items[1].decoded.includes('89860011223344556677'))
-	assert.ok(parsed.tlv[0].items[1].decoded.includes('启用,运营'))
-	assert.ok(parsed.tlv[0].items[1].decoded.includes('禁用,预置/引导,禁删PPR'))
 	assert.ok(parsed.tlv[0].items[2].decoded.includes('失败'))
 	assert.ok(parsed.tlv[0].items[2].decoded.includes('0x8500090C'))
+	assert.ok(parsed.tlv[0].items[2].decoded.includes('PE 处理错误'))
 	assert.ok(parsed.tlv[0].items[2].decoded.includes('2026-11-24 19:30:00'))
 
 	const lv = window.skLogView(parsed)
 	assert.ok(lv && lv.sections.length === 1)
 	assert.equal(lv.sections[0].title, 'Tag66 eSIM管理')
 	assert.equal(lv.sections[0].pairs.length, 3)
+	assert.ok(!lv.notes.some((n) => n.text.includes('未识别模组')), '已识别 EG800Z 不应再提示未识别模组')
+
+	// 2c. 识别到非 EG800Z 模组（如 EG800K / BC660K）时，0x090C 仅保留原始十六进制码，不套用 EG800Z 文案也不提示未识别
+	const tag1Other = sekUp(0x83, tlvBlock(1, [
+		[10].concat(asciiPadded('BC660KGLAAR01A05', 32)),
+		[12].concat(asciiPadded('BC660K', 16)),
+	]))
+	assert.equal(window.skParseFrame(tag1Other).ok, true)
+	assert.equal(window.skSession.isEg800z(), false)
+	const parsedOther = window.skParseFrame(up)
+	assert.ok(parsedOther.tlv[0].items[2].decoded.includes('模组码:0x090C '))
+	assert.ok(!parsedOther.tlv[0].items[2].decoded.includes('0x8500090C'))
+	assert.ok(!parsedOther.tlv[0].items[2].decoded.includes('PE 处理错误'))
+	assert.ok(!parsedOther.tlv[0].items[2].decoded.includes('未识别模组'))
+	const lvOther = window.skLogView(parsedOther)
+	assert.ok(!lvOther.notes.some((n) => n.text.includes('未识别模组')), '已识别非 EG800Z 时不应提示未识别模组')
+
+	// 2d. 换表（设备唯一码变更）必须重置模组识别状态，避免上一台 EG800Z 的识别泄漏到新设备；snapshot/restore 保持一致
+	assert.equal(window.skParseFrame(tag1Eg800z).ok, true)
+	const snapEg = window.skSession.snapshot()
+	assert.equal(snapEg.moduleVersion, 'EG800ZEULAR09A01M04_BETA261020_E')
+	const upOtherDevice = sekUpWithUid(0x83, tlvBlock(66, [[4].concat(id4Val)]), [0x00, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44])
+	const parsedOtherDev = window.skParseFrame(upOtherDevice)
+	assert.equal(window.skSession.hasModule(), false, '切换设备唯一码必须清空模组版本缓存')
+	assert.ok(parsedOtherDev.tlv[0].items[0].decoded.includes('0x090C（未识别模组）'))
+	assert.ok(!parsedOtherDev.tlv[0].items[0].decoded.includes('0x8500090C'))
+	window.skSession.restore(snapEg)
+	assert.equal(window.skSession.isEg800z(), true, 'restore 应恢复会话快照中的模组版本')
+	window.skSession.resetModule()
 
 	// 结构化解码器测试（严格 12B：含空闲全 0 时间戳与 9B 截断拒绝）
 	assert.equal(EsimCore.decodeEid(new Uint8Array(16)).ready, false)
-	const st = EsimCore.decodeStatus(id4Val)
-	assert.equal(st.state, 3)
-	assert.equal(st.failStage, 6)
-	assert.equal(st.moduleErrCode, 0x090C)
-	assert.equal(st.qesimFullCode, '0x8500090C')
-	assert.equal(st.timeText, '2026-11-24 19:30:00')
-	assert.ok(st.errHint.length > 0)
+	const stUnknown = EsimCore.decodeStatus(id4Val)
+	assert.equal(stUnknown.state, 3)
+	assert.equal(stUnknown.failStage, 6)
+	assert.equal(stUnknown.moduleErrCode, 0x090C)
+	assert.equal(stUnknown.errCategory, 'module-unidentified')
+	assert.equal(stUnknown.qesimFullCode, '')
+	assert.equal(stUnknown.errName, '')
+	assert.ok(stUnknown.errDisplay.includes('0x090C'))
+	assert.ok(stUnknown.errHint.includes('Tag1'))
+
+	const stEg = EsimCore.decodeStatus(id4Val, { moduleVersion: 'EG800ZEULAR08A02M04_ESIM_01.001.01.001' })
+	assert.equal(stEg.state, 3)
+	assert.equal(stEg.failStage, 6)
+	assert.equal(stEg.moduleErrCode, 0x090C)
+	assert.equal(stEg.errCategory, 'qesim')
+	assert.equal(stEg.qesimFullCode, '0x8500090C')
+	assert.ok(stEg.errName.includes('PE 处理错误'))
+	assert.equal(stEg.timeText, '2026-11-24 19:30:00')
+	assert.ok(stEg.errHint.length > 0)
+
+	const stOther = EsimCore.decodeStatus(id4Val, { moduleVersion: 'EG800KEULAR08A01M04' })
+	assert.equal(stOther.errCategory, 'module-other')
+	assert.equal(stOther.qesimFullCode, '')
+	assert.equal(stOther.errName, '')
+	assert.equal(stOther.errHint, '')
+	assert.equal(stOther.errDisplay, '0x090C')
 
 	const id4Idle = [0, 0, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
 	const upIdle = sekUp(0x83, tlvBlock(66, [[4].concat(id4Idle)]))
@@ -134,6 +209,7 @@ function asciiPadded(s, len) {
 	assert.equal(parsedIdle.tlv[0].items[0].raw.length, 12)
 	const stIdle = EsimCore.decodeStatus(id4Idle)
 	assert.equal(stIdle.state, 0)
+	assert.equal(stIdle.errCategory, 'none')
 	assert.equal(stIdle.timeText, '')
 
 	// 9B 截断 ID4 必须判不完整 / 返回 null
@@ -141,6 +217,173 @@ function asciiPadded(s, len) {
 	const upTrunc = sekUp(0x83, tlvBlock(66, [[4, 3, 2, 6, 0x0C, 0x09, 0x00, 0x00, 0x00, 0x00]]))
 	const parsedTrunc = window.skParseFrame(upTrunc)
 	assert.equal(parsedTrunc.tlv[0].items[0].partial, true)
+}
+
+// 2.5. EG800Z 识别、完整 +QESIM 码表与 0xE1xx / 0xE2xx / 0xE3se / 0xE4rn 细分子错误码全分区测试
+{
+	// 模组识别边界（按型号前缀判断）
+	const egProf1 = EsimCore.detectModuleProfile('EG800ZEULAR09A01M04_BETA261020_E')
+	assert.equal(egProf1.isEg800z, true)
+	assert.equal(egProf1.modelPrefix, 'EG800Z')
+	assert.equal(EsimCore.detectModuleProfile('EG800ZEULAR08A02M04_ESIM_01.001.01.001').isEg800z, true)
+	assert.equal(EsimCore.detectModuleProfile('eg800z-eu').isEg800z, true)
+	assert.equal(EsimCore.detectModuleProfile({ moduleModel: 'EG800Z' }).isEg800z, true)
+	assert.equal(EsimCore.detectModuleProfile({ moduleModel: 'Quectel EG800Z' }).isEg800z, true)
+	assert.equal(EsimCore.detectModuleProfile('OTHER_EG800Z_TEST').isEg800z, false, '仅识别开头型号前缀，不误匹配中间子串')
+	const egkProf = EsimCore.detectModuleProfile('EG800KEULAR08A01M04')
+	assert.equal(egkProf.isEg800z, false)
+	assert.equal(egkProf.known, true)
+	assert.equal(egkProf.modelPrefix, 'EG800K')
+	const bcProf = EsimCore.detectModuleProfile('BC660KGLAAR01A05')
+	assert.equal(bcProf.isEg800z, false)
+	assert.equal(bcProf.modelPrefix, 'BC660K')
+	assert.equal(EsimCore.detectModuleProfile('').known, false)
+	assert.equal(EsimCore.detectModuleProfile('\x00\x00\x00').known, false)
+	assert.equal(EsimCore.detectModuleProfile('00000000').known, false)
+
+	// 完整 EG800Z +QESIM 码表（含 0x000F~0x0015 区间与 0x0B03~0x0B0B）
+	const egMod = { moduleVersion: 'EG800ZEULAR09A01M04_BETA261020_E' }
+	const qesimCases = [
+		[0x0004, '操作超时'],
+		[0x0005, '通用错误'],
+		[0x0008, '消息发送错误'],
+		[0x000B, 'APDU 解析错误'],
+		[0x000E, '文件系统操作错误'],
+		[0x000F, 'HTTP / TLS'],
+		[0x0012, 'HTTP / TLS'],
+		[0x0015, 'HTTP / TLS'],
+		[0x0016, 'SM-DP+ 返回错误'],
+		[0x0017, '网络/连接超时'],
+		[0x0018, '网络/连接超时'],
+		[0x0019, '网络错误'],
+		[0x0102, 'Profile 已处于启用态'],
+		[0x0105, '卡应用繁忙'],
+		[0x0203, 'PPR 策略禁止禁用'],
+		[0x0204, '卡应用繁忙'],
+		[0x0302, '仍处于启用态'],
+		[0x0303, 'PPR 策略禁止删除'],
+		[0x0704, '无会话上下文'],
+		[0x0705, '无效 OID'],
+		[0x0706, 'Challenge 不匹配'],
+		[0x0909, 'ICCID 已存在'],
+		[0x090C, 'PE 处理错误'],
+		[0x0B03, 'eUICC 证书无效'],
+		[0x0B04, 'eUICC 证书已过期'],
+		[0x0B05, 'eUICC 签名无效'],
+		[0x0B06, 'MatchingID 被拒绝'],
+		[0x0B07, 'EID 不匹配'],
+		[0x0B08, '没有符合条件的 Profile'],
+		[0x0B09, '未知的 CI 公钥'],
+		[0x0B0A, '交易 ID 未知'],
+		[0x0B0B, 'eUICC 存储空间不足'],
+	]
+	for (const [code, keyword] of qesimCases) {
+		const r = EsimCore.decodeModuleErrCode(code, egMod)
+		assert.equal(r.category, 'qesim', 'code 0x' + code.toString(16))
+		assert.equal(r.qesimFullCode, '0x8500' + code.toString(16).toUpperCase().padStart(4, '0'))
+		assert.ok(r.name.includes(keyword), '0x' + code.toString(16) + ' name=' + r.name)
+		assert.ok(r.displayText.includes(r.qesimFullCode) && r.displayText.includes(keyword))
+		// 非 EG800Z 绝不套用 EG800Z 文案
+		const rOther = EsimCore.decodeModuleErrCode(code, { moduleVersion: 'BC660KGLAAR01A05' })
+		assert.equal(rOther.category, 'module-other')
+		assert.equal(rOther.qesimFullCode, '')
+		assert.equal(rOther.name, '')
+	}
+	// 区间内未收录的 EG800Z 原始码仍保留 0x8500xxxx
+	const rUnmappedEg = EsimCore.decodeModuleErrCode(0x0501, egMod)
+	assert.equal(rUnmappedEg.category, 'qesim')
+	assert.equal(rUnmappedEg.qesimFullCode, '0x85000501')
+	assert.equal(rUnmappedEg.displayText, '0x0501 (0x85000501)')
+
+	// 0xE1xx：模组 +CME ERROR（不依赖模组识别）
+	const cme53 = EsimCore.decodeModuleErrCode(0xE135)
+	assert.equal(cme53.category, 'cme')
+	assert.equal(cme53.qesimFullCode, '')
+	assert.equal(cme53.name, '+CME ERROR: 53 (参数非法)')
+	assert.equal(cme53.displayText, '0xE135 (+CME ERROR: 53 (参数非法))')
+	assert.equal(EsimCore.decodeModuleErrCode(0xE10A).name, '+CME ERROR: 10 (SIM 未插入)')
+	assert.equal(EsimCore.decodeModuleErrCode(0xE10D).name, '+CME ERROR: 13 (SIM 故障)')
+	assert.equal(EsimCore.decodeModuleErrCode(0xE11E).name, '+CME ERROR: 30')
+	const cmeSat = EsimCore.decodeModuleErrCode(0xE1FF)
+	assert.equal(cmeSat.detail.saturated, true)
+	assert.equal(cmeSat.name, '+CME ERROR: ≥255')
+
+	// 0xE2xx：mode=0 上电/入网与前置步骤失败（不依赖模组识别）
+	const precondCases = [
+		[0xE201, 'commuEnable'],
+		[0xE202, 'AT+CFUN=1'],
+		[0xE203, 'AT+CEREG'],
+		[0xE204, 'AT+CGATT'],
+		[0xE205, 'AT+QIACT=1'],
+		[0xE206, 'AT+QIACT?'],
+		[0xE207, 'AT+CSQ'],
+		[0xE208, 'mode=1'],
+	]
+	for (const [code, kw] of precondCases) {
+		const r = EsimCore.decodeModuleErrCode(code)
+		assert.equal(r.category, 'precond')
+		assert.equal(r.qesimFullCode, '')
+		assert.ok(r.name.includes(kw), '0x' + code.toString(16) + ' -> ' + r.name)
+	}
+
+	// 0xE3se：AT+QESIM 状态机内部错误（不依赖模组识别）
+	const fsm67 = EsimCore.decodeModuleErrCode(0xE367)
+	assert.equal(fsm67.category, 'qesim-fsm')
+	assert.equal(fsm67.qesimFullCode, '')
+	assert.equal(fsm67.detail.stateName, 'WAIT_URC')
+	assert.equal(fsm67.detail.statusName, '超时')
+	assert.ok(fsm67.displayText.includes('WAIT_URC') && fsm67.displayText.includes('超时'))
+
+	const fsm8C = EsimCore.decodeModuleErrCode(0xE38C)
+	assert.equal(fsm8C.detail.stateName, 'REINJECTING')
+	assert.equal(fsm8C.detail.statusName, '响应含 HTTP 头')
+
+	const fsmBF = EsimCore.decodeModuleErrCode(0xE3BF)
+	assert.equal(fsmBF.detail.stateName, 'ABORTED')
+	assert.equal(fsmBF.detail.statusName, '部分中止')
+
+	// 0xE4rn：mode=1 近端 ZMODEM 传输失败（不依赖模组识别）
+	const zmAB = EsimCore.decodeModuleErrCode(0xE4AB)
+	assert.equal(zmAB.category, 'zmodem')
+	assert.equal(zmAB.qesimFullCode, '')
+	assert.equal(zmAB.detail.dir, 1)
+	assert.equal(zmAB.detail.round, 2)
+	assert.equal(zmAB.detail.dirLabel, 'Host→MCU 收响应')
+	assert.ok(zmAB.detail.zmodemName.includes('对端 CAN 取消'))
+	assert.ok(zmAB.displayText.includes('第 2 轮') && zmAB.displayText.includes('Host→MCU 收响应') && zmAB.displayText.includes('CAN 取消'))
+
+	const zm12 = EsimCore.decodeModuleErrCode(0xE412)
+	assert.equal(zm12.detail.dir, 0)
+	assert.equal(zm12.detail.round, 1)
+	assert.equal(zm12.detail.dirLabel, 'MCU→Host 发请求')
+	assert.equal(zm12.detail.zmodemName, '读超时')
+
+	const zm9E = EsimCore.decodeModuleErrCode(0xE49E)
+	assert.equal(zm9E.detail.dir, 1)
+	assert.equal(zm9E.detail.round, 1)
+	assert.equal(zm9E.detail.zmodemName, '未收到 ZFILE')
+
+	const zm03 = EsimCore.decodeModuleErrCode(0xE403)
+	assert.equal(zm03.detail.round, 0)
+	assert.equal(zm03.detail.roundLabel, '未知轮次')
+	assert.equal(zm03.detail.zmodemName, 'I/O 断开')
+
+	// 协议帧端到端解析：未识别模组时 0xE1xx ~ 0xE4xx 仍应正常解析且不弹出「未识别模组」警告
+	window.skSession.resetModule()
+	for (const [code, expectSub] of [
+		[0xE135, '+CME ERROR: 53 (参数非法)'],
+		[0xE205, 'AT+QIACT=1 PDP 激活失败'],
+		[0xE367, 'WAIT_URC'],
+		[0xE4AB, '第 2 轮'],
+	]) {
+		const id4 = [3, 2, 7, code & 0xff, (code >> 8) & 0xff, 0x20, 0x26, 0x11, 0x26, 0x20, 0x00, 0x00]
+		const pf = window.skParseFrame(sekUp(0x83, tlvBlock(66, [[4].concat(id4)])))
+		assert.equal(pf.ok, true)
+		assert.ok(pf.tlv[0].items[0].decoded.includes(expectSub), '0x' + code.toString(16) + ' decoded=' + pf.tlv[0].items[0].decoded)
+		assert.ok(!pf.tlv[0].items[0].decoded.includes('0x8500'), '0xE1xx~0xE4xx 绝不能拼 0x8500')
+		const plv = window.skLogView(pf)
+		assert.ok(!plv.notes.some((n) => n.text.includes('未识别模组')), '0xE1xx~0xE4xx 不应提示未识别模组')
+	}
 }
 
 // 3. Tag=66 ID=2 下载触发编码与 AC/CC 脱敏验证（严禁明文出现在解析输出与 logData 中）
@@ -769,6 +1012,325 @@ async function runAsyncTests() {
 	// 10c. 关闭脱敏开关：输入明文、串口记真实帧（含 mode=1 ZMODEM 原始 TX/RX）、面板日志可见，且 AC/CC 仍不落盘
 	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 0, redact: false })
 	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 1, allowInsecureTls: false, redact: false })
+
+	// 11. esim-panel.js ID4 错误码渲染与模组识别门控回归（EG800Z / 未识别 / 非 EG800Z / 0xE1xx~0xE4xx）
+	async function runPanelErrRenderCase({ moduleInfo, failStage, errCode, expectErrSub, forbidErrSub, expectHintSub, expectHintHidden }) {
+		const listeners = Object.create(null)
+		function makeEl(id, extra) {
+			return Object.assign({
+				id, value: '', checked: false, textContent: '', className: '', hidden: false, disabled: false,
+				style: {}, dataset: {}, childNodes: [], scrollTop: 0, scrollHeight: 0,
+				addEventListener(type, fn) { listeners[id + ':' + type] = fn },
+				appendChild(node) { this.childNodes.push(node) },
+				removeChild(node) { const idx = this.childNodes.indexOf(node); if (idx >= 0) this.childNodes.splice(idx, 1) },
+				querySelectorAll() { return [] },
+			}, extra || {})
+		}
+		const elements = {
+			'sk-esim-card': makeEl('sk-esim-card'),
+			'sk-esim-eid': makeEl('sk-esim-eid'),
+			'sk-esim-refresh': makeEl('sk-esim-refresh'),
+			'sk-esim-poll': makeEl('sk-esim-poll'),
+			'sk-esim-stop': makeEl('sk-esim-stop'),
+			'sk-esim-state-badge': makeEl('sk-esim-state-badge'),
+			'sk-esim-last-op': makeEl('sk-esim-last-op'),
+			'sk-esim-fail-stage': makeEl('sk-esim-fail-stage'),
+			'sk-esim-err-code': makeEl('sk-esim-err-code'),
+			'sk-esim-err-hint': makeEl('sk-esim-err-hint'),
+			'sk-esim-status-time': makeEl('sk-esim-status-time'),
+			'sk-esim-profile-count': makeEl('sk-esim-profile-count'),
+			'sk-esim-profile-list': makeEl('sk-esim-profile-list'),
+			'sk-esim-mode': makeEl('sk-esim-mode', { value: '0' }),
+			'sk-esim-redact': makeEl('sk-esim-redact', { checked: true }),
+			'sk-esim-ac': makeEl('sk-esim-ac', { type: 'password' }),
+			'sk-esim-cc': makeEl('sk-esim-cc', { type: 'password' }),
+			'sk-esim-proxy-row': makeEl('sk-esim-proxy-row'),
+			'sk-esim-proxy-notice': makeEl('sk-esim-proxy-notice'),
+			'sk-esim-tls-wrap': makeEl('sk-esim-tls-wrap'),
+			'sk-esim-insecure-tls': makeEl('sk-esim-insecure-tls'),
+			'sk-esim-proxy-url': makeEl('sk-esim-proxy-url'),
+			'sk-esim-download': makeEl('sk-esim-download'),
+			'sk-esim-progress-bar': makeEl('sk-esim-progress-bar'),
+			'sk-esim-status': makeEl('sk-esim-status'),
+			'sk-esim-log-title': makeEl('sk-esim-log-title'),
+			'sk-esim-log': makeEl('sk-esim-log'),
+			'sk-esim-log-clear': makeEl('sk-esim-log-clear'),
+		}
+		const id4Fail = [3, 1, failStage, errCode & 0xff, (errCode >> 8) & 0xff, 0x20, 0x26, 0x11, 0x26, 0x20, 0x30, 0x00]
+		const failFrame = window.skParseFrame(sekUp(0x83, tlvBlock(66, [[4].concat(id4Fail)])))
+		let pinnedSid = null
+		const panelWin = {
+			EsimCore,
+			Zmodem,
+			AppPlatform: { service() { return null } },
+			AppDialog: { async alert(msg) { throw new Error('unexpected alert: ' + msg) }, async confirm() { return true } },
+			serialApi: {
+				getMode() { return 'single' },
+				getActiveSendSid() { return 'A' },
+				isOpen() { return true },
+				isPinned() { return pinnedSid !== null },
+				pinSession(sid) { pinnedSid = sid },
+				unpinSession() { pinnedSid = null },
+				getActiveLaneModuleInfo(sid) {
+					assert.equal(sid, 'S')
+					return moduleInfo
+				},
+			},
+			sekTx: {
+				hasTag(f, tag) { return !!(f && f.tlv && f.tlv.some((t) => t.tag === tag)) },
+				findTlvItem(f, tag, id) {
+					const blk = f && f.tlv ? f.tlv.find((t) => t.tag === tag) : null
+					return blk ? (blk.items.find((it) => it.id === id) || null) : null
+				},
+				async sendAndWait() { return { frame: failFrame } },
+			},
+		}
+		const panelCtx = {
+			window: panelWin,
+			localStorage: { getItem() { return null }, setItem() {} },
+			document: {
+				readyState: 'complete',
+				getElementById(id) { return elements[id] || null },
+				createElement() { return makeEl('dyn') },
+				addEventListener() {},
+			},
+			Uint8Array, TextEncoder, AbortController, Date, console,
+			setTimeout(fn, ms) { return setTimeout(fn, Math.min(ms || 0, 5)) },
+			clearTimeout,
+		}
+		vm.createContext(panelCtx)
+		vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/esim-panel.js'), 'utf8'), panelCtx)
+
+		await listeners['sk-esim-poll:click']()
+		const errText = elements['sk-esim-err-code'].textContent
+		assert.ok(errText.includes(expectErrSub), 'err-code 应包含 ' + expectErrSub + '，实际: ' + errText)
+		if (forbidErrSub) {
+			assert.ok(!errText.includes(forbidErrSub), 'err-code 不应包含 ' + forbidErrSub + '，实际: ' + errText)
+		}
+		if (expectHintHidden) {
+			assert.equal(elements['sk-esim-err-hint'].hidden, true, '不应显示提示条')
+		} else if (expectHintSub) {
+			assert.equal(elements['sk-esim-err-hint'].hidden, false, '应显示提示条')
+			assert.ok(elements['sk-esim-err-hint'].textContent.includes(expectHintSub), '提示条内容不符: ' + elements['sk-esim-err-hint'].textContent)
+		}
+		assert.ok(elements['sk-esim-status'].textContent.includes(expectErrSub), '轮询终态摘要应包含解析后错误码: ' + elements['sk-esim-status'].textContent)
+	}
+
+	await runPanelErrRenderCase({
+		moduleInfo: { known: true, isEg800z: true, moduleVersion: 'EG800ZEULAR09A01M04_BETA261020_E' },
+		failStage: 6, errCode: 0x090C,
+		expectErrSub: '0x8500090C', expectHintSub: '建议：',
+	})
+	await runPanelErrRenderCase({
+		moduleInfo: { known: false, isEg800z: false, moduleVersion: '' },
+		failStage: 6, errCode: 0x090C,
+		expectErrSub: '0x090C（未识别模组）', forbidErrSub: '0x8500090C', expectHintSub: '提示：',
+	})
+	await runPanelErrRenderCase({
+		moduleInfo: { known: true, isEg800z: false, moduleVersion: 'BC660KGLAAR01A05' },
+		failStage: 6, errCode: 0x090C,
+		expectErrSub: '0x090C', forbidErrSub: '0x8500090C', expectHintHidden: true,
+	})
+	await runPanelErrRenderCase({
+		moduleInfo: { known: false, isEg800z: false, moduleVersion: '' },
+		failStage: 1, errCode: 0xE135,
+		expectErrSub: '+CME ERROR: 53 (参数非法)', forbidErrSub: '0x8500', expectHintSub: '建议：',
+	})
+	await runPanelErrRenderCase({
+		moduleInfo: { known: false, isEg800z: false, moduleVersion: '' },
+		failStage: 2, errCode: 0xE205,
+		expectErrSub: 'AT+QIACT=1 PDP 激活失败', forbidErrSub: '0x8500', expectHintSub: '建议：',
+	})
+	await runPanelErrRenderCase({
+		moduleInfo: { known: false, isEg800z: false, moduleVersion: '' },
+		failStage: 4, errCode: 0xE367,
+		expectErrSub: 'WAIT_URC', forbidErrSub: '0x8500', expectHintSub: '建议：',
+	})
+	await runPanelErrRenderCase({
+		moduleInfo: { known: false, isEg800z: false, moduleVersion: '' },
+		failStage: 7, errCode: 0xE4AB,
+		expectErrSub: '第 2 轮', forbidErrSub: '0x8500', expectHintSub: '建议：',
+	})
+
+	// 12. esim-panel.js 「刷新信息」先查基础信息 (0x03 Tag10-ID1) 再查 Tag66；失败/空版本号优雅降级；轮询不发 Tag10-ID1
+	async function runPanelRefreshProbeCase({ baseBehavior, errCode, failStage = 6, expectErrSub, forbidErrSub, expectHintSub, expectHintHidden, expectLogSub }) {
+		const listeners = Object.create(null)
+		function makeEl(id, extra) {
+			return Object.assign({
+				id, value: '', checked: false, textContent: '', className: '', hidden: false, disabled: false,
+				style: {}, dataset: {}, childNodes: [], scrollTop: 0, scrollHeight: 0,
+				addEventListener(type, fn) { listeners[id + ':' + type] = fn },
+				appendChild(node) { this.childNodes.push(node) },
+				removeChild(node) { const idx = this.childNodes.indexOf(node); if (idx >= 0) this.childNodes.splice(idx, 1) },
+				querySelectorAll() { return [] },
+			}, extra || {})
+		}
+		const elements = {
+			'sk-esim-card': makeEl('sk-esim-card'),
+			'sk-esim-eid': makeEl('sk-esim-eid'),
+			'sk-esim-refresh': makeEl('sk-esim-refresh'),
+			'sk-esim-poll': makeEl('sk-esim-poll'),
+			'sk-esim-stop': makeEl('sk-esim-stop'),
+			'sk-esim-state-badge': makeEl('sk-esim-state-badge'),
+			'sk-esim-last-op': makeEl('sk-esim-last-op'),
+			'sk-esim-fail-stage': makeEl('sk-esim-fail-stage'),
+			'sk-esim-err-code': makeEl('sk-esim-err-code'),
+			'sk-esim-err-hint': makeEl('sk-esim-err-hint'),
+			'sk-esim-status-time': makeEl('sk-esim-status-time'),
+			'sk-esim-profile-count': makeEl('sk-esim-profile-count'),
+			'sk-esim-profile-list': makeEl('sk-esim-profile-list'),
+			'sk-esim-mode': makeEl('sk-esim-mode', { value: '0' }),
+			'sk-esim-redact': makeEl('sk-esim-redact', { checked: true }),
+			'sk-esim-ac': makeEl('sk-esim-ac', { type: 'password' }),
+			'sk-esim-cc': makeEl('sk-esim-cc', { type: 'password' }),
+			'sk-esim-proxy-row': makeEl('sk-esim-proxy-row'),
+			'sk-esim-proxy-notice': makeEl('sk-esim-proxy-notice'),
+			'sk-esim-tls-wrap': makeEl('sk-esim-tls-wrap'),
+			'sk-esim-insecure-tls': makeEl('sk-esim-insecure-tls'),
+			'sk-esim-proxy-url': makeEl('sk-esim-proxy-url'),
+			'sk-esim-download': makeEl('sk-esim-download'),
+			'sk-esim-progress-bar': makeEl('sk-esim-progress-bar'),
+			'sk-esim-status': makeEl('sk-esim-status'),
+			'sk-esim-log-title': makeEl('sk-esim-log-title'),
+			'sk-esim-log': makeEl('sk-esim-log'),
+			'sk-esim-log-clear': makeEl('sk-esim-log-clear'),
+		}
+		const sentQueries = []
+		let laneModule = { known: false, isEg800z: false, family: 'unknown', modelPrefix: '', label: '', moduleVersion: '', moduleModel: '', source: '' }
+		let pinnedSid = null
+
+		const eidBytes = [0x89, 0x04, 0x90, 0x32, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34, 0x56, 0x78]
+		const id4Bytes = [3, 1, failStage, errCode & 0xff, (errCode >> 8) & 0xff, 0x20, 0x26, 0x11, 0x26, 0x21, 0x00, 0x00]
+		window.skSession.resetModule()
+		const tag66Frame = window.skParseFrame(sekUp(0x83, tlvBlock(66, [
+			[0].concat(eidBytes),
+			[1, 0],
+			[4].concat(id4Bytes),
+		])))
+
+		const panelWin = {
+			EsimCore,
+			Zmodem,
+			AppPlatform: { service() { return null } },
+			AppDialog: { async alert(msg) { throw new Error('unexpected alert: ' + msg) }, async confirm() { return true } },
+			serialApi: {
+				getMode() { return 'single' },
+				getActiveSendSid() { return 'A' },
+				isOpen() { return true },
+				isPinned() { return pinnedSid !== null },
+				pinSession(sid) { pinnedSid = sid },
+				unpinSession() { pinnedSid = null },
+				getActiveLaneModuleInfo(sid) {
+					assert.equal(sid, 'S')
+					return laneModule
+				},
+				setActiveLaneModuleInfo(sid, info) {
+					assert.equal(sid, 'S')
+					laneModule = EsimCore.detectModuleProfile(info)
+					return laneModule.known
+				},
+			},
+			sekTx: {
+				hasTag(f, tag) { return !!(f && f.tlv && f.tlv.some((t) => t.tag === tag)) },
+				findTlvItem(f, tag, id) {
+					const blk = f && f.tlv ? f.tlv.find((t) => t.tag === tag) : null
+					return blk ? (blk.items.find((it) => it.id === id) || null) : null
+				},
+				async sendAndWait(opts) {
+					const qId = opts && opts.buildOpts && opts.buildOpts.tlv && opts.buildOpts.tlv[0] && opts.buildOpts.tlv[0].items[0].id
+					sentQueries.push(qId)
+					if (qId === 1) {
+						if (baseBehavior.timeout) throw new Error('等待响应超时(3000ms)')
+						const items = []
+						if (baseBehavior.ver !== undefined) items.push([10].concat(asciiPadded(baseBehavior.ver, 32)))
+						if (baseBehavior.model !== undefined) items.push([12].concat(asciiPadded(baseBehavior.model, 16)))
+						window.skSession.resetModule()
+						const baseFrame = window.skParseFrame(sekUp(0x83, tlvBlock(1, items)))
+						return { frame: baseFrame }
+					}
+					if (qId === 66) return { frame: tag66Frame }
+					throw new Error('unexpected query id: ' + qId)
+				},
+			},
+		}
+		const panelCtx = {
+			window: panelWin,
+			localStorage: { getItem() { return null }, setItem() {} },
+			document: {
+				readyState: 'complete',
+				getElementById(id) { return elements[id] || null },
+				createElement() { return makeEl('dyn') },
+				addEventListener() {},
+			},
+			Uint8Array, TextEncoder, AbortController, Date, console,
+			setTimeout(fn, ms) { return setTimeout(fn, Math.min(ms || 0, 5)) },
+			clearTimeout,
+		}
+		vm.createContext(panelCtx)
+		vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/esim-panel.js'), 'utf8'), panelCtx)
+
+		// 先点「刷新信息」：必须按 [1, 66] 顺序发送
+		await listeners['sk-esim-refresh:click']()
+		assert.deepEqual(sentQueries, [1, 66], '刷新信息应先发 Tag10-ID1 再发 Tag10-ID66')
+		assert.equal(elements['sk-esim-eid'].textContent, '89049032000000000000000012345678', 'Tag66 EID 必须正常更新')
+		const errText = elements['sk-esim-err-code'].textContent
+		assert.ok(errText.includes(expectErrSub), 'err-code 应包含 ' + expectErrSub + '，实际: ' + errText)
+		if (forbidErrSub) assert.ok(!errText.includes(forbidErrSub), 'err-code 不应包含 ' + forbidErrSub + '，实际: ' + errText)
+		if (expectHintHidden) assert.equal(elements['sk-esim-err-hint'].hidden, true)
+		else if (expectHintSub) {
+			assert.equal(elements['sk-esim-err-hint'].hidden, false)
+			assert.ok(elements['sk-esim-err-hint'].textContent.includes(expectHintSub))
+		}
+		if (expectLogSub) {
+			const logs = elements['sk-esim-log'].childNodes.map((n) => n.textContent)
+			assert.ok(logs.some((l) => l.includes(expectLogSub)), '日志应包含 ' + expectLogSub + '，实际: ' + logs.join(' | '))
+		}
+
+		// 再点「轮询状态」：绝不能发 Tag10-ID1 干扰 ID4 轮询
+		sentQueries.length = 0
+		await listeners['sk-esim-poll:click']()
+		assert.deepEqual(sentQueries, [66], 'ID4 轮询只允许发 Tag10-ID66，不得发送 Tag10-ID1')
+	}
+
+	// 12a. 刷新信息：Tag1 返回 EG800ZEULAR... -> 识别前缀 EG800Z -> Tag66 0x090C 启用 EG800Z 专属码表
+	await runPanelRefreshProbeCase({
+		baseBehavior: { ver: 'EG800ZEULAR09A01M04_BETA261020_E' },
+		errCode: 0x090C,
+		expectErrSub: '0x8500090C',
+		expectHintSub: '建议：',
+		expectLogSub: '基础信息识别模组：EG800Z',
+	})
+
+	// 12b. 刷新信息：Tag1 返回非 EG800Z（BC660K）-> 0x090C 仅展示原始十六进制，不套用 EG800Z 文案
+	await runPanelRefreshProbeCase({
+		baseBehavior: { ver: 'BC660KGLAAR01A05' },
+		errCode: 0x090C,
+		expectErrSub: '0x090C',
+		forbidErrSub: '0x8500090C',
+		expectHintHidden: true,
+		expectLogSub: '基础信息识别模组：BC660K',
+	})
+
+	// 12c. 刷新信息：Tag1 超时失败 -> 优雅降级，不阻塞 Tag66 查询，0x090C 标注未识别模组
+	await runPanelRefreshProbeCase({
+		baseBehavior: { timeout: true },
+		errCode: 0x090C,
+		expectErrSub: '0x090C（未识别模组）',
+		forbidErrSub: '0x8500090C',
+		expectHintSub: '提示：',
+		expectLogSub: '已降级，继续查询 Tag66',
+	})
+
+	// 12d. 刷新信息：Tag1 返回空版本号 -> 优雅降级，不阻塞 Tag66 查询，0xE205 通用细分子码正常解析
+	await runPanelRefreshProbeCase({
+		baseBehavior: { ver: '' },
+		failStage: 2,
+		errCode: 0xE205,
+		expectErrSub: 'AT+QIACT=1 PDP 激活失败',
+		forbidErrSub: '0x8500',
+		expectHintSub: '建议：',
+		expectLogSub: '未返回有效模组版本号',
+	})
 }
 
 runAsyncTests().then(() => {

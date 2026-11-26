@@ -263,12 +263,12 @@
 			if (el.statusStage) el.statusStage.textContent = st.failStageLabel + ' (' + st.failStage + ')'
 			if (el.statusErr) {
 				el.statusErr.textContent = st.moduleErrCode
-					? (st.moduleErrHex + ' (' + st.qesimFullCode + (st.errName ? ' · ' + st.errName : '') + ')')
+					? (st.errDisplay || st.moduleErrHex)
 					: '0x0000'
 			}
 			if (el.statusHint) {
 				if (st.errHint) {
-					el.statusHint.textContent = '建议：' + st.errHint
+					el.statusHint.textContent = (st.errCategory === 'module-unidentified' ? '提示：' : '建议：') + st.errHint
 					el.statusHint.hidden = false
 				} else {
 					el.statusHint.textContent = ''
@@ -348,14 +348,41 @@
 			})
 		}
 
-		function applyTag66Frame(frame) {
+		function decodeAsciiItem(item) {
+			if (!item) return ''
+			if (item.raw && item.raw.length) {
+				let s = ''
+				for (let i = 0; i < item.raw.length; i++) {
+					const c = item.raw[i] & 0xff
+					if (c === 0) break
+					s += String.fromCharCode(c)
+				}
+				return s.trim()
+			}
+			return item.decoded != null ? String(item.decoded).trim() : ''
+		}
+
+		function getCurrentModuleInfo(frame) {
+			if (window.serialApi && typeof window.serialApi.getActiveLaneModuleInfo === 'function') {
+				return window.serialApi.getActiveLaneModuleInfo(activePhysSid())
+			}
+			if (frame && frame.sessionModule) return frame.sessionModule
+			if (window.skSession && typeof window.skSession.getModuleInfo === 'function') {
+				return window.skSession.getModuleInfo()
+			}
+			return null
+		}
+
+		function applyTag66Frame(frame, probedModuleInfo) {
 			if (!frame || !window.sekTx) return { status: null }
 			const it0 = window.sekTx.findTlvItem(frame, 66, 0)
 			const it1 = window.sekTx.findTlvItem(frame, 66, 1)
 			const it4 = window.sekTx.findTlvItem(frame, 66, 4)
 			if (it0 && it0.raw) renderEid(Core.decodeEid(it0.raw))
 			if (it1 && it1.raw) renderProfiles(Core.decodeProfileList(it1.raw))
-			const st = (it4 && it4.raw) ? Core.decodeStatus(it4.raw) : null
+			const laneInfo = getCurrentModuleInfo(frame)
+			const moduleInfo = (laneInfo && laneInfo.known) ? laneInfo : (probedModuleInfo || laneInfo)
+			const st = (it4 && it4.raw) ? Core.decodeStatus(it4.raw, { moduleInfo }) : null
 			if (st) renderStatus(st)
 			return { eid: it0 ? Core.decodeEid(it0.raw) : null, profiles: it1 ? Core.decodeProfileList(it1.raw) : null, status: st }
 		}
@@ -372,7 +399,47 @@
 			return true
 		}
 
-		async function queryTag66(timeoutMs) {
+		// 刷新前探测基础信息（0x03 Tag10-ID1 -> Tag1 ID10/ID12）识别模组型号前缀；失败或未返回版本号时优雅降级，不阻塞后续 Tag66
+		async function queryBaseModuleInfo(timeoutMs) {
+			try {
+				const res = await window.sekTx.sendAndWait({
+					buildOpts: {
+						funcCode: 0x03,
+						tlv: [{ tag: 10, items: [{ id: 1, value: null }] }],
+					},
+					expectFunc: 0x83,
+					match: function (f) { return window.sekTx.hasTag(f, 1) },
+					timeoutMs: timeoutMs || 3000,
+				})
+				const frame = res && res.frame
+				if (!frame) return null
+				const it10 = window.sekTx.findTlvItem(frame, 1, 10)
+				const it12 = window.sekTx.findTlvItem(frame, 1, 12)
+				const moduleVersion = decodeAsciiItem(it10)
+				const moduleModel = decodeAsciiItem(it12)
+				const profile = Core.detectModuleProfile({ moduleVersion, moduleModel })
+				if (profile.known) {
+					const uid = frame.fields && frame.fields['设备唯一编码'] != null ? frame.fields['设备唯一编码'] : null
+					if (window.serialApi && typeof window.serialApi.setActiveLaneModuleInfo === 'function') {
+						window.serialApi.setActiveLaneModuleInfo(activePhysSid(), {
+							deviceUid: uid,
+							moduleVersion: profile.moduleVersion,
+							moduleModel: profile.moduleModel,
+						})
+					} else if (window.skSession) {
+						if (uid != null && typeof window.skSession.touchDevice === 'function') window.skSession.touchDevice(uid)
+						if (profile.moduleVersion && typeof window.skSession.setModuleVersion === 'function') window.skSession.setModuleVersion(profile.moduleVersion, 'Tag1-ID10')
+						if (profile.moduleModel && typeof window.skSession.setModuleModel === 'function') window.skSession.setModuleModel(profile.moduleModel, 'Tag1-ID12')
+					}
+					return profile
+				}
+				return null
+			} catch (e) {
+				return { error: e && e.message ? e.message : String(e) }
+			}
+		}
+
+		async function queryTag66(timeoutMs, probedModuleInfo) {
 			const res = await window.sekTx.sendAndWait({
 				buildOpts: {
 					funcCode: 0x03,
@@ -382,7 +449,7 @@
 				match: function (f) { return window.sekTx.hasTag(f, 66) },
 				timeoutMs: timeoutMs || 6000,
 			})
-			return applyTag66Frame(res.frame)
+			return applyTag66Frame(res.frame, probedModuleInfo)
 		}
 
 		function activePhysSid() {
@@ -424,7 +491,8 @@
 					const info = await queryTag66(6000)
 					const st = info.status
 					if (st && st.state !== 1) {
-						const summary = st.stateLabel + ' · ' + st.failStageLabel + (st.moduleErrCode ? ' · ' + st.qesimFullCode : '')
+						const errPart = st.moduleErrCode ? (' · ' + (st.errDisplay || st.moduleErrHex)) : ''
+						const summary = st.stateLabel + ' · ' + st.failStageLabel + errPart
 						setStatusText(label + '结束：' + summary)
 						addLog(label + '终态 -> ' + summary, st.state === 2 ? 'ok' : (st.state === 4 ? 'warn' : 'bad'))
 						setProgress(100, st.stateLabel)
@@ -446,10 +514,24 @@
 			if (running || !ensureReady()) return
 			abortCtrl = new AbortController()
 			setBusy(true)
-			setStatusText('正在查询 eSIM 信息 (0x03 Tag10-ID66)…')
-			setProgress(30, '查询中')
+			setStatusText('正在查询基础信息以识别模组型号 (0x03 Tag10-ID1)…')
+			setProgress(15, '识别模组')
 			try {
-				const info = await queryTag66(6000)
+				let probed = null
+				const baseProbe = await queryBaseModuleInfo(3000)
+				if (abortCtrl && abortCtrl.signal.aborted) throw new Error('已手动停止查询')
+				if (baseProbe && baseProbe.known) {
+					probed = baseProbe
+					const verSuffix = baseProbe.moduleVersion ? (' (' + baseProbe.moduleVersion + ')') : ''
+					addLog('基础信息识别模组：' + (baseProbe.modelPrefix || baseProbe.label) + verSuffix, 'info')
+				} else if (baseProbe && baseProbe.error) {
+					addLog('基础信息查询未应答（已降级，继续查询 Tag66）：' + baseProbe.error, 'warn')
+				} else {
+					addLog('基础信息未返回有效模组版本号（已降级，继续查询 Tag66）', 'info')
+				}
+				setStatusText('正在查询 eSIM 信息 (0x03 Tag10-ID66)…')
+				setProgress(45, '查询中')
+				const info = await queryTag66(6000, probed)
 				const cnt = info.profiles ? info.profiles.count : 0
 				setStatusText('查询完成：共 ' + cnt + ' 个 Profile')
 				setProgress(100, '已刷新')
