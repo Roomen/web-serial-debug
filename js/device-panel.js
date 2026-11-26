@@ -11,6 +11,9 @@
 	const NARROW = 760
 	// 通信记录条的窄屏判定与 #main 变单列的断点一致（761–768px 已是单列、整页滚动）
 	const STRIP_NARROW = 768
+	// 读取认领的归属限制：宿主只能保证认领「查询发出后才开始」的匹配帧，迟到应答分不出来
+	const READ_LIMIT_SHORT = '迟到应答无法与本次应答区分，读取期间请勿手动发送'
+	const READ_LIMIT_FULL = '读取认领查询发出后开始的第一条该组应答。更早命令或超时查询的迟到应答与本次应答无法区分；上次没等到应答的组，在本次连接内再读都标「归属未确认」，重新连接后恢复。读取期间请勿手动发送。'
 	const M = window.DeviceModel
 	const R = window.ProtocolRequest
 	if (!M || !R) return
@@ -658,6 +661,8 @@
 		const prevBody = root.querySelector('.dp-body')
 		const scroll = prevBody ? prevBody.scrollTop : 0
 		const focusSearch = document.activeElement && document.activeElement.id === 'dp-param-search'
+		// 读取限制说明是可聚焦的：重绘（每秒的任务到期、新读数）后把焦点还给它，读屏 / 键盘用户才不会丢位置
+		const focusLimit = document.activeElement && document.activeElement.id === 'dp-read-limit'
 		const narrow = (root.clientWidth || window.innerWidth) < NARROW
 		const read = M.latestStatusRead(c.dev, L)
 		const nameKey = c.dev.nameKey
@@ -679,7 +684,16 @@
 				h('b', {}, laneChip(c.sid), h('span', { text: title }), nameVal && h('span', { class: 'dp-name', text: nameVal })),
 				h('span', { class: 'dp-readat', text: readText }),
 				// 读取的归属限制如实写出来：宿主只能保证认领的是「查询发出后才开始」的匹配帧，迟到应答分不出来
-				c.dev.queryable && h('span', { class: 'dp-limit', id: 'dp-read-limit', text: '读取认领查询发出后开始的第一条该组应答。更早命令或超时查询的迟到应答与本次应答无法区分；上次没等到应答的组，在本次连接内再读都标「归属未确认」，重新连接后恢复。读取期间请勿手动发送。' })),
+				// 常显一行短提示，全文在 title / aria-label；点按（窄屏、触屏没有悬停）展开或收起全文，状态只认 aria-expanded
+				c.dev.queryable && h('button', {
+					type: 'button',
+					class: 'dp-limit',
+					id: 'dp-read-limit',
+					title: READ_LIMIT_FULL,
+					'aria-label': READ_LIMIT_FULL,
+					'aria-expanded': L.ui.limitOpen ? 'true' : 'false',
+					onclick: function () { L.ui.limitOpen = !L.ui.limitOpen; render() },
+				}, h('span', { class: 'dp-limit-i', 'aria-hidden': 'true', text: 'ⓘ' }), h('span', { class: 'dp-limit-t', text: L.ui.limitOpen ? READ_LIMIT_FULL : READ_LIMIT_SHORT }))),
 			acts)
 		const task = L.task && (!L.task.until || L.task.until > Date.now()) ? L.task : null
 		const taskLine = task && h('div', { class: 'dp-task', 'data-kind': task.kind, role: 'status' }, task.kind === 'run' && h('span', { class: 'dp-spin' }), h('span', { text: task.text }))
@@ -702,6 +716,10 @@
 		root.dataset.lane = c.sid
 		add(root, [head, taskLine, tabs, banner, body, renderInspector(c)])
 		body.scrollTop = scroll
+		if (focusLimit) {
+			const lb = document.getElementById('dp-read-limit')
+			if (lb) lb.focus()
+		}
 		if (focusSearch) {
 			const s = document.getElementById('dp-param-search')
 			if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length) }
