@@ -28,7 +28,7 @@
 		build: '组帧失败',
 		busy: '其它协议事务正在占用串口',
 		noproto: '这一路的协议不能收帧（缺少 findFrame / parseFrame）',
-		foreign: '等待应答期间这一路有其它发送，无法确认应答属于本次读取',
+		foreign: '等待应答期间这一路有其它发送，无法确认应答属于本次请求',
 	}
 
 	function makeErr(code, detail, sent) {
@@ -187,6 +187,7 @@
 				return new Promise(function (resolve, reject) {
 					const pre = check()
 					if (pre) { reject(pre); return }
+					if (current) { reject(makeErr('busy')); return }
 					if (!entry || (typeof entry.findFrame !== 'function' && typeof entry.parseFrame !== 'function')) { reject(makeErr('noproto')); return }
 					let bytes = null
 					try {
@@ -308,13 +309,39 @@
 						tx0 = txCount(sid)
 						boundary = position ? position() : null
 						sent = true
-						return Promise.resolve(api.writeRawTo(sid, bytes)).then(function () {
+						const writeOpts = o.secret ? { logData: new Uint8Array(bytes.length) } : undefined
+						return Promise.resolve(api.writeRawTo(sid, bytes, writeOpts)).then(function () {
 							if (done) return
 							written = true
 							if (claimed) deliver()
 						})
-					}).catch(function (e) { finish(makeErr('write', e && e.message ? e.message : String(e))) })
+					}).catch(function (e) {
+						if (tx0 != null && txCount(sid) === tx0) sent = false
+						finish(makeErr('write', e && e.message ? e.message : String(e)))
+					})
 				})
+			}
+
+			function readGroup(device, group) {
+				return request({
+					build: function () { return device.buildRequest(group, { sid: sid }) },
+					match: function (parsed, frame, item) { return !!(item && item.res && item.res.groups.includes(group.id)) },
+					timeoutMs: device.timeoutMs,
+				})
+			}
+
+			async function writeField(device, field, value, context) {
+				let reply = null
+				await request({
+					build: function () { return device.buildWrite(field, value, context) },
+					secret: field.secret,
+					match: function (parsed, frame) {
+						reply = device.matchWriteReply(field, parsed, frame)
+						return ['ok', 'rejected', 'processing'].includes(reply)
+					},
+					timeoutMs: device.timeoutMs,
+				})
+				return reply
 			}
 
 			function cancel(reason) {
@@ -337,6 +364,8 @@
 				entry: entry,
 				check: check,
 				request: request,
+				readGroup: readGroup,
+				writeField: writeField,
 				cancel: cancel,
 				end: end,
 				get cancelled() { return cancelReason != null },

@@ -51,7 +51,7 @@
 		{ id: 'maint', title: '维护平台', keys: [[3, 22], [3, 21], [3, 40]] },
 		{ id: 'alarm', title: '告警阈值', keys: [[3, 0], [3, 1], [3, 2], [3, 3], [3, 4], [3, 5]] },
 		{ id: 'usage', title: '用水告警', keys: [[39, 3]] },
-		{ id: 'meter', title: '计量参数', keys: [[3, 18], [3, 17], [3, 29], [3, 24], [3, 28], [3, 30], [3, 12], [3, 15]] },
+		{ id: 'meter', title: '计量参数', keys: [[3, 18], [3, 17], [3, 35], [3, 36], [3, 29], [3, 24], [3, 28], [3, 30], [3, 12], [3, 15]] },
 		{ id: 'valve', title: '阀控', keys: [[36, 13], [36, 6], [36, 4], [36, 5], [36, 7], [36, 8], [36, 1]] },
 		{ id: 'ble', title: '蓝牙', keys: [[37, 0], [37, 1]] },
 	]
@@ -126,6 +126,31 @@
 
 	const FIELD_DECODE = {}
 	const FIELD_DESC = {}
+	const FIELD_SETTING = Object.create(null)
+	const SETTINGS = Object.create(null)
+	const LIMITS = { '3:9': { step: 30 }, '3:10': { max: 4 }, '3:12': { min: 30, max: 1440, step: 30 }, '3:15': { step: 5 }, '3:22': { step: 1440 }, '36:1': { max: 31 }, '36:8': { min: 1, max: 45 } }
+	const DANGER = { '3:6': '更改服务器地址可能使设备无法上报。', '3:7': '更改 APN 可能使设备无法联网。', '3:17': '这会改写设备累计底度。', '3:35': '这会改写设备正累计底度。', '3:36': '这会改写设备逆累计底度。', '3:18': '变更口径会重置部分告警阈值。', '3:21': '更改维护服务器地址可能导致失联。', '3:23': '更改通信方式可能导致失联。', '3:29': '这会更改流量换算基准。', '36:6': '这会更改阀门的应急开阀行为。', '36:7': '这会更改低电压关阀行为。', '37:1': '关闭广播可能影响蓝牙连接。' }
+	const SECRET_FIELDS = [[3, 16], [38, 1]]
+	const presetCodec = W.SK_PRESET_CODEC
+	if (presetCodec) (W.SK_DOWN_PRESETS || []).forEach(function (category) {
+		category.items.forEach(function (preset) {
+			const block = preset.tlv && preset.tlv.length === 1 && preset.tlv[0]
+			const item = block && block.items.length === 1 && block.items[0]
+			if (!item || !preset.param || preset.func !== '0x01' || block.tag === 34) return
+			const name = key(block.tag, item.id)
+			const param = name === '3:5' ? { type: 'uint16le', label: '16 位告警位域（十进制）' } : preset.param
+			if (!presetCodec.settingRange(param) && !['multi', 'ascii', 'largeFlow'].includes(param.type)) return
+			SETTINGS[name] = { tag: block.tag, id: item.id, param: param }
+		})
+	})
+
+	function rulesFor(k, param) {
+		const range = presetCodec.settingRange(param)
+		if (range) return Object.assign({ step: 1, hint: param.label, options: param.options, confirm: DANGER[k] }, range, LIMITS[k])
+		if (param.type === 'ascii') return { maxLen: param.fillLen || param.length, pattern: '[ -~]*', hint: param.placeholder || param.label, confirm: DANGER[k] }
+		if (param.type === 'largeFlow') return { maxLen: 32, pattern: '[0-9]+(?:\\.[0-9]+)?', hint: '底度 (m³)，先读取当量', confirm: DANGER[k] }
+		return { maxLen: 96, hint: param.fields.map(function (part) { return part.label }).join('，'), confirm: DANGER[k] }
+	}
 
 	function makeField(tag, id) {
 		const d = schemaDef(tag, id)
@@ -145,6 +170,13 @@
 			options: disp.options || null,
 			bits: disp.bits || null,
 			group: TAG_GROUP[tag] || null,
+			secret: SECRET_FIELDS.some(function (pair) { return pair[0] === tag && pair[1] === id }) || /PAK|密钥/i.test(d.name),
+		}
+		const setting = SETTINGS[k]
+		if (setting && !f.secret) {
+			FIELD_SETTING[k] = setting.param
+			f.write = rulesFor(k, setting.param)
+			if (setting.param.type === 'largeFlow') f.unit = 'm³'
 		}
 		return Object.assign(f, DISPLAY[k] || {})
 	}
@@ -163,6 +195,7 @@
 	const ALARM_KEYS = (TAGS['4'] || []).filter(function (d) { return /^BYTE\[1\+/.test(d.type || '') }).map(function (d) { return addField(4, d.id) }).filter(Boolean)
 	const IDENTITY_KEYS = IDENTITY.map(function (p) { return addField(p[0], p[1]) }).filter(Boolean)
 	STATUS_KEYS.forEach(function (p) { addField(p[0], p[1]) })
+	SECRET_FIELDS.forEach(function (pair) { addField(pair[0], pair[1]) })
 	const categories = CATEGORIES.map(function (c) {
 		return { id: c.id, title: c.title, keys: c.keys.map(function (p) { return addField(p[0], p[1]) }).filter(Boolean) }
 	})
@@ -185,6 +218,7 @@
 	function decodeItem(k, item) {
 		const how = FIELD_DECODE[k]
 		const raw = item.raw || []
+		if (FIELD_SETTING[k]) return settingRaw(FIELD_SETTING[k], raw, item.baseCode)
 		if (how === 'flag') {
 			const on = raw.length > 0 && raw[0] !== 0 && raw[0] !== 0xff
 			let note = ''
@@ -202,6 +236,74 @@
 			return v
 		}
 		return item.decoded != null ? String(item.decoded) : undefined
+	}
+
+	function settingRaw(param, raw, base) {
+		if (param.type === 'ascii') return String.fromCharCode.apply(null, raw).replace(/\x00+$/, '')
+		if (param.type === 'largeFlow') {
+			if (raw.length !== 8 || (raw[0] & 1) || base == null) return undefined
+			let units = 0n
+			for (let index = 7; index > 0; index--) units = (units << 8n) | BigInt(raw[index])
+			return presetCodec.unitsToM3(units, base)
+		}
+		let offset = 0
+		function number(part) {
+			if (part.bits) return (raw[0] >> part.bits[1]) & ((1 << (part.bits[0] - part.bits[1] + 1)) - 1)
+			const type = part.type === 'enum' ? part.valueType || 'uint8' : part.type
+			const size = +(/(8|16|32)/.exec(type) || [0, 8])[1] / 8
+			if (offset + size > raw.length) return undefined
+			const view = new DataView(Uint8Array.from(raw.slice(offset, offset + size)).buffer)
+			offset += size
+			const read = 'get' + (type[0] === 'u' ? 'Uint' : 'Int') + size * 8
+			return view[read](0, !type.endsWith('be'))
+		}
+		if (param.type !== 'multi') return number(param)
+		const values = param.fields.map(number)
+		return values.every(function (value) { return value !== undefined }) ? values : undefined
+	}
+
+	function parseInput(field, text) {
+		const param = SETTINGS[field.key].param
+		if (param.type === 'ascii') return text
+		if (param.type === 'largeFlow') {
+			const match = /^(\d+)(?:\.(\d+))?$/.exec(text)
+			if (!match) return undefined
+			const fraction = (match[2] || '').replace(/0+$/, '')
+			return BigInt(match[1]).toString() + (fraction ? '.' + fraction : '')
+		}
+		if (param.type === 'multi') {
+			const parts = text.split(/[,，]/)
+			if (parts.length !== param.fields.length) return undefined
+			return param.fields.map(function (part, index) { return presetCodec.settingNumber(part, parts[index]) })
+		}
+		return presetCodec.settingNumber(param, text)
+	}
+
+	function buildWrite(field, value, ctx) {
+		const setting = SETTINGS[field.key]
+		let bytes
+		if (setting.param.type === 'largeFlow') {
+			const parameterBase = ctx.get('3:29')
+			const base = parameterBase == null ? ctx.get('2:29') : parameterBase
+			if (base == null) throw new Error('先读取本连接的基准水量')
+			const result = presetCodec.largeFlowM3ToBytes(value, base)
+			if (result.error) throw new Error(result.error)
+			if (presetCodec.unitsToM3(result.units, result.baseCode) !== value) throw new Error('底度不能按当前基准精确表示')
+			bytes = result.bytes
+		} else bytes = presetCodec.settingBytes(setting.param, value)
+		return buildDown({ funcCode: '0x01', tlv: [{ tag: setting.tag, items: [{ id: setting.id, value: bytes }] }] })
+	}
+
+	function matchWriteReply(field, parsed) {
+		const setting = SETTINGS[field.key]
+		if (!setting || !parsed || parsed.ok === false || parsed.dir !== 'up' || ![0x81, 0x91].includes(funcOf(parsed))) return null
+		const blocks = parsed.tlv || []
+		let result = null
+		const matching = blocks.find(function (block) { return block.tag === setting.tag && !block.error })
+		const item = matching && (matching.items || []).find(function (candidate) { return candidate.id === setting.id && candidate.resultCode != null })
+		if (item) result = item.resultCode
+		else if (blocks.length === 1 && blocks[0].tag === 11 && !blocks[0].error && W.sekTx && typeof W.sekTx.tag11Result === 'function') result = W.sekTx.tag11Result(parsed)
+		return result == null ? null : result === 1 ? 'ok' : result === 0 ? 'processing' : 'rejected'
 	}
 
 	function extract(parsed) {
@@ -223,7 +325,10 @@
 	function buildRequest(group) {
 		const req = group && group.request
 		if (!req || req.query == null) throw new Error('该组没有查询 ID')
-		const opts = { funcCode: '0x03', tlv: [{ tag: 10, items: [{ id: req.query, value: [] }] }] }
+		return buildDown({ funcCode: '0x03', tlv: [{ tag: 10, items: [{ id: req.query, value: [] }] }] })
+	}
+
+	function buildDown(opts) {
 		if (W.sekTx && typeof W.sekTx.buildDown === 'function') return W.sekTx.buildDown(opts).frame
 		if (typeof W.skBuildDownFrame !== 'function') throw new Error('SEK 组帧不可用')
 		const api = W.serialApi
@@ -242,8 +347,15 @@
 		return code != null && BASE_LITERS[code] != null ? BASE_LITERS[code] : null
 	}
 
-	// 只覆盖默认显示做不到的：累计流量按同一路读到的基准水量换算成 m³
 	function format(k, raw, get) {
+		const param = FIELD_SETTING[k]
+		if (param && param.type === 'largeFlow' && typeof raw === 'string') return raw + ' m³'
+		if (param && param.type === 'multi' && Array.isArray(raw)) {
+			return param.fields.map(function (part, index) {
+				const value = raw[index]
+				return part.label + '：' + (part.options && Object.prototype.hasOwnProperty.call(part.options, value) ? part.options[value] : value)
+			}).join(' · ')
+		}
 		if (k === '2:9' && typeof raw === 'number') {
 			if (raw === 0xffffffff) return '异常(全FF)'
 			const liters = baseLitersFrom(get)
@@ -295,5 +407,8 @@
 		extract: extract,
 		format: format,
 		byteGroups: byteGroups,
+		buildWrite: buildWrite,
+		matchWriteReply: matchWriteReply,
+		parseInput: parseInput,
 	}
 })(typeof window !== 'undefined' ? window : globalThis)

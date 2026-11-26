@@ -790,6 +790,44 @@ window.SK_PRESET_CODEC = (function () {
 		}
 	}
 
+	function settingRange(param) {
+		const type = param.type === 'enum' ? (param.valueType || 'uint8') : param.type
+		const match = /^(u?)int(8|16|32)(?:le|be)?$/.exec(type)
+		if (!match) return null
+		const signed = !match[1]
+		const limit = 2 ** (+match[2] - (signed ? 1 : 0))
+		return { min: param.min == null ? (signed ? -limit : 0) : +param.min, max: param.max == null ? limit - 1 : +param.max }
+	}
+
+	function settingNumber(param, input) {
+		const range = settingRange(param)
+		const value = /^-?\d+$/.test(String(input).trim()) ? Number(input) : NaN
+		if (!range || !Number.isInteger(value) || value < range.min || value > range.max || (param.options && !Object.prototype.hasOwnProperty.call(param.options, value))) {
+			throw new Error((param.label || '数值') + '超出范围或不是有效选项')
+		}
+		return value
+	}
+
+	function settingBytes(param, value) {
+		const codec = window.ProtocolDownlink
+		if (!codec) throw new Error('参数编码器未加载')
+		if (param.type === 'multi') {
+			if (!Array.isArray(value) || value.length !== param.fields.length) throw new Error('参数项数不匹配')
+			return codec.encodeMultiFields(param.fields, param.fields.map(function (part, index) { return settingNumber(part, value[index]) }))
+		}
+		if (param.type === 'ascii') {
+			const length = param.fillLen || param.length
+			if (typeof value !== 'string' || /[^\x20-\x7e]/.test(value) || value.length > length) throw new Error('请输入长度合规的可打印 ASCII')
+			return codec.encodeFieldValue(param.type, value, Object.assign({ allowEmpty: true }, param))
+		}
+		return codec.encodeFieldValue(param.type, settingNumber(param, value), param)
+	}
+
+	function unitsToM3(units, baseCode) {
+		const digits = String(units).padStart(baseCode + 1, '0')
+		return baseCode ? (digits.slice(0, -baseCode) + '.' + digits.slice(-baseCode)).replace(/\.?0+$/, '') : digits
+	}
+
 	// 按功能码和关键字(空格分隔多词全匹配)过滤常用指令分组
 	function filterPresets(presets, funcCode, query) {
 		const list = Array.isArray(presets) ? presets : []
@@ -815,6 +853,10 @@ window.SK_PRESET_CODEC = (function () {
 	return {
 		BASE_WATER_LABEL: BASE_WATER_LABEL,
 		largeFlowM3ToBytes: largeFlowM3ToBytes,
+		settingRange: settingRange,
+		settingNumber: settingNumber,
+		settingBytes: settingBytes,
+		unitsToM3: unitsToM3,
 		filterPresets: filterPresets
 	}
 })()

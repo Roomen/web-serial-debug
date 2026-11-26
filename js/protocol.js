@@ -1584,14 +1584,16 @@
 			if ((tag === 2 || tag === 3) && id === 29 && raw && raw.length) {
 				W.skSession.setBase(raw[0], tag === 2 ? 'Tag2-ID29' : 'Tag3-ID29')
 			}
-			items.push({
+			const item = {
 				id,
 				name: def ? def.name : ('ID' + id),
 				raw: Array.from(raw),
 				decoded,
 				off: idOff,
 				span: 1 + raw.length
-			})
+			}
+			if (tag === 3 && (id === 35 || id === 36)) item.baseCode = W.skSession.baseCode
+			items.push(item)
 			updateSeriesMeta(tag, id, raw, seriesMeta)
 		}
 		return items

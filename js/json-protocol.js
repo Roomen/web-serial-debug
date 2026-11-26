@@ -436,6 +436,23 @@
 		if (e) { errors.push(e); return false }
 		let hexTotal = 0
 		let ok = true
+		function checkReply(rp, replyPath) {
+			if (!rp || typeof rp !== 'object' || rp.match === undefined) return
+			const list = Array.isArray(rp.match) ? rp.match : [rp.match]
+			if (list.length > DEVICE_LIMITS.rules) { errors.push(replyPath + '.match 超过 ' + DEVICE_LIMITS.rules + ' 条'); ok = false; return }
+			list.forEach((mr, index) => {
+				const bytes = mr && typeof mr === 'object' ? mr.bytes : null
+				if (bytes == null || bytes === '') return
+				const label = replyPath + '.match[' + index + '].bytes'
+				if (typeof bytes === 'string') {
+					if (bytes.length > DEVICE_LIMITS.ruleBytes * 3) { errors.push(label + ' 超过 ' + DEVICE_LIMITS.ruleBytes + ' 字节'); ok = false; return }
+					hexTotal += bytes.length
+				} else if (Array.isArray(bytes)) {
+					if (bytes.length > DEVICE_LIMITS.ruleBytes) { errors.push(label + ' 超过 ' + DEVICE_LIMITS.ruleBytes + ' 字节'); ok = false; return }
+					hexTotal += bytes.length * 2
+				} else { errors.push(label + ' 必须为 HEX 字符串或字节数组'); ok = false }
+			})
+		}
 		const groups = Array.isArray(dev.groups) ? dev.groups : []
 		groups.forEach((g, i) => {
 			if (!g || typeof g !== 'object') return
@@ -450,23 +467,11 @@
 					hexTotal += v.length
 				})
 			}
-			const rp = g.reply && typeof g.reply === 'object' ? g.reply : null
-			if (rp && rp.match !== undefined) {
-				const list = Array.isArray(rp.match) ? rp.match : [rp.match]
-				if (list.length > DEVICE_LIMITS.rules) { errors.push(p + '.reply.match 超过 ' + DEVICE_LIMITS.rules + ' 条'); ok = false; return }
-				list.forEach((mr, mi) => {
-					const b = mr && typeof mr === 'object' ? mr.bytes : null
-					if (b == null || b === '') return
-					const q = p + '.reply.match[' + mi + '].bytes'
-					if (typeof b === 'string') {
-						if (b.length > DEVICE_LIMITS.ruleBytes * 3) { errors.push(q + ' 超过 ' + DEVICE_LIMITS.ruleBytes + ' 字节'); ok = false; return }
-						hexTotal += b.length
-					} else if (Array.isArray(b)) {
-						if (b.length > DEVICE_LIMITS.ruleBytes) { errors.push(q + ' 超过 ' + DEVICE_LIMITS.ruleBytes + ' 字节'); ok = false; return }
-						hexTotal += b.length * 2
-					} else { errors.push(q + ' 必须为 HEX 字符串或字节数组'); ok = false }
-				})
-			}
+			checkReply(g.reply, p + '.reply')
+		})
+		;(Array.isArray(dev.writes) ? dev.writes : []).forEach((entry, index) => {
+			if (!entry || !entry.reply) return
+			for (const state of ['ok', 'rejected', 'processing']) checkReply(entry.reply[state], 'device.writes[' + index + '].reply.' + state)
 		})
 		if (ok && hexTotal > DEVICE_LIMITS.hexTotal) { errors.push('device 里请求 HEX 与应答匹配字节的总量超过 ' + DEVICE_LIMITS.hexTotal + ' 字符'); ok = false }
 		return ok
@@ -512,6 +517,7 @@
 		over = lim(dev.fields, DEVICE_LIMITS.fields, 'device.fields') || over
 		over = lim(dev.status, DEVICE_LIMITS.status, 'device.status') || over
 		over = lim(dev.categories, DEVICE_LIMITS.categories, 'device.categories') || over
+		over = lim(dev.writes, DEVICE_LIMITS.fields, 'device.writes') || over
 		const rsIn = dev.readSets && typeof dev.readSets === 'object' && !Array.isArray(dev.readSets) ? dev.readSets : null
 		if (rsIn) {
 			over = lim(rsIn.status, DEVICE_LIMITS.list, 'device.readSets.status') || over
@@ -531,12 +537,13 @@
 			} : null,
 			status: [],
 			categories: [],
+			writes: [],
 		}
 		if (Number.isNaN(out.timeoutMs) || out.timeoutMs < 200 || out.timeoutMs > 60000) errors.push('device.timeoutMs 必须为 200~60000 的整数')
 		// 与注册表 normalizeDevice 一致：非法值丢弃、不拒绝整份协议（校验没有非阻断的提示通道）
 		if (DEVICE_LOG_PREFS.indexOf(dev.log) >= 0) out.log = dev.log
 		const groupIds = []
-		if (!Array.isArray(dev.groups) || !dev.groups.length) {
+		if (!Array.isArray(dev.groups) || (!dev.groups.length && !(Array.isArray(dev.writes) && dev.writes.length))) {
 			errors.push('device.groups 必须为非空数组')
 		} else {
 			dev.groups.forEach((g, i) => {
@@ -619,12 +626,38 @@
 					options: options,
 					bits: Array.isArray(f.bits) ? f.bits.map(b => typeof b === 'string' || typeof b === 'number' ? String(b) : '') : null,
 					copy: f.copy === true,
+					secret: f.secret === true,
+					write: validateDeviceWriteRules(f.write, p, errors),
 					note: typeof f.note === 'string' ? f.note : '',
 					addr: typeof f.addr === 'string' ? f.addr : '',
 				})
 			})
 		}
 		if (out.nameKey && keys.indexOf(out.nameKey) < 0) errors.push('device.nameKey 不是已声明的字段：' + out.nameKey)
+		const written = new Set()
+		;(Array.isArray(dev.writes) ? dev.writes : []).forEach((item, index) => {
+			const path = 'device.writes[' + index + ']'
+			const field = item && out.fields.find(f => f.key === item.field)
+			if (!field || !field.write || written.has(field.key)) { errors.push(path + '.field 必须是唯一的可写字段 key'); return }
+			written.add(field.key)
+			const template = ctx.writeTemplates.find(t => t.name === item.template)
+			const type = template && template.param && String(template.param.type || 'uint8').toLowerCase()
+			if (!type || !/^(?:(?:u?int(?:8|16(?:le|be)|32(?:le|be)))|enum|ascii|hex|hexbytes|bcd|bcd_le|bcd_be)$/.test(type)) { errors.push(path + '.template 须引用带单参数的模板'); return }
+			const reply = Object.create(null)
+			for (const state of ['rejected', 'processing', 'ok']) {
+				const rule = item.reply && item.reply[state]
+				if (!rule && state !== 'ok') continue
+				if (!rule || typeof rule !== 'object' || Array.isArray(rule)) { errors.push(path + '.reply.' + state + ' 必须为对象'); continue }
+				const title = typeof rule.title === 'string' ? rule.title.trim() : ''
+				const match = rule.match == null ? [] : Array.isArray(rule.match) ? rule.match : [rule.match]
+				if ((!title && !match.length) || match.length > DEVICE_LIMITS.rules) { errors.push(path + '.reply.' + state + ' 须声明 title 或有限的 match'); continue }
+				const rules = match.map((m, mi) => validateMatchRule(m, path + '.reply.' + state + '.match[' + mi + ']', errors)).filter(Boolean)
+				if (rules.some(r => r.bytes && r.bytes.length > DEVICE_LIMITS.ruleBytes)) { errors.push(path + '.reply.match 字节数过多'); continue }
+				reply[state] = { title: title, match: rules.map(r => r.bytes ? { offset: r.offset, bytes: Array.from(r.bytes) } : r) }
+			}
+			out.writes.push({ field: field.key, template: template.name, reply: reply })
+		})
+		out.fields.forEach(f => { if (f.write && !written.has(f.key)) errors.push('device 字段 ' + f.key + ' 缺少写入声明') })
 		const str = v => (typeof v === 'string' ? v : '')
 		;(Array.isArray(dev.status) ? dev.status : []).forEach((w, i) => {
 			const p = 'device.status[' + i + ']'
@@ -659,6 +692,39 @@
 			const id = typeof c.id === 'string' && deviceKeyOk(c.id) ? c.id : ('c' + i)
 			out.categories.push({ id: id, title: str(c.title) || id, keys: c.keys.slice() })
 		})
+		return out
+	}
+
+	function validateDeviceWriteRules(write, path, errors) {
+		if (write == null) return null
+		if (typeof write !== 'object' || Array.isArray(write)) { errors.push(path + '.write 必须为对象'); return null }
+		const out = Object.create(null)
+		for (const key of ['min', 'max', 'step', 'maxLen']) {
+			if (write[key] == null) continue
+			if (typeof write[key] !== 'number' || !Number.isFinite(write[key]) || (key === 'step' && write[key] <= 0) || (key === 'maxLen' && (!Number.isInteger(write[key]) || write[key] < 0 || write[key] > 2048))) errors.push(path + '.write.' + key + ' 不是有效约束')
+			else out[key] = write[key]
+		}
+		if (out.min > out.max) errors.push(path + '.write.min 大于 max')
+		for (const key of ['hint', 'confirm']) if (typeof write[key] === 'string') out[key] = write[key].slice(0, 200)
+		if (write.pattern != null) {
+			const pattern = write.pattern
+			const simple = /^\^?(?:\[[^\[\]\\]{1,64}\]|\\[dsw]|[a-zA-Z0-9 _:-])(?:[+*?]|\{\d{1,4}(?:,\d{0,4})?\})?\$?$/
+			try {
+				if (typeof pattern !== 'string' || !simple.test(pattern)) throw new Error('仅支持单一字符组或字符及其量词')
+				new RegExp(pattern)
+				out.pattern = pattern
+			} catch (error) { errors.push(path + '.write.pattern：' + error.message) }
+		}
+		if (write.options != null) {
+			if (typeof write.options !== 'object' || Array.isArray(write.options) || Object.keys(write.options).length > DEVICE_LIMITS.options) errors.push(path + '.write.options 无效或选项过多')
+			else {
+				out.options = Object.create(null)
+				Object.keys(write.options).forEach(key => {
+					if (!deviceKeyOk(key) || typeof write.options[key] !== 'string') errors.push(path + '.write.options 含非法选项')
+					else out.options[key] = write.options[key].slice(0, 64)
+				})
+			}
+		}
 		return out
 	}
 
@@ -991,6 +1057,7 @@
 		const normDevice = validateDeviceSpec(spec.device, {
 			fieldsByName: fieldsByName,
 			templates: normDownlink && normDownlink.templates ? normDownlink.templates.map(t => t.name) : [],
+			writeTemplates: normDownlink && normDownlink.templates ? normDownlink.templates : [],
 		}, errors)
 
 		if (errors.length) return { ok: false, errors: errors }
@@ -1589,6 +1656,7 @@
 			const groupById = Object.create(null)
 			dv.groups.forEach(g => { groupById[g.id] = g })
 			const byId = id => (typeof id === 'string' && Object.prototype.hasOwnProperty.call(groupById, id) ? groupById[id] : null)
+			const writes = new Map(dv.writes.map(item => [item.field, item]))
 			function replyMatches(g, parsed, frame) {
 				if (!g || !parsed || !parsed.matchedHead) return false
 				const rp = g.reply || {}
@@ -1609,6 +1677,31 @@
 				readSets: dv.readSets,
 				status: dv.status,
 				categories: dv.categories,
+				buildWrite: writes.size ? function (field, value) {
+					const item = writes.get(field.key)
+					if (!item) throw new Error('字段没有写入模板')
+					const template = templateByName.get(item.template)
+					if (!template) throw new Error('字段的写入模板不存在')
+					const param = template.param
+					const type = String(param.type || 'uint8').toLowerCase()
+					const numeric = /^(u?)int(8|16|32)(?:[lb]e)?$/.exec(type === 'enum' ? 'uint8' : type)
+					if (numeric) {
+						const scale = Number(param.scale || 1)
+						const raw = Number(value) / scale
+						const max = 2 ** (Number(numeric[2]) - (numeric[1] ? 0 : 1))
+						if (Math.abs(raw - Math.round(raw)) > 1e-7 || !Number.isFinite(raw) || Math.round(raw) >= max || Math.round(raw) < (numeric[1] ? 0 : -max)) throw new Error('写入值超出模板参数范围或精度')
+					}
+					if (type === 'ascii' && (typeof value !== 'string' || /[^\x20-\x7e]/.test(value) || (param.length && value.length > Number(param.length)))) throw new Error('写入值不符合模板 ASCII 约束')
+					return buildDownFrame({ presetName: item.template, paramValue: value })
+				} : null,
+				matchWriteReply: writes.size ? function (field, parsed, frame) {
+					const item = writes.get(field.key)
+					if (!item || !parsed || parsed.ok === false) return null
+					for (const state of ['rejected', 'processing', 'ok']) {
+						if (item.reply[state] && replyMatches({ reply: item.reply[state] }, parsed, frame)) return state
+					}
+					return null
+				} : null,
 				buildRequest: function (group) {
 					const g = byId(group && group.id)
 					if (!g) throw new Error('未知的读取组')

@@ -255,7 +255,7 @@ test('registry: 外部协议 device 只留约定的数据与函数', () => {
 	const evil = {
 		title: '<img src=x onerror=alert(1)>',
 		fields: [
-			{ key: 'a', name: 'A', kind: 'weird', group: 'g', options: opts, write: { encode: 'u16le', min: 0, max: 10, junk: () => 1 }, onRender: () => 1 },
+			{ key: 'a', name: 'A', kind: 'weird', group: 'g', options: opts, secret: true, write: { min: 0, max: 10, options: opts, confirm: '先确认', junk: () => 1 }, onRender: () => 1 },
 			{ key: 'b', name: sneaky, group: 'missing' },
 		],
 		groups: [{ id: 'g', title: 'G', request: { cmd: 1, fn: () => 1, nested: { deep: { deeper: { deepest: { x: 1 } } } } } }],
@@ -265,6 +265,9 @@ test('registry: 外部协议 device 只留约定的数据与函数', () => {
 		format(k) { return k === 'a' ? sneaky : null },
 		buildRequest() { return [1, 2, 300] },
 		matchReply() { return 'yes' },
+		buildWrite() { throw new Error('编码错误') },
+		matchWriteReply() { throw new Error('匹配错误') },
+		parseInput() { throw new Error('转换错误') },
 		html: '<b>x</b>',
 	}
 	reg.register('ext-dev', { name: 'Ext', source: 'js-local', parseFrame: () => ({}), device: evil })
@@ -277,7 +280,14 @@ test('registry: 外部协议 device 只留约定的数据与函数', () => {
 	assert.equal(d.fields[0].onRender, undefined)
 	assert.equal(Object.getPrototypeOf(d.fields[0].options), null, '键表无原型')
 	assert.equal(Object.prototype.hasOwnProperty.call(d.fields[0].options, '__proto__'), false, '__proto__ 不进键表')
-	assert.deepEqual(Object.keys(d.fields[0].write).sort(), ['encode', 'hint', 'max', 'maxLen', 'min', 'pattern', 'step'])
+	assert.deepEqual(Object.keys(d.fields[0].write).sort(), ['confirm', 'hint', 'max', 'maxLen', 'min', 'options', 'pattern', 'step'])
+	assert.equal(d.fields[0].secret, true)
+	assert.equal(d.fields[0].write.confirm, '先确认')
+	assert.equal(Object.getPrototypeOf(d.fields[0].write.options), null)
+	assert.equal(Object.hasOwn(d.fields[0].write.options, '__proto__'), false)
+	assert.throws(() => d.buildWrite(d.fields[0], 1), /编码错误/)
+	assert.equal(d.matchWriteReply(d.fields[0], {}), null)
+	assert.equal(d.parseInput(d.fields[0], '1'), undefined)
 	assert.equal(d.fields[1].group, null, '指向不存在的组时清掉')
 	assert.equal(d.fields[1].name, 'b', '非字符串名称不调用 toString，退回 key')
 	assert.notEqual(typeof d.groups[0].request.fn, 'function', '请求描述里的函数被丢掉')
@@ -390,7 +400,9 @@ function loadSek() {
 	const sb = { console, BigInt, Math, Number, String, Array, Object, Date, JSON, Uint8Array, parseInt, isNaN, TextDecoder, TextEncoder }
 	sb.window = sb
 	sb.globalThis = sb
-	for (const f of ['js/protocol-schema.js', 'js/protocol-crypto.js', 'js/protocol.js', 'js/sek-device.js']) {
+	sb.serialApi = { onReceive() {}, getEncKey: () => null }
+	sb.ProtocolDownlink = require('../js/protocol-downlink.js')
+	for (const f of ['js/protocol-schema.js', 'js/protocol-crypto.js', 'js/protocol.js', 'js/protocol-presets.js', 'js/sek-device.js', 'js/sek-transaction.js']) {
 		vm.runInNewContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), sb, { filename: f })
 	}
 	return sb
@@ -1007,6 +1019,284 @@ test('json: 请求 HEX 与应答规则在解码前限量，非字符串不调用
 })
 
 // 用例里等的 promise 永远不结束时（假时钟不再推进），事件循环会排空、进程以 0 退出且不打印汇总；按卡住失败处理
+function synthWriteDevice() {
+	return Reg.normalizeDevice(Object.assign({}, synthDevice, {
+		fields: synthDevice.fields.map(field => Object.assign({}, field, { write: { min: 0, max: 65535, step: 1 }, secret: field.key === 'sn' })),
+		buildWrite(field, value) {
+			if (value === 999) throw new Error('合成编码失败')
+			return synthFrame(0x10, [value & 255, value >> 8])
+		},
+		matchWriteReply(field, parsed) { return parsed.cmd === 0x90 ? ['ok', 'rejected', 'processing'][parsed.payload[0]] : null },
+	}))
+}
+
+test('write model: 草稿隔离、过期禁写、无组允许写、结果与快照三态', () => {
+	const dev = synthWriteDevice()
+	const store = M.createStore()
+	const lane = M.lane(store, 'A', 't')
+	const parser = synthProto()
+	const ingest = (cmd, payload, gen) => {
+		const bytes = synthFrame(cmd, payload)
+		return M.ingest(store, { sid: 'A', pid: 't', gen, at: 10, bytes, parsed: parser.parseFrame(bytes), device: dev })
+	}
+	const record = ingest(0x81, [49], 1)
+	assert.equal(record.rec.secret, true)
+	ingest(0x82, [16, 0, 1], 1)
+	lane.readings.cfg = { raw: 6, at: 9, gen: 0 }
+	assert.equal(M.writeAllowed(lane, dev.fieldMap.volt, 1), true)
+	assert.equal(M.writeAllowed(lane, dev.fieldMap.volt, 2), false)
+	assert.equal(M.writeAllowed(lane, dev.fieldMap.cfg, 2), true)
+	assert.throws(() => M.inputValue(dev, dev.fieldMap.volt, '1.5'), /步进/)
+	const snapshot = M.exportSnapshot(lane, dev, (field, raw) => String(raw))
+	assert.deepEqual(snapshot.values.volt, { raw: 16, text: '16', at: 10, gen: 1 })
+	assert.equal(Object.hasOwn(snapshot.values, 'sn'), false)
+	assert.throws(() => M.compareSnapshot(lane, dev, 1, { ...snapshot, protocolId: 'wrong' }), /协议/)
+	ingest(0x82, [17, 0, 1], 1)
+	snapshot.values.constructor = { raw: 1, text: '1' }
+	const rows = M.compareSnapshot(lane, dev, 1, snapshot)
+	assert.deepEqual(rows.map(row => [row.field.key, row.state]), [['volt', 'different'], ['valve', 'same'], ['cfg', 'unread']])
+	assert.deepEqual(rows.map(row => row.formatted), ['0.16 V', '开', '6'])
+	dev.format = (key, raw, get) => key === 'volt' ? raw + ' / ' + get('valve') : null
+	ingest(0x82, [17, 0, 0], 1)
+	assert.equal(M.formatValue(dev, 'volt', lane.readings.volt.raw, M.getter(lane, 1)), '17 / 0')
+	assert.equal(M.compareSnapshot(lane, dev, 1, snapshot)[0].formatted, '16 / 1')
+	M.applySnapshot(lane, rows)
+	assert.deepEqual(Object.entries(lane.drafts), [['volt', '16']])
+	assert.deepEqual(Object.keys(M.lane(store, 'B', 't').drafts), [])
+	assert.deepEqual(Object.keys(M.lane(store, 'A', 'other').drafts), [])
+	assert.equal(M.writeResult('ok', { raw: [1, 2] }, null, [1, 2]).state, 'confirmed')
+	assert.equal(M.writeResult('ok', { raw: 17 }, null, 16).state, 'mismatch')
+	assert.equal(M.writeResult('rejected').state, 'rejected')
+	assert.equal(M.writeResult('ok').state, 'unconfirmed')
+	assert.equal(M.writeResult('ok', { raw: 16, unsure: true }, null, 16).state, 'unconfirmed')
+	assert.equal(M.writeResult('processing').state, 'processing')
+	assert.equal(M.writeResult(null, null, { sent: false }).state, 'skipped')
+	assert.equal(M.writeResult(null, null, { sent: true }).state, 'unknown')
+})
+
+test('write request: 编码失败、发送边界、原始回读认领、foreign 和代次锁定', async () => {
+	const fake = fakeEnv()
+	const request = Req.create(fake.env)
+	const dev = synthWriteDevice()
+	const store = M.createStore()
+	const field = dev.fieldMap.volt
+	const pump = request.createPump('S', { onFrame(item) {
+		item.res = M.ingest(store, { sid: 'S', pid: 't', gen: item.gen, at: item.at, bytes: item.frame, parsed: item.parsed, device: dev })
+	} })
+	const flow = request.begin('S', { source: pump.source, position: pump.position })
+	await assert.rejects(flow.writeField(dev, field, 999), error => error.code === 'build' && !error.sent)
+	assert.equal(fake.state.writes.length, 0)
+	const old = synthFrame(0x90, [1])
+	fake.rx('S', old.slice(0, 3))
+	const write = flow.writeField(dev, field, 16)
+	await flush()
+	fake.rx('S', old.slice(3))
+	fake.rx('S', synthFrame(0x90, [0]))
+	assert.equal(await write, 'ok')
+	const read = flow.readGroup(dev, dev.groups.find(group => group.id === field.group))
+	await flush()
+	fake.rx('S', synthFrame(0x82, []))
+	fake.rx('S', [...synthFrame(0x82, [16, 0, 1]), ...synthFrame(0x82, [17, 0, 1])])
+	assert.equal((await read).item.res.values.volt, 16)
+	assert.equal(M.reading(M.lane(store, 'S', 't'), 'volt').raw, 17)
+	const foreign = flow.writeField(dev, field, 18)
+	await flush()
+	fake.foreignWrite('S')
+	fake.rx('S', synthFrame(0x90, [0]))
+	await assert.rejects(foreign, error => error.code === 'foreign' && error.sent)
+	fake.session('S', 'open')
+	await assert.rejects(flow.writeField(dev, field, 20), error => error.code === 'generation' && !error.sent)
+	assert.equal(fake.state.writes.length, 3)
+	flow.end()
+	pump.stop()
+})
+
+test('write request: 写入前传输拒绝标为未发出，保密字段不把发送数据交给日志', async () => {
+	const fake = fakeEnv()
+	const request = Req.create(fake.env)
+	const flow = request.begin('S')
+	const dev = synthWriteDevice()
+	const field = dev.fieldMap.sn
+	const realWrite = fake.env.serialApi.writeRawTo
+	let shown
+	fake.env.serialApi.writeRawTo = async () => { throw new Error('没有拿到写锁') }
+	await assert.rejects(flow.writeField(dev, field, 16), error => error.code === 'write' && !error.sent)
+	fake.env.serialApi.writeRawTo = (sid, bytes, opts) => {
+		shown = opts.logData
+		return realWrite(sid, bytes)
+	}
+	const pending = flow.writeField(dev, field, 16)
+	await flush()
+	fake.rx('S', synthFrame(0x90, [0]))
+	assert.equal(await pending, 'ok')
+	assert.equal(shown.length, fake.state.writes[0].bytes.length)
+	assert.ok(Array.from(shown).every(value => value === 0))
+	flow.end()
+})
+
+test('write panel: 确认合并、处理中不自动回读、组归属不明、批写中换代停止', async () => {
+	const dev = synthWriteDevice()
+	dev.fieldMap.cfg.write.confirm = '合成操作确认'
+	const fake = fakeEnv()
+	fake.entries.t.device = dev
+	const request = Req.create(fake.env)
+	const messages = []
+	let accept = true
+	const fakeElement = name => ({ name, children: [], events: {}, attrs: {}, textContent: '',
+		append(child) { this.children.push(child) },
+		addEventListener(type, listener) { this.events[type] = listener },
+		setAttribute(key, value) { this.attrs[key] = value },
+	})
+	const walk = node => [node, ...(node.children || []).flatMap(walk)]
+	const sandbox = {
+		window: { DeviceModel: M, ProtocolRequest: request, ProtocolRegistry: fake.env.registry, serialApi: fake.env.serialApi, serialLanes: fake.env.serialLanes,
+			AppDialog: { confirm: async message => { messages.push(message); return accept } } },
+		document: { readyState: 'loading', addEventListener() {}, createElement: fakeElement, getElementById: () => null },
+	}
+	const source = fs.readFileSync(path.join(ROOT, 'js/device-panel.js'), 'utf8')
+	const exportPoint = 'window.DevicePanel = {'
+	assert.ok(source.includes(exportPoint))
+	vm.runInNewContext(source.replace(exportPoint, 'window.DevicePanel = { _testWrite: runWrite, _testCtx: ctx, _testPump: makePump, _testRow: paramRow,'), sandbox)
+	const panel = sandbox.window.DevicePanel
+	const pump = panel._pumps.S = panel._testPump('S')
+	const context = () => panel._testCtx()
+	const lane = context().L
+	const receive = (cmd, payload) => fake.rx('S', synthFrame(cmd, payload))
+	const write = (...keys) => panel._testWrite(context(), keys)
+	const commands = () => fake.state.writes.map(item => item.bytes[2])
+	const clear = () => fake.state.writes.splice(0)
+	const read = () => receive(0x82, [15, 0, 1])
+	read()
+	lane.drafts.cfg = '4'
+	let job = write('cfg')
+	await flush()
+	assert.equal(messages.length, 1)
+	assert.match(messages[0], /无法从设备读取[\s\S]*合成操作确认/)
+	receive(0x90, [0])
+	await job
+	assert.deepEqual(commands(), [0x10])
+	assert.equal(lane.writes.cfg.state, 'unconfirmed')
+	clear()
+	lane.drafts.volt = '16'
+	const row = walk(panel._testRow(context(), 'volt'))
+	const preview = row.find(node => node.className && node.className.includes('dp-write-preview'))
+	const input = row.find(node => node.name === 'input')
+	assert.equal(preview.textContent, '预览：0.16 V')
+	input.value = '48'
+	input.events.input()
+	assert.equal(preview.textContent, '预览：0.48 V')
+	input.value = 'invalid'
+	input.events.input()
+	assert.equal(preview.textContent, '')
+	lane.drafts.volt = '16'
+	job = write('volt')
+	await flush()
+	receive(0x90, [2])
+	await job
+	assert.deepEqual(commands(), [0x10])
+	assert.equal(lane.writes.volt.state, 'processing')
+	clear()
+	M.markLate(lane, 'live', 1)
+	job = write('volt')
+	await flush()
+	receive(0x90, [0])
+	await flush()
+	receive(0x82, [16, 0, 1])
+	await job
+	assert.deepEqual(commands(), [0x10, 0x02])
+	assert.equal(lane.writes.volt.state, 'unconfirmed')
+	assert.match(M.readingUnsure(lane, 'volt'), /归属未确认/)
+	clear()
+	job = write('volt', 'cfg')
+	await flush()
+	fake.session('S', 'open')
+	await job
+	assert.deepEqual(commands(), [0x10])
+	assert.equal(lane.writes.volt.state, 'unknown')
+	assert.equal(lane.writes.cfg.state, 'skipped')
+	assert.equal(lane.writes.cfg.detail, '前一项（电压）连接变化后中止，未发送')
+	assert.match(lane.writes.volt.detail, /后续项未发送/)
+	clear()
+	read()
+	job = write('volt', 'cfg')
+	await flush()
+	fake.advance(dev.timeoutMs + 1)
+	await job
+	assert.deepEqual(commands(), [0x10])
+	assert.equal(lane.writes.volt.state, 'unknown')
+	assert.equal(lane.writes.cfg.detail, '前一项（电压）等待写入应答超时后中止，未发送')
+	clear()
+	accept = false
+	job = write('cfg', 'volt')
+	await job
+	assert.deepEqual(commands(), [])
+	assert.match(messages[messages.length - 1], /取消此项会中止本轮/)
+	assert.equal(lane.writes.cfg.state, 'skipped')
+	assert.equal(lane.writes.volt.detail, '前一项（只能写的参数）取消写入后中止，未发送')
+	assert.equal(fake.state.pinned, null)
+	pump.stop()
+})
+
+test('sek write: 按预设编码与解析往返，Tag34 禁写，Tag39 仅应答', () => {
+	const win = loadSek()
+	const dev = Reg.normalizeDevice(win.SekDevice, { id: 'sek' })
+	const roundTrip = (key, text, base, expectedBytes) => {
+		const field = dev.fieldMap[key]
+		assert.ok(field.write, key + ' 应可写')
+		const expected = M.inputValue(dev, field, text)
+		const bytes = dev.buildWrite(field, expected, { get: name => name === '3:29' ? base : undefined })
+		const [tag, id] = key.split(':').map(Number)
+		const parsed = win.skParseFrame(bytes, {})
+		const encoded = parsed.tlv.find(block => block.tag === tag).items.find(item => item.id === id)
+		assert.deepEqual(Array.from(encoded.raw), Array.from(expectedBytes))
+		const settings = [[id, Array.from(encoded.raw)]]
+		if (base != null && tag === 3) settings.unshift([29, [base]])
+		const read = win.skParseFrame(sekUp(win, 0x83, [[tag, settings]]), {})
+		assert.equal(M.sameValue(dev.extract(read)[key], expected), true)
+		for (const [code, result] of [[0, 'processing'], [1, 'ok'], [2, 'rejected'], [3, 'rejected'], [4, 'rejected']]) {
+			const ack = win.skParseFrame(sekUp(win, 0x81, [[tag, [[id, [code]]]]]), {})
+			assert.equal(dev.matchWriteReply(field, ack), result)
+		}
+	}
+	roundTrip('3:0', '300', null, [44, 1, 0, 0])
+	roundTrip('3:23', '1, 2', null, [34])
+	roundTrip('3:35', '123.456', 3, win.SK_PRESET_CODEC.largeFlowM3ToBytes('123.456', 3).bytes)
+	roundTrip('39:3', '30, 5', null, [30, 0, 5, 0])
+	assert.ok(dev.fieldMap['3:16'].secret)
+	assert.ok(dev.fieldMap['38:1'].secret)
+	assert.ok(!dev.fields.some(field => field.key.startsWith('34:') && field.write))
+	assert.equal(dev.fieldMap['39:3'].group, null)
+	const operationAck = win.skParseFrame(sekUp(win, 0x91, [[39, [[3, [1]]]]]), {})
+	assert.equal(dev.matchWriteReply(dev.fieldMap['39:3'], operationAck), 'ok')
+	assert.equal(dev.matchWriteReply(dev.fieldMap['3:0'], operationAck), null)
+	const legacy = win.skParseFrame(sekUp(win, 0x81, [[11, [[1, [1]]]]]), {})
+	assert.equal(dev.matchWriteReply(dev.fieldMap['39:3'], legacy), 'ok')
+	assert.equal(M.writeResult('ok', null).state, 'unconfirmed')
+})
+
+test('json write: 模板输入和应答分流，拒绝有歧义或超限的声明', () => {
+	const spec = JSON.parse(JSON.stringify(jsonSpec))
+	spec.device.fields[1].write = { min: 0, max: 1, step: 1, options: { 0: '关', 1: '开' } }
+	spec.downlink.templates.push({ name: '写阀门', cmd: 0x12, param: { type: 'uint8' } })
+	spec.device.writes = [{ field: 'valve', template: '写阀门', reply: {
+		ok: { match: [{ offset: 2, value: 0x92 }, { offset: 3, value: 1 }] },
+		processing: { match: [{ offset: 2, value: 0x92 }, { offset: 3, value: 0 }] },
+		rejected: { match: [{ offset: 2, value: 0x92 }, { offset: 3, value: 2 }] },
+	} }]
+	assert.equal(JP.validateSpec(spec).ok, true)
+	const proto = JP.compile(spec)
+	const dev = Reg.normalizeDevice(proto.device)
+	const field = dev.fieldMap.valve
+	const value = M.inputValue(dev, field, '1')
+	assert.deepEqual(Array.from(dev.buildWrite(field, value).slice(2, 4)), [0x12, 1])
+	for (const [code, state] of [[0, 'processing'], [1, 'ok'], [2, 'rejected'], [3, null]]) {
+		const bytes = proto.buildDownFrame({ cmd: 0x92, payload: [code] })
+		assert.equal(dev.matchWriteReply(field, proto.parseFrame(bytes), bytes), state)
+	}
+	spec.device.fields[1].write.pattern = '(a+)+b'
+	assert.equal(JP.validateSpec(spec).ok, false)
+})
+
 let current = null
 let finished = false
 process.on('exit', (code) => {
