@@ -142,7 +142,7 @@
 			},
 		],
 
-		// 设备面板（只读）：两组查询，应答命令 = 请求命令 | 0x80
+		// 设备面板：两组查询，示例写入可通过传感器组回读湿度设置。
 		device: {
 			title: '示例设备',
 			nameKey: 'ver',
@@ -152,7 +152,7 @@
 			fields: [
 				{ key: 'ver', name: '固件版本', kind: 'text', group: 'info', copy: true },
 				{ key: 'temp', name: '温度', kind: 'number', scale: 0.1, decimals: 1, unit: '℃', group: 'sensor' },
-				{ key: 'hum', name: '湿度', kind: 'number', unit: '%', group: 'sensor' },
+				{ key: 'hum', name: '示例湿度设定', kind: 'number', unit: '%', group: 'sensor', write: { min: 0, max: 100, step: 1 } },
 			],
 			groups: [
 				{ id: 'info', title: '设备信息', request: { cmd: 0x02 } },
@@ -166,6 +166,14 @@
 			categories: [{ id: 'all', title: '全部', keys: ['ver', 'temp', 'hum'] }],
 			buildRequest(group) { return buildFrame(group.request.cmd, []) },
 			matchReply(group, r) { return !!(r && r.ok && r.cmd === (group.request.cmd | 0x80)) },
+			buildWrite(field, value) {
+				if (field.key !== 'hum' || !Number.isInteger(value) || value < 0 || value > 100) throw new Error('湿度设定必须是 0 至 100 的整数')
+				return buildFrame(0x13, [value])
+			},
+			matchWriteReply(field, r) {
+				if (field.key !== 'hum' || !r || !r.ok || r.cmd !== 0x93 || r.payload.length !== 1) return null
+				return ['ok', 'rejected', 'processing'][r.payload[0]] || null
+			},
 			extract(r) {
 				if (!r || !r.ok) return null
 				const p = r.payload || []

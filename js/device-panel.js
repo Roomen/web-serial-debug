@@ -12,8 +12,8 @@
 	// 通信记录条的窄屏判定与 #main 变单列的断点一致（761–768px 已是单列、整页滚动）
 	const STRIP_NARROW = 768
 	// 读取认领的归属限制：宿主只能保证认领「查询发出后才开始」的匹配帧，迟到应答分不出来
-	const READ_LIMIT_SHORT = '迟到应答无法与本次应答区分，读取期间请勿手动发送'
-	const READ_LIMIT_FULL = '读取认领查询发出后开始的第一条该组应答。更早命令或超时查询的迟到应答与本次应答无法区分；上次没等到应答的组，在本次连接内再读都标「归属未确认」，重新连接后恢复。读取期间请勿手动发送。'
+	const READ_LIMIT_SHORT = '迟到应答可能与本次应答混淆，读写期间请勿手动发送'
+	const READ_LIMIT_FULL = '面板只认领请求发出后开始的匹配应答。更早命令的迟到应答可能与本次应答混淆；上次没等到应答的查询组，在本次连接内再读都标「归属未确认」，重新连接后恢复。读写期间请勿手动发送。'
 	const M = window.DeviceModel
 	const R = window.ProtocolRequest
 	if (!M || !R) return
@@ -25,6 +25,8 @@
 	let mounted = false
 	let renderTimer = 0
 	let lastSig = ''
+	let writing = null
+	const WRITE_LABELS = { confirmed: '回读一致 ✓', mismatch: '回读不一致', rejected: '设备拒绝', unconfirmed: '已应答未确认', processing: '设备处理中', skipped: '未执行', unknown: '已发出、结果未知' }
 
 	// ---------- 小工具 ----------
 	function h(name, attrs) {
@@ -140,8 +142,30 @@
 		return msg + (e.sent ? '（查询已发出，设备是否执行未知）' : '（查询未发出）')
 	}
 
+	function stopFlow(error) {
+		return ['generation', 'closed', 'cancelled', 'protocol', 'foreign'].includes(error.code)
+	}
+
+	async function requestGroup(c, flow, group) {
+		const gid = group.id
+		const late = M.isLate(c.L, gid, flow.gen)
+		M.setGroupBusy(c.L, gid, true)
+		try {
+			const result = await flow.readGroup(c.dev, group)
+			const record = result.item.res
+			if (late) M.markRecUnsure(c.L, record.rec.id, '归属未确认：这一组在本次连接里有查询没等到应答，读到的可能是那次的迟到应答')
+			return { record: record, unsure: late }
+		} catch (error) {
+			M.setGroupError(c.L, gid, failText(error), flow.gen, Date.now())
+			if (error.sent && error.code !== 'generation' && error.code !== 'closed') M.markLate(c.L, gid, flow.gen)
+			throw error
+		} finally {
+			M.setGroupBusy(c.L, gid, false)
+		}
+	}
+
 	// ---------- 读取 ----------
-	async function runRead(label, gids) {
+	async function runRead(label, gids, afterRead) {
 		const c = ctx()
 		if (!c.dev || !c.L || c.L.busy || !gids.length || !c.dev.queryable) return
 		const L = c.L
@@ -170,32 +194,17 @@
 			const pre = flow.check()
 			if (pre) { skipped = n - i; firstErr = firstErr || failText(pre); break }
 			L.task = { kind: 'run', text: label + ' ' + (i + 1) + '/' + n + ' · ' + g.title, sid: c.sid }
-			M.setGroupBusy(L, gid, true)
-			// 这一组在本连接里欠过账（上次超时等）：本次认领到的可能是那条迟到应答
-			const late = M.isLate(L, gid, flow.gen)
-			render()
 			try {
-				// 只认领泵已入账、且入账结果确实认领了这一组（协议认领 + 取到该组字段）的帧
-				const res = await flow.request({
-					build: function () { return dev.buildRequest(g, { sid: c.sid }) },
-					match: function (parsed, frame, item) {
-						return !!(item && item.res && item.res.groups.indexOf(gid) >= 0)
-					},
-					timeoutMs: dev.timeoutMs,
-				})
-				M.setGroupBusy(L, gid, false)
-				if (late) {
-					// 标在请求实际认领的那条记录上（同一块里之后又来的同组帧不继承，也不会把标记挪走）
-					M.markRecUnsure(L, res.item && res.item.res && res.item.res.rec ? res.item.res.rec.id : null, '归属未确认：这一组在本次连接里有查询没等到应答，读到的可能是那次的迟到应答')
-					unsure++
-				} else ok++
+				const pending = requestGroup(c, flow, g)
+				render()
+				const result = await pending
+				if (result.unsure) unsure++
+				else ok++
+				if (afterRead) afterRead(result)
 			} catch (e) {
-				M.setGroupError(L, gid, failText(e), flow.gen, Date.now())
-				// 已发出却没认领到应答：设备的应答可能还在路上，记一笔欠账（断开 / 重连换了代次，不必记）
-				if (e.sent && e.code !== 'generation' && e.code !== 'closed') M.markLate(L, gid, flow.gen)
 				fail++
 				firstErr = firstErr || failText(e)
-				if (e.code === 'generation' || e.code === 'closed' || e.code === 'cancelled' || e.code === 'protocol' || e.code === 'foreign') {
+				if (stopFlow(e)) {
 					skipped = n - i - 1
 					break
 				}
@@ -223,6 +232,95 @@
 	function cancelRead() {
 		const c = ctx()
 		if (c.L && c.L.flow) c.L.flow.cancel('已手动取消')
+	}
+
+	function writeText(field, raw) {
+		if (raw == null) return ''
+		if (field.kind === 'hex' && typeof raw === 'number') return raw.toString(16).toUpperCase()
+		return Array.isArray(raw) ? raw.join(', ') : String(raw)
+	}
+
+	function confirmationFor(field, result) {
+		return { raw: result.record.values && result.record.values[field.key], unsure: result.unsure,
+			detail: result.unsure ? '回读归属未确认' : '' }
+	}
+
+	function writeStopReason(error, submitted) {
+		return ({ generation: '连接变化', closed: '连接关闭', protocol: '协议变化', cancelled: '取消写入', foreign: '检测到其它发送', timeout: '等待写入应答超时' })[error.code]
+			|| (submitted ? '回读中断' : '写入结果未知')
+	}
+
+	async function runWrite(c, keys) {
+		if (writing || c.L.busy || !c.open || !keys.length || !c.dev.buildWrite) return
+		const L = c.L
+		const dev = c.dev
+		const plan = keys.filter(function (key) { return dev.fieldMap[key] && dev.fieldMap[key].write && Object.prototype.hasOwnProperty.call(L.drafts, key) })
+		if (!plan.length) return
+		const pump = pumps[c.sid]
+		const entry = protocolEntry(c.pid)
+		if (!entry || entry.device !== dev || protocolOf(c.sid) !== c.pid || genOf(c.sid) !== c.gen) return
+		let flow
+		try { flow = R.begin(c.sid, { source: pump && pump.source, position: pump && pump.position }) }
+		catch (error) {
+			plan.forEach(function (key) { L.writes[key] = Object.assign(M.writeResult(null, null, error), { gen: c.gen }) })
+			L.task = { kind: 'bad', text: '写入未开始：' + error.message, until: Date.now() + 8000, sid: c.sid }
+			render()
+			return
+		}
+		L.busy = true
+		L.flow = flow
+		writing = flow
+		let stop = null
+		let submitted = false
+		try {
+			for (const [index, key] of plan.entries()) {
+				const field = dev.fieldMap[key]
+				if (stop) {
+					L.writes[key] = { state: 'skipped', detail: stop, gen: flow.gen }
+					continue
+				}
+				const text = L.drafts[key]
+				let expected
+				submitted = false
+				try {
+					const before = flow.check()
+					if (before) throw before
+					L.task = { kind: 'run', text: '写入 ' + (index + 1) + '/' + plan.length + ' · ' + field.name, sid: c.sid }
+					render()
+					if (!M.writeAllowed(L, field, flow.gen)) throw new Error('先读取当前值')
+					expected = M.inputValue(dev, field, text)
+					const warning = !field.group ? '当前值无法从设备读取，写入后只能确认设备已应答、无法确认是否生效。' : ''
+					if (warning || field.write.confirm) {
+						const batchWarning = index + 1 < plan.length ? '取消此项会中止本轮，后续项不会发送。' : ''
+						const confirmed = await window.AppDialog.confirm([warning, field.write.confirm, batchWarning].filter(Boolean).join('\n'), { title: '写入「' + field.name + '」？', danger: true })
+						if (!confirmed) { flow.cancel('已取消写入'); throw flow.check() }
+					}
+					const reply = await flow.writeField(dev, field, expected, { sid: c.sid, gen: flow.gen, text: text, get: M.getter(L, flow.gen) })
+					submitted = true
+					const group = reply === 'ok' && field.group && dev.groups.find(function (item) { return item.id === field.group })
+					const confirmation = group ? confirmationFor(field, await requestGroup(c, flow, group)) : null
+					L.writes[key] = Object.assign(M.writeResult(reply, confirmation, null, expected), { expected: expected, gen: flow.gen, text: text })
+					if (L.writes[key].state === 'confirmed') delete L.drafts[key]
+				} catch (error) {
+					L.writes[key] = Object.assign(submitted ? M.writeResult('ok', { detail: failText(error) }) : M.writeResult(null, null, error), { gen: flow.gen })
+					if (field.secret && error.code === 'build') L.writes[key].detail = '保密字段编码失败'
+					if ((stopFlow(error) || (!submitted && error.sent)) && index + 1 < plan.length) {
+						stop = '前一项（' + field.name + '）' + writeStopReason(error, submitted) + '后中止，未发送'
+						L.writes[key].detail += '；已中止本轮，后续项未发送'
+					}
+				}
+			}
+		} finally {
+			flow.end()
+			L.flow = null
+			L.busy = false
+			writing = null
+			const totals = Object.create(null)
+			plan.forEach(function (key) { const state = L.writes[key].state; totals[state] = (totals[state] || 0) + 1 })
+			const summary = Object.keys(WRITE_LABELS).filter(function (state) { return totals[state] }).map(function (state) { return WRITE_LABELS[state] + ' ' + totals[state] })
+			L.task = { kind: totals.confirmed === plan.length ? 'ok' : 'warn', text: '写入 · ' + summary.join(' · '), until: Date.now() + 10000, sid: c.sid }
+			render()
+		}
 	}
 
 	function readGroups(gids, label) {
@@ -325,6 +423,7 @@
 
 	function valueText(c, key) {
 		const r = M.reading(c.L, key)
+		if (r && c.dev.fieldMap[key] && c.dev.fieldMap[key].secret) return '••••'
 		// 换算只用同一路、同一连接代次的其它读数（重连后不拿上一连接的基准去算）
 		return r ? M.formatValue(c.dev, key, r.raw, M.getter(c.L, r.gen)) : '—'
 	}
@@ -419,7 +518,7 @@
 				return h('span', { class: 'dp-idchip' },
 					h('span', { class: 'dp-k', text: f.name }),
 					r ? valBtn(c, k) : h('span', { class: 'dp-ph', text: '—' }),
-					r && h('button', { type: 'button', class: 'dp-copy', title: '复制', 'aria-label': '复制 ' + f.name, text: '⧉', onclick: function () { copyText(valueText(c, k), f.name) } }))
+					r && !f.secret && h('button', { type: 'button', class: 'dp-copy', title: '复制', 'aria-label': '复制 ' + f.name, text: '⧉', onclick: function () { copyText(valueText(c, k), f.name) } }))
 			})) : unreadHint(c, w))
 		const key = 'ids:' + w.title
 		const pref = c.L.ui[key]
@@ -534,17 +633,124 @@
 		const readable = passive ? true : M.readable(c.dev, k)
 		const stale = M.isStale(r, c.gen)
 		let state
-		if (!readable) state = h('span', { class: 'dp-ph', text: '读不到' })
+		if (!readable && !r) state = h('span', { class: 'dp-ph', text: '读不到' })
 		else if (!r) state = h('span', { class: 'dp-ph', text: passive ? '等上报' : '未读' })
 		else if (stale) state = h('span', { class: 'dp-pill is-warn', text: '上次连接' })
 		else if (M.readingUnsure(c.L, k)) state = h('span', { class: 'dp-pill is-warn', text: '归属未确认', title: M.readingUnsure(c.L, k) })
-		else state = h('span', { class: 'dp-ph', 'data-dp-ago': r.at, text: ago(r.at) })
+		else state = !f.group && f.write ? h('span', { class: 'dp-ph', text: '被动读数 · 仅供参考' }) : h('span', { class: 'dp-ph', 'data-dp-ago': r.at, text: ago(r.at) })
+		const result = c.L.writes[k]
+		const hasDraft = Object.prototype.hasOwnProperty.call(c.L.drafts, k)
+		const ready = M.writeAllowed(c.L, f, c.gen)
+		const disabled = !!writing || c.L.busy || !c.open
+		const button = function (label, click, off) {
+			return h('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', text: label, onclick: click, disabled: !!off })
+		}
+		let editor = null
+		if (f.write) {
+			const opts = f.write.options
+			const attrs = { id: 'dp-set-' + k, disabled: disabled || !ready, 'aria-label': f.name + '设置值', title: f.write.hint }
+			const input = opts
+				? h('select', Object.assign(attrs, { class: 'form-select form-select-sm' }), h('option', { value: '', text: '请选择', disabled: true }), Object.keys(opts).map(function (value) { return h('option', { value: value, text: opts[value] }) }))
+				: h('input', Object.assign(attrs, { class: 'form-control form-control-sm', type: f.secret ? 'password' : 'text', autocomplete: 'off', maxlength: f.write.maxLen, placeholder: ready ? (f.write.hint || '输入设置值') : '先读取' }))
+			input.value = hasDraft ? c.L.drafts[k] : ''
+			const commit = button('写入', function () { runWrite(c, [k]) }, disabled || !ready || !hasDraft)
+			const preview = !f.secret && h('span', { class: 'dp-ph dp-write-preview' })
+			function parseSetting(show) {
+				let raw
+				try { if (show) raw = M.inputValue(c.dev, f, input.value) } catch (error) {}
+				if (preview) preview.textContent = raw === undefined ? '' : '预览：' + M.formatValue(c.dev, k, raw, M.getter(c.L, c.gen))
+				return raw
+			}
+			parseSetting(hasDraft)
+			input.addEventListener('input', function () {
+				const raw = parseSetting(true)
+				const changed = raw === undefined || !r || stale || !M.sameValue(r.raw, raw)
+				if (changed) c.L.drafts[k] = input.value
+				else delete c.L.drafts[k]
+				commit.disabled = !changed
+				syncDraftToolbar(c)
+			})
+			editor = h('div', { class: 'dp-row-edit' }, input, commit, preview,
+				!ready && h('span', { class: 'dp-ph', text: '先读取' }))
+		}
+		const rowActions = result && result.state === 'mismatch' && hasDraft ? [
+			button('重试', function () { runWrite(c, [k]) }, disabled || !ready),
+			button('改用设备值', function () { delete c.L.drafts[k]; delete c.L.writes[k]; render() }, disabled),
+		] : result && result.state === 'processing' && result.gen === c.gen && f.group ? button('稍后回读', function () {
+			const finish = function (reading) {
+				const next = M.writeResult('ok', confirmationFor(f, reading), null, result.expected)
+				c.L.writes[k] = Object.assign(next, { gen: c.gen })
+				if (next.state === 'confirmed' && c.L.drafts[k] === result.text) delete c.L.drafts[k]
+			}
+			runRead('稍后回读', [f.group], finish)
+		}, disabled) : result && result.state === 'rejected' && hasDraft ? button('撤销', function () {
+			delete c.L.drafts[k]; delete c.L.writes[k]; render()
+		}, disabled) : null
 		return h('div', { class: 'dp-row' + (stale ? ' is-stale' : ''), 'data-key': k },
 			h('div', { class: 'dp-row-n' }, h('b', { text: f.name }), f.addr && h('span', { class: 'dp-addr', text: f.addr })),
 			h('div', { class: 'dp-row-v' }, h('span', { class: 'dp-cl', text: '当前' }),
-				readable ? valBtn(c, k) : h('span', { class: 'dp-ph', text: '协议没有对应查询' })),
-			h('div', { class: 'dp-row-s' }, state),
-			(f.note || !readable) && h('div', { class: 'dp-row-note', text: !readable ? '这一项协议里没有对应的查询，读不到当前值' + (f.note ? '；' + f.note : '') : f.note }))
+				(readable || r) ? valBtn(c, k) : h('span', { class: 'dp-ph', text: '协议没有对应查询' })),
+			editor || h('span', { class: 'dp-row-edit dp-ph', text: '只读' }),
+			h('div', { class: 'dp-row-s' }, state, result && h('div', { class: 'dp-write-result', 'data-state': result.state, text: (result.gen !== c.gen ? '上次连接 · ' : '') + WRITE_LABELS[result.state] + (result.detail ? '：' + result.detail : '') }), rowActions),
+			(f.note || !readable) && h('div', { class: 'dp-row-note', text: !readable ? '这一项协议里没有对应的查询' + (f.note ? '；' + f.note : '') : f.note }))
+	}
+
+	function draftKeys(c) {
+		return Object.keys(c.L.drafts).filter(function (key) { const field = c.dev.fieldMap[key]; return field && field.write })
+	}
+
+	function syncDraftToolbar(c) {
+		const count = document.getElementById('dp-draft-count')
+		const commit = document.getElementById('dp-write-all')
+		const undo = document.getElementById('dp-undo-all')
+		if (!count || !commit || !undo) return
+		const keys = draftKeys(c)
+		count.textContent = keys.length + ' 项改动'
+		commit.disabled = !!writing || c.L.busy || !c.open || !keys.some(function (key) { return M.writeAllowed(c.L, c.dev.fieldMap[key], c.gen) })
+		undo.disabled = !!writing || c.L.busy || !keys.length
+	}
+
+	function downloadSnapshot(c) {
+		const data = M.exportSnapshot(c.L, c.dev, writeText)
+		const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
+		const link = h('a', { href: url, download: 'device-snapshot.json' })
+		document.body.append(link)
+		link.click()
+		link.remove()
+		setTimeout(function () { URL.revokeObjectURL(url) }, 1000)
+	}
+
+	async function importSnapshot(c, file) {
+		if (!file) return
+		try {
+			if (file.size > 1024 * 1024) throw new Error('快照文件过大')
+			const data = JSON.parse(await file.text())
+			const rows = M.compareSnapshot(c.L, c.dev, c.gen, data)
+			const labels = { same: '一致', different: '不一致', unread: '未读或过期' }
+			const diff = new Set(rows.filter(function (row) { return row.state === 'different' }).map(function (row) { return row.field.key }))
+			await window.AppDialog.panel({ title: '快照对比', wide: true, build: function (body, controls) {
+				const notice = h('p', { text: '仅将确认不一致的项加入草稿，不发送。' })
+				body.append(notice)
+				add(body, Object.keys(labels).map(function (state) {
+					const subset = rows.filter(function (row) { return row.state === state })
+					return h('details', { open: state === 'different' }, h('summary', { text: labels[state] + ' ' + subset.length + ' 项' }),
+						h('ul', {}, subset.map(function (row) {
+							const current = state !== 'unread' ? ' · 当前：' + valueText(c, row.field.key) : ''
+							return h('li', { text: row.field.name + current + ' · 快照：' + row.formatted })
+						})))
+				}))
+				if (diff.size) body.append(h('button', { type: 'button', class: 'btn btn-sm btn-primary mt-2', text: '套用', onclick: function () {
+					const now = ctx()
+					if (writing || now.L !== c.L || now.L.busy || now.dev !== c.dev || now.gen !== c.gen) {
+						notice.textContent = '连接或协议已变化，请关闭后重新导入。'
+						return
+					}
+					M.applySnapshot(c.L, M.compareSnapshot(c.L, c.dev, c.gen, data).filter(function (row) { return diff.has(row.field.key) }))
+					controls.close()
+					render()
+				} }))
+			} })
+		} catch (error) { await window.AppDialog.alert(error.message, { title: '无法导入快照' }) }
 	}
 
 	function renderParamRows(c, wrap) {
@@ -567,13 +773,21 @@
 			return
 		}
 		add(wrap, [info,
-			h('div', { class: 'dp-rhead' }, h('span', { text: '参数' }), h('span', { text: '设备当前值' }), h('span', { text: '状态' })),
+			h('div', { class: 'dp-rhead' }, h('span', { text: '参数' }), h('span', { text: '设备当前值' }), h('span', { text: '设置值' }), h('span', { text: '状态' })),
 			keys.map(function (k) { return paramRow(c, k) })])
 	}
 
 	function renderParams(c) {
 		const cats = c.dev.categories
-		if (!cats.length) return h('div', { class: 'dp-empty', text: '协议没有声明参数分类' })
+		const file = h('input', { type: 'file', accept: '.json,application/json', hidden: true, onchange: function () { importSnapshot(c, file.files[0]); file.value = '' } })
+		const actions = h('div', { class: 'dp-write-tools' },
+			h('span', { id: 'dp-draft-count', role: 'status' }),
+			h('button', { type: 'button', id: 'dp-write-all', class: 'btn btn-sm btn-primary', text: '全部写入', onclick: function () { runWrite(c, draftKeys(c)) } }),
+			h('button', { type: 'button', id: 'dp-undo-all', class: 'btn btn-sm btn-outline-secondary', text: '撤销全部', onclick: function () { draftKeys(c).forEach(function (key) { delete c.L.drafts[key]; delete c.L.writes[key] }); render() } }),
+			writing && c.L.flow === writing && h('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', text: '取消写入', onclick: cancelRead }),
+			h('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', text: '导出快照', onclick: function () { downloadSnapshot(c) } }),
+			h('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', text: '导入快照', disabled: !!writing || c.L.busy, onclick: function () { file.click() } }), file)
+		if (!cats.length) return h('div', {}, actions, h('div', { class: 'dp-empty', text: '协议没有声明参数分类' }))
 		const cat = currentCategory(c)
 		const rows = h('div', { class: 'dp-ptable-rows' })
 		const search = h('input', { class: 'form-control form-control-sm dp-search', type: 'search', id: 'dp-param-search', placeholder: '搜索全部参数（名称或地址）', 'aria-label': '搜索参数', value: c.L.ui.query || '' })
@@ -596,7 +810,7 @@
 			})
 		}))
 		renderParamRows(c, rows)
-		return h('div', { class: 'dp-params' }, rail, h('div', { class: 'dp-ptable' }, h('div', { class: 'dp-ptools' }, search), rows))
+		return h('div', {}, actions, h('div', { class: 'dp-params' }, rail, h('div', { class: 'dp-ptable' }, h('div', { class: 'dp-ptools' }, search), rows)))
 	}
 
 	function renderInspector(c) {
@@ -613,6 +827,10 @@
 			h('div', { class: 'dp-insp-val' }, h('span', { class: 'dp-k', text: '值' }), h('b', { text: valueText(c, key) })))
 		if (!rec) {
 			box.append(h('p', { class: 'dp-fine', text: '来源帧已不在缓存里（只保留最近的帧）' }))
+			return box
+		}
+		if (f.secret || rec.secret) {
+			box.append(h('p', { class: 'dp-fine', text: '来源帧含保密字段，不展示可复制的帧数据' }))
 			return box
 		}
 		const stale = rec.gen !== c.gen
@@ -661,6 +879,7 @@
 		const prevBody = root.querySelector('.dp-body')
 		const scroll = prevBody ? prevBody.scrollTop : 0
 		const focusSearch = document.activeElement && document.activeElement.id === 'dp-param-search'
+		const editor = document.activeElement && document.activeElement.id.startsWith('dp-set-') ? document.activeElement : null
 		// 读取限制说明是可聚焦的：重绘（每秒的任务到期、新读数）后把焦点还给它，读屏 / 键盘用户才不会丢位置
 		const focusLimit = document.activeElement && document.activeElement.id === 'dp-read-limit'
 		const narrow = (root.clientWidth || window.innerWidth) < NARROW
@@ -678,14 +897,14 @@
 				h('button', { type: 'button', role: 'menuitem', disabled: L.busy || !c.open, onclick: function () { L.ui.more = false; readGroups(c.dev.readSets.all, '全部读取') } },
 					'全部读取', h('small', { text: '状态 + 全部参数，共 ' + c.dev.readSets.all.length + ' 组查询' })),
 				h('button', { type: 'button', role: 'menuitem', disabled: !L.busy, onclick: function () { L.ui.more = false; cancelRead() } },
-					'取消读取', h('small', { text: '没发出的组不再发送' }))))
+					writing && L.flow === writing ? '取消写入' : '取消读取', h('small', { text: '没发出的请求不再发送' }))))
 		const head = h('div', { class: 'dp-head' },
 			h('div', { class: 'dp-who' },
 				h('b', {}, laneChip(c.sid), h('span', { text: title }), nameVal && h('span', { class: 'dp-name', text: nameVal })),
 				h('span', { class: 'dp-readat', text: readText }),
 				// 读取的归属限制如实写出来：宿主只能保证认领的是「查询发出后才开始」的匹配帧，迟到应答分不出来
 				// 常显一行短提示，全文在 title / aria-label；点按（窄屏、触屏没有悬停）展开或收起全文，状态只认 aria-expanded
-				c.dev.queryable && h('button', {
+				(c.dev.queryable || c.dev.buildWrite) && h('button', {
 					type: 'button',
 					class: 'dp-limit',
 					id: 'dp-read-limit',
@@ -715,7 +934,15 @@
 		root.textContent = ''
 		root.dataset.lane = c.sid
 		add(root, [head, taskLine, tabs, banner, body, renderInspector(c)])
+		syncDraftToolbar(c)
 		body.scrollTop = scroll
+		if (editor) {
+			const next = document.getElementById(editor.id)
+			if (next && !next.disabled) {
+				next.focus({ preventScroll: true })
+				if (editor.selectionStart != null) next.setSelectionRange(editor.selectionStart, editor.selectionEnd)
+			}
+		}
 		if (focusLimit) {
 			const lb = document.getElementById('dp-read-limit')
 			if (lb) lb.focus()

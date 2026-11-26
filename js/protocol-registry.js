@@ -255,7 +255,7 @@
 			addr: devText(f.addr, 32),
 			options: null,
 			bits: null,
-			// 第二期写入预留：只存约定的纯数据（编码类型、范围、步进、长度、正则、提示），第一期不使用
+			secret: f.secret === true,
 			write: null,
 		}
 		if (isPlainObject(f.options)) {
@@ -280,14 +280,29 @@
 		}
 		if (isPlainObject(f.write)) {
 			const w = f.write
+			const options = isPlainObject(w.options) ? Object.create(null) : null
+			if (options) {
+				const keys = Object.keys(w.options)
+				if (keys.length > DEVICE_MAX_OPTIONS) { errors.push('写入选项过多：' + key); return null }
+				keys.forEach(function (name) {
+					if (devKey(name)) options[name] = devText(w.options[name], 64)
+				})
+			}
+			const pattern = devText(w.pattern, 200)
+			try { if (pattern) new RegExp('^(?:' + pattern + ')$') } catch (e) { errors.push('写入校验表达式无效：' + key); return null }
 			out.write = {
-				encode: devText(w.encode, 32),
 				min: devNum(w.min, null, null, null),
 				max: devNum(w.max, null, null, null),
 				step: devNum(w.step, 0, null, null),
 				maxLen: devNum(w.maxLen, 0, 4096, null),
-				pattern: devText(w.pattern, 200),
+				pattern: pattern,
 				hint: devText(w.hint, 200),
+				options: options,
+				confirm: devText(w.confirm, 300),
+			}
+			if ((out.write.min != null && out.write.max != null && out.write.min > out.write.max) || out.write.step === 0 || (out.write.maxLen != null && !Number.isInteger(out.write.maxLen))) {
+				errors.push('写入约束无效：' + key)
+				return null
 			}
 		}
 		return out
@@ -402,8 +417,8 @@
 			groupIds.push(id)
 			groups.push({ id: id, title: devText(g.title, 64) || id, request: devPlain(g.request), reply: devPlain(g.reply) })
 		})
-		if (!fields.length || !groups.length) return null
-		fields.forEach(function (f) { if (f.group && groupIds.indexOf(f.group) < 0) f.group = null })
+		if (!fields.length || (!groups.length && !(typeof dev.buildWrite === 'function' && typeof dev.matchWriteReply === 'function' && fields.some(function (f) { return f.write && !f.group })))) return null
+		fields.forEach(function (f) { if (f.group && groupIds.indexOf(f.group) < 0) { f.group = null; f.write = null } })
 		const readSets = { status: [], all: [] }
 		;['status', 'all'].forEach(function (k) {
 			arr(rsIn[k]).forEach(function (id) { if (typeof id === 'string' && groupIds.indexOf(id) >= 0 && readSets[k].indexOf(id) < 0) readSets[k].push(id) })
@@ -432,10 +447,14 @@
 		const rawExtract = fn('extract')
 		const rawFormat = fn('format')
 		const rawByteGroups = fn('byteGroups')
+		const rawWrite = fn('buildWrite')
+		const rawWriteMatch = fn('matchWriteReply')
+		const rawInput = fn('parseInput')
 		// 没有 extract 面板什么也取不到（被动更新与读取认领都靠它），整份声明拒绝并说明，不当成可用面板
 		if (!rawExtract) return reject('缺少 extract：面板靠它从帧里取值，读取也要靠它确认应答里确实有该组字段')
 		// 可查询 = 能组请求帧且能认领应答；缺一项这个面板只被动更新（不出现读取按键，组不发查询）
 		const canQuery = !!(rawBuild && rawMatch)
+		fields.forEach(function (field) { if (!rawWrite || !rawWriteMatch || (field.group && !canQuery)) field.write = null })
 		const out = {
 			title: devText(dev.title, 64),
 			nameKey: nameKey && hasOwn(fieldMap, nameKey) ? nameKey : null,
@@ -448,6 +467,26 @@
 			readSets: readSets,
 			status: status,
 			categories: categories,
+			buildWrite: rawWrite && rawWriteMatch ? function (field, value, ctx) {
+				if (!field || fieldMap[field.key] !== field || !field.write) throw new Error('字段不可写')
+				const bytes = rawWrite.call(dev, field, value, ctx || {})
+				if (!ArrayBuffer.isView(bytes) || Object.prototype.toString.call(bytes) !== '[object Uint8Array]' || !bytes.length) throw new Error('协议没有构造出写入帧')
+				if (bytes.length > DEVICE_MAX_REQUEST) throw new Error('写入帧超过 ' + DEVICE_MAX_REQUEST + ' 字节')
+				return new Uint8Array(bytes)
+			} : null,
+			matchWriteReply: rawWrite && rawWriteMatch ? function (field, parsed, frame) {
+				try {
+					const result = rawWriteMatch.call(dev, field, parsed, frame)
+					return ['ok', 'rejected', 'processing'].indexOf(result) >= 0 ? result : null
+				} catch (e) { warn('matchWriteReply', e); return null }
+			} : null,
+			parseInput: rawInput ? function (field, text) {
+				try {
+					const value = rawInput.call(dev, field, text)
+					return value === undefined ? undefined : devRawValue(value)
+				}
+				catch (e) { warn('parseInput', field && field.secret ? '保密字段输入转换失败' : e); return undefined }
+			} : null,
 			// 组请求帧：返回 Uint8Array，失败抛错（由请求层如实报告）
 			buildRequest: canQuery ? function (group, ctx) {
 				const r = rawBuild.call(dev, group, ctx || {})

@@ -40,6 +40,8 @@
 				sid: sid,
 				pid: pid || '',
 				readings: Object.create(null),
+				drafts: Object.create(null),
+				writes: Object.create(null),
 				frames: [],
 				groups: Object.create(null),
 				unsure: Object.create(null), // rec id → 归属未确认说明
@@ -90,7 +92,8 @@
 		const hex = toHex(bytes)
 		const at = typeof o.at === 'number' ? o.at : Date.now()
 		// 每一帧只入账一次（收帧泵是唯一入口，请求只认领泵入账过的记录），所以这里不去重
-		const rec = { id: ++store.seq, sid: o.sid, pid: o.pid || '', gen: o.gen, at: at, bytes: bytes, hex: hex, parsed: o.parsed }
+		const rec = { id: ++store.seq, sid: o.sid, pid: o.pid || '', gen: o.gen, at: at, bytes: bytes, hex: hex, parsed: o.parsed,
+			secret: keys.some(function (key) { return dev.fieldMap[key] && dev.fieldMap[key].secret }) }
 		L.frames.push(rec)
 		keys.forEach(function (k) {
 			L.readings[k] = { raw: vals[k], at: rec.at, gen: rec.gen, rec: rec.id }
@@ -103,7 +106,84 @@
 			g.error = null
 		})
 		pruneFrames(L)
-		return { rec: rec, keys: keys, groups: matched }
+		return { rec: rec, keys: keys, groups: matched, values: vals }
+	}
+
+	function sameValue(left, right) {
+		return left === right || (Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every(function (value, index) { return value === right[index] }))
+	}
+
+	function inputValue(dev, field, text) {
+		const rule = field.write
+		if (!rule) throw new Error('字段不可写')
+		if (text.length > (rule.maxLen == null ? 2048 : rule.maxLen)) throw new Error('输入过长')
+		if (rule.options && !Object.prototype.hasOwnProperty.call(rule.options, text)) throw new Error('请选择有效选项')
+		if (rule.pattern) {
+			const match = new RegExp('^(?:' + rule.pattern + ')$').exec(text)
+			if (!match || match[0] !== text) throw new Error('输入格式无效')
+		}
+		let val = text
+		const numeric = ['number', 'bits', 'hex'].includes(field.kind) || (field.kind === 'enum' && /^-?\d+(?:\.\d+)?$/.test(text)) || rule.min != null || rule.max != null || rule.step != null
+		if (numeric && (rule.min != null || rule.max != null || rule.step != null || !dev.parseInput)) {
+			val = field.kind === 'hex' && /^[\da-f]+$/i.test(text) ? Number('0x' + text) : Number(text)
+			if (!text.trim() || !Number.isFinite(val) || (rule.min != null && val < rule.min) || (rule.max != null && val > rule.max)) throw new Error('数值超出范围')
+			const steps = (val - (rule.min || 0)) / rule.step
+			if (rule.step > 0 && Math.abs(steps - Math.round(steps)) > 1e-7) throw new Error('数值不符合步进')
+		}
+		if (dev.parseInput) val = dev.parseInput(field, text)
+		else if (field.kind === 'flag') val = text === 'true' || text === '1' ? true : text === 'false' || text === '0' ? false : undefined
+		if (val === undefined || val === null) throw new Error('协议无法转换此输入')
+		return val
+	}
+
+	function writeAllowed(L, field, gen) {
+		const current = reading(L, field.key)
+		return !!(field.write && (!field.group || (current && current.gen === gen)))
+	}
+
+	function writeResult(reply, confirmation, error, expected) {
+		if (error) return { state: error.sent ? 'unknown' : 'skipped', detail: error.message }
+		if (reply !== 'ok') return { state: reply }
+		if (!confirmation || confirmation.unsure || confirmation.raw === undefined) return { state: 'unconfirmed', detail: confirmation && confirmation.detail }
+		return { state: sameValue(expected, confirmation.raw) ? 'confirmed' : 'mismatch' }
+	}
+
+	function exportSnapshot(L, dev, draftText) {
+		const values = Object.create(null)
+		dev.fields.forEach(function (field) {
+			const value = reading(L, field.key)
+			if (!field.secret && value) values[field.key] = { raw: value.raw, at: value.at, gen: value.gen, text: field.write ? draftText(field, value.raw) : undefined }
+		})
+		return { version: 1, protocolId: L.pid, values: values }
+	}
+
+	function compareSnapshot(L, dev, gen, snapshot) {
+		if (!snapshot || snapshot.version !== 1 || snapshot.protocolId !== L.pid || !snapshot.values || typeof snapshot.values !== 'object' || Array.isArray(snapshot.values)) throw new Error('快照格式或协议不匹配')
+		return dev.fields.flatMap(function (field) {
+			if (!field.write || field.secret || !Object.prototype.hasOwnProperty.call(snapshot.values, field.key)) return []
+			const value = snapshot.values[field.key]
+			if (!value || typeof value.text !== 'string') return []
+			let raw
+			try { raw = inputValue(dev, field, value.text) } catch (err) { return [] }
+			if (!sameValue(raw, value.raw)) return []
+			const current = reading(L, field.key)
+			const state = !current || current.gen !== gen || readingUnsure(L, field.key) ? 'unread' : sameValue(current.raw, raw) ? 'same' : 'different'
+			const formatted = formatValue(dev, field.key, raw, function (key) {
+				const companion = dev.fieldMap[key] && !dev.fieldMap[key].secret && Object.prototype.hasOwnProperty.call(snapshot.values, key) && snapshot.values[key]
+				if (!companion || companion.gen !== value.gen) return undefined
+				const scalar = function (item) { return item === null || typeof item === 'string' || typeof item === 'boolean' || Number.isFinite(item) }
+				if (scalar(companion.raw) || (Array.isArray(companion.raw) && companion.raw.length <= 64 && companion.raw.every(scalar))) return companion.raw
+			})
+			return [{ field: field, text: value.text, formatted: formatted, state: state }]
+		})
+	}
+
+	function applySnapshot(L, rows) {
+		rows.forEach(function (row) {
+			if (row.state !== 'different') return
+			L.drafts[row.field.key] = row.text
+			delete L.writes[row.field.key]
+		})
 	}
 
 	function setGroupBusy(L, gid, busy) {
@@ -354,6 +434,13 @@
 		createStore: createStore,
 		laneKey: laneKey,
 		lane: lane,
+		inputValue: inputValue,
+		sameValue: sameValue,
+		writeAllowed: writeAllowed,
+		writeResult: writeResult,
+		exportSnapshot: exportSnapshot,
+		compareSnapshot: compareSnapshot,
+		applySnapshot: applySnapshot,
 		ingest: ingest,
 		findFrame: findFrame,
 		setGroupBusy: setGroupBusy,

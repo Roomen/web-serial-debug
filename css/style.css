@@ -14989,6 +14989,7 @@ html[data-layout='modern'] .dp-body {
 	flex: 1 1 auto;
 	min-height: 0;
 	overflow: auto;
+	container-type: inline-size;
 	padding: 12px 16px 24px;
 }
 html[data-layout='modern'] .dp-status {
@@ -15336,10 +15337,42 @@ html[data-layout='modern'] .dp-ptools {
 	margin-bottom: 8px;
 	max-width: 360px;
 }
+html[data-layout='modern'] .dp-write-tools,
+html[data-layout='modern'] .dp-row-edit {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+	min-width: 0;
+}
+html[data-layout='modern'] .dp-write-tools {
+	margin-bottom: 8px;
+}
+html[data-layout='modern'] .dp-row-edit > input,
+html[data-layout='modern'] .dp-row-edit > select {
+	flex: 1 1 7em;
+	min-width: 0;
+}
+html[data-layout='modern'] .dp-write-preview:not(:empty) {
+	flex-basis: 100%;
+	overflow-wrap: anywhere;
+}
+html[data-layout='modern'] .dp-write-preview:empty {
+	display: none;
+}
+html[data-layout='modern'] .dp-write-result {
+	overflow-wrap: anywhere;
+}
+html[data-layout='modern'] .dp-write-result[data-state='confirmed'] {
+	color: var(--success);
+}
+html[data-layout='modern'] .dp-write-result:is([data-state='mismatch'], [data-state='rejected']) {
+	color: var(--danger);
+}
 html[data-layout='modern'] .dp-rhead,
 html[data-layout='modern'] .dp-row {
 	display: grid;
-	grid-template-columns: minmax(140px, 1.2fr) minmax(120px, 1.6fr) 110px;
+	grid-template-columns: minmax(100px, 1fr) minmax(90px, 1fr) minmax(125px, 1.3fr) minmax(95px, 1fr);
 	gap: 4px 12px;
 	align-items: baseline;
 	padding: 6px 4px;
@@ -15350,6 +15383,36 @@ html[data-layout='modern'] .dp-rhead {
 	font-size: 0.72rem;
 	color: var(--text-muted);
 	padding-top: 0;
+}
+@container (max-width: 590px) {
+	html[data-layout='modern'] .dp-params:has(.dp-rail) {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	html[data-layout='modern'] .dp-params > .dp-rail {
+		flex-direction: row;
+		overflow-x: auto;
+	}
+	html[data-layout='modern'] .dp-params > .dp-rail > button {
+		white-space: nowrap;
+	}
+	html[data-layout='modern'] .dp-ptable .dp-rhead {
+		display: none;
+	}
+	html[data-layout='modern'] .dp-ptable .dp-row {
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	}
+	html[data-layout='modern'] .dp-ptable :is(.dp-row-v, .dp-row-edit) {
+		grid-column: 1 / -1;
+	}
+	html[data-layout='modern'] .dp-ptable .dp-row-v {
+		order: 3;
+	}
+	html[data-layout='modern'] .dp-ptable .dp-row-edit {
+		order: 4;
+	}
+	html[data-layout='modern'] .dp-ptable .dp-row-v .dp-cl {
+		display: inline;
+	}
 }
 html[data-layout='modern'] .dp-row-n {
 	display: flex;
@@ -15500,6 +15563,10 @@ html[data-layout='modern'] .dp-insp-parse-body {
 	html[data-layout='modern'] .dp-row-v {
 		grid-column: 1 / -1;
 		order: 3;
+	}
+	html[data-layout='modern'] .dp-row-edit {
+		grid-column: 1 / -1;
+		order: 4;
 	}
 	html[data-layout='modern'] .dp-cl {
 		display: inline;
