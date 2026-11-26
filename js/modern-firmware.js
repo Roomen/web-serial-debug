@@ -395,7 +395,8 @@
 	const STATE_LABEL = { done: '完成', active: '进行中', waiting: '等待', failed: '失败' }
 	const STATE_MARK = { done: '✓', failed: '!', active: '', waiting: '' }
 
-	let ui = null
+	let packUi = null
+	let upUi = null
 	let raf = 0
 
 	function chunkInputValue() {
@@ -441,12 +442,12 @@
 		return { el: wrap, last: last, btn: btn, region: region }
 	}
 
-	function card(n, title, sub) {
+	function card(stepKey, labelNum, title, sub) {
 		const sec = h('section', 'mdn-fw-card')
-		sec.dataset.step = String(n)
+		sec.dataset.step = String(stepKey)
 		const head = h('div', 'mdn-fw-card-head')
-		const cap = h('h3', 'mdn-fw-cap', n + ' · ' + title)
-		cap.id = 'mdn-fw-cap-' + n
+		const cap = h('h3', 'mdn-fw-cap', labelNum + ' · ' + title)
+		cap.id = 'mdn-fw-cap-' + stepKey
 		sec.setAttribute('aria-labelledby', cap.id)
 		head.appendChild(cap)
 		let subEl = null
@@ -465,33 +466,41 @@
 		return n
 	}
 
-	function build() {
-		const rootEl = h('section', 'mdn-fw')
-		rootEl.id = 'mdn-fw'
-		rootEl.setAttribute('aria-label', '固件打包与升级流水线')
-
-		// 顶部四步进度条
+	function buildStepBar(defs) {
 		const steps = h('ol', 'mdn-fw-steps')
 		const stepEls = []
-		;['选择固件', '生成升级包', '升级', '校验'].forEach(function (name, i) {
+		defs.forEach(function (d, i) {
 			const li = h('li', 'mdn-fw-step')
 			const badge = h('span', 'mdn-fw-step-badge', String(i + 1))
 			badge.setAttribute('aria-hidden', 'true')
 			const txt = h('div', 'mdn-fw-step-text')
 			const top = h('div', 'mdn-fw-step-top')
-			const nm = h('span', 'mdn-fw-step-name', name)
+			const nm = h('span', 'mdn-fw-step-name', d.name)
 			const stt = h('span', 'mdn-fw-step-state')
 			top.append(nm, stt)
 			const sum = h('div', 'mdn-fw-step-sum')
 			txt.append(top, sum)
 			li.append(badge, txt)
 			steps.appendChild(li)
-			stepEls.push({ li: li, badge: badge, state: stt, sum: sum })
+			stepEls.push({ idx: d.stageIdx, num: i + 1, li: li, badge: badge, state: stt, sum: sum })
 		})
+		return { el: steps, items: stepEls }
+	}
+
+	// ---- 纯离线打包界面（挂载到 #view-fw-pack） ----
+	function buildPack() {
+		const rootEl = h('section', 'mdn-fw mdn-fw--pack')
+		rootEl.id = 'mdn-fw'
+		rootEl.setAttribute('aria-label', '固件打包流水线')
+
+		const stepBar = buildStepBar([
+			{ stageIdx: 0, name: '选择固件' },
+			{ stageIdx: 1, name: '生成升级包' },
+		])
 		const cards = h('div', 'mdn-fw-cards')
 
 		// 卡片 1：选择固件
-		const c1 = card(1, '选择固件')
+		const c1 = card(1, 1, '选择固件')
 		const slots = {}
 		;[['old', 'fp-drop-old'], ['nw', 'fp-drop-new']].forEach(function (pair) {
 			const slot = h('div', 'mdn-fw-slot')
@@ -515,10 +524,10 @@
 		const udSlot = h('div', 'mdn-fw-slot')
 		park(ud ? ud.closest('.fw-config-item') : null, udSlot)
 		c1.el.appendChild(udSlot)
-		c1.el.appendChild(h('p', 'mdn-fw-hint', '也可以跳过打包，直接把现成的升级包拖进第 3 步的固件文件框。'))
+		c1.el.appendChild(h('p', 'mdn-fw-hint', '也可跳过离线打包，直接在「通信调试 → 固件升级」载入原始固件（自动差分/压缩）或现成升级包。'))
 
 		// 卡片 2：生成升级包
-		const c2 = card(2, '生成升级包')
+		const c2 = card(2, 2, '生成升级包')
 		const typesSlot = h('div', 'mdn-fw-slot')
 		const origin = $('fp-gen-origin')
 		park(origin ? origin.closest('.fw-config-item') : null, typesSlot)
@@ -551,8 +560,53 @@
 		park(logCard, packFold.region)
 		c2.el.appendChild(packFold.el)
 
-		// 卡片 3：升级
-		const c3 = card(3, '升级', '')
+		cards.append(c1.el, c2.el)
+		rootEl.append(stepBar.el, cards)
+		$('view-fw-pack').appendChild(rootEl)
+
+		list.addEventListener('click', function (e) {
+			const b = e.target.closest('.mdn-fw-out')
+			if (!b) return
+			model.pack.selected = Number(b.dataset.i)
+			render()
+		})
+		dl.addEventListener('click', function () {
+			const o = model.pack.outputs[model.pack.selected]
+			const item = o && root._fwPackOutputs && root._fwPackOutputs[o.idx]
+			if (!item || !item.buffer || !root.FirmwarePackager) return
+			root.FirmwarePackager.downloadBlob(new Uint8Array(item.buffer), item.name)
+		})
+		use.addEventListener('click', function () {
+			const o = model.pack.outputs[model.pack.selected]
+			const item = o && root._fwPackOutputs && root._fwPackOutputs[o.idx]
+			if (!item || !item.buffer || !root.setFwUpgradeFile || model.up.running) return
+			root.setFwUpgradeFile(item.buffer, item.name)
+			if (root.DevicePanel && typeof root.DevicePanel.showFirmware === 'function') root.DevicePanel.showFirmware()
+			else if (root.Workbench) root.Workbench.open('firmware')
+		})
+
+		packUi = {
+			root: rootEl, stepEls: stepBar.items, slots: slots, packNote: packNote, list: list, outEmpty: outEmpty, zipNote: zipNote,
+			dl: dl, use: use, packFold: packFold, packSig: '',
+		}
+	}
+
+	// ---- 在线固件升级与校验界面（挂载到通信调试子视图 #firmware-panel，桌面与移动端共用） ----
+	function buildUpgrade() {
+		const hostEl = $('firmware-panel')
+		if (!hostEl) return
+		const rootEl = h('section', 'mdn-fw mdn-fw--upgrade')
+		rootEl.id = 'mdn-fw-upgrade'
+		rootEl.setAttribute('aria-label', '固件升级与校验')
+
+		const stepBar = buildStepBar([
+			{ stageIdx: 2, name: '升级' },
+			{ stageIdx: 3, name: '校验' },
+		])
+		const cards = h('div', 'mdn-fw-cards')
+
+		// 卡片 1(step=3)：升级
+		const c3 = card(3, 1, '固件升级', '')
 		const fileA = $('fw-file') ? $('fw-file').closest('.fw-upgrade-card') : null
 		const fileSlot = h('div', 'mdn-fw-slot')
 		park(fileA, fileSlot)
@@ -592,8 +646,8 @@
 		park($('fw-log'), upFold.region)
 		c3.el.appendChild(upFold.el)
 
-		// 卡片 4：校验
-		const c4 = card(4, '校验')
+		// 卡片 2(step=4)：校验
+		const c4 = card(4, 2, '版本校验')
 		const rows = h('dl', 'mdn-fw-rows')
 		const val = {}
 		;[['pre', '升级前'], ['target', '目标'], ['post', '升级后']].forEach(function (p) {
@@ -612,31 +666,11 @@
 		const verifyHint = h('p', 'mdn-fw-hint', '升级命令发出、设备重启后点「查询版本」，与目标版本比对；也可随时查询当前版本。')
 		c4.el.append(verdict, verifyBtn, verifyHint)
 
-		cards.append(c1.el, c2.el, c3.el, c4.el)
-		rootEl.append(steps, cards)
+		cards.append(c3.el, c4.el)
+		rootEl.append(stepBar.el, cards)
+		hostEl.textContent = ''
+		hostEl.appendChild(rootEl)
 
-		$('view-fw-pack').appendChild(rootEl)
-
-		// 新控件只驱动现有逻辑
-		list.addEventListener('click', function (e) {
-			const b = e.target.closest('.mdn-fw-out')
-			if (!b) return
-			model.pack.selected = Number(b.dataset.i)
-			render()
-		})
-		dl.addEventListener('click', function () {
-			const o = model.pack.outputs[model.pack.selected]
-			const item = o && root._fwPackOutputs && root._fwPackOutputs[o.idx]
-			if (!item || !item.buffer || !root.FirmwarePackager) return
-			root.FirmwarePackager.downloadBlob(new Uint8Array(item.buffer), item.name)
-		})
-		use.addEventListener('click', function () {
-			const o = model.pack.outputs[model.pack.selected]
-			const item = o && root._fwPackOutputs && root._fwPackOutputs[o.idx]
-			if (!item || !item.buffer || !root.setFwUpgradeFile || model.up.running) return
-			root.setFwUpgradeFile(item.buffer, item.name)
-			c3.el.scrollIntoView({ block: 'nearest' })
-		})
 		verifyBtn.addEventListener('click', function () {
 			const q = $('fw-query')
 			if (q && !q.disabled) q.click()
@@ -658,11 +692,9 @@
 			if (t !== canvas.title) canvas.title = t
 		})
 
-		ui = {
-			root: rootEl, stepEls: stepEls, slots: slots, packNote: packNote, list: list, outEmpty: outEmpty, zipNote: zipNote,
-			dl: dl, use: use, packFold: packFold, upFold: upFold, c3: c3, big: big, stats: stats, canvas: canvas, gridWrap: gridWrap,
+		upUi = {
+			root: rootEl, stepEls: stepBar.items, upFold: upFold, c3: c3, big: big, stats: stats, canvas: canvas, gridWrap: gridWrap,
 			gridEmpty: gridEmpty, legendItems: legendItems, upNote: upNote, val: val, verdict: verdict, verifyBtn: verifyBtn,
-			packSig: '',
 		}
 	}
 
@@ -680,21 +712,33 @@
 		if (el.textContent !== n.msg) el.textContent = n.msg
 	}
 
-	function renderSteps() {
-		deriveStages(model).forEach(function (s, i) {
-			const e = ui.stepEls[i]
+	function applyStepItems(items, stages) {
+		items.forEach(function (e) {
+			const s = stages[e.idx]
+			if (!s) return
 			e.li.dataset.state = s.state
 			if (s.state === 'active') e.li.setAttribute('aria-current', 'step')
 			else e.li.removeAttribute('aria-current')
-			e.badge.textContent = s.state === 'waiting' ? String(i + 1) : STATE_MARK[s.state]
+			e.badge.textContent = s.state === 'waiting' ? String(e.num) : STATE_MARK[s.state]
 			e.state.textContent = STATE_LABEL[s.state]
 			e.sum.textContent = s.summary
 		})
 	}
 
+	function renderPackSteps() {
+		if (!packUi) return
+		applyStepItems(packUi.stepEls, deriveStages(model))
+	}
+
+	function renderUpgradeSteps() {
+		if (!upUi) return
+		applyStepItems(upUi.stepEls, deriveStages(model))
+	}
+
 	function renderFiles() {
+		if (!packUi) return
 		;[['old', model.pack.old], ['nw', model.pack.nw]].forEach(function (pair) {
-			const ver = ui.slots[pair[0]].ver
+			const ver = packUi.slots[pair[0]].ver
 			if (!ver) return
 			const f = pair[1]
 			if (f && f.version) {
@@ -708,17 +752,18 @@
 	}
 
 	function renderPack() {
+		if (!packUi) return
 		const p = model.pack
-		setNote(ui.packNote, p.notice)
-		ui.outEmpty.hidden = p.outputs.length > 0
+		setNote(packUi.packNote, p.notice)
+		packUi.outEmpty.hidden = p.outputs.length > 0
 		const sig = p.outputs.map(function (o) { return o.idx + ':' + o.size + ':' + o.base }).join('|')
-		if (sig === ui.packSig) {
-			Array.prototype.forEach.call(ui.list.children, function (b, i) { b.setAttribute('aria-selected', String(i === p.selected)) })
+		if (sig === packUi.packSig) {
+			Array.prototype.forEach.call(packUi.list.children, function (b, i) { b.setAttribute('aria-selected', String(i === p.selected)) })
 		} else {
-			ui.packSig = sig
-			ui.list.textContent = ''
+			packUi.packSig = sig
+			packUi.list.textContent = ''
 		}
-		if (ui.list.children.length === 0) p.outputs.forEach(function (o, i) {
+		if (packUi.list.children.length === 0) p.outputs.forEach(function (o, i) {
 			const b = h('button', 'mdn-fw-out')
 			b.type = 'button'
 			b.setAttribute('role', 'option')
@@ -737,23 +782,24 @@
 			}
 			const label = KIND_LABEL[o.kind] || '升级包'
 			b.appendChild(h('span', 'mdn-fw-out-desc', label + (r != null ? ' · ' + Math.round(r * 100) + '%' : '')))
-			ui.list.appendChild(b)
+			packUi.list.appendChild(b)
 		})
 		if (p.zip) {
-			ui.zipNote.hidden = false
-			ui.zipNote.textContent = 'ZIP：' + p.zip.name + ' · ' + fmtSize(p.zip.size) + ' · ' + p.zip.count + ' 个文件'
+			packUi.zipNote.hidden = false
+			packUi.zipNote.textContent = 'ZIP：' + p.zip.name + ' · ' + fmtSize(p.zip.size) + ' · ' + p.zip.count + ' 个文件'
 		} else {
-			ui.zipNote.hidden = true
+			packUi.zipNote.hidden = true
 		}
 		const has = p.outputs.length > 0 && p.selected >= 0
-		ui.dl.disabled = !has
-		ui.use.disabled = !has || model.up.running
-		ui.packFold.last.textContent = shortMsg(p.lastLog, 60)
+		packUi.dl.disabled = !has
+		packUi.use.disabled = !has || model.up.running
+		packUi.packFold.last.textContent = shortMsg(p.lastLog, 60)
 	}
 
 	function renderUpgrade(now) {
+		if (!upUi) return
 		const u = model.up
-		ui.big.textContent = u.percent + '%'
+		upUi.big.textContent = u.percent + '%'
 		let line
 		if (u.plan) {
 			const st = computeStats(model, now)
@@ -765,11 +811,11 @@
 		} else {
 			line = u.running ? (PHASE_TEXT[u.phase] || '升级中') : '未开始'
 		}
-		ui.stats.textContent = line
-		setNote(ui.upNote, u.notice)
-		ui.upFold.last.textContent = shortMsg(u.lastLog, 60)
+		upUi.stats.textContent = line
+		setNote(upUi.upNote, u.notice)
+		upUi.upFold.last.textContent = shortMsg(u.lastLog, 60)
 		// 当前走哪个串口：与顶栏主发口一致
-		if (ui.c3.sub) {
+		if (upUi.c3.sub) {
 			let t = ''
 			try {
 				const sid = root.serialApi && root.serialApi.getActiveSendSid && root.serialApi.getActiveSendSid()
@@ -777,17 +823,18 @@
 				else if (sid === 'B') t = '经顶栏 B 路'
 				else if (sid) t = '经顶栏串口'
 			} catch (e) { /* 取不到就不显示 */ }
-			if (ui.c3.sub.textContent !== t) ui.c3.sub.textContent = t
+			if (upUi.c3.sub.textContent !== t) upUi.c3.sub.textContent = t
 		}
 		drawGrid()
 	}
 
 	function renderVerify() {
+		if (!upUi) return
 		const u = model.up
 		const target = targetVersion(model)
-		ui.val.pre.textContent = u.pre != null ? u.pre : '--'
-		ui.val.target.textContent = target != null ? target : '--'
-		ui.val.post.textContent = u.post != null ? u.post : (u.querying ? '查询中…' : '待查询')
+		upUi.val.pre.textContent = u.pre != null ? u.pre : '--'
+		upUi.val.target.textContent = target != null ? target : '--'
+		upUi.val.post.textContent = u.post != null ? u.post : (u.querying ? '查询中…' : '待查询')
 		let text = ''
 		let state = ''
 		if (u.queryError && !u.querying) { text = '查询失败：' + u.queryError; state = 'failed' }
@@ -797,35 +844,45 @@
 			text = '设备当前已是目标版本'
 			state = 'waiting'
 		}
-		ui.verdict.textContent = text
-		ui.verdict.dataset.state = state
-		ui.verdict.hidden = !text
+		upUi.verdict.textContent = text
+		upUi.verdict.dataset.state = state
+		upUi.verdict.hidden = !text
 		const q = $('fw-query')
-		ui.verifyBtn.disabled = !!(q && q.disabled) || u.querying
-		ui.verifyBtn.textContent = u.outcome === 'ok' ? '查询升级后版本' : '查询版本'
+		upUi.verifyBtn.disabled = !!(q && q.disabled) || u.querying
+		upUi.verifyBtn.textContent = u.outcome === 'ok' ? '查询升级后版本' : '查询版本'
+	}
+
+	function packVisible() {
+		const view = $('view-fw-pack')
+		return !!(packUi && !document.hidden && view && view.classList.contains('active'))
+	}
+
+	function upgradeVisible() {
+		const vs = $('view-serial')
+		const panel = $('firmware-panel')
+		return !!(upUi && !document.hidden && vs && vs.classList.contains('active') && panel && !panel.hidden)
 	}
 
 	function render() {
-		if (!viewVisible()) return
+		if (!packVisible() && !upgradeVisible()) return
 		if (raf) return
 		raf = requestAnimationFrame(function () {
 			raf = 0
-			if (!viewVisible()) return
 			renderAll(Date.now())
 		})
 	}
 
-	function viewVisible() {
-		const view = $('view-fw-pack')
-		return !!(ui && !document.hidden && view && view.classList.contains('active'))
-	}
-
 	function renderAll(now) {
-		renderSteps()
-		renderFiles()
-		renderPack()
-		renderUpgrade(now)
-		renderVerify()
+		if (packVisible()) {
+			renderPackSteps()
+			renderFiles()
+			renderPack()
+		}
+		if (upgradeVisible()) {
+			renderUpgradeSteps()
+			renderUpgrade(now)
+			renderVerify()
+		}
 	}
 
 	// ---------- 分块格子（canvas） ----------
@@ -857,12 +914,13 @@
 	}
 
 	function drawGrid() {
+		if (!upUi) return
 		const g = model.up.grid
-		const cv = ui.canvas
+		const cv = upUi.canvas
 		const has = !!(g && g.total > 0)
-		ui.gridWrap.classList.toggle('is-empty', !has)
+		upUi.gridWrap.classList.toggle('is-empty', !has)
 		const counts = gridCounts(g)
-		const li = ui.legendItems
+		const li = upUi.legendItems
 		li.done.txt.textContent = li.done.label + ' ' + counts.done
 		li.retried.txt.textContent = li.retried.label + ' ' + counts.retried
 		li.active.txt.textContent = li.active.label + ' ' + counts.active
@@ -914,8 +972,8 @@
 
 	function cellTitle(e) {
 		const g = model.up.grid
-		if (!g || !lastLayout) return ''
-		const rect = ui.canvas.getBoundingClientRect()
+		if (!g || !lastLayout || !upUi) return ''
+		const rect = upUi.canvas.getBoundingClientRect()
 		const L = lastLayout.L
 		const cellW = (lastLayout.width - (L.cols - 1) * CELL_GAP) / L.cols
 		const col = Math.floor((e.clientX - rect.left) / (cellW + CELL_GAP))
@@ -932,28 +990,36 @@
 	// ---------- 挂载 ----------
 
 	function mount() {
-		if (ui || !$('view-fw-pack')) return
-		build()
-		const view = $('view-fw-pack')
+		const P = window.AppPlatform
+		const allowPack = !P || P.has('view.firmware-pack')
+		const allowUpgrade = !P || P.has('panel.firmware')
+		if (allowPack && !packUi && $('view-fw-pack')) buildPack()
+		if (allowUpgrade && !upUi && $('firmware-panel')) buildUpgrade()
+		if (!packUi && !upUi) return
+
 		previewPlan(model, chunkInputValue())
-		if (viewVisible()) renderAll(Date.now())
-		// 事件始终归约到 model；页面再次显示时补一次完整视图(含产物列表)。
+		renderAll(Date.now())
 		document.addEventListener('visibilitychange', render)
+		document.addEventListener('dp-subview-change', render)
 		// 速率、剩余时间与端口标签随时间变；产物列表只在事件到来时重建，免得键盘焦点被每秒重绘打掉
 		setInterval(function () {
-			// 固件页没显示时不刷新：分块格子每秒都要整段统计；切回固件页后下一拍(1 秒内)补上
-			if (!viewVisible()) return
+			if (!upgradeVisible()) return
 			const now = Date.now()
-			renderSteps()
+			renderUpgradeSteps()
 			renderUpgrade(now)
 			renderVerify()
 		}, 1000)
-		if (typeof ResizeObserver === 'function') {
-			new ResizeObserver(function () { if (viewVisible()) drawGrid() }).observe(ui.gridWrap)
+		if (upUi && typeof ResizeObserver === 'function') {
+			new ResizeObserver(function () { if (upgradeVisible()) drawGrid() }).observe(upUi.gridWrap)
 		}
 		if (typeof MutationObserver === 'function') {
-			new MutationObserver(function () { if (viewVisible()) drawGrid() }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-			new MutationObserver(render).observe(view, { attributes: true, attributeFilter: ['class'] })
+			new MutationObserver(function () { if (upgradeVisible()) drawGrid() }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+			const packView = $('view-fw-pack')
+			if (packUi && packView) new MutationObserver(render).observe(packView, { attributes: true, attributeFilter: ['class'] })
+			const serialView = $('view-serial')
+			const fwPanel = $('firmware-panel')
+			if (upUi && serialView) new MutationObserver(render).observe(serialView, { attributes: true, attributeFilter: ['class', 'data-subview'] })
+			if (upUi && fwPanel) new MutationObserver(render).observe(fwPanel, { attributes: true, attributeFilter: ['hidden'] })
 		}
 	}
 
@@ -968,13 +1034,11 @@
 			if (d.type === 'parsed' || d.type === 'file-set') previewPlan(model, chunkInputValue())
 			render()
 		})
-		// 平台没有固件打包视图(移动端)时不搭流水线：固件升级面板留在串口视图的停靠区(js/workbench.js)
-		if (window.AppPlatform && !window.AppPlatform.has('view.firmware-pack')) return
 		mount()
 	}
 
 	root.ModernFirmware.model = model
-	root.ModernFirmware.isMounted = function () { return !!ui }
+	root.ModernFirmware.isMounted = function () { return !!(packUi || upUi) }
 
 	if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init)
 	else init()

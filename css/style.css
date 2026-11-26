@@ -10904,15 +10904,23 @@ html[data-layout='modern'] .mdn-fw-card {
 }
 
 html[data-layout='modern'] .mdn-fw-card[data-step='1'] {
-	flex-basis: 260px;
+	flex: 1 1 320px;
+}
+
+html[data-layout='modern'] .mdn-fw-card[data-step='2'] {
+	flex: 1.15 1 340px;
 }
 
 html[data-layout='modern'] .mdn-fw-card[data-step='3'] {
-	flex: 1.3 1 340px;
+	flex: 1.8 1 420px;
 }
 
 html[data-layout='modern'] .mdn-fw-card[data-step='4'] {
-	flex-basis: 200px;
+	flex: 0.9 1 240px;
+}
+
+html[data-layout='modern'] .dp-fw > .mdn-fw--upgrade {
+	padding: 12px 16px 20px;
 }
 
 html[data-layout='modern'] .mdn-fw-card-head {
@@ -14001,6 +14009,11 @@ html[data-layout='modern'] .mdn-pop-params[hidden] {
 	font-weight: 600;
 	margin-bottom: 6px;
 }
+.sk-esim-redact-switch {
+	font-size: 0.74rem;
+	font-weight: 500;
+	color: var(--text-secondary);
+}
 .sk-esim-badge {
 	display: inline-block;
 	padding: 1px 7px;
@@ -14643,10 +14656,10 @@ html[data-layout='modern'] .dp-why {
 	text-overflow: ellipsis;
 	min-width: 0;
 }
-/* 设备面板子视图：日志降为面板下方的「通信记录」条。节点不搬：#main 排到面板之后(order)并限高，
+/* 设备面板与固件升级子视图：日志降为面板下方的「通信记录」条。节点不搬：#main 排到面板之后(order)并限高，
    只留 #log-main 里的日志窗与条头(右栏、停靠栏、日志工具条、协议解析、发送区隐藏)；高度与收起由 js/device-panel.js
    写在 #view-serial 的 --dp-log-h / data-dplog 上。!important 压过窄屏的 #main { height: auto !important } 与右栏网格 */
-html[data-layout='modern'] #view-serial[data-subview='device'] > #main {
+html[data-layout='modern'] #view-serial:is([data-subview='device'], [data-subview='firmware']) > #main {
 	order: 1;
 	flex: 0 0 auto;
 	height: var(--dp-log-h, 120px) !important;
@@ -14655,21 +14668,21 @@ html[data-layout='modern'] #view-serial[data-subview='device'] > #main {
 	grid-template-rows: minmax(0, 1fr);
 	border-top: 1px solid var(--border-color);
 }
-html[data-layout='modern'] #view-serial[data-subview='device'][data-dplog='collapsed'] > #main {
+html[data-layout='modern'] #view-serial:is([data-subview='device'], [data-subview='firmware'])[data-dplog='collapsed'] > #main {
 	height: auto !important;
 }
 /* 窄屏整页滚动(视图高度随内容)，条贴在视口底部，否则落在长面板的最下面看不到；
    窄屏通用规则给日志窗的固定高度 / 最小高度(面板 200、列表与终端 40vh / 160)在条里要还原成桌面的弹性填充，否则溢出条、拖矮无效 */
 @media (max-width: 768px) {
-	html[data-layout='modern'] #view-serial[data-subview='device'] #serial-log-panes,
-	html[data-layout='modern'] #view-serial[data-subview='device'] .serial-log-mode,
-	html[data-layout='modern'] #view-serial[data-subview='device'] .serial-logs,
-	html[data-layout='modern'] #view-serial[data-subview='device'] .serial-term-host {
+	html[data-layout='modern'] #view-serial:is([data-subview='device'], [data-subview='firmware']) #serial-log-panes,
+	html[data-layout='modern'] #view-serial:is([data-subview='device'], [data-subview='firmware']) .serial-log-mode,
+	html[data-layout='modern'] #view-serial:is([data-subview='device'], [data-subview='firmware']) .serial-logs,
+	html[data-layout='modern'] #view-serial:is([data-subview='device'], [data-subview='firmware']) .serial-term-host {
 		flex: 1 1 0;
 		height: auto;
 		min-height: 0;
 	}
-	html[data-layout='modern'] #view-serial[data-subview='device'] > #main {
+	html[data-layout='modern'] #view-serial:is([data-subview='device'], [data-subview='firmware']) > #main {
 		position: sticky;
 		bottom: 0;
 		z-index: 5;
@@ -14677,11 +14690,11 @@ html[data-layout='modern'] #view-serial[data-subview='device'][data-dplog='colla
 		box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.08);
 	}
 }
-html[data-layout='modern'] #view-serial[data-subview='device'] > #main > :not(#log-main),
-html[data-layout='modern'] #view-serial[data-subview='device'] #log-main > :not(#serial-log-panes):not(#dp-log-head) {
+html[data-layout='modern'] #view-serial:is([data-subview='device'], [data-subview='firmware']) > #main > :not(#log-main),
+html[data-layout='modern'] #view-serial:is([data-subview='device'], [data-subview='firmware']) #log-main > :not(#serial-log-panes):not(#dp-log-head) {
 	display: none !important;
 }
-html[data-layout='modern'] #view-serial[data-subview='device'] #log-main {
+html[data-layout='modern'] #view-serial:is([data-subview='device'], [data-subview='firmware']) #log-main {
 	grid-column: 1;
 	grid-row: 1;
 	height: 100%;
@@ -14691,7 +14704,7 @@ html[data-layout='modern'] #view-serial[data-subview='device'] #log-main {
 /* 收起：日志窗压成 0 高而不是 display:none——display:none 下 innerText 退化成无排版文本，
    命令面板 / 原生菜单的复制与导出(getLogsText 用 innerText)会丢掉 HEX 与 TEXT 之间的换行；
    不能用 visibility:hidden(innerText 对它返回空)。焦点与点击由 js/device-panel.js 给 #serial-log-panes 设 inert 挡住 */
-html[data-layout='modern'] #view-serial[data-subview='device'][data-dplog='collapsed'] #serial-log-panes {
+html[data-layout='modern'] #view-serial:is([data-subview='device'], [data-subview='firmware'])[data-dplog='collapsed'] #serial-log-panes {
 	flex: 0 0 0 !important;
 	height: 0 !important;
 	min-height: 0 !important;
@@ -14700,7 +14713,7 @@ html[data-layout='modern'] #view-serial[data-subview='device'][data-dplog='colla
 html[data-layout='modern'] .dp-log-head {
 	display: none;
 }
-html[data-layout='modern'] #view-serial[data-subview='device'] .dp-log-head {
+html[data-layout='modern'] #view-serial:is([data-subview='device'], [data-subview='firmware']) .dp-log-head {
 	order: -1;
 	flex: 0 0 auto;
 	display: flex;
@@ -14715,7 +14728,7 @@ html[data-layout='modern'] #view-serial[data-subview='device'] .dp-log-head {
 	touch-action: none;
 	user-select: none;
 }
-html[data-layout='modern'] #view-serial[data-subview='device'][data-dplog='collapsed'] .dp-log-head {
+html[data-layout='modern'] #view-serial:is([data-subview='device'], [data-subview='firmware'])[data-dplog='collapsed'] .dp-log-head {
 	border-bottom: 0;
 }
 html[data-layout='modern'] .dp-log-tog,
@@ -15305,63 +15318,275 @@ html[data-layout='modern'] .dp-grp[data-state='stale'] .dp-grp-st,
 html[data-layout='modern'] .dp-grp[data-state='unsure'] .dp-grp-st {
 	color: var(--warning);
 }
-html[data-layout='modern'] .dp-params {
-	display: grid;
-	grid-template-columns: 160px 1fr;
-	gap: 14px;
-	min-height: 0;
-}
-html[data-layout='modern'] .dp-rail {
+html[data-layout='modern'] .dp-params-wrap {
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
+	gap: 10px;
+	min-height: 0;
 }
-html[data-layout='modern'] .dp-rail > button {
-	border: 0;
-	background: transparent;
-	text-align: left;
-	padding: 5px 10px;
-	border-radius: var(--radius-sm, 4px);
-	font-size: 0.82rem;
-	color: var(--text-secondary);
-}
-html[data-layout='modern'] .dp-rail > button[aria-current='true'] {
-	background: var(--accent-light);
-	color: var(--accent);
-	font-weight: 600;
-}
-html[data-layout='modern'] .dp-ptable {
-	min-width: 0;
+html[data-layout='modern'] .dp-ptopbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 8px 12px;
+	padding: 8px 10px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md, 6px);
 }
 html[data-layout='modern'] .dp-ptools {
-	margin-bottom: 8px;
-	max-width: 360px;
+	flex: 1 1 220px;
+	max-width: 340px;
+	min-width: 160px;
+	margin: 0;
 }
-html[data-layout='modern'] .dp-write-tools,
-html[data-layout='modern'] .dp-row-edit {
+html[data-layout='modern'] .dp-write-tools {
 	display: flex;
 	align-items: center;
 	flex-wrap: wrap;
 	gap: 6px;
 	min-width: 0;
 }
-html[data-layout='modern'] .dp-write-tools {
-	margin-bottom: 8px;
+html[data-layout='modern'] .dp-draft-badge {
+	font-size: 0.76rem;
+	color: var(--text-secondary);
+	padding: 2px 8px;
+	border-radius: 999px;
+	background: var(--mdn-subtle, var(--border-light));
 }
-html[data-layout='modern'] .dp-row-edit > input,
-html[data-layout='modern'] .dp-row-edit > select {
-	flex: 1 1 7em;
+html[data-layout='modern'] .dp-tools-sep {
+	width: 1px;
+	height: 16px;
+	background: var(--border-color);
+	margin: 0 2px;
+}
+html[data-layout='modern'] .dp-params {
+	display: grid;
+	grid-template-columns: 205px minmax(0, 1fr);
+	gap: 14px;
+	align-items: start;
+	min-height: 0;
+}
+html[data-layout='modern'] .dp-rail {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	position: sticky;
+	top: 0;
+	padding: 6px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md, 6px);
+}
+html[data-layout='modern'] .dp-rail > button {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 6px;
+	border: 0;
+	background: transparent;
+	text-align: left;
+	padding: 6px 8px;
+	border-radius: var(--radius-sm, 4px);
+	font-size: 0.78rem;
+	color: var(--text-secondary);
 	min-width: 0;
 }
+html[data-layout='modern'] .dp-rail > button:hover {
+	background: var(--bg-surface-hover, rgba(128, 128, 128, 0.08));
+	color: var(--text-primary);
+}
+html[data-layout='modern'] .dp-rail > button[aria-current='true'] {
+	background: var(--accent-light);
+	color: var(--accent);
+	font-weight: 600;
+}
+html[data-layout='modern'] .dp-rail-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+html[data-layout='modern'] .dp-rail-badges {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	flex: 0 0 auto;
+}
+html[data-layout='modern'] .dp-rail-cnt {
+	font-size: 0.68rem;
+	font-family: var(--font-mono);
+	color: var(--text-muted);
+	padding: 0 5px;
+	border-radius: 999px;
+	background: var(--border-light);
+}
+html[data-layout='modern'] .dp-rail > button[aria-current='true'] .dp-rail-cnt {
+	background: rgba(13, 110, 253, 0.14);
+	color: var(--accent);
+}
+html[data-layout='modern'] .dp-rail-dirty {
+	font-size: 0.66rem;
+	font-weight: 700;
+	font-family: var(--font-mono);
+	padding: 0 5px;
+	border-radius: 999px;
+	background: var(--accent);
+	color: #fff;
+}
+html[data-layout='modern'] .dp-rail-dirty[hidden] {
+	display: none;
+}
+html[data-layout='modern'] .dp-ptable {
+	min-width: 0;
+}
+html[data-layout='modern'] .dp-cat-title {
+	font-size: 0.84rem;
+	font-weight: 600;
+	color: var(--text-primary);
+	margin-right: 4px;
+	align-self: center;
+}
+/* 自适应多列参数卡片网格：宽屏 2-3 列并排，中屏 2 列，窄屏自动单列，彻底解决单行拉长问题 */
+html[data-layout='modern'] .dp-pgrid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+	gap: 10px;
+	align-items: stretch;
+}
+html[data-layout='modern'] .dp-row {
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+	padding: 10px 11px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border-color);
+	border-radius: var(--radius-md, 6px);
+	font-size: 0.8rem;
+	min-width: 0;
+	transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+html[data-layout='modern'] .dp-row:hover {
+	border-color: var(--accent-border, var(--accent));
+}
+html[data-layout='modern'] .dp-row.is-dirty {
+	border-color: var(--accent);
+	box-shadow: inset 3px 0 0 var(--accent);
+}
+html[data-layout='modern'] .dp-row.is-readonly {
+	background: var(--mdn-subtle, var(--bg-surface));
+}
+html[data-layout='modern'] .dp-card-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 8px;
+	min-width: 0;
+}
+html[data-layout='modern'] .dp-row-n {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	min-width: 0;
+}
+html[data-layout='modern'] .dp-row-n > b {
+	font-weight: 600;
+	font-size: 0.82rem;
+	line-height: 1.3;
+	color: var(--text-primary);
+	overflow-wrap: anywhere;
+}
+html[data-layout='modern'] .dp-addr {
+	font-family: var(--font-mono);
+	font-size: 0.68rem;
+	color: var(--text-muted);
+}
+html[data-layout='modern'] .dp-card-meta {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex: 0 0 auto;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+html[data-layout='modern'] .dp-card-meta .dp-ph {
+	font-size: 0.7rem;
+	white-space: nowrap;
+}
+html[data-layout='modern'] .dp-row-v {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 5px 8px;
+	border-radius: var(--radius-sm, 4px);
+	background: var(--mdn-subtle, rgba(128, 128, 128, 0.06));
+	min-width: 0;
+}
+html[data-layout='modern'] .dp-cl {
+	display: inline;
+	flex: 0 0 auto;
+	font-size: 0.7rem;
+	color: var(--text-muted);
+}
+html[data-layout='modern'] .dp-row-v .dp-val {
+	font-family: var(--font-mono);
+	font-size: 0.8rem;
+	font-weight: 500;
+	text-align: right;
+	min-width: 0;
+}
+html[data-layout='modern'] .dp-row-edit {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+	margin-top: auto;
+}
+html[data-layout='modern'] .dp-row-edit-line {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	min-width: 0;
+}
+html[data-layout='modern'] .dp-row-edit-line > input,
+html[data-layout='modern'] .dp-row-edit-line > select {
+	flex: 1 1 0;
+	min-width: 0;
+	font-size: 0.78rem;
+}
+html[data-layout='modern'] .dp-row-edit-line > button {
+	flex: 0 0 auto;
+	padding-left: 8px;
+	padding-right: 8px;
+	font-size: 0.74rem;
+	white-space: nowrap;
+}
 html[data-layout='modern'] .dp-write-preview:not(:empty) {
-	flex-basis: 100%;
+	font-size: 0.72rem;
+	color: var(--accent);
 	overflow-wrap: anywhere;
 }
 html[data-layout='modern'] .dp-write-preview:empty {
 	display: none;
 }
+html[data-layout='modern'] .dp-row-s {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding-top: 4px;
+	border-top: 1px dashed var(--border-light);
+	font-size: 0.74rem;
+}
+html[data-layout='modern'] .dp-row-acts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 5px;
+}
 html[data-layout='modern'] .dp-write-result {
 	overflow-wrap: anywhere;
+	font-weight: 500;
 }
 html[data-layout='modern'] .dp-write-result[data-state='confirmed'] {
 	color: var(--success);
@@ -15369,74 +15594,25 @@ html[data-layout='modern'] .dp-write-result[data-state='confirmed'] {
 html[data-layout='modern'] .dp-write-result:is([data-state='mismatch'], [data-state='rejected']) {
 	color: var(--danger);
 }
-html[data-layout='modern'] .dp-rhead,
-html[data-layout='modern'] .dp-row {
-	display: grid;
-	grid-template-columns: minmax(100px, 1fr) minmax(90px, 1fr) minmax(125px, 1.3fr) minmax(95px, 1fr);
-	gap: 4px 12px;
-	align-items: baseline;
-	padding: 6px 4px;
-	border-bottom: 1px solid var(--border-light);
-	font-size: 0.82rem;
-}
-html[data-layout='modern'] .dp-rhead {
-	font-size: 0.72rem;
+html[data-layout='modern'] .dp-row-note {
+	font-size: 0.7rem;
+	line-height: 1.35;
 	color: var(--text-muted);
-	padding-top: 0;
 }
-@container (max-width: 590px) {
+@container (max-width: 680px) {
 	html[data-layout='modern'] .dp-params:has(.dp-rail) {
 		grid-template-columns: minmax(0, 1fr);
 	}
 	html[data-layout='modern'] .dp-params > .dp-rail {
+		position: static;
 		flex-direction: row;
 		overflow-x: auto;
+		padding: 4px;
 	}
 	html[data-layout='modern'] .dp-params > .dp-rail > button {
 		white-space: nowrap;
+		flex: 0 0 auto;
 	}
-	html[data-layout='modern'] .dp-ptable .dp-rhead {
-		display: none;
-	}
-	html[data-layout='modern'] .dp-ptable .dp-row {
-		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-	}
-	html[data-layout='modern'] .dp-ptable :is(.dp-row-v, .dp-row-edit) {
-		grid-column: 1 / -1;
-	}
-	html[data-layout='modern'] .dp-ptable .dp-row-v {
-		order: 3;
-	}
-	html[data-layout='modern'] .dp-ptable .dp-row-edit {
-		order: 4;
-	}
-	html[data-layout='modern'] .dp-ptable .dp-row-v .dp-cl {
-		display: inline;
-	}
-}
-html[data-layout='modern'] .dp-row-n {
-	display: flex;
-	flex-direction: column;
-	min-width: 0;
-}
-html[data-layout='modern'] .dp-row-n > b {
-	font-weight: 500;
-}
-html[data-layout='modern'] .dp-addr {
-	font-family: var(--font-mono);
-	font-size: 0.68rem;
-	color: var(--text-muted);
-}
-html[data-layout='modern'] .dp-cl {
-	display: none;
-	font-size: 0.7rem;
-	color: var(--text-muted);
-	margin-right: 4px;
-}
-html[data-layout='modern'] .dp-row-note {
-	grid-column: 1 / -1;
-	font-size: 0.72rem;
-	color: var(--text-muted);
 }
 html[data-layout='modern'] .dp-empty {
 	padding: 24px 8px;
@@ -15548,28 +15724,16 @@ html[data-layout='modern'] .dp-insp-parse-body {
 		grid-template-columns: 1fr;
 	}
 	html[data-layout='modern'] .dp-rail {
+		position: static;
 		flex-direction: row;
 		overflow-x: auto;
 	}
 	html[data-layout='modern'] .dp-rail > button {
 		white-space: nowrap;
+		flex: 0 0 auto;
 	}
-	html[data-layout='modern'] .dp-rhead {
-		display: none;
-	}
-	html[data-layout='modern'] .dp-row {
-		grid-template-columns: 1fr auto;
-	}
-	html[data-layout='modern'] .dp-row-v {
-		grid-column: 1 / -1;
-		order: 3;
-	}
-	html[data-layout='modern'] .dp-row-edit {
-		grid-column: 1 / -1;
-		order: 4;
-	}
-	html[data-layout='modern'] .dp-cl {
-		display: inline;
+	html[data-layout='modern'] .dp-pgrid {
+		grid-template-columns: minmax(0, 1fr);
 	}
 	html[data-layout='modern'] .dp-insp {
 		top: auto;

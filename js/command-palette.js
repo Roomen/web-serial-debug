@@ -322,7 +322,29 @@
 			group: '视图',
 			title: '切换到通信调试',
 			alias: 'chuankou tiaoshi serial view',
-			run: function () { clickSel('.rail-item[data-view="view-serial"]') }
+			run: function () {
+				clickSel('.rail-item[data-view="view-serial"]')
+				if (window.DevicePanel && typeof window.DevicePanel.showComm === 'function') window.DevicePanel.showComm()
+			}
+		})
+		list.push({
+			group: '视图',
+			title: '切换到设备面板',
+			feature: 'view.device',
+			alias: 'shebei mianban device panel view',
+			run: function () {
+				if (window.DevicePanel && typeof window.DevicePanel.show === 'function') window.DevicePanel.show()
+			}
+		})
+		list.push({
+			group: '视图',
+			title: '切换到固件升级',
+			feature: 'panel.firmware',
+			alias: 'gujian shengji firmware upgrade ota view',
+			run: function () {
+				if (window.DevicePanel && typeof window.DevicePanel.showFirmware === 'function') window.DevicePanel.showFirmware()
+				else if (window.Workbench) window.Workbench.open('firmware')
+			}
 		})
 		list.push({
 			group: '视图',

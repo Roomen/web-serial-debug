@@ -21,6 +21,7 @@
 	const store = M.createStore()
 	let view = 'comm'
 	let root = null
+	let fwRoot = null
 	let viewbar = null
 	let mounted = false
 	let renderTimer = 0
@@ -343,6 +344,21 @@
 	}
 
 	// ---------- 视图切换 ----------
+	function hasFirmwareView() {
+		const P = window.AppPlatform
+		return !!fwRoot && (!P || typeof P.has !== 'function' || P.has('panel.firmware'))
+	}
+	function firmwareInfo() {
+		const hb = hub()
+		const sid = hb && typeof hb.activeSendPhys === 'function' ? hb.activeSendPhys() : mainSid()
+		const pid = protocolOf(sid)
+		const entry = protocolEntry(pid)
+		const supported = !!(entry && entry.firmware && entry.firmware.method === 'pcp')
+		if (!supported) {
+			return { ok: false, sid: sid, pid: pid, why: protocolName(pid) + ' 不支持固件升级（仍可选择固件、管理本机固件库）' }
+		}
+		return { ok: true, sid: sid, pid: pid, why: isDual() ? '固件升级走主发 ' + laneWord(sid) + '（' + protocolName(pid) + '）' : '' }
+	}
 	function availability() {
 		const sid = mainSid()
 		const pid = protocolOf(sid)
@@ -356,16 +372,18 @@
 	}
 
 	function setView(v, quiet) {
-		const want = v === 'device' ? 'device' : 'comm'
+		const want = v === 'device' ? 'device' : (v === 'firmware' ? 'firmware' : 'comm')
 		if (want === 'device' && !availability().ok) return false
+		if (want === 'firmware' && !hasFirmwareView()) return false
 		view = want
 		try { sessionStorage.setItem(SUBVIEW_KEY, view) } catch (e) {}
 		const vs = document.getElementById('view-serial')
 		if (vs) vs.dataset.subview = view
 		if (root) root.hidden = view !== 'device'
+		if (fwRoot) fwRoot.hidden = view !== 'firmware'
 		// 终端在通信记录条里只读：键入 / 粘贴不写主发口（common.js 的发送回调入口另有复核）
-		if (window.SerialTerm && typeof window.SerialTerm.setInputEnabled === 'function') window.SerialTerm.setInputEnabled(view !== 'device')
-		if (view === 'device') syncStrip(true)
+		if (window.SerialTerm && typeof window.SerialTerm.setInputEnabled === 'function') window.SerialTerm.setInputEnabled(view === 'comm')
+		if (view !== 'comm') syncStrip(true)
 		else {
 			const panes = document.getElementById('serial-log-panes')
 			if (panes) panes.inert = false
@@ -377,6 +395,7 @@
 			const c = ctx()
 			if (c.L && c.L.ui.tab === 'params') autoReadCategory()
 		}
+		try { document.dispatchEvent(new CustomEvent('dp-subview-change', { detail: { view: view } })) } catch (e) {}
 		return true
 	}
 
@@ -385,14 +404,22 @@
 		const av = availability()
 		const devBtn = viewbar.querySelector('#dp-view-device')
 		const commBtn = viewbar.querySelector('#dp-view-comm')
-		devBtn.disabled = !av.ok
-		devBtn.title = av.ok ? '' : av.why
-		devBtn.setAttribute('aria-pressed', view === 'device' ? 'true' : 'false')
-		commBtn.setAttribute('aria-pressed', view === 'comm' ? 'true' : 'false')
-		viewbar.querySelector('.dp-why').textContent = av.why
+		const fwBtn = viewbar.querySelector('#dp-view-firmware')
+		if (devBtn) {
+			devBtn.disabled = !av.ok
+			devBtn.title = av.ok ? '' : av.why
+			devBtn.setAttribute('aria-pressed', view === 'device' ? 'true' : 'false')
+		}
+		if (commBtn) commBtn.setAttribute('aria-pressed', view === 'comm' ? 'true' : 'false')
+		if (fwBtn) {
+			fwBtn.hidden = !hasFirmwareView()
+			fwBtn.setAttribute('aria-pressed', view === 'firmware' ? 'true' : 'false')
+		}
+		const whyEl = viewbar.querySelector('.dp-why')
+		if (whyEl) whyEl.textContent = view === 'firmware' ? firmwareInfo().why : av.why
 	}
 
-	// 主发路 / 协议 / 连接代次变化时同步：协议没有 device 了就退回通信调试
+	// 主发路 / 协议 / 连接代次变化时同步：协议没有 device 了就退回通信调试；固件升级子视图不踢回（遵循升级中切协议不打断本轮）
 	function sync() {
 		if (!mounted) return
 		const av = availability()
@@ -407,7 +434,7 @@
 			lastSig = sig
 			if (view === 'device') render()
 		}
-		if (view === 'device') syncStrip(false)
+		if (view !== 'comm') syncStrip(false)
 	}
 
 	// ---------- 渲染 ----------
@@ -615,12 +642,14 @@
 		})
 		const protocol = protocolEntry(c.pid)
 		const firmware = protocol && protocol.firmware
-		if (firmware && window.Workbench) {
+		if (firmware && (hasFirmwareView() || window.Workbench)) {
 			const key = firmware.versionKey
 			blocks.push(h('div', { class: 'dp-ids d-flex flex-wrap align-items-center gap-2' },
 				key && c.dev.fieldMap[key] && h('span', { class: 'd-inline-flex align-items-center gap-2' },
 					h('span', { class: 'dp-meta', text: '当前固件版本' }), valBtn(c, key)),
-				h('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', text: '固件升级', onclick: function () { window.Workbench.open('firmware') } })))
+				h('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', text: '固件升级', onclick: function () {
+					if (!setView('firmware') && window.Workbench) window.Workbench.open('firmware')
+				} })))
 		}
 		const groups = h('div', { class: 'dp-groups' }, c.dev.readSets.status.map(function (gid) { return groupLine(c, gid) }))
 		return h('div', { class: 'dp-status' }, metrics.length && h('div', { class: 'dp-metrics' }, metrics), blocks, groups)
@@ -657,6 +686,14 @@
 		const button = function (label, click, off) {
 			return h('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', text: label, onclick: click, disabled: !!off })
 		}
+		const rowClass = function (dirty) {
+			return 'dp-row' + (stale ? ' is-stale' : '') + (dirty ? ' is-dirty' : '') + (f.write ? '' : ' is-readonly')
+		}
+		let rowEl = null
+		const syncRowDirty = function () {
+			if (!rowEl) return
+			rowEl.className = rowClass(Object.prototype.hasOwnProperty.call(c.L.drafts, k))
+		}
 		let editor = null
 		if (f.write) {
 			const opts = f.write.options
@@ -682,6 +719,7 @@
 					if (preview) preview.textContent = ''
 					commit.disabled = true
 					syncClearBtn()
+					syncRowDirty()
 					syncDraftToolbar(c)
 					return
 				}
@@ -702,6 +740,7 @@
 					if (preview) preview.textContent = ''
 					commit.disabled = true
 					syncClearBtn()
+					syncRowDirty()
 					syncDraftToolbar(c)
 					return
 				}
@@ -714,13 +753,21 @@
 				}
 				commit.disabled = disabled || !ready || !changed
 				syncClearBtn()
+				syncRowDirty()
 				syncDraftToolbar(c)
 			}
 			parseSetting(hasDraft)
 			syncClearBtn()
 			input.addEventListener('input', function () { applyDraft(false) })
-			editor = h('div', { class: 'dp-row-edit' }, input, clearBtn, commit, preview,
-				!ready && h('span', { class: 'dp-ph', text: '先读取' }))
+			input.addEventListener('keydown', function (ev) {
+				if (ev && ev.key === 'Enter' && !commit.disabled) {
+					if (ev.preventDefault) ev.preventDefault()
+					runWrite(c, [k])
+				}
+			})
+			editor = h('div', { class: 'dp-row-edit' },
+				h('div', { class: 'dp-row-edit-line' }, input, clearBtn, commit),
+				preview)
 		}
 		const rowActions = result && result.state === 'mismatch' && hasDraft ? [
 			button('重试', function () { runWrite(c, [k]) }, disabled || !ready),
@@ -735,13 +782,20 @@
 		}, disabled) : result && result.state === 'rejected' && hasDraft ? button('撤销', function () {
 			delete c.L.drafts[k]; delete c.L.writes[k]; render()
 		}, disabled) : null
-		return h('div', { class: 'dp-row' + (stale ? ' is-stale' : ''), 'data-key': k },
-			h('div', { class: 'dp-row-n' }, h('b', { text: f.name }), f.addr && h('span', { class: 'dp-addr', text: f.addr })),
-			h('div', { class: 'dp-row-v' }, h('span', { class: 'dp-cl', text: '当前' }),
-				(readable || r) ? valBtn(c, k) : h('span', { class: 'dp-ph', text: '协议没有对应查询' })),
-			editor || h('span', { class: 'dp-row-edit dp-ph', text: '只读' }),
-			h('div', { class: 'dp-row-s' }, state, result && h('div', { class: 'dp-write-result', 'data-state': result.state, text: (result.gen !== c.gen ? '上次连接 · ' : '') + WRITE_LABELS[result.state] + (result.detail ? '：' + result.detail : '') }), rowActions),
+		const hasWriteFooter = !!(result || rowActions)
+		rowEl = h('div', { class: rowClass(hasDraft), 'data-key': k },
+			h('div', { class: 'dp-card-head' },
+				h('div', { class: 'dp-row-n' }, h('b', { text: f.name }), f.addr && h('span', { class: 'dp-addr', text: f.addr })),
+				h('div', { class: 'dp-card-meta' }, state, !f.write && h('span', { class: 'dp-pill', text: '只读' }))),
+			h('div', { class: 'dp-row-v' },
+				h('span', { class: 'dp-cl', text: '当前' }),
+				(readable || r) ? valBtn(c, k) : h('span', { class: 'dp-ph', text: '无对应查询' })),
+			editor,
+			hasWriteFooter && h('div', { class: 'dp-row-s' },
+				result && h('div', { class: 'dp-write-result', 'data-state': result.state, text: (result.gen !== c.gen ? '上次连接 · ' : '') + WRITE_LABELS[result.state] + (result.detail ? '：' + result.detail : '') }),
+				rowActions && h('div', { class: 'dp-row-acts' }, rowActions)),
 			(f.note || !readable) && h('div', { class: 'dp-row-note', text: !readable ? '这一项协议里没有对应的查询' + (f.note ? '；' + f.note : '') : f.note }))
+		return rowEl
 	}
 
 	function draftKeys(c) {
@@ -754,9 +808,26 @@
 		const undo = document.getElementById('dp-undo-all')
 		if (!count || !commit || !undo) return
 		const keys = draftKeys(c)
-		count.textContent = keys.length + ' 项改动'
+		count.textContent = keys.length ? (keys.length + ' 项待写入') : '无改动'
 		commit.disabled = !!writing || c.L.busy || !c.open || !keys.some(function (key) { return M.writeAllowed(c.L, c.dev.fieldMap[key], c.gen) })
 		undo.disabled = !!writing || c.L.busy || !keys.length
+		if (root && typeof root.querySelectorAll === 'function' && c.dev && Array.isArray(c.dev.categories)) {
+			const draftSet = new Set(keys)
+			const dirtyByCat = Object.create(null)
+			c.dev.categories.forEach(function (cat) {
+				let n = 0
+				cat.keys.forEach(function (k) { if (draftSet.has(k)) n++ })
+				dirtyByCat[cat.id] = n
+			})
+			root.querySelectorAll('.dp-rail > button[data-cat]').forEach(function (btn) {
+				const n = dirtyByCat[btn.dataset.cat] || 0
+				const badge = btn.querySelector('.dp-rail-dirty')
+				if (badge) {
+					badge.textContent = n ? String(n) : ''
+					badge.hidden = !n
+				}
+			})
+		}
 	}
 
 	function downloadSnapshot(c) {
@@ -810,7 +881,10 @@
 		const gids = []
 		keys.forEach(function (k) { const f = c.dev.fieldMap[k]; if (f && f.group && gids.indexOf(f.group) < 0) gids.push(f.group) })
 		const noQuery = keys.some(function (k) { return !M.readable(c.dev, k) })
-		const info = h('div', { class: 'dp-catinfo' }, gids.map(function (gid) { return groupLine(c, gid) }),
+		const info = h('div', { class: 'dp-catinfo' },
+			!q.trim() && cat && h('span', { class: 'dp-cat-title', text: cat.title + '（' + keys.length + ' 项）' }),
+			q.trim() && h('span', { class: 'dp-cat-title', text: '搜索结果（' + keys.length + ' 项）' }),
+			gids.map(function (gid) { return groupLine(c, gid) }),
 			noQuery && h('span', { class: 'dp-grp', 'data-state': 'none' }, h('span', { class: 'dp-grp-t', text: '部分参数协议里没有对应查询' })))
 		if (!keys.length) {
 			add(wrap, [info, h('div', { class: 'dp-empty', text: q.trim() ? '没有匹配「' + q.trim() + '」的参数' : '协议没有声明参数' })])
@@ -821,34 +895,37 @@
 			add(wrap, [info, h('div', { class: 'dp-empty' }, h('span', { class: 'dp-spin' }), '正在读取' + M.groupTitle(c.dev, busyUnread) + '，读完后显示设备当前值')])
 			return
 		}
-		add(wrap, [info,
-			h('div', { class: 'dp-rhead' }, h('span', { text: '参数' }), h('span', { text: '设备当前值' }), h('span', { text: '设置值' }), h('span', { text: '状态' })),
-			keys.map(function (k) { return paramRow(c, k) })])
+		add(wrap, [info, h('div', { class: 'dp-pgrid' }, keys.map(function (k) { return paramRow(c, k) }))])
 	}
 
 	function renderParams(c) {
 		const cats = c.dev.categories
 		const file = h('input', { type: 'file', accept: '.json,application/json', hidden: true, onchange: function () { importSnapshot(c, file.files[0]); file.value = '' } })
 		const actions = h('div', { class: 'dp-write-tools' },
-			h('span', { id: 'dp-draft-count', role: 'status' }),
+			h('span', { id: 'dp-draft-count', class: 'dp-draft-badge', role: 'status' }),
 			h('button', { type: 'button', id: 'dp-write-all', class: 'btn btn-sm btn-primary', text: '全部写入', onclick: function () { runWrite(c, draftKeys(c)) } }),
 			h('button', { type: 'button', id: 'dp-undo-all', class: 'btn btn-sm btn-outline-secondary', text: '撤销全部', onclick: function () { draftKeys(c).forEach(function (key) { delete c.L.drafts[key]; delete c.L.writes[key] }); render() } }),
 			writing && c.L.flow === writing && h('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', text: '取消写入', onclick: cancelRead }),
+			h('span', { class: 'dp-tools-sep', 'aria-hidden': 'true' }),
 			h('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', text: '导出快照', onclick: function () { downloadSnapshot(c) } }),
 			h('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', text: '导入快照', disabled: !!writing || c.L.busy, onclick: function () { file.click() } }), file)
 		if (!cats.length) return h('div', {}, actions, h('div', { class: 'dp-empty', text: '协议没有声明参数分类' }))
 		const cat = currentCategory(c)
 		const rows = h('div', { class: 'dp-ptable-rows' })
-		const search = h('input', { class: 'form-control form-control-sm dp-search', type: 'search', id: 'dp-param-search', placeholder: '搜索全部参数（名称或地址）', 'aria-label': '搜索参数', value: c.L.ui.query || '' })
+		const search = h('input', { class: 'form-control form-control-sm dp-search', type: 'search', id: 'dp-param-search', placeholder: '搜索全部参数（名称或 Tag-ID）', 'aria-label': '搜索参数', value: c.L.ui.query || '' })
 		search.addEventListener('input', function () {
 			c.L.ui.query = search.value
 			renderParamRows(ctx(), rows)
 		})
-		const rail = h('nav', { class: 'dp-rail', 'aria-label': '参数类别' }, cats.map(function (x) {
+		const draftSet = new Set(draftKeys(c))
+		const rail = h('nav', { class: 'dp-rail', 'aria-label': '参数 Tag 分类' }, cats.map(function (x) {
+			const dirtyCount = x.keys.reduce(function (acc, k) { return acc + (draftSet.has(k) ? 1 : 0) }, 0)
+			const dirtyBadge = h('span', { class: 'dp-rail-dirty', title: '待写入改动数', text: dirtyCount ? String(dirtyCount) : '' })
+			dirtyBadge.hidden = !dirtyCount
 			return h('button', {
 				type: 'button',
+				'data-cat': x.id,
 				'aria-current': x.id === (cat && cat.id) && !(c.L.ui.query || '').trim() ? 'true' : 'false',
-				text: x.title,
 				onclick: function () {
 					c.L.ui.cat = x.id
 					c.L.ui.query = ''
@@ -856,10 +933,13 @@
 					render()
 					autoReadCategory()
 				},
-			})
+			},
+			h('span', { class: 'dp-rail-name', text: x.title }),
+			h('span', { class: 'dp-rail-badges' }, dirtyBadge, h('span', { class: 'dp-rail-cnt', text: String(x.keys.length) })))
 		}))
 		renderParamRows(c, rows)
-		return h('div', {}, actions, h('div', { class: 'dp-params' }, rail, h('div', { class: 'dp-ptable' }, h('div', { class: 'dp-ptools' }, search), rows)))
+		const topbar = h('div', { class: 'dp-ptopbar' }, h('div', { class: 'dp-ptools' }, search), actions)
+		return h('div', { class: 'dp-params-wrap' }, topbar, h('div', { class: 'dp-params' }, rail, h('div', { class: 'dp-ptable' }, rows)))
 	}
 
 	function renderInspector(c) {
@@ -1006,8 +1086,9 @@
 	function tick() {
 		if (document.hidden) return
 		sync()
-		if (!root || view !== 'device') return
+		if (view === 'comm') return
 		updateStripSummary()
+		if (!root || view !== 'device') return
 		const c = ctx()
 		if (!c.L) return
 		root.querySelectorAll('[data-dp-est]').forEach(function (el) {
@@ -1088,7 +1169,7 @@
 		}).join('　')
 	}
 	function scheduleStripSummary() {
-		if (strip.sumTimer || view !== 'device') return
+		if (strip.sumTimer || view === 'comm') return
 		strip.sumTimer = setTimeout(updateStripSummary, 200)
 	}
 	function applyStrip() {
@@ -1101,10 +1182,10 @@
 		if (vs.style.getPropertyValue('--dp-log-h') !== h + 'px') vs.style.setProperty('--dp-log-h', h + 'px')
 		// 收起时日志窗只是压成 0 高（不用 display:none，导出的 innerText 才与展开时一致），inert 挡住其中控件的焦点与点击
 		const panes = document.getElementById('serial-log-panes')
-		if (panes) panes.inert = strip.st.collapsed && view === 'device'
-		// 收起期间终端不 fit（否则被压成 1 行、裁掉历史），展开或离开设备视图时恢复并补 fit
+		if (panes) panes.inert = strip.st.collapsed && view !== 'comm'
+		// 收起期间终端不 fit（否则被压成 1 行、裁掉历史），展开或离开子视图时恢复并补 fit
 		const T = window.SerialTerm
-		if (T && typeof T.setFitSuspended === 'function') T.setFitSuspended(strip.st.collapsed && view === 'device')
+		if (T && typeof T.setFitSuspended === 'function') T.setFitSuspended(strip.st.collapsed && view !== 'comm')
 		strip.tog.setAttribute('aria-expanded', strip.st.collapsed ? 'false' : 'true')
 		strip.tog.title = strip.st.collapsed ? '展开通信记录' : '收起通信记录（拖动这一条可调高度）'
 		updateStripSummary()
@@ -1194,8 +1275,8 @@
 		let roTimer = 0
 		if (vs && typeof ResizeObserver === 'function') {
 			new ResizeObserver(function () {
-				if (view !== 'device' || roTimer) return
-				roTimer = setTimeout(function () { roTimer = 0; if (view === 'device' && !strip.drag) applyStrip() }, 50)
+				if (view === 'comm' || roTimer) return
+				roTimer = setTimeout(function () { roTimer = 0; if (view !== 'comm' && !strip.drag) applyStrip() }, 50)
 			}).observe(vs)
 		}
 		if (window.matchMedia) {
@@ -1210,7 +1291,9 @@
 	function mount() {
 		if (mounted) return
 		const P = window.AppPlatform
-		if (P && typeof P.has === 'function' && !P.has('view.device')) return
+		const allowDevice = !P || typeof P.has !== 'function' || P.has('view.device')
+		const allowFw = !P || typeof P.has !== 'function' || P.has('panel.firmware')
+		if (!allowDevice && !allowFw) return
 		const vs = document.getElementById('view-serial')
 		const main = document.getElementById('main')
 		if (!vs || !main || main.parentNode !== vs) return
@@ -1218,12 +1301,23 @@
 		viewbar = h('div', { class: 'dp-viewbar', id: 'dp-viewbar' },
 			h('div', { class: 'ctl-seg', role: 'group', 'aria-label': '通信调试视图' },
 				h('button', { type: 'button', id: 'dp-view-comm', 'aria-pressed': 'true', text: '通信调试', onclick: function () { setView('comm') } }),
-				h('button', { type: 'button', id: 'dp-view-device', 'aria-pressed': 'false', text: '设备面板', onclick: function () { setView('device') } })),
+				allowDevice && h('button', { type: 'button', id: 'dp-view-device', 'aria-pressed': 'false', text: '设备面板', onclick: function () { setView('device') } }),
+				allowFw && h('button', { type: 'button', id: 'dp-view-firmware', 'aria-pressed': 'false', 'data-feature': 'panel.firmware', text: '固件升级', onclick: function () { setView('firmware') } })),
 			h('span', { class: 'dp-why' }))
 		root = h('section', { class: 'dp', id: 'device-panel', 'aria-label': '设备面板' })
 		root.hidden = true
 		vs.insertBefore(viewbar, main)
 		vs.insertBefore(root, main.nextSibling)
+		if (allowFw) {
+			fwRoot = document.getElementById('firmware-panel')
+			if (!fwRoot) {
+				fwRoot = h('section', { class: 'dp dp-fw', id: 'firmware-panel', 'aria-label': '固件升级' })
+				fwRoot.hidden = true
+				vs.insertBefore(fwRoot, root.nextSibling)
+			} else if (fwRoot.parentNode !== vs) {
+				vs.insertBefore(fwRoot, root.nextSibling)
+			}
+		}
 		mountStrip()
 		;['S', 'A', 'B'].forEach(function (sid) { pumps[sid] = makePump(sid) })
 		document.addEventListener('serial-session', function (ev) {
@@ -1258,7 +1352,7 @@
 		setInterval(tick, 1000)
 		let saved = null
 		try { saved = sessionStorage.getItem(SUBVIEW_KEY) } catch (e) {}
-		setView(saved === 'device' ? 'device' : 'comm', true)
+		setView(saved === 'device' ? 'device' : (saved === 'firmware' ? 'firmware' : 'comm'), true)
 		lastSig = ''
 		sync()
 	}
@@ -1268,6 +1362,11 @@
 			const rail = document.querySelector('.rail-item[data-view="view-serial"]')
 			if (rail && !rail.classList.contains('active')) rail.click()
 			if (!setView('device')) toast(availability().why, 'warn')
+		},
+		showFirmware: function () {
+			const rail = document.querySelector('.rail-item[data-view="view-serial"]')
+			if (rail && !rail.classList.contains('active')) rail.click()
+			return setView('firmware')
 		},
 		showComm: function () { if (view !== 'comm') setView('comm', true) },
 		view: function () { return view },

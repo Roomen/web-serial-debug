@@ -147,7 +147,11 @@
 
 	function open(id) {
 		const p = find(id)
-		// 放在别的视图上的面板(固件升级在固件页)：切到那个视图
+		// 固件升级已升格为通信调试顶部子视图（与设备面板同级），所有指向 firmware 面板的入口统一路由至此
+		if (id === 'firmware' && window.DevicePanel && typeof window.DevicePanel.showFirmware === 'function') {
+			return window.DevicePanel.showFirmware()
+		}
+		// 放在别的视图上的面板：切到那个视图
 		if (p && p.hidden && p.view) {
 			const rail = document.querySelector('.rail-item[data-view="' + p.view + '"]')
 			if (rail && !rail.classList.contains('active')) rail.click()
@@ -707,18 +711,18 @@
 	// ---------- 外壳 ----------
 	// index.html 里的节点是来源：启动时把要用的节点原样搬到新宿主(不克隆，事件绑定与控件状态跟着节点走)，只搬一次
 
-	// 固件升级面板并进固件打包页；平台没有固件打包视图(移动端)时留在停靠区
-	function fwInPackView() {
-		return !window.AppPlatform || window.AppPlatform.has('view.firmware-pack')
+	// 固件升级已独立到通信调试的子视图(#firmware-panel，与设备面板同级)；若页面存在该宿主则不再在右侧停靠栏重复占位
+	function fwInSubview() {
+		return !!$('firmware-panel')
 	}
 
-	// 对注册定义的覆盖：解析变成右栏第一个标签「检查器」，固件升级并进固件打包页
+	// 对注册定义的覆盖：解析变成右栏第一个标签「检查器」，固件升级由子视图承载
 	const PROFILE = {
 		parse: function () {
 			return { el: inspectorEl(), title: '检查器', label: '检查器', icon: 'bi-search', order: -1, docks: ['right'], defDock: 'right', fixed: false }
 		},
 		firmware: function () {
-			return fwInPackView() ? { hidden: true, view: 'view-fw-pack' } : null
+			return fwInSubview() ? { hidden: true } : null
 		},
 	}
 
@@ -815,18 +819,6 @@
 		park($('serial-parse-lock'), inspector.tools)
 		park($('serial-parse-clear'), inspector.tools)
 		park($('serial-parse-body'), inspector.rawBody)
-		// S4：固件升级面板放进固件打包页
-		const fwView = $('view-fw-pack')
-		const fw = find('firmware')
-		if (fwView && fw && fwInPackView()) {
-			const sec = host('section', 'fw-pack-upgrade', 'fw-pack-upgrade')
-			sec.setAttribute('aria-label', '固件升级')
-			const head = mk('div', 'fw-pack-upgrade-head')
-			head.append(iconEl('bi-cpu'), mk('span', 'fw-pack-upgrade-title', '固件升级'), mk('span', 'view-bar-sub', '经顶部串口连接收发'))
-			sec.appendChild(head)
-			fwView.appendChild(sec)
-			sec.appendChild(fw.base.el)
-		}
 	}
 
 	// ---------- 初始化 ----------

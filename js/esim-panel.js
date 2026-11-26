@@ -1,7 +1,7 @@
 // eSIM (Tag=66) Workbench 面板控制器：
 // - 只在 SEK 协议下可用（通过切换 #sk-esim-card 的 style.display 与 Workbench 联动）
 // - 不嗅探 UA / __TAURI__：通过 AppPlatform.service('esim-http') 判断是否具备免 CORS 的 SM-DP+ HTTPS 代理能力
-// - 严禁持久化或明文输出激活码 (AC) / 确认码 (CC) 到 localStorage 或日志
+// - 严禁持久化激活码 (AC) / 确认码 (CC) 到 localStorage；支持通过「脱敏」开关（默认开启）切换输入遮掩与日志脱敏
 // - 设备返回的所有字符串一律用 textContent 渲染
 ;(function () {
 	'use strict'
@@ -12,12 +12,16 @@
 	const POLL_MAX_MANAGE_MS = 60000
 	const MAX_LOG_LINES = 120
 	const STORAGE_INSECURE_TLS = 'skEsimAllowInsecureTls'
+	const STORAGE_REDACT = 'skEsimRedact'
 
-	function readBoolStorage(key) {
+	function readBoolStorage(key, defaultVal) {
 		try {
-			return typeof localStorage !== 'undefined' && localStorage.getItem(key) === '1'
+			if (typeof localStorage === 'undefined') return !!defaultVal
+			const v = localStorage.getItem(key)
+			if (v == null) return !!defaultVal
+			return v === '1'
 		} catch (e) {
-			return false
+			return !!defaultVal
 		}
 	}
 
@@ -87,6 +91,7 @@
 			profileCount: $('sk-esim-profile-count'),
 			profileList: $('sk-esim-profile-list'),
 			modeSelect: $('sk-esim-mode'),
+			redactToggle: $('sk-esim-redact'),
 			acInput: $('sk-esim-ac'),
 			ccInput: $('sk-esim-cc'),
 			proxyRow: $('sk-esim-proxy-row'),
@@ -97,6 +102,7 @@
 			downloadBtn: $('sk-esim-download'),
 			progressBar: $('sk-esim-progress-bar'),
 			statusLine: $('sk-esim-status'),
+			logTitle: $('sk-esim-log-title'),
 			logBox: $('sk-esim-log'),
 			clearLogBtn: $('sk-esim-log-clear'),
 		}
@@ -121,9 +127,40 @@
 			return !!(el.insecureTls && el.insecureTls.checked)
 		}
 
-		if (el.insecureTls) {
-			el.insecureTls.checked = readBoolStorage(STORAGE_INSECURE_TLS)
+		function isRedactEnabled() {
+			return el.redactToggle ? !!el.redactToggle.checked : true
 		}
+
+		function syncRedactionUi() {
+			const redact = isRedactEnabled()
+			if (el.acInput) {
+				el.acInput.type = redact ? 'password' : 'text'
+				el.acInput.placeholder = redact
+					? 'LPA:1$smdp.example.com$MATCHING-ID（不落盘、当前已脱敏）'
+					: 'LPA:1$smdp.example.com$MATCHING-ID（明文显示，仍不落盘）'
+			}
+			if (el.ccInput) {
+				el.ccInput.type = redact ? 'password' : 'text'
+				el.ccInput.placeholder = redact
+					? '可选，最多 64 字节（不落盘、当前已脱敏）'
+					: '可选，最多 64 字节（明文显示，仍不落盘）'
+			}
+			if (el.logTitle) {
+				el.logTitle.textContent = redact ? '操作日志（凭证已脱敏）' : '操作日志（已关闭脱敏 · 凭证可见）'
+			}
+		}
+
+		if (el.insecureTls) {
+			el.insecureTls.checked = readBoolStorage(STORAGE_INSECURE_TLS, false)
+		}
+		if (el.redactToggle) {
+			el.redactToggle.checked = readBoolStorage(STORAGE_REDACT, true)
+			el.redactToggle.addEventListener('change', function () {
+				writeBoolStorage(STORAGE_REDACT, !!el.redactToggle.checked)
+				syncRedactionUi()
+			})
+		}
+		syncRedactionUi()
 
 		function updateModeNotice() {
 			const mode = Number(el.modeSelect ? el.modeSelect.value : 0)
@@ -510,10 +547,9 @@
 			}
 		}
 
-		// 构建脱敏发送用的完整帧与 logData 副本（绝不在日志中落盘明文 AC/CC）
-		function buildDownloadFrames(mode, ac, cc) {
+		// 构建下载触发帧：开启脱敏时同时生成打码后的 logData 副本，关闭脱敏时原样记入串口日志（AC/CC 始终不落盘）
+		function buildDownloadFrames(mode, ac, cc, redact) {
 			const val = Core.encodeDownloadTrigger({ mode, ac, cc })
-			const redactedVal = Core.redactDownloadValue(val)
 			const seq = window.sekTx.nextSeq()
 			const now = new Date()
 			const encKey = typeof window.serialApi.getEncKey === 'function' ? window.serialApi.getEncKey() : null
@@ -525,14 +561,18 @@
 				encKey: encKey,
 				tlv: [{ tag: 66, items: [{ id: 2, value: val }] }],
 			})
-			const logFrame = window.skBuildDownFrame({
-				frameSeq: seq,
-				version: 2,
-				time: now,
-				funcCode: 0x01,
-				encKey: null,
-				tlv: [{ tag: 66, items: [{ id: 2, value: redactedVal }] }],
-			})
+			let logFrame = null
+			if (redact) {
+				const redactedVal = Core.redactDownloadValue(val)
+				logFrame = window.skBuildDownFrame({
+					frameSeq: seq,
+					version: 2,
+					time: now,
+					funcCode: 0x01,
+					encKey: null,
+					tlv: [{ tag: 66, items: [{ id: 2, value: redactedVal }] }],
+				})
+			}
 			return { frame, logFrame, seq }
 		}
 
@@ -592,9 +632,10 @@
 				}
 			}
 
+			const redact = isRedactEnabled()
 			let built
 			try {
-				built = buildDownloadFrames(mode, acRaw, ccRaw)
+				built = buildDownloadFrames(mode, acRaw, ccRaw, redact)
 			} catch (e) {
 				await dialogAlert(e.message, '参数错误')
 				return
@@ -606,7 +647,10 @@
 			const modeName = Core.MODE_LABELS[mode] || ('mode=' + mode)
 			setStatusText('正在发送下载触发 (' + modeName + ')…')
 			const tlsTag = mode === 1 && allowInsecureTls ? '，已跳过 TLS 证书校验' : ''
-			addLog('触发 Profile 下载：' + modeName + '，SM-DP+=' + acInfo.smdpHost + tlsTag + '（AC/CC 已脱敏）', 'info')
+			const credLog = redact
+				? '（AC/CC 已脱敏）'
+				: ('，AC=' + acRaw + (ccRaw ? '，CC=' + ccRaw : ''))
+			addLog('触发 Profile 下载：' + modeName + '，SM-DP+=' + acInfo.smdpHost + tlsTag + credLog, 'info')
 
 			const sid = activePhysSid()
 			let pinned = false
@@ -624,7 +668,7 @@
 				}, 6000)
 				waitAck.catch(function () {})
 
-				await window.serialApi.writeRawTo(sid, built.frame, { logData: built.logFrame })
+				await window.serialApi.writeRawTo(sid, built.frame, built.logFrame ? { logData: built.logFrame } : undefined)
 				const ack = await waitAck
 				const code = window.sekTx.tag11Result(ack.frame)
 

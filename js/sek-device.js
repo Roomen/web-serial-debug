@@ -47,27 +47,6 @@
 	const IDENTITY = [[1, 0], [1, 1], [1, 2], [1, 4], [1, 5], [1, 10], [1, 12]]
 	const STATUS_KEYS = [[2, 9], [2, 29], [2, 5], [2, 10], [2, 30], [2, 15], [2, 31], [2, 12], [2, 3], [2, 11], [1, 6],
 		[92, 7], [92, 8], [92, 6], [92, 9], [92, 0], [92, 1], [92, 4], [91, 0]]
-	// 核心分类置顶并保留既有顺序与 id，其余 0x01 参数预设分类按 SK_DOWN_PRESETS 顺序自动派生
-	const CORE_CATEGORIES = [
-		{ group: '参数设置-业务平台配置 (0x01)', id: 'biz', title: '业务平台', keys: [[3, 9], [3, 6], [3, 7], [3, 8], [3, 10], [3, 11], [3, 23]] },
-		{ group: '参数设置-维护平台配置 (0x01)', id: 'maint', title: '维护平台', keys: [[3, 22], [3, 21], [3, 40]] },
-		{ group: '参数设置-告警阈值 (0x01)', id: 'alarm', title: '告警阈值', keys: [[3, 0], [3, 1], [3, 2], [3, 3], [3, 4], [3, 5]] },
-		{ group: '参数设置-TAG39告警 (0x01)', id: 'usage', title: '用水告警', keys: [[39, 3]] },
-		{ group: '参数设置-计量参数 (0x01)', id: 'meter', title: '计量参数', keys: [[3, 18], [3, 17], [3, 35], [3, 36], [3, 29], [3, 24], [3, 28], [3, 30], [3, 12], [3, 15]] },
-		{ group: '参数设置-TAG36阀控 (0x01)', id: 'valve', title: '阀控', keys: [[36, 13], [36, 6], [36, 4], [36, 5], [36, 7], [36, 8], [36, 1]] },
-		{ group: '参数设置-TAG37蓝牙 (0x01)', id: 'ble', title: '蓝牙', keys: [[37, 0], [37, 1]] },
-	]
-	const EXTRA_CATEGORY_META = {
-		'参数设置-设备标识 (0x01)': { id: 'ident', title: '设备标识' },
-		'参数设置-设备管理 (0x01)': { id: 'mgmt', title: '设备管理' },
-		'参数设置-TAG32摄像表 (0x01)': { id: 'cam', title: '摄像表' },
-		'参数设置-TAG33总线采集器 (0x01)': { id: 'bus', title: '总线采集器' },
-		'参数设置-TAG34无磁传感器 (0x01)': { id: 'mag', title: '无磁传感器' },
-		'参数设置-TAG35LoRa (0x01)': { id: 'lora', title: 'LoRa' },
-		'参数设置-TAG38通讯认证 (0x01)': { id: 'auth', title: '通讯认证' },
-		'参数设置-TAG30超声波 (0x01)': { id: 'ultra', title: '超声波' },
-		'参数设置-TAG64渗漏仪 (0x01)': { id: 'leak', title: '渗漏仪' },
-	}
 	function hexSpaced(bytes) {
 		const out = []
 		for (let i = 0; i < bytes.length; i++) out.push((bytes[i] & 0xff).toString(16).toUpperCase().padStart(2, '0'))
@@ -149,11 +128,9 @@
 	const LIMITS = { '3:9': { step: 30 }, '3:10': { max: 4 }, '3:12': { min: 30, max: 1440, step: 30 }, '3:15': { step: 5 }, '3:22': { step: 1440 }, '36:1': { max: 31 }, '36:8': { min: 1, max: 45 } }
 	const DANGER = { '3:6': '更改服务器地址可能使设备无法上报。', '3:7': '更改 APN 可能使设备无法联网。', '3:17': '这会改写设备累计底度。', '3:35': '这会改写设备正累计底度。', '3:36': '这会改写设备逆累计底度。', '3:18': '变更口径会重置部分告警阈值。', '3:21': '更改维护服务器地址可能导致失联。', '3:23': '更改通信方式可能导致失联。', '3:29': '这会更改流量换算基准。', '36:6': '这会更改阀门的应急开阀行为。', '36:7': '这会更改低电压关阀行为。', '37:1': '关闭广播可能影响蓝牙连接。', '38:0': '更改加密方式可能导致通信无法解密。' }
 	const SECRET_FIELDS = [[3, 16], [38, 1], [38, 5]]
-	const PRESET_GROUPS = []
-	const PRESET_GROUP_MAP = Object.create(null)
+	const PRESET_BY_TAG = Object.create(null)
 	const presetCodec = W.SK_PRESET_CODEC
 	if (presetCodec) (W.SK_DOWN_PRESETS || []).forEach(function (category) {
-		const pairs = []
 		category.items.forEach(function (preset) {
 			const block = preset.tlv && preset.tlv.length === 1 && preset.tlv[0]
 			const item = block && block.items.length === 1 && block.items[0]
@@ -162,17 +139,10 @@
 			const param = name === '3:5' ? { type: 'uint16le', label: '16 位告警位域（十进制）' } : preset.param
 			if (!presetCodec.settingRange(param) && !['multi', 'ascii', 'largeFlow', 'bcd', 'hexbytes'].includes(param.type)) return
 			SETTINGS[name] = { tag: block.tag, id: item.id, param: param }
-			pairs.push([block.tag, item.id])
+			const tagKey = String(block.tag)
+			if (!PRESET_BY_TAG[tagKey]) PRESET_BY_TAG[tagKey] = []
+			PRESET_BY_TAG[tagKey].push(item.id)
 		})
-		if (pairs.length) {
-			const gname = category.group || ''
-			if (!PRESET_GROUP_MAP[gname]) {
-				PRESET_GROUP_MAP[gname] = pairs
-				PRESET_GROUPS.push(gname)
-			} else {
-				PRESET_GROUP_MAP[gname] = PRESET_GROUP_MAP[gname].concat(pairs)
-			}
-		}
 	})
 
 	function rulesFor(k, param) {
@@ -240,33 +210,26 @@
 	const IDENTITY_KEYS = IDENTITY.map(function (p) { return addField(p[0], p[1]) }).filter(Boolean)
 	STATUS_KEYS.forEach(function (p) { addField(p[0], p[1]) })
 	SECRET_FIELDS.forEach(function (pair) { addField(pair[0], pair[1]) })
+	// 参数分类直接按协议 Tag 划分（不再二次人为拆分子分类），Tag 与 ID 均按协议编号升序排列
 	const usedInCat = Object.create(null)
-	const usedGroups = Object.create(null)
-	function collectCatKeys(pairs) {
-		const out = []
-		pairs.forEach(function (p) {
-			const k = addField(p[0], p[1])
+	const categories = []
+	Object.keys(PRESET_BY_TAG).map(Number).sort(function (a, b) { return a - b }).forEach(function (tag) {
+		const ids = PRESET_BY_TAG[String(tag)].slice().sort(function (a, b) { return a - b })
+		const keys = []
+		ids.forEach(function (id) {
+			const k = addField(tag, id)
 			if (!k || usedInCat[k]) return
 			usedInCat[k] = true
-			out.push(k)
+			keys.push(k)
 		})
-		return out
-	}
-	const categories = []
-	CORE_CATEGORIES.forEach(function (c) {
-		usedGroups[c.group] = true
-		const keys = collectCatKeys(c.keys.concat(PRESET_GROUP_MAP[c.group] || []))
-		if (keys.length) categories.push({ id: c.id, title: c.title, keys: keys })
-	})
-	let extraIdx = 1
-	PRESET_GROUPS.forEach(function (gname) {
-		if (usedGroups[gname]) return
-		usedGroups[gname] = true
-		const meta = EXTRA_CATEGORY_META[gname]
-		const id = meta ? meta.id : ('preset-' + extraIdx++)
-		const title = meta ? meta.title : (gname.replace(/^参数设置-/, '').replace(/\s*\(0x01\)\s*$/i, '').replace(/^TAG\d+/i, '').trim() || gname)
-		const keys = collectCatKeys(PRESET_GROUP_MAP[gname] || [])
-		if (keys.length) categories.push({ id: id, title: title, keys: keys })
+		if (keys.length) {
+			const tagName = TAG_NAME[String(tag)] || ''
+			categories.push({
+				id: 'tag' + tag,
+				title: tagName ? ('Tag ' + tag + ' · ' + tagName) : ('Tag ' + tag),
+				keys: keys,
+			})
+		}
 	})
 
 	const groups = GROUP_TAGS.filter(function (g) { return queryIdFor(g[1]) != null }).map(function (g) {
