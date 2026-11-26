@@ -3,10 +3,15 @@
   "id": "demo-modbus-rtu",
   "name": "Modbus-RTU 示例（参考例程）",
   "version": "1.0.0",
-  "description": "标准 Modbus-RTU 帧参考例程：Addr(1B) + Func(1B) + Data + CRC16-Modbus(2B LE)",
+  "description": "标准 Modbus-RTU 帧参考例程：Addr(1B) + Func(1B) + Data + CRC16-Modbus(2B LE)；含设备面板（device）声明：读保持寄存器 0x0000×2",
   "framing": {
     "head": "01",
-    "length": { "offset": 2, "size": 1, "endian": "be", "totalDelta": 5 },
+    "length": {
+      "offset": 2,
+      "size": 1,
+      "endian": "be",
+      "totalDelta": 5
+    },
     "minLength": 5,
     "maxLength": 256
   },
@@ -18,7 +23,12 @@
     "endian": "le"
   },
   "fields": [
-    { "name": "从站地址", "offset": 0, "type": "uint8", "format": "hex" },
+    {
+      "name": "从站地址",
+      "offset": 0,
+      "type": "uint8",
+      "format": "hex"
+    },
     {
       "name": "功能码",
       "offset": 1,
@@ -52,5 +62,86 @@
         }
       ]
     }
-  ]
+  ],
+  "frames": [
+    {
+      "title": "读保持寄存器应答(2个)",
+      "match": [
+        {
+          "offset": 1,
+          "value": "0x03"
+        },
+        {
+          "offset": 2,
+          "value": "0x04"
+        }
+      ],
+      "dir": "up",
+      "fields": [
+        {
+          "name": "寄存器0",
+          "offset": 3,
+          "type": "uint16be"
+        },
+        {
+          "name": "寄存器1",
+          "offset": 5,
+          "type": "uint16be",
+          "scale": 0.1,
+          "decimals": 1
+        }
+      ]
+    }
+  ],
+  "device": {
+    "title": "Modbus 从站 0x01",
+    "timeoutMs": 2000,
+    "groups": [
+      {
+        "id": "hold",
+        "title": "保持寄存器",
+        "request": {
+          "rawHex": "01 03 00 00 00 02 C4 0B"
+        },
+        "reply": {
+          "title": "读保持寄存器应答(2个)"
+        }
+      }
+    ],
+    "fields": [
+      {
+        "key": "r0",
+        "from": "寄存器0",
+        "name": "寄存器 0x0000",
+        "group": "hold"
+      },
+      {
+        "key": "r1",
+        "from": "寄存器1",
+        "name": "寄存器 0x0001",
+        "unit": "℃",
+        "group": "hold"
+      }
+    ],
+    "status": [
+      {
+        "type": "metric",
+        "title": "寄存器 0x0001",
+        "key": "r1",
+        "sub": [
+          "r0"
+        ]
+      }
+    ],
+    "categories": [
+      {
+        "id": "hold",
+        "title": "保持寄存器",
+        "keys": [
+          "r0",
+          "r1"
+        ]
+      }
+    ]
+  }
 }

@@ -4489,6 +4489,8 @@
 			flushPendingRx(sid)
 			const sendTime = new Date()
 			const writeStart = typeof performance !== 'undefined' ? performance.now() : Date.now()
+			// 每次真正交给串口写入前加一（serialApi.txCount）：协议请求层据此发现等待应答期间这一路有别的发送
+			session.txCount = (session.txCount || 0) + 1
 			session.writeTask = writer.write(data)
 			await session.writeTask
 			const completedAt = new Date()
@@ -4538,6 +4540,7 @@
 			writer = port.writable.getWriter()
 			session.writer = writer
 			const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+			session.txCount = (session.txCount || 0) + 1
 			session.writeTask = writer.write(u8)
 			await session.writeTask
 			if ((session.writeSeq || 0) !== gen) return
@@ -5235,6 +5238,12 @@
 		sessionGeneration(id) {
 			if (id !== 'S' && id !== 'A' && id !== 'B') return 0
 			return serialSessionGen[id] || 0
+		},
+		// 这一路累计交给串口的写入次数（所有发送路径都算，含手动发送与终端直写）。钉扎只锁主发、挡不住手动发送，
+		// 协议请求层（js/protocol-request.js）用它发现等待应答期间这一路有别的发送，避免把别人的应答认领成自己的
+		txCount(id) {
+			if (id !== 'S' && id !== 'A' && id !== 'B') return 0
+			return SerialHub._sess(id).txCount || 0
 		},
 		getActiveSendSid() {
 			return SerialHub.activeSendSid()
@@ -7149,6 +7158,12 @@
 		addLaneB: addLaneB,
 		removeLaneB: removeLaneB,
 		protocolOf: protocolIdForSid,
+		// 在 sid 那一路的实时解析上下文里同步执行 fn（该路协议与流式解析状态换入，结束还原）。
+		// 设备面板 / 公共请求层按路收帧时用它，fn 里不要 await
+		parseInLane: function (sid, fn) {
+			if (sid !== 'S' && sid !== 'A' && sid !== 'B') return fn()
+			return inLiveLane(sid, fn)
+		},
 		protocolName: protocolName,
 		setProtocol: setLaneProtocol,
 		transportOf: laneTransport,

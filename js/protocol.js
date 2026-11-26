@@ -1862,6 +1862,9 @@
 	}
 
 	// 仅 TLV 段(不含帧头帧尾)的解析入口，供交叉测试与外部工具直接调用
+	// 字段描述（SK_TAGS 的 desc）→ 系数 / 单位 / 数值 / 枚举表，与解析页同一套规则。设备面板声明（js/sek-device.js）据此派生字段显示，不另抄一份
+	W.skDescCodec = { numUnit: numUnit, readNum: readNum, parseEnumMap: parseEnumMap }
+
 	W.skParseTlv = function (bytes, opt) {
 		return parseTlv(bytes, opt)
 	}

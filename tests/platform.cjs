@@ -49,7 +49,7 @@ const P = require('../js/platform.js')
 	})
 }
 
-// ---- 移动画像：SEK 协议设置与下发 + 固件升级(+ 解析)，单路、只 SEK、单实例 ----
+// ---- 移动画像：SEK 协议设置与下发 + 设备面板 + 固件升级(+ 解析)，单路、只 SEK、单实例 ----
 {
 	const a = P.resolve({ os: 'android', runtime: 'tauri' })
 	assert.equal(a.profile, 'mobile')
@@ -59,7 +59,7 @@ const P = require('../js/platform.js')
 	assert.equal(a.multiInstance, false)
 	assert.deepEqual(a.transports, ['ble', 'bt-classic', 'serial'])
 	const on = P.FEATURES.filter((f) => P.hasFeature(a, f))
-	const expectOn = ['view.serial', 'panel.protocol', 'panel.firmware', 'panel.parse', 'transport.serial', 'transport.ble', 'transport.bt-classic']
+	const expectOn = ['view.serial', 'view.device', 'panel.protocol', 'panel.firmware', 'panel.parse', 'transport.serial', 'transport.ble', 'transport.bt-classic']
 	assert.deepEqual(on.slice().sort(), expectOn.slice().sort())
 	assert.equal(P.hasFeature(a, 'lane.dual'), false)
 	assert.equal(P.hasFeature(a, 'view.power'), false)

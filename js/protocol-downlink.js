@@ -1526,6 +1526,8 @@
 			updateFrameTime: rawSek.updateFrameTime || (typeof root.skUpdateFrameTime === 'function' ? root.skUpdateFrameTime : null),
 			presets: root.SK_DOWN_PRESETS || [],
 			funcTabs: SEK_FUNC_TABS,
+			// 设备面板声明在 SEK 自己的 js/sek-device.js（在本文件之前加载）
+			device: root.SekDevice || null,
 			mountPanel: mountSekPanel,
 			unmountPanel: unmountSekPanel,
 		})
