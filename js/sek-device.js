@@ -178,7 +178,7 @@
 	function rulesFor(k, param) {
 		const range = presetCodec.settingRange(param)
 		if (range) return Object.assign({ step: 1, hint: param.label, options: param.options, confirm: DANGER[k] }, range, LIMITS[k])
-		if (param.type === 'ascii') return { maxLen: param.fillLen || param.length, pattern: '[ -~]*', hint: param.placeholder || param.label, confirm: DANGER[k] }
+		if (param.type === 'ascii') return { maxLen: param.fillLen || param.length, pattern: '[ -~]*', allowEmpty: true, hint: param.placeholder || param.label, confirm: DANGER[k] }
 		if (param.type === 'bcd') {
 			const len = param.fillLen || param.length
 			return { maxLen: len ? len * 2 : 64, pattern: '[0-9]+', hint: param.placeholder || (param.label + (len ? '（最多 ' + (len * 2) + ' 位数字）' : '')), confirm: DANGER[k] }

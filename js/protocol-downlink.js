@@ -723,6 +723,20 @@
 			else setParamUnit('暂按1L预览 · 下发前自动读当量', false)
 			return res.bytes
 		}
+		if (p.type === 'ascii') {
+			const s = paramVal ? paramVal.value : ''
+			const fl = p.fillLen != null ? Number(p.fillLen) : (p.length != null ? Number(p.length) : null)
+			if (/[^\x20-\x7e]/.test(s)) {
+				setParamUnit('仅支持可打印 ASCII', true)
+				return null
+			}
+			if (fl != null && s.length > fl) {
+				setParamUnit('超过 ' + fl + ' 字节上限', true)
+				return null
+			}
+			setParamUnit(fl ? ('(' + fl + 'B' + (s === '' && p.allowEmpty ? ' · 全0清空' : '') + ')') : '', false)
+			return encodeFieldValue('ascii', s, p)
+		}
 		if (p.type === 'multi') {
 			const bytes = multiParamToBytes(p.fields || [])
 			return bytes && bytes.length ? bytes : null
@@ -1047,7 +1061,10 @@
 				const tlv = JSON.parse(JSON.stringify(preset.tlv || []))
 				if (preset.param) {
 					const bytes = encodeParamToBytes(preset, overrideBaseCode)
-					if (!bytes || !bytes.length) return
+					if (!bytes || !bytes.length) {
+						if (tlvInput) tlvInput.value = ''
+						return
+					}
 					for (let i = 0; i < tlv.length; i++) {
 						const items = tlv[i].items || []
 						for (let j = 0; j < items.length; j++) {
@@ -1065,7 +1082,10 @@
 			let payloadBytes = null
 			if (preset.param) {
 				payloadBytes = encodeParamToBytes(preset, overrideBaseCode)
-				if (payloadBytes == null) return
+				if (payloadBytes == null) {
+					if (tlvInput) tlvInput.value = ''
+					return
+				}
 			} else if (Array.isArray(preset.payload)) {
 				payloadBytes = preset.payload.slice()
 			} else if (typeof preset.payloadHex === 'string') {
@@ -1103,6 +1123,7 @@
 				paramVal.removeAttribute('inputmode')
 				paramVal.removeAttribute('min')
 				paramVal.removeAttribute('max')
+				paramVal.removeAttribute('maxlength')
 				if (preset.param.type === 'enum') {
 					paramVal.style.display = 'none'
 					paramVal.type = 'text'
@@ -1120,13 +1141,15 @@
 					setParamUnit('', false)
 					_currentParamType = 'enum'
 				} else if (preset.param.type === 'ascii') {
+					const fl = preset.param.fillLen != null ? Number(preset.param.fillLen) : (preset.param.length != null ? Number(preset.param.length) : null)
 					paramVal.type = 'text'
 					paramVal.style.display = ''
 					paramVal.style.width = '180px'
 					paramSelEnum.style.display = 'none'
+					if (fl != null && fl > 0) paramVal.maxLength = fl
 					paramVal.value = preset.param.default != null ? String(preset.param.default) : ''
-					paramVal.placeholder = preset.param.placeholder || 'ASCII 字符串'
-					setParamUnit(preset.param.fillLen ? ('(' + preset.param.fillLen + 'B)') : '', false)
+					paramVal.placeholder = preset.param.placeholder || (preset.param.allowEmpty ? 'ASCII 字符串（留空清空）' : 'ASCII 字符串')
+					setParamUnit(fl ? ('(' + fl + 'B)') : '', false)
 					_currentParamType = 'ascii'
 				} else if (preset.param.type === 'bcd' || preset.param.type === 'bcd_le' || preset.param.type === 'bcd_be') {
 					paramVal.type = 'text'

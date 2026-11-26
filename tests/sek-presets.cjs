@@ -124,4 +124,153 @@ assert.throws(() => codec.settingBytes({ type: 'hexbytes', fillLen: 3 }, '076'))
 assert.throws(() => codec.settingBytes({ type: 'hexbytes', fillLen: 3 }, '07 66 88 99'))
 assert.throws(() => codec.settingBytes({ type: 'hexbytes', fillLen: 3 }, '07 ZZ 88'))
 
+// 5. 配置APN / 用户账号 / 用户密码允许写空(32B 全0)，且协议下行切换预设或清空输入时不残留上一条 TLV
+const flatPresets = presets.flatMap(g => g.items)
+const apnPreset = flatPresets.find(it => it.name === '配置APN')
+const ipPreset = flatPresets.find(it => it.name === '配置业务平台IP')
+const userPreset = flatPresets.find(it => it.name === '设置用户账号')
+const passPreset = flatPresets.find(it => it.name === '设置用户密码')
+assert.strictEqual(apnPreset.param.allowEmpty, true)
+assert.strictEqual(userPreset.param.allowEmpty, true)
+assert.strictEqual(passPreset.param.allowEmpty, true)
+assert.notStrictEqual(ipPreset.param.allowEmpty, true)
+assert.deepStrictEqual(sandbox.window.ProtocolDownlink.encodeFieldValue('ascii', '', apnPreset.param), new Array(32).fill(0))
+assert.strictEqual(sandbox.window.ProtocolDownlink.encodeFieldValue('ascii', '', ipPreset.param), null)
+
+// 5a. 下行 UI 回归：切到 配置APN 立刻生成 Tag3-ID7 全0帧；切到 配置业务平台IP（不允许空）必须清空 tlvInput，避免点下发误发上一条指令
+{
+	function mkEl(tag) {
+		const el = {
+			tagName: tag.toUpperCase(),
+			value: '',
+			textContent: '',
+			placeholder: '',
+			type: 'text',
+			hidden: false,
+			disabled: false,
+			style: {},
+			dataset: {},
+			attrs: {},
+			children: [],
+			options: [],
+			selectedIndex: 0,
+			classList: { _s: new Set(), add(c) { this._s.add(c) }, remove(c) { this._s.delete(c) }, toggle(c, v) { v ? this._s.add(c) : this._s.delete(c) }, contains(c) { return this._s.has(c) } },
+			_listeners: {},
+			addEventListener(ev, fn) { (this._listeners[ev] = this._listeners[ev] || []).push(fn) },
+			dispatchEvent(ev) {
+				const list = this._listeners[ev.type] || []
+				for (const fn of list) fn({ target: this })
+			},
+			click() { this.dispatchEvent({ type: 'click' }) },
+			appendChild(c) {
+				this.children.push(c)
+				if (c.tagName === 'OPTION') this.options.push(c)
+				if (c.tagName === 'OPTGROUP') {
+					const origAppend = c.appendChild.bind(c)
+					c.appendChild = (o) => { origAppend(o); if (o.tagName === 'OPTION') this.options.push(o) }
+				}
+			},
+			setAttribute(k, v) { this.attrs[k] = v },
+			removeAttribute(k) { delete this.attrs[k] },
+			closest() { return null },
+			querySelector() { return null },
+			querySelectorAll() { return [] },
+			focus() {},
+		}
+		Object.defineProperty(el, 'innerHTML', {
+			get() { return '' },
+			set() { el.children = []; el.options = [] },
+		})
+		return el
+	}
+	const ids = [
+		'sk-down-card', 'serial-protocol-down-encrypt', 'serial-protocol-down-tlv',
+		'serial-protocol-build', 'serial-protocol-send', 'serial-protocol-down-preview',
+		'serial-protocol-down-preset', 'serial-protocol-down-func', 'serial-protocol-down-func-tabs',
+		'serial-protocol-down-preset-search', 'serial-protocol-down-preset-search-clear',
+		'serial-protocol-down-desc', 'serial-protocol-down-param-group',
+		'serial-protocol-down-param-val', 'serial-protocol-down-param-sel',
+		'serial-protocol-down-param-label', 'serial-protocol-down-param-unit',
+		'serial-protocol-down-param-multi',
+	]
+	const dom = {}
+	for (const id of ids) dom[id] = mkEl(id.includes('sel') || id.includes('preset') && !id.includes('search') && !id.includes('desc') || id.endsWith('func') ? 'select' : 'input')
+	const sent = []
+	const errs = []
+	const uiDoc = {
+		readyState: 'complete',
+		getElementById(id) { return dom[id] || null },
+		createElement(tag) { return mkEl(tag) },
+		createTextNode(t) { return { textContent: t } },
+	}
+	const uiSandbox = {
+		window: null,
+		document: uiDoc,
+		Event: function (type) { this.type = type },
+		console, BigInt, Math, Number, String, Array, Object, Date, JSON, Uint8Array, parseInt, isNaN, setTimeout, clearTimeout, Promise,
+	}
+	uiSandbox.window = uiSandbox
+	uiSandbox.globalThis = uiSandbox
+	uiSandbox._activeProtocol = 'sek'
+	uiSandbox.SK_TAGS = sandbox.window.SK_TAGS
+	uiSandbox.SK_TAG_NAME = sandbox.window.SK_TAG_NAME
+	uiSandbox.SK_DOWN_PRESETS = presets
+	uiSandbox.SK_PRESET_CODEC = codec
+	uiSandbox.skBuildDownFrame = sandbox.window.skBuildDownFrame
+	uiSandbox.skParseFrame = sandbox.window.skParseFrame
+	uiSandbox._serialProtocolHost = {
+		rawSek: { buildDownFrame: sandbox.window.skBuildDownFrame, parseFrame: sandbox.window.skParseFrame },
+		sendHex(hex) { sent.push(hex); return Promise.resolve() },
+		addLogErr(msg) { errs.push(msg) },
+	}
+	vm.runInNewContext(fs.readFileSync(path.join(root, 'js/protocol-downlink.js'), 'utf8'), uiSandbox, { filename: 'js/protocol-downlink.js' })
+	uiSandbox.ProtocolDownlink.mountSekPanel()
+
+	// 先切到 0x01，默认选中第一项（设置上报频率 Tag3-ID9）
+	dom['serial-protocol-down-func'].value = '0x01'
+	dom['serial-protocol-down-func'].dispatchEvent({ type: 'change' })
+	assert.strictEqual(dom['serial-protocol-down-preset'].value, '设置上报频率')
+	assert.ok(dom['serial-protocol-down-tlv'].value.includes('"id":9'))
+
+	// 切到 配置APN（默认空）→ 应立刻生成 Tag3-ID7 全0 32B 帧，绝不能残留 Tag3-ID9
+	dom['serial-protocol-down-preset'].value = '配置APN'
+	dom['serial-protocol-down-preset'].dispatchEvent({ type: 'change' })
+	assert.strictEqual(dom['serial-protocol-down-tlv'].value, JSON.stringify([{ tag: 3, items: [{ id: 7, value: '00'.repeat(32) }] }]))
+	const emptyApnParsed = sandbox.window.skParseFrame(dom['serial-protocol-down-preview'].value, {})
+	assert.strictEqual(emptyApnParsed.ok, true)
+	assert.strictEqual(emptyApnParsed.tlv[0].tag, 3)
+	assert.strictEqual(emptyApnParsed.tlv[0].items[0].id, 7)
+	assert.deepStrictEqual(emptyApnParsed.tlv[0].items[0].raw, new Array(32).fill(0))
+
+	// 输入 cmnet → 生成 cmnet + 补零 32B；再删空 → 恢复全0 32B，不残留 cmnet
+	dom['serial-protocol-down-param-val'].value = 'cmnet'
+	dom['serial-protocol-down-param-val'].dispatchEvent({ type: 'input' })
+	const cmnetParsed = sandbox.window.skParseFrame(dom['serial-protocol-down-preview'].value, {})
+	assert.strictEqual(cmnetParsed.tlv[0].items[0].decoded, 'cmnet')
+	assert.strictEqual(cmnetParsed.tlv[0].items[0].raw.length, 32)
+	dom['serial-protocol-down-param-val'].value = ''
+	dom['serial-protocol-down-param-val'].dispatchEvent({ type: 'input' })
+	const clearedParsed = sandbox.window.skParseFrame(dom['serial-protocol-down-preview'].value, {})
+	assert.deepStrictEqual(clearedParsed.tlv[0].items[0].raw, new Array(32).fill(0))
+
+	// 输入非 ASCII 字符 → 清空 tlvInput 与 previewEl 并标红提示，不产生乱码帧
+	dom['serial-protocol-down-param-val'].value = '中文'
+	dom['serial-protocol-down-param-val'].dispatchEvent({ type: 'input' })
+	assert.strictEqual(dom['serial-protocol-down-tlv'].value, '')
+	assert.strictEqual(dom['serial-protocol-down-preview'].value, '')
+	assert.strictEqual(dom['serial-protocol-down-param-unit'].classList.contains('is-error'), true)
+
+	// 切到不允许写空的 配置业务平台IP（默认空）→ 必须清空 tlvInput 与 previewEl，点下发不得误发上一条指令
+	dom['serial-protocol-down-preset'].value = '设置上报频率'
+	dom['serial-protocol-down-preset'].dispatchEvent({ type: 'change' })
+	assert.ok(dom['serial-protocol-down-tlv'].value.includes('"id":9'))
+	dom['serial-protocol-down-preset'].value = '配置业务平台IP'
+	dom['serial-protocol-down-preset'].dispatchEvent({ type: 'change' })
+	assert.strictEqual(dom['serial-protocol-down-tlv'].value, '')
+	assert.strictEqual(dom['serial-protocol-down-preview'].value, '')
+	dom['serial-protocol-send'].click()
+	assert.strictEqual(sent.length, 0, '不允许空的预设留空点下发绝不能误发上一条指令')
+	assert.ok(errs.some(m => m.includes('请先生成HEX再下发')))
+}
+
 console.log('sek-presets.cjs: all assertions passed')

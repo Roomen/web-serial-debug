@@ -707,6 +707,10 @@
 		}
 		if (out.min > out.max) errors.push(path + '.write.min 大于 max')
 		for (const key of ['hint', 'confirm']) if (typeof write[key] === 'string') out[key] = write[key].slice(0, 200)
+		if (write.allowEmpty != null) {
+			if (typeof write.allowEmpty !== 'boolean') errors.push(path + '.write.allowEmpty 必须为布尔值')
+			else if (write.allowEmpty) out.allowEmpty = true
+		}
 		if (write.pattern != null) {
 			const pattern = write.pattern
 			const simple = /^\^?(?:\[[^\[\]\\]{1,64}\]|\\[dsw]|[a-zA-Z0-9 _:-])(?:[+*?]|\{\d{1,4}(?:,\d{0,4})?\})?\$?$/
