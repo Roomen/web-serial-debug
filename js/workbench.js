@@ -141,6 +141,8 @@
 	function ensureSerialView() {
 		const rail = document.querySelector('.rail-item[data-view="view-serial"]')
 		if (rail && !rail.classList.contains('active')) rail.click()
+		// 停靠区面板在「通信调试」子视图里，设备面板开着时先切回来，否则打开的面板看不见
+		if (window.DevicePanel && typeof window.DevicePanel.showComm === 'function') window.DevicePanel.showComm()
 	}
 
 	function open(id) {
@@ -507,6 +509,24 @@
 				if (typeof window.expandSendPanel === 'function') window.expandSendPanel()
 				const input = $('serial-send-content')
 				if (input) input.focus()
+			},
+		},
+		{
+			// 设备面板的读取进度与结果(js/device-panel.js)：窄屏下也要看得见，失败提示保留几秒。读取很短，不阻止应用更新
+			label: '设备读取',
+			title: '打开设备面板',
+			noSpin: true,
+			blocksUpdate: false,
+			running: function () {
+				const d = window.DevicePanel
+				return !!(d && typeof d.task === 'function' && d.task())
+			},
+			text: function () {
+				const t = window.DevicePanel.task()
+				return t ? t.text : ''
+			},
+			open: function () {
+				if (window.DevicePanel && typeof window.DevicePanel.show === 'function') window.DevicePanel.show()
 			},
 		},
 		{

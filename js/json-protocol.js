@@ -390,6 +390,273 @@
 		return { offset: offset, value: value & 0xff, mask: mask & 0xff }
 	}
 
+	// ===== 设备面板声明（device）=====
+	// JSON 协议用声明式映射代替函数：字段按本协议解出的字段名（from）取值，读取组的请求帧走 downlink 模板或 cmd/payloadHex 组帧，
+	// 应答按分支标题（reply.title）或匹配规则（reply.match，与 frames[].match 同格式）认领。编译后交给注册表按设备面板契约清洗。
+	const DEVICE_KINDS = ['number', 'enum', 'text', 'bits', 'time', 'hex', 'flag']
+	const DEVICE_WIDGETS = ['metric', 'identity', 'deviceTime', 'flags', 'dayBitmap', 'kv']
+	const DEVICE_KEY_RE = /^[A-Za-z0-9_.:\-]{1,48}$/
+	const DEVICE_BAD_KEYS = ['__proto__', 'constructor', 'prototype']
+	// 校验前先限量：超限直接报错，不裁剪（裁剪会留下指向被裁掉部分的引用）。注册表还有一道总预算（js/protocol-registry.js）
+	const DEVICE_LIMITS = {
+		groups: 64, fields: 512, status: 32, categories: 32, list: 128, options: 256, bits: 64,
+		rules: 16, // 每组 reply.match 规则数
+		ruleBytes: 64, // 单条匹配规则的字节数
+		hexChars: 8192 + 4096, // 单个 rawHex / payloadHex 字符串长度（请求帧最多 4096 字节，留出分隔符）
+		hexTotal: 65536, // 全部请求 HEX 与匹配规则字节串的总字符数
+		nodes: 20000, // 声明里的数据节点总数
+		text: 512 * 1024, // 声明里字符串总长
+		depth: 8,
+	}
+	// 解码前先量：声明总规模（节点、文本、深度、循环），以及每组请求 HEX 与应答规则的条数和长度。任何一项超限整体报错，不解码不分配
+	function devicePrecheck(dev, errors) {
+		let nodes = 0
+		let text = 0
+		const path = typeof Set !== 'undefined' ? new Set() : null
+		function walk(v, depth) {
+			if (++nodes > DEVICE_LIMITS.nodes) return 'device 声明过大（数据节点超过 ' + DEVICE_LIMITS.nodes + '）'
+			if (v == null) return null
+			if (typeof v === 'string') { text += v.length; return text > DEVICE_LIMITS.text ? 'device 声明里的文本总长超过 ' + DEVICE_LIMITS.text + ' 字符' : null }
+			if (typeof v !== 'object') return null
+			if (depth > DEVICE_LIMITS.depth) return 'device 声明嵌套过深（超过 ' + DEVICE_LIMITS.depth + ' 层）'
+			if (path) { if (path.has(v)) return 'device 声明里有循环引用'; path.add(v) }
+			let e = null
+			if (Array.isArray(v)) {
+				if (v.length > DEVICE_LIMITS.nodes) e = 'device 声明里的数组过长'
+				for (let i = 0; !e && i < v.length; i++) e = walk(v[i], depth + 1)
+			} else {
+				const ks = Object.keys(v)
+				if (ks.length > DEVICE_LIMITS.nodes) e = 'device 声明里的对象键过多'
+				for (let i = 0; !e && i < ks.length; i++) { text += ks[i].length; e = walk(v[ks[i]], depth + 1) }
+			}
+			if (path) path.delete(v)
+			return e
+		}
+		const e = walk(dev, 0)
+		if (e) { errors.push(e); return false }
+		let hexTotal = 0
+		let ok = true
+		const groups = Array.isArray(dev.groups) ? dev.groups : []
+		groups.forEach((g, i) => {
+			if (!g || typeof g !== 'object') return
+			const p = 'device.groups[' + i + ']'
+			const rq = g.request && typeof g.request === 'object' ? g.request : null
+			if (rq) {
+				;['payloadHex', 'rawHex'].forEach(k => {
+					const v = rq[k]
+					if (v == null || v === '') return
+					if (typeof v !== 'string') { errors.push(p + '.request.' + k + ' 必须为 HEX 字符串'); ok = false; return }
+					if (v.length > DEVICE_LIMITS.hexChars) { errors.push(p + '.request.' + k + ' 超过 ' + DEVICE_LIMITS.hexChars + ' 字符'); ok = false; return }
+					hexTotal += v.length
+				})
+			}
+			const rp = g.reply && typeof g.reply === 'object' ? g.reply : null
+			if (rp && rp.match !== undefined) {
+				const list = Array.isArray(rp.match) ? rp.match : [rp.match]
+				if (list.length > DEVICE_LIMITS.rules) { errors.push(p + '.reply.match 超过 ' + DEVICE_LIMITS.rules + ' 条'); ok = false; return }
+				list.forEach((mr, mi) => {
+					const b = mr && typeof mr === 'object' ? mr.bytes : null
+					if (b == null || b === '') return
+					const q = p + '.reply.match[' + mi + '].bytes'
+					if (typeof b === 'string') {
+						if (b.length > DEVICE_LIMITS.ruleBytes * 3) { errors.push(q + ' 超过 ' + DEVICE_LIMITS.ruleBytes + ' 字节'); ok = false; return }
+						hexTotal += b.length
+					} else if (Array.isArray(b)) {
+						if (b.length > DEVICE_LIMITS.ruleBytes) { errors.push(q + ' 超过 ' + DEVICE_LIMITS.ruleBytes + ' 字节'); ok = false; return }
+						hexTotal += b.length * 2
+					} else { errors.push(q + ' 必须为 HEX 字符串或字节数组'); ok = false }
+				})
+			}
+		})
+		if (ok && hexTotal > DEVICE_LIMITS.hexTotal) { errors.push('device 里请求 HEX 与应答匹配字节的总量超过 ' + DEVICE_LIMITS.hexTotal + ' 字符'); ok = false }
+		return ok
+	}
+	function deviceKeyOk(k) { return typeof k === 'string' && DEVICE_KEY_RE.test(k) && DEVICE_BAD_KEYS.indexOf(k) < 0 }
+	function ownKeys(o) { return o && typeof o === 'object' && !Array.isArray(o) ? Object.keys(o) : [] }
+	function nullMap(src, max, pathLabel, errors) {
+		const ks = ownKeys(src)
+		if (ks.length > max) { errors.push(pathLabel + ' 超过 ' + max + ' 项'); return null }
+		const out = Object.create(null)
+		ks.forEach(k => {
+			if (DEVICE_BAD_KEYS.indexOf(k) >= 0) { errors.push(pathLabel + ' 不能用 ' + k + ' 作键'); return }
+			const v = src[k]
+			out[k] = typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' ? String(v) : ''
+		})
+		return out
+	}
+
+	function defaultDeviceKind(src) {
+		if (!src) return 'text'
+		if (src.map) return 'enum'
+		if (src.type === 'bitfield') return src.bits && src.bits.length ? 'text' : 'hex'
+		if (FIXED_TYPE_SIZE[src.type]) return src.format === 'hex' ? 'hex' : 'number'
+		return 'text'
+	}
+
+	function validateDeviceSpec(dev, ctx, errors) {
+		if (dev === undefined || dev === null) return null
+		if (typeof dev !== 'object' || Array.isArray(dev)) {
+			errors.push('device 必须为对象')
+			return null
+		}
+		const lim = function (v, max, what) {
+			if (v !== undefined && !Array.isArray(v)) return false
+			if (Array.isArray(v) && v.length > max) { errors.push(what + ' 超过 ' + max + ' 项'); return true }
+			return false
+		}
+		// 规模先查，任何解码（HEX、匹配规则）与复制都在这之后
+		if (!devicePrecheck(dev, errors)) return null
+		let over = lim(dev.groups, DEVICE_LIMITS.groups, 'device.groups')
+		over = lim(dev.fields, DEVICE_LIMITS.fields, 'device.fields') || over
+		over = lim(dev.status, DEVICE_LIMITS.status, 'device.status') || over
+		over = lim(dev.categories, DEVICE_LIMITS.categories, 'device.categories') || over
+		const rsIn = dev.readSets && typeof dev.readSets === 'object' && !Array.isArray(dev.readSets) ? dev.readSets : null
+		if (rsIn) {
+			over = lim(rsIn.status, DEVICE_LIMITS.list, 'device.readSets.status') || over
+			over = lim(rsIn.all, DEVICE_LIMITS.list, 'device.readSets.all') || over
+		}
+		if (over) return null
+		const out = {
+			title: typeof dev.title === 'string' ? dev.title.trim().slice(0, 64) : '',
+			nameKey: typeof dev.nameKey === 'string' ? dev.nameKey.trim() : '',
+			timeoutMs: dev.timeoutMs == null ? 5000 : parseIntStrict(dev.timeoutMs),
+			groups: [],
+			fields: [],
+			readSets: rsIn ? {
+				status: (Array.isArray(rsIn.status) ? rsIn.status : []).filter(x => typeof x === 'string'),
+				all: (Array.isArray(rsIn.all) ? rsIn.all : []).filter(x => typeof x === 'string'),
+			} : null,
+			status: [],
+			categories: [],
+		}
+		if (Number.isNaN(out.timeoutMs) || out.timeoutMs < 200 || out.timeoutMs > 60000) errors.push('device.timeoutMs 必须为 200~60000 的整数')
+		const groupIds = []
+		if (!Array.isArray(dev.groups) || !dev.groups.length) {
+			errors.push('device.groups 必须为非空数组')
+		} else {
+			dev.groups.forEach((g, i) => {
+				const p = 'device.groups[' + i + ']'
+				if (!g || typeof g !== 'object' || Array.isArray(g)) { errors.push(p + ' 必须为对象'); return }
+				const id = typeof g.id === 'string' ? g.id.trim() : ''
+				if (!deviceKeyOk(id)) { errors.push(p + '.id 须为 1~48 位字母、数字或 _ . : -（不能是 __proto__ / constructor / prototype）'); return }
+				if (groupIds.indexOf(id) >= 0) { errors.push(p + '.id 重复：' + id); return }
+				groupIds.push(id)
+				const rq = g.request && typeof g.request === 'object' && !Array.isArray(g.request) ? g.request : null
+				const request = {}
+				if (!rq) {
+					errors.push(p + '.request 必须为对象（template 或 cmd / payloadHex / rawHex）')
+				} else {
+					if (typeof rq.template === 'string' && rq.template.trim()) {
+						request.template = rq.template.trim()
+						if (ctx.templates.indexOf(request.template) < 0) errors.push(p + '.request.template 在 downlink.templates 中不存在：' + request.template)
+					}
+					if (rq.cmd != null && rq.cmd !== '') {
+						const c = parseIntStrict(rq.cmd)
+						if (Number.isNaN(c) || c < 0 || c > 0xffff) errors.push(p + '.request.cmd 必须为整数或十六进制值')
+						else request.cmd = c
+					}
+					;['payloadHex', 'rawHex'].forEach(k => {
+						if (rq[k] == null || rq[k] === '') return
+						if (!hexToBytes(rq[k])) errors.push(p + '.request.' + k + ' 必须为合法 HEX')
+						else request[k] = String(rq[k])
+					})
+					if (!Object.keys(request).length) errors.push(p + '.request 至少要有 template、cmd、payloadHex、rawHex 之一')
+				}
+				const reply = {}
+				const rp = g.reply && typeof g.reply === 'object' && !Array.isArray(g.reply) ? g.reply : null
+				if (!rp) {
+					errors.push(p + '.reply 必须为对象（title 或 match）')
+				} else {
+					if (typeof rp.title === 'string' && rp.title.trim()) reply.title = rp.title.trim()
+					if (rp.match !== undefined) {
+						const list = Array.isArray(rp.match) ? rp.match : [rp.match]
+						reply.match = []
+						list.forEach((mr, mi) => {
+							const r = validateMatchRule(mr, p + '.reply.match[' + mi + ']', errors)
+							if (r) reply.match.push(r.bytes ? { offset: r.offset, bytes: Array.from(r.bytes) } : r)
+						})
+					}
+					if (!reply.title && !(reply.match && reply.match.length)) errors.push(p + '.reply 至少要有 title 或 match')
+				}
+				out.groups.push({ id: id, title: typeof g.title === 'string' && g.title.trim() ? g.title.trim() : id, request: request, reply: reply })
+			})
+		}
+		const keys = []
+		if (!Array.isArray(dev.fields) || !dev.fields.length) {
+			errors.push('device.fields 必须为非空数组')
+		} else {
+			dev.fields.forEach((f, i) => {
+				const p = 'device.fields[' + i + ']'
+				if (!f || typeof f !== 'object' || Array.isArray(f)) { errors.push(p + ' 必须为对象'); return }
+				const key = typeof f.key === 'string' ? f.key.trim() : ''
+				if (!deviceKeyOk(key)) { errors.push(p + '.key 须为 1~48 位字母、数字或 _ . : -（不能是 __proto__ / constructor / prototype）'); return }
+				if (keys.indexOf(key) >= 0) { errors.push(p + '.key 重复：' + key); return }
+				const from = typeof f.from === 'string' ? f.from.trim() : ''
+				const src = from && Object.prototype.hasOwnProperty.call(ctx.fieldsByName, from) ? ctx.fieldsByName[from] : null
+				if (!from || !src) { errors.push(p + '.from 必须是本协议 fields / frames[].fields 里的字段名：' + from); return }
+				if (f.kind != null && DEVICE_KINDS.indexOf(f.kind) < 0) errors.push(p + '.kind 不支持：' + f.kind)
+				const group = typeof f.group === 'string' ? f.group.trim() : ''
+				if (group && groupIds.indexOf(group) < 0) errors.push(p + '.group 不是已声明的读取组：' + group)
+				if (Array.isArray(f.bits) && f.bits.length > DEVICE_LIMITS.bits) { errors.push(p + '.bits 超过 ' + DEVICE_LIMITS.bits + ' 项'); return }
+				const options = f.options !== undefined && f.options !== null
+					? nullMap(f.options, DEVICE_LIMITS.options, p + '.options', errors)
+					: (src.map ? nullMap(src.map, DEVICE_LIMITS.options, p + '.options（来自字段 map）', errors) : null)
+				keys.push(key)
+				out.fields.push({
+					key: key,
+					name: typeof f.name === 'string' && f.name.trim() ? f.name.trim() : from,
+					from: from,
+					group: group || null,
+					kind: DEVICE_KINDS.indexOf(f.kind) >= 0 ? f.kind : defaultDeviceKind(src),
+					unit: typeof f.unit === 'string' ? f.unit : (src.unit || ''),
+					decimals: f.decimals != null ? parseIntStrict(f.decimals) : src.decimals,
+					digits: f.digits != null ? parseIntStrict(f.digits) : null,
+					options: options,
+					bits: Array.isArray(f.bits) ? f.bits.map(b => typeof b === 'string' || typeof b === 'number' ? String(b) : '') : null,
+					copy: f.copy === true,
+					note: typeof f.note === 'string' ? f.note : '',
+					addr: typeof f.addr === 'string' ? f.addr : '',
+				})
+			})
+		}
+		if (out.nameKey && keys.indexOf(out.nameKey) < 0) errors.push('device.nameKey 不是已声明的字段：' + out.nameKey)
+		const str = v => (typeof v === 'string' ? v : '')
+		;(Array.isArray(dev.status) ? dev.status : []).forEach((w, i) => {
+			const p = 'device.status[' + i + ']'
+			if (!w || typeof w !== 'object' || Array.isArray(w) || DEVICE_WIDGETS.indexOf(w.type) < 0) { errors.push(p + '.type 必须是 ' + DEVICE_WIDGETS.join(' / ')); return }
+			if ((Array.isArray(w.keys) && w.keys.length > DEVICE_LIMITS.list) || (Array.isArray(w.sub) && w.sub.length > DEVICE_LIMITS.list)) { errors.push(p + ' 的 key 列表超过 ' + DEVICE_LIMITS.list + ' 项'); return }
+			const refs = [].concat(w.key != null ? [w.key] : [], Array.isArray(w.keys) ? w.keys : [], Array.isArray(w.sub) ? w.sub : [], w.meter != null ? [w.meter] : [])
+			let bad = false
+			refs.forEach(k => { if (typeof k !== 'string' || keys.indexOf(k) < 0) { bad = true; errors.push(p + ' 引用了未声明的字段：' + str(k)) } })
+			if (bad) return
+			// 只拷约定的部件字段，不整体深拷
+			const nw = { type: w.type, title: str(w.title) }
+			if (w.key != null) nw.key = w.key
+			if (Array.isArray(w.keys)) nw.keys = w.keys.slice()
+			if (Array.isArray(w.sub)) nw.sub = w.sub.slice()
+			if (w.meter != null) nw.meter = w.meter
+			if (w.type === 'dayBitmap') {
+				if (w.days != null) nw.days = Number(w.days)
+				if (w.firstBit != null) nw.firstBit = Number(w.firstBit)
+				nw.setMeans = w.setMeans === 'bad' ? 'bad' : 'ok'
+				nw.setLabel = str(w.setLabel)
+				nw.clearLabel = str(w.clearLabel)
+			}
+			out.status.push(nw)
+		})
+		;(Array.isArray(dev.categories) ? dev.categories : []).forEach((c, i) => {
+			const p = 'device.categories[' + i + ']'
+			if (!c || typeof c !== 'object' || !Array.isArray(c.keys)) { errors.push(p + ' 必须为 { id, title, keys: [] }'); return }
+			if (c.keys.length > DEVICE_LIMITS.list) { errors.push(p + '.keys 超过 ' + DEVICE_LIMITS.list + ' 项'); return }
+			let bad = false
+			c.keys.forEach(k => { if (typeof k !== 'string' || keys.indexOf(k) < 0) { bad = true; errors.push(p + ' 引用了未声明的字段：' + str(k)) } })
+			if (bad) return
+			const id = typeof c.id === 'string' && deviceKeyOk(c.id) ? c.id : ('c' + i)
+			out.categories.push({ id: id, title: str(c.title) || id, keys: c.keys.slice() })
+		})
+		return out
+	}
+
 	function validateSpec(spec) {
 		const errors = []
 		if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
@@ -712,6 +979,15 @@
 			}
 		}
 
+		// device（设备面板）：字段按本协议字段名引用，模板按 downlink.templates 的名字引用
+		const fieldsByName = Object.create(null)
+		normFields.forEach(f => { fieldsByName[f.name] = f })
+		normFrames.forEach(fm => fm.fields.forEach(f => { if (!Object.prototype.hasOwnProperty.call(fieldsByName, f.name)) fieldsByName[f.name] = f }))
+		const normDevice = validateDeviceSpec(spec.device, {
+			fieldsByName: fieldsByName,
+			templates: normDownlink && normDownlink.templates ? normDownlink.templates.map(t => t.name) : [],
+		}, errors)
+
 		if (errors.length) return { ok: false, errors: errors }
 
 		const normalized = {
@@ -725,6 +1001,7 @@
 			fields: normFields,
 			frames: normFrames,
 			downlink: normDownlink,
+			device: normDevice,
 		}
 		return { ok: true, errors: [], normalized: normalized }
 	}
@@ -1301,6 +1578,64 @@
 			})
 		}
 
+		// 设备面板：把声明式映射编译成契约函数（buildRequest / matchReply / extract / byteGroups）
+		function compileDevice(dv) {
+			if (!dv) return null
+			const groupById = Object.create(null)
+			dv.groups.forEach(g => { groupById[g.id] = g })
+			const byId = id => (typeof id === 'string' && Object.prototype.hasOwnProperty.call(groupById, id) ? groupById[id] : null)
+			function replyMatches(g, parsed, frame) {
+				if (!g || !parsed || !parsed.matchedHead) return false
+				const rp = g.reply || {}
+				if (rp.title && parsed.title !== rp.title) return false
+				if (rp.match && rp.match.length) {
+					const rules = rp.match.map(r => r.bytes ? { offset: r.offset, bytes: Uint8Array.from(r.bytes) } : r)
+					if (!matchFrameRule(toU8(frame || parsed.raw), rules)) return false
+				}
+				return true
+			}
+			return {
+				title: dv.title,
+				nameKey: dv.nameKey || null,
+				timeoutMs: dv.timeoutMs,
+				fields: dv.fields,
+				groups: dv.groups,
+				readSets: dv.readSets,
+				status: dv.status,
+				categories: dv.categories,
+				buildRequest: function (group) {
+					const g = byId(group && group.id)
+					if (!g) throw new Error('未知的读取组')
+					const rq = (g && g.request) || {}
+					const o = {}
+					if (rq.rawHex) o.rawHex = rq.rawHex
+					if (rq.template) o.presetName = rq.template
+					if (rq.cmd != null) o.cmd = rq.cmd
+					if (rq.payloadHex != null) o.payloadHex = rq.payloadHex
+					return buildDownFrame(o)
+				},
+				matchReply: function (group, parsed, frame) {
+					return replyMatches(byId(group && group.id), parsed, frame)
+				},
+				extract: function (parsed, frame) {
+					if (!parsed || !parsed.matchedHead || parsed.ok === false) return null
+					const out = Object.create(null)
+					dv.fields.forEach(f => {
+						const g = f.group ? byId(f.group) : null
+						if (g && !replyMatches(g, parsed, frame)) return
+						const d = parsed.fields && Object.prototype.hasOwnProperty.call(parsed.fields, f.from) ? parsed.fields[f.from] : null
+						if (!d || !d.ok) return
+						out[f.key] = d.value
+					})
+					return out
+				},
+				byteGroups: function (parsed, key) {
+					const f = dv.fields.find(x => x.key === key)
+					return f ? [f.from] : []
+				},
+			}
+		}
+
 		function buildDownFrame(opts) {
 			const o = opts || {}
 			// 形态 3：直接原始帧 HEX
@@ -1452,6 +1787,7 @@
 			buildDownFrame: buildDownFrame,
 			presets: presets,
 			funcTabs: funcTabs,
+			device: compileDevice(spec.device),
 			rawSpec: JSON.parse(JSON.stringify(rawSpec)),
 		}
 	}

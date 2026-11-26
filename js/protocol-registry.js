@@ -67,6 +67,426 @@
 		return sanitizeLogViewModel(out)
 	}
 
+	// ===== 设备面板契约（device）=====
+	// 协议在 registerProtocol 时可选声明 device，宿主据此画设备面板；宿主不认识任何具体协议。
+	// 这里是契约的唯一入口：只保留约定的纯数据字段与约定的函数字段，函数一律包一层（异常吞掉、输出按约定清洗），
+	// 协议给出的所有文本最终由宿主 textContent 渲染。内置与外部协议走同一套清洗，外部协议额外不能带任何未约定的键。
+	const DEVICE_KINDS = ['number', 'enum', 'text', 'bits', 'time', 'hex', 'flag']
+	const DEVICE_WIDGETS = ['metric', 'identity', 'deviceTime', 'flags', 'dayBitmap', 'kv']
+	const DEVICE_KEY_RE = /^[A-Za-z0-9_.:\-]{1,48}$/
+	const DEVICE_TEXT_MAX = 256
+	const DEVICE_VALUE_TEXT_MAX = 2048
+	const DEVICE_MAX_FIELDS = 512
+	const DEVICE_MAX_GROUPS = 64
+	const DEVICE_MAX_WIDGETS = 32
+
+	const DEVICE_MAX_CATEGORIES = 32
+	const DEVICE_MAX_LIST = 128 // 部件 / 分类里的 key 列表、readSets 每项
+	const DEVICE_MAX_OPTIONS = 256
+	const DEVICE_MAX_BITS = 64
+	const DEVICE_MAX_NODES = 20000 // device 声明里纯数据的总节点数（对象、数组、标量都算）
+	const DEVICE_MAX_TEXT = 512 * 1024 // 声明里全部字符串的总长度
+	const DEVICE_MAX_REQUEST = 4096 // 单个请求帧最大字节数
+	const DEVICE_MAX_EXTRACT = 512 // 单帧 extract 结果最多几项
+	const DEVICE_MAX_RAW_ITEMS = 64 // 一个读数数组最多几项
+	// 这几个名字在普通对象上是原型链上的特殊键，作 key 会改写或读到原型，一律拒绝
+	const DEVICE_BAD_KEYS = ['__proto__', 'constructor', 'prototype']
+
+	function hasOwn(o, k) { return Object.prototype.hasOwnProperty.call(o, k) }
+
+	// 只收字符串 / 有限数字 / 布尔，别的类型不调用 toString（对象的 toString 可以是任意代码）
+	function devText(v, max) {
+		if (v == null) return ''
+		const t = typeof v
+		let s
+		if (t === 'string') s = v
+		else if ((t === 'number' && Number.isFinite(v)) || t === 'boolean') s = String(v)
+		else return ''
+		const lim = max || DEVICE_TEXT_MAX
+		return s.length > lim ? s.slice(0, lim) : s
+	}
+
+	function devKey(v) {
+		if (typeof v !== 'string') return ''
+		const s = v.trim()
+		if (DEVICE_BAD_KEYS.indexOf(s) >= 0) return ''
+		return DEVICE_KEY_RE.test(s) ? s : ''
+	}
+
+	function devNum(v, min, max, dflt) {
+		const n = typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN)
+		if (!Number.isFinite(n)) return dflt
+		if (min != null && n < min) return dflt
+		if (max != null && n > max) return dflt
+		return n
+	}
+
+	function isPlainObject(v) {
+		if (!v || typeof v !== 'object' || Array.isArray(v)) return false
+		// 只认普通对象（允许来自别的 realm，如 iframe / vm 里构造的字面量）
+		if (Object.prototype.toString.call(v) !== '[object Object]') return false
+		const proto = Object.getPrototypeOf(v)
+		return proto === null || Object.getPrototypeOf(proto) === null
+	}
+
+	// 复制前先量总规模：节点数、字符串总长、深度、循环引用。超限整体拒绝并说明原因，不裁剪（裁剪会留下指向被裁掉部分的引用）。
+	// 循环只看当前递归路径上的祖先：同一个对象被两处引用（如两个字段共用一张枚举表）是合法的，按实际复制次数各计一次预算
+	function deviceBudget(dev) {
+		let nodes = 0
+		let text = 0
+		const path = typeof Set !== 'undefined' ? new Set() : null
+		function walk(v, depth) {
+			if (++nodes > DEVICE_MAX_NODES) return '声明过大（数据节点超过 ' + DEVICE_MAX_NODES + '）'
+			if (v == null) return null
+			const t = typeof v
+			if (t === 'string') {
+				text += v.length
+				return text > DEVICE_MAX_TEXT ? '声明里的文本总长超过 ' + DEVICE_MAX_TEXT + ' 字符' : null
+			}
+			if (t !== 'object') return null
+			if (depth > 8) return '声明嵌套过深（超过 8 层）'
+			if (path) {
+				if (path.has(v)) return '声明里有循环引用'
+				path.add(v)
+			}
+			const e = walkChildren(v, depth)
+			if (path) path.delete(v)
+			return e
+		}
+		function walkChildren(v, depth) {
+			if (Array.isArray(v) || (typeof Uint8Array !== 'undefined' && v instanceof Uint8Array)) {
+				if (v.length > DEVICE_MAX_NODES) return '声明里的数组过长'
+				for (let i = 0; i < v.length; i++) { const e = walk(v[i], depth + 1); if (e) return e }
+				return null
+			}
+			if (!isPlainObject(v)) return null
+			const keys = Object.keys(v)
+			if (keys.length > DEVICE_MAX_NODES) return '声明里的对象键过多'
+			for (let i = 0; i < keys.length; i++) {
+				const k = keys[i]
+				if (typeof v[k] === 'function') continue
+				text += k.length
+				const e = walk(v[k], depth + 1)
+				if (e) return e
+			}
+			return null
+		}
+		return walk(dev, 0)
+	}
+
+	// 纯数据深拷贝：只留 JSON 可表示的标量 / 数组 / 普通对象（无原型），丢掉函数与特殊键。规模已由 deviceBudget 限住
+	function devPlain(v, depth) {
+		const d = depth || 0
+		if (v == null) return null
+		const t = typeof v
+		if (t === 'string') return devText(v, DEVICE_VALUE_TEXT_MAX)
+		if (t === 'number') return Number.isFinite(v) ? v : null
+		if (t === 'boolean') return v
+		if (d >= 8) return null
+		if (Array.isArray(v) || (typeof Uint8Array !== 'undefined' && v instanceof Uint8Array)) {
+			const out = []
+			for (let i = 0; i < v.length; i++) out.push(devPlain(v[i], d + 1))
+			return out
+		}
+		if (isPlainObject(v)) {
+			const out = Object.create(null)
+			Object.keys(v).forEach(function (k) {
+				if (DEVICE_BAD_KEYS.indexOf(k) >= 0 || typeof v[k] === 'function') return
+				out[k] = devPlain(v[k], d + 1)
+			})
+			return out
+		}
+		return null
+	}
+
+	// 读数原值：标量，或一层标量数组（如「告警标志 + 说明」）。别的形状（对象、嵌套数组、超长文本）整项拒绝，返回 undefined
+	function devScalar(x) {
+		if (x == null) return null
+		const t = typeof x
+		if (t === 'number') return Number.isFinite(x) ? x : undefined
+		if (t === 'boolean') return x
+		if (t === 'string') return x.length > DEVICE_VALUE_TEXT_MAX ? undefined : x
+		return undefined
+	}
+	function devRawValue(v) {
+		if (Array.isArray(v)) {
+			if (v.length > DEVICE_MAX_RAW_ITEMS) return undefined
+			const out = []
+			for (let i = 0; i < v.length; i++) {
+				const x = devScalar(v[i])
+				if (x === undefined) return undefined
+				out.push(x)
+			}
+			return out
+		}
+		return devScalar(v)
+	}
+
+	// key 列表：只收已声明的字段；列表过长由 normalizeDevice 先行拒绝
+	function devKeyList(list, fieldMap) {
+		const out = []
+		if (!Array.isArray(list)) return out
+		for (let i = 0; i < list.length; i++) {
+			const k = devKey(list[i])
+			if (k && hasOwn(fieldMap, k) && out.indexOf(k) < 0) out.push(k)
+		}
+		return out
+	}
+
+	function normalizeDeviceField(f, errors) {
+		if (!isPlainObject(f)) return null
+		const key = devKey(f.key)
+		if (!key) {
+			errors.push('字段 key 非法：' + devText(f.key, 48))
+			return null
+		}
+		const kind = DEVICE_KINDS.indexOf(f.kind) >= 0 ? f.kind : 'text'
+		const out = {
+			key: key,
+			name: devText(f.name, 64) || key,
+			kind: kind,
+			unit: devText(f.unit, 16),
+			scale: devNum(f.scale, null, null, 1) || 1,
+			decimals: devNum(f.decimals, 0, 10, null),
+			digits: devNum(f.digits, 1, 16, null),
+			group: devKey(f.group) || null,
+			copy: f.copy === true,
+			note: devText(f.note, 200),
+			addr: devText(f.addr, 32),
+			options: null,
+			bits: null,
+			// 第二期写入预留：只存约定的纯数据（编码类型、范围、步进、长度、正则、提示），第一期不使用
+			write: null,
+		}
+		if (isPlainObject(f.options)) {
+			const ks = Object.keys(f.options)
+			if (ks.length > DEVICE_MAX_OPTIONS) {
+				errors.push('字段 ' + key + ' 的 options 超过 ' + DEVICE_MAX_OPTIONS + ' 项')
+				return null
+			}
+			const opts = Object.create(null)
+			ks.forEach(function (k) {
+				if (DEVICE_BAD_KEYS.indexOf(k) >= 0) return
+				opts[devText(k, 32)] = devText(f.options[k], 64)
+			})
+			out.options = opts
+		}
+		if (Array.isArray(f.bits)) {
+			if (f.bits.length > DEVICE_MAX_BITS) {
+				errors.push('字段 ' + key + ' 的 bits 超过 ' + DEVICE_MAX_BITS + ' 项')
+				return null
+			}
+			out.bits = f.bits.map(function (b) { return devText(b, 32) })
+		}
+		if (isPlainObject(f.write)) {
+			const w = f.write
+			out.write = {
+				encode: devText(w.encode, 32),
+				min: devNum(w.min, null, null, null),
+				max: devNum(w.max, null, null, null),
+				step: devNum(w.step, 0, null, null),
+				maxLen: devNum(w.maxLen, 0, 4096, null),
+				pattern: devText(w.pattern, 200),
+				hint: devText(w.hint, 200),
+			}
+		}
+		return out
+	}
+
+	function normalizeDeviceWidget(w, fieldMap, groupIds, errors) {
+		if (!isPlainObject(w) || DEVICE_WIDGETS.indexOf(w.type) < 0) return null
+		const lists = [w.sub, w.keys]
+		for (let i = 0; i < lists.length; i++) {
+			if (Array.isArray(lists[i]) && lists[i].length > DEVICE_MAX_LIST) {
+				errors.push('状态部件 ' + w.type + ' 的 key 列表超过 ' + DEVICE_MAX_LIST + ' 项')
+				return null
+			}
+		}
+		const out = { type: w.type, title: devText(w.title, 64), group: groupIds.indexOf(w.group) >= 0 ? w.group : null }
+		if (w.type === 'metric' || w.type === 'deviceTime' || w.type === 'dayBitmap') {
+			const key = devKey(w.key)
+			if (!key || !hasOwn(fieldMap, key)) return null
+			out.key = key
+			out.sub = devKeyList(w.sub, fieldMap)
+		}
+		if (w.type === 'metric') {
+			const mk = devKey(w.meter)
+			out.meter = mk && hasOwn(fieldMap, mk) ? mk : null
+		}
+		if (w.type === 'dayBitmap') {
+			out.days = devNum(w.days, 1, 31, 31)
+			out.firstBit = devNum(w.firstBit, 0, 1, 1)
+			out.setMeans = w.setMeans === 'bad' ? 'bad' : 'ok'
+			out.setLabel = devText(w.setLabel, 16) || (out.setMeans === 'bad' ? '异常' : '正常')
+			out.clearLabel = devText(w.clearLabel, 16) || (out.setMeans === 'bad' ? '正常' : '异常')
+		}
+		if (w.type === 'identity' || w.type === 'flags' || w.type === 'kv') {
+			out.keys = devKeyList(w.keys, fieldMap)
+			if (!out.keys.length) return null
+		}
+		if (!out.group) {
+			const first = out.key || (out.keys && out.keys[0])
+			out.group = first && hasOwn(fieldMap, first) ? fieldMap[first].group : null
+		}
+		return out
+	}
+
+	// 请求帧：先看长度再分配，超过上限或有非字节值都拒绝
+	function toBytesOut(v) {
+		if (v == null) return null
+		if (isPlainObject(v) && v.frame != null) v = v.frame
+		if (typeof Uint8Array !== 'undefined' && v instanceof Uint8Array) {
+			if (v.length > DEVICE_MAX_REQUEST) throw new Error('请求帧超过 ' + DEVICE_MAX_REQUEST + ' 字节')
+			return Uint8Array.from(v)
+		}
+		if (Array.isArray(v)) {
+			if (v.length > DEVICE_MAX_REQUEST) throw new Error('请求帧超过 ' + DEVICE_MAX_REQUEST + ' 字节')
+			const out = new Uint8Array(v.length)
+			for (let i = 0; i < v.length; i++) {
+				const n = v[i]
+				if (typeof n !== 'number' || !Number.isInteger(n) || n < 0 || n > 255) return null
+				out[i] = n
+			}
+			return out
+		}
+		return null
+	}
+
+	// opts.errors：可选数组，收集拒绝原因。返回规范化的 device，或 null（没有 / 不合格）
+	function normalizeDevice(dev, opts) {
+		const label = (opts && opts.id) || ''
+		const errors = (opts && Array.isArray(opts.errors)) ? opts.errors : []
+		const warn = function (what, e) {
+			try { console.warn('[ProtocolRegistry] device.' + what + ' 异常(' + label + '):', e) } catch (x) {}
+		}
+		const reject = function (msg) {
+			errors.push(msg)
+			warn('声明', msg)
+			return null
+		}
+		if (!isPlainObject(dev)) return null
+		const over = deviceBudget(dev)
+		if (over) return reject(over)
+		const arr = function (v) { return Array.isArray(v) ? v : [] }
+		if (arr(dev.fields).length > DEVICE_MAX_FIELDS) return reject('fields 超过 ' + DEVICE_MAX_FIELDS + ' 项')
+		if (arr(dev.groups).length > DEVICE_MAX_GROUPS) return reject('groups 超过 ' + DEVICE_MAX_GROUPS + ' 项')
+		if (arr(dev.status).length > DEVICE_MAX_WIDGETS) return reject('status 超过 ' + DEVICE_MAX_WIDGETS + ' 项')
+		if (arr(dev.categories).length > DEVICE_MAX_CATEGORIES) return reject('categories 超过 ' + DEVICE_MAX_CATEGORIES + ' 项')
+		for (const c of arr(dev.categories)) {
+			if (c && Array.isArray(c.keys) && c.keys.length > DEVICE_MAX_LIST) return reject('分类的 keys 超过 ' + DEVICE_MAX_LIST + ' 项')
+		}
+		const rsIn = isPlainObject(dev.readSets) ? dev.readSets : {}
+		if (arr(rsIn.status).length > DEVICE_MAX_LIST || arr(rsIn.all).length > DEVICE_MAX_LIST) return reject('readSets 过长')
+		const fields = []
+		const fieldMap = Object.create(null)
+		const ferr = []
+		arr(dev.fields).forEach(function (f) {
+			const nf = normalizeDeviceField(f, ferr)
+			if (nf && !hasOwn(fieldMap, nf.key)) {
+				fieldMap[nf.key] = nf
+				fields.push(nf)
+			}
+		})
+		if (ferr.length) return reject(ferr.join('；'))
+		const groups = []
+		const groupIds = []
+		arr(dev.groups).forEach(function (g) {
+			if (!isPlainObject(g)) return
+			const id = devKey(g.id)
+			if (!id || groupIds.indexOf(id) >= 0) return
+			groupIds.push(id)
+			groups.push({ id: id, title: devText(g.title, 64) || id, request: devPlain(g.request), reply: devPlain(g.reply) })
+		})
+		if (!fields.length || !groups.length) return null
+		fields.forEach(function (f) { if (f.group && groupIds.indexOf(f.group) < 0) f.group = null })
+		const readSets = { status: [], all: [] }
+		;['status', 'all'].forEach(function (k) {
+			arr(rsIn[k]).forEach(function (id) { if (typeof id === 'string' && groupIds.indexOf(id) >= 0 && readSets[k].indexOf(id) < 0) readSets[k].push(id) })
+		})
+		if (!readSets.all.length) readSets.all = groupIds.slice()
+		if (!readSets.status.length) readSets.status = readSets.all.slice()
+		const status = []
+		const werr = []
+		arr(dev.status).forEach(function (w) {
+			const nw = normalizeDeviceWidget(w, fieldMap, groupIds, werr)
+			if (nw) status.push(nw)
+		})
+		if (werr.length) return reject(werr.join('；'))
+		const categories = []
+		arr(dev.categories).forEach(function (c) {
+			if (!isPlainObject(c)) return
+			const id = devKey(c.id)
+			const keys = devKeyList(c.keys, fieldMap)
+			if (!id || !keys.length) return
+			categories.push({ id: id, title: devText(c.title, 32) || id, keys: keys })
+		})
+		const nameKey = devKey(dev.nameKey)
+		const fn = function (name) { return typeof dev[name] === 'function' ? dev[name] : null }
+		const rawBuild = fn('buildRequest')
+		const rawMatch = fn('matchReply')
+		const rawExtract = fn('extract')
+		const rawFormat = fn('format')
+		const rawByteGroups = fn('byteGroups')
+		// 没有 extract 面板什么也取不到（被动更新与读取认领都靠它），整份声明拒绝并说明，不当成可用面板
+		if (!rawExtract) return reject('缺少 extract：面板靠它从帧里取值，读取也要靠它确认应答里确实有该组字段')
+		// 可查询 = 能组请求帧且能认领应答；缺一项这个面板只被动更新（不出现读取按键，组不发查询）
+		const canQuery = !!(rawBuild && rawMatch)
+		const out = {
+			title: devText(dev.title, 64),
+			nameKey: nameKey && hasOwn(fieldMap, nameKey) ? nameKey : null,
+			timeoutMs: devNum(dev.timeoutMs, 200, 60000, 5000),
+			queryable: canQuery,
+			fields: fields,
+			fieldMap: fieldMap,
+			groups: groups,
+			readSets: readSets,
+			status: status,
+			categories: categories,
+			// 组请求帧：返回 Uint8Array，失败抛错（由请求层如实报告）
+			buildRequest: canQuery ? function (group, ctx) {
+				const r = rawBuild.call(dev, group, ctx || {})
+				const bytes = toBytesOut(r)
+				if (!bytes || !bytes.length) throw new Error('协议没有为「' + group.title + '」构造出请求帧')
+				return bytes
+			} : null,
+			matchReply: canQuery ? function (group, parsed, frame) {
+				try { return rawMatch.call(dev, group, parsed, frame) === true } catch (e) { warn('matchReply', e); return false }
+			} : null,
+			// 取值：只收 fields 里声明过的 key（自有键），原值只能是标量或一层标量数组，结果项数有上限
+			extract: rawExtract ? function (parsed, frame) {
+				let r = null
+				try { r = rawExtract.call(dev, parsed, frame) } catch (e) { warn('extract', e); return null }
+				if (!r || typeof r !== 'object' || Array.isArray(r)) return null
+				const ks = Object.keys(r)
+				if (ks.length > DEVICE_MAX_EXTRACT) { warn('extract', '结果超过 ' + DEVICE_MAX_EXTRACT + ' 项，整帧丢弃'); return null }
+				const vals = Object.create(null)
+				let n = 0
+				ks.forEach(function (k) {
+					if (!hasOwn(fieldMap, k)) return
+					const v = devRawValue(r[k])
+					if (v === undefined) return
+					vals[k] = v
+					n++
+				})
+				return n ? vals : null
+			} : null,
+			format: rawFormat ? function (key, raw, get) {
+				try {
+					const s = rawFormat.call(dev, key, raw, get)
+					return typeof s === 'string' ? devText(s, DEVICE_VALUE_TEXT_MAX) : null
+				} catch (e) { warn('format', e); return null }
+			} : null,
+			byteGroups: rawByteGroups ? function (parsed, key) {
+				try {
+					const r = rawByteGroups.call(dev, parsed, key)
+					if (!Array.isArray(r) || r.length > 64) return []
+					return r.filter(function (g) { return typeof g === 'string' && g !== '' && g.length <= 128 })
+				} catch (e) { warn('byteGroups', e); return [] }
+			} : null,
+		}
+		return out
+	}
+
 	function wrapExternalProtocol(norm, env) {
 		const origLogView = typeof norm.logView === 'function' ? norm.logView : null
 		const origFormatFrame = typeof norm.formatFrame === 'function' ? norm.formatFrame : null
@@ -383,6 +803,7 @@
 				funcTabs: Array.isArray(impl.funcTabs) ? impl.funcTabs : null,
 				mountPanel: typeof impl.mountPanel === 'function' ? impl.mountPanel : null,
 				unmountPanel: typeof impl.unmountPanel === 'function' ? impl.unmountPanel : null,
+				device: normalizeDevice(impl.device, { id: id }),
 			}
 			return isBuiltin ? norm : wrapExternalProtocol(norm, env)
 		}
@@ -547,6 +968,7 @@
 					downlink: typeof entry.buildDownFrame === 'function',
 					presets: Array.isArray(entry.presets) && entry.presets.length > 0,
 					customPanel: typeof entry.mountPanel === 'function',
+					device: !!entry.device,
 				},
 			}
 		}
@@ -605,6 +1027,7 @@
 			setHost: function (h) { host = h || null },
 			getMountedId: function () { return mountedId },
 			sanitizeLogViewOutput: sanitizeLogViewOutput,
+			normalizeDevice: normalizeDevice,
 		}
 	}
 
@@ -613,6 +1036,9 @@
 	api.RESERVED_IDS = RESERVED_IDS.slice()
 	api.HIDDEN_KEY = HIDDEN_KEY
 	api.sanitizeLogViewOutput = sanitizeLogViewOutput
+	api.normalizeDevice = normalizeDevice
+	api.DEVICE_KINDS = DEVICE_KINDS.slice()
+	api.DEVICE_WIDGETS = DEVICE_WIDGETS.slice()
 
 	if (typeof module !== 'undefined' && module.exports) {
 		module.exports = api

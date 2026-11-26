@@ -1,7 +1,7 @@
 // 平台层：识别运行环境(系统 × 运行时)，给出功能画像，页面与各模块只经 window.AppPlatform 问「这里能不能用某功能」，
 // 不要自己嗅探 UA、navigator.serial 或 Tauri 全局量。在 <head> 里第一个加载(首屏前定下 data-* 与功能门控样式)，不依赖任何模块。
 // 画像：desktop(web / Windows / macOS / Linux，全部功能、双路、可多开)；mobile(Android / iOS，只留 SEK 协议设置与下发、
-// 固件升级，单路，传输按系统取 BLE / 经典蓝牙 / 串口)。界面只有一套(现代布局)，各画像只在功能门控上不同。功能 id 见 FEATURES；画像外的功能在 DOM 上用
+// 设备面板、固件升级，单路，传输按系统取 BLE / 经典蓝牙 / 串口)。界面只有一套(现代布局)，各画像只在功能门控上不同。功能 id 见 FEATURES；画像外的功能在 DOM 上用
 // data-feature="id"(多个以空格分隔，须全部开启)标注，由这里注入的样式隐藏，模块代码用 AppPlatform.has(id) 判断。
 // 预览其它平台：URL 加 ?platform=android|ios|windows|macos|linux|web(只换系统，运行时仍按实际识别)。
 // 纯逻辑可在 node 里跑(tests/platform.cjs)。
@@ -13,6 +13,7 @@
 		'view.firmware-pack', // 固件打包视图(原始包 / 压缩包 / 双向差分)
 		'view.classic',
 		'view.power', // 功耗分析视图(BLU 电流计)
+		'view.device', // 设备面板(通信调试视图里与日志并列的子视图，由主发那一路协议的 device 声明驱动)
 		'lane.dual', // 双路 A/B(由画像的 lanes 推出)
 		'panel.quick-send',
 		'panel.protocol', // 协议设置与下发
@@ -50,7 +51,7 @@
 		},
 		mobile: {
 			// 不开固件打包视图：移动端不输出中间产物，原始固件在固件升级面板里按设备版本自动差分 / 压缩后直接升级
-			features: ['view.serial', 'panel.protocol', 'panel.parse', 'panel.firmware'],
+			features: ['view.serial', 'view.device', 'panel.protocol', 'panel.parse', 'panel.firmware'],
 			protocols: ['sek'],
 			lanes: 1,
 		},

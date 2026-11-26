@@ -1,5 +1,5 @@
 // JS 协议插件完整参考例程：
-// 展示 findFrame / parseFrame / logView / byteMap / buildDownFrame / presets / randomTest 完整适配方式。
+// 展示 findFrame / parseFrame / logView / byteMap / buildDownFrame / presets / randomTest / device（设备面板）完整适配方式。
 // 帧格式：5A A5 + Cmd(1B) + Len(1B) + Payload(Len B) + XOR8(1B)
 ;(function () {
 	'use strict'
@@ -107,7 +107,9 @@
 			}
 		},
 
+		// 宿主按 byteMap(parsed) 调用（见 js/common.js），这里也兼容 byteMap(bytes, parsed)
 		byteMap(bytes, r) {
+			if (bytes && !(bytes instanceof Uint8Array) && !Array.isArray(bytes) && bytes.raw) { r = bytes; bytes = bytes.raw }
 			const b = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes || [])
 			const map = new Array(b.length)
 			if (b.length < 5) return map
@@ -139,6 +141,43 @@
 				],
 			},
 		],
+
+		// 设备面板（只读）：两组查询，应答命令 = 请求命令 | 0x80
+		device: {
+			title: '示例设备',
+			nameKey: 'ver',
+			timeoutMs: 3000,
+			fields: [
+				{ key: 'ver', name: '固件版本', kind: 'text', group: 'info', copy: true },
+				{ key: 'temp', name: '温度', kind: 'number', scale: 0.1, decimals: 1, unit: '℃', group: 'sensor' },
+				{ key: 'hum', name: '湿度', kind: 'number', unit: '%', group: 'sensor' },
+			],
+			groups: [
+				{ id: 'info', title: '设备信息', request: { cmd: 0x02 } },
+				{ id: 'sensor', title: '传感器', request: { cmd: 0x03 } },
+			],
+			readSets: { status: ['sensor'], all: ['info', 'sensor'] },
+			status: [
+				{ type: 'metric', title: '温度', key: 'temp', sub: ['hum'] },
+				{ type: 'identity', title: '设备', keys: ['ver'] },
+			],
+			categories: [{ id: 'all', title: '全部', keys: ['ver', 'temp', 'hum'] }],
+			buildRequest(group) { return buildFrame(group.request.cmd, []) },
+			matchReply(group, r) { return !!(r && r.ok && r.cmd === (group.request.cmd | 0x80)) },
+			extract(r) {
+				if (!r || !r.ok) return null
+				const p = r.payload || []
+				if (r.cmd === 0x82 && p.length >= 2) return { ver: p[0] + '.' + p[1] }
+				if (r.cmd === 0x83 && p.length >= 3) {
+					let t = p[0] | (p[1] << 8)
+					if (t & 0x8000) t -= 0x10000
+					return { temp: t, hum: p[2] }
+				}
+				return null
+			},
+			// 来源帧高亮：这个例程的 byteMap 只把载荷整体分成一组
+			byteGroups() { return ['payload'] },
+		},
 
 		randomTest: {
 			supportsWrite: false,
