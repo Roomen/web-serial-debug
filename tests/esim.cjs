@@ -494,6 +494,221 @@ async function runAsyncTests() {
 		)
 		await mcuTask
 	}
+
+	// 10. esim-panel.js 会话 ID 路由回归：单路模式(getMode==='single', getActiveSendSid==='A')必须路由到物理会话 'S'，双路模式路由到 'B'
+	async function runPanelDownloadCase({ serialMode, activeUiSid, openPhysSid, downloadMode }) {
+		const listeners = Object.create(null)
+		function makeEl(id, extra) {
+			const el = Object.assign({
+				id,
+				value: '',
+				textContent: '',
+				className: '',
+				hidden: false,
+				disabled: false,
+				style: {},
+				dataset: {},
+				childNodes: [],
+				scrollTop: 0,
+				scrollHeight: 0,
+				addEventListener(type, fn) {
+					listeners[id + ':' + type] = fn
+				},
+				appendChild(node) { this.childNodes.push(node) },
+				removeChild(node) {
+					const idx = this.childNodes.indexOf(node)
+					if (idx >= 0) this.childNodes.splice(idx, 1)
+				},
+				querySelectorAll() { return [] },
+			}, extra || {})
+			return el
+		}
+
+		const elements = {
+			'sk-esim-card': makeEl('sk-esim-card'),
+			'sk-esim-eid': makeEl('sk-esim-eid'),
+			'sk-esim-refresh': makeEl('sk-esim-refresh'),
+			'sk-esim-poll': makeEl('sk-esim-poll'),
+			'sk-esim-stop': makeEl('sk-esim-stop'),
+			'sk-esim-state-badge': makeEl('sk-esim-state-badge'),
+			'sk-esim-last-op': makeEl('sk-esim-last-op'),
+			'sk-esim-fail-stage': makeEl('sk-esim-fail-stage'),
+			'sk-esim-err-code': makeEl('sk-esim-err-code'),
+			'sk-esim-err-hint': makeEl('sk-esim-err-hint'),
+			'sk-esim-status-time': makeEl('sk-esim-status-time'),
+			'sk-esim-profile-count': makeEl('sk-esim-profile-count'),
+			'sk-esim-profile-list': makeEl('sk-esim-profile-list'),
+			'sk-esim-mode': makeEl('sk-esim-mode', { value: String(downloadMode) }),
+			'sk-esim-ac': makeEl('sk-esim-ac', { value: 'LPA:1$smdp.test.invalid$MATCH-12345' }),
+			'sk-esim-cc': makeEl('sk-esim-cc', { value: '' }),
+			'sk-esim-proxy-row': makeEl('sk-esim-proxy-row'),
+			'sk-esim-proxy-notice': makeEl('sk-esim-proxy-notice'),
+			'sk-esim-proxy-url': makeEl('sk-esim-proxy-url'),
+			'sk-esim-download': makeEl('sk-esim-download'),
+			'sk-esim-progress-bar': makeEl('sk-esim-progress-bar'),
+			'sk-esim-status': makeEl('sk-esim-status'),
+			'sk-esim-log': makeEl('sk-esim-log'),
+			'sk-esim-log-clear': makeEl('sk-esim-log-clear'),
+		}
+
+		const calls = {
+			pinSession: [],
+			unpinCount: 0,
+			writeRawTo: [],
+			isSessionOpen: [],
+			setSuppressRxLog: [],
+			onReceiveFrom: [],
+		}
+
+		const enc = new TextEncoder()
+		const okBody = enc.encode('{"header":{"functionExecutionStatus":{"status":"Executed-Success"}}}')
+		const mcuRxQ = Zmodem.createByteQueue()
+		let rxSub = null
+		let mcuTask = null
+		let pinnedSid = null
+
+		const serialApi = {
+			getMode() { return serialMode },
+			getActiveSendSid() { return activeUiSid },
+			isOpen() { return true },
+			isSessionOpen(id) {
+				calls.isSessionOpen.push(id)
+				return id === openPhysSid
+			},
+			isPinned() { return pinnedSid !== null },
+			pinSession(sid) {
+				calls.pinSession.push(sid)
+				pinnedSid = sid
+			},
+			unpinSession() {
+				calls.unpinCount++
+				pinnedSid = null
+			},
+			suppressParse: false,
+			setSuppressRxLog(sid, on) {
+				calls.setSuppressRxLog.push([sid, !!on])
+			},
+			onReceiveFrom(sid, cb) {
+				calls.onReceiveFrom.push(sid)
+				rxSub = { sid, cb }
+				if (downloadMode === 1 && sid === openPhysSid) {
+					const mcuIo = {
+						readByte: (ms) => mcuRxQ.readByte(ms),
+						writeBytes: async (u8) => {
+							if (rxSub && rxSub.sid === openPhysSid) rxSub.cb(new Uint8Array(u8))
+						},
+					}
+					mcuTask = (async () => {
+						for (let r = 0; r < 4; r++) {
+							await Zmodem.send(mcuIo, {
+								fileName: EsimCore.ES9_ROUNDS[r].path,
+								data: enc.encode(JSON.stringify({ smdpAddress: 'smdp.test.invalid', round: r + 1 })),
+							}, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 })
+							await Zmodem.receive(mcuIo, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 })
+						}
+					})()
+				}
+				return () => { rxSub = null }
+			},
+			async writeRawTo(id, data, opts) {
+				calls.writeRawTo.push({ id, len: data.length, hasLogData: !!(opts && opts.logData) })
+				if (!this.isSessionOpen(id)) throw new Error('串口会话未打开或当前模式不可路由')
+				if (rxSub && downloadMode === 1) mcuRxQ.push(data)
+			},
+		}
+
+		// 终态 ID4: state=2(成功), op=1(下载), stage=0, err=0, 全0时间
+		const id4Done = [2, 1, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+		const doneFrame = window.skParseFrame(sekUp(0x83, tlvBlock(66, [[4].concat(id4Done)])))
+		let seq = 1
+		let httpCount = 0
+
+		const panelWin = {
+			EsimCore,
+			Zmodem,
+			AppPlatform: {
+				service(name) {
+					if (name !== 'esim-http') return null
+					return {
+						async post() {
+							httpCount++
+							if (httpCount <= 3) return { status: 200, bodyBytes: okBody }
+							return { status: 204, bodyBytes: new Uint8Array(0) }
+						},
+					}
+				},
+			},
+			AppDialog: {
+				async alert(msg) { throw new Error('unexpected alert: ' + msg) },
+				async confirm() { return true },
+			},
+			serialApi,
+			skBuildDownFrame: window.skBuildDownFrame,
+			sekTx: {
+				nextSeq() { return seq++ },
+				clearBuffer() {},
+				waitFor() {
+					return Promise.resolve({ frame: { dir: 'up', fields: { '功能码': 0x81 } } })
+				},
+				tag11Result() { return 0 },
+				hasTag(f, tag) { return !!(f && f.tlv && f.tlv.some((t) => t.tag === tag)) },
+				findTlvItem(f, tag, id) {
+					if (!f || !f.tlv) return null
+					const blk = f.tlv.find((t) => t.tag === tag)
+					return blk ? (blk.items.find((it) => it.id === id) || null) : null
+				},
+				async sendAndWait() {
+					return { frame: doneFrame }
+				},
+			},
+		}
+
+		const panelCtx = {
+			window: panelWin,
+			document: {
+				readyState: 'complete',
+				getElementById(id) { return elements[id] || null },
+				createElement() { return makeEl('dyn') },
+				addEventListener() {},
+			},
+			Uint8Array,
+			TextEncoder,
+			AbortController,
+			Date,
+			console,
+			setTimeout(fn, ms) { return setTimeout(fn, Math.min(ms || 0, 5)) },
+			clearTimeout,
+		}
+		vm.createContext(panelCtx)
+		vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/esim-panel.js'), 'utf8'), panelCtx)
+
+		const onDownload = listeners['sk-esim-download:click']
+		assert.equal(typeof onDownload, 'function', '应已绑定下载按钮点击事件')
+		await onDownload()
+		if (mcuTask) await mcuTask
+
+		const logs = elements['sk-esim-log'].childNodes.map((n) => n.textContent)
+		assert.ok(!logs.some((l) => l.includes('串口会话未打开或当前模式不可路由')), '不应报串口会话未打开或当前模式不可路由: ' + logs.join(' | '))
+		assert.ok(!elements['sk-esim-status'].textContent.includes('下载失败'), '下载状态不应失败: ' + elements['sk-esim-status'].textContent)
+		assert.deepEqual(calls.pinSession, [openPhysSid], 'pinSession 必须使用物理会话 ID')
+		assert.equal(calls.unpinCount, 1, '结束后必须解除钉扎')
+		assert.ok(calls.writeRawTo.length >= 1, '应至少触发一次 writeRawTo')
+		assert.ok(calls.writeRawTo.every((c) => c.id === openPhysSid), '所有 writeRawTo 必须路由到 ' + openPhysSid)
+		assert.ok(calls.isSessionOpen.every((id) => id === openPhysSid), '所有 isSessionOpen 必须查询 ' + openPhysSid)
+		if (downloadMode === 1) {
+			assert.deepEqual(calls.onReceiveFrom, [openPhysSid], 'onReceiveFrom 必须订阅 ' + openPhysSid)
+			assert.deepEqual(calls.setSuppressRxLog, [[openPhysSid, true], [openPhysSid, false]], 'setSuppressRxLog 必须成对作用于 ' + openPhysSid)
+			assert.equal(httpCount, 4, 'mode=1 应完成四轮 SM-DP+ 请求')
+		}
+	}
+
+	// 10a. 单路模式（getMode==='single', getActiveSendSid==='A'，仅 'S' 打开、'A' 返回 false）：mode=0 与 mode=1 均以 'S' 路由
+	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 0 })
+	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 1 })
+
+	// 10b. 双路模式（getMode==='dual', getActiveSendSid==='B'，仅 'B' 打开）：mode=0 与 mode=1 均以 'B' 路由
+	await runPanelDownloadCase({ serialMode: 'dual', activeUiSid: 'B', openPhysSid: 'B', downloadMode: 0 })
+	await runPanelDownloadCase({ serialMode: 'dual', activeUiSid: 'B', openPhysSid: 'B', downloadMode: 1 })
 }
 
 runAsyncTests().then(() => {
