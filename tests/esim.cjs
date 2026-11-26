@@ -495,13 +495,15 @@ async function runAsyncTests() {
 		await mcuTask
 	}
 
-	// 10. esim-panel.js 会话 ID 路由回归：单路模式(getMode==='single', getActiveSendSid==='A')必须路由到物理会话 'S'，双路模式路由到 'B'
-	async function runPanelDownloadCase({ serialMode, activeUiSid, openPhysSid, downloadMode }) {
+	// 10. esim-panel.js 会话 ID 路由与 TLS 证书开关回归：单路模式路由到 'S'，双路路由到 'B'，透传 allowInsecureTls 并持久化
+	async function runPanelDownloadCase({ serialMode, activeUiSid, openPhysSid, downloadMode, allowInsecureTls = false }) {
 		const listeners = Object.create(null)
+		const storageMap = Object.create(null)
 		function makeEl(id, extra) {
 			const el = Object.assign({
 				id,
 				value: '',
+				checked: false,
 				textContent: '',
 				className: '',
 				hidden: false,
@@ -543,6 +545,8 @@ async function runAsyncTests() {
 			'sk-esim-cc': makeEl('sk-esim-cc', { value: '' }),
 			'sk-esim-proxy-row': makeEl('sk-esim-proxy-row'),
 			'sk-esim-proxy-notice': makeEl('sk-esim-proxy-notice'),
+			'sk-esim-tls-wrap': makeEl('sk-esim-tls-wrap'),
+			'sk-esim-insecure-tls': makeEl('sk-esim-insecure-tls'),
 			'sk-esim-proxy-url': makeEl('sk-esim-proxy-url'),
 			'sk-esim-download': makeEl('sk-esim-download'),
 			'sk-esim-progress-bar': makeEl('sk-esim-progress-bar'),
@@ -558,6 +562,7 @@ async function runAsyncTests() {
 			isSessionOpen: [],
 			setSuppressRxLog: [],
 			onReceiveFrom: [],
+			httpReqs: [],
 		}
 
 		const enc = new TextEncoder()
@@ -630,8 +635,9 @@ async function runAsyncTests() {
 				service(name) {
 					if (name !== 'esim-http') return null
 					return {
-						async post() {
+						async post(req) {
 							httpCount++
+							calls.httpReqs.push(req)
 							if (httpCount <= 3) return { status: 200, bodyBytes: okBody }
 							return { status: 204, bodyBytes: new Uint8Array(0) }
 						},
@@ -665,6 +671,10 @@ async function runAsyncTests() {
 
 		const panelCtx = {
 			window: panelWin,
+			localStorage: {
+				getItem(k) { return Object.prototype.hasOwnProperty.call(storageMap, k) ? storageMap[k] : null },
+				setItem(k, v) { storageMap[k] = String(v) },
+			},
 			document: {
 				readyState: 'complete',
 				getElementById(id) { return elements[id] || null },
@@ -681,6 +691,18 @@ async function runAsyncTests() {
 		}
 		vm.createContext(panelCtx)
 		vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/esim-panel.js'), 'utf8'), panelCtx)
+
+		if (downloadMode === 1) {
+			assert.equal(elements['sk-esim-tls-wrap'].hidden, false, '桌面原生 mode=1 应显示 TLS 证书开关')
+			assert.equal(elements['sk-esim-insecure-tls'].checked, false, 'TLS 证书开关默认关闭')
+			assert.equal(elements['sk-esim-proxy-notice'].className, 'sk-esim-notice is-ok')
+			if (allowInsecureTls) {
+				elements['sk-esim-insecure-tls'].checked = true
+				listeners['sk-esim-insecure-tls:change']()
+				assert.equal(storageMap.skEsimAllowInsecureTls, '1', '勾选后应持久化开关偏好')
+				assert.equal(elements['sk-esim-proxy-notice'].className, 'sk-esim-notice is-warn', '跳过 TLS 校验时应显示警告态提示')
+			}
+		}
 
 		const onDownload = listeners['sk-esim-download:click']
 		assert.equal(typeof onDownload, 'function', '应已绑定下载按钮点击事件')
@@ -699,16 +721,22 @@ async function runAsyncTests() {
 			assert.deepEqual(calls.onReceiveFrom, [openPhysSid], 'onReceiveFrom 必须订阅 ' + openPhysSid)
 			assert.deepEqual(calls.setSuppressRxLog, [[openPhysSid, true], [openPhysSid, false]], 'setSuppressRxLog 必须成对作用于 ' + openPhysSid)
 			assert.equal(httpCount, 4, 'mode=1 应完成四轮 SM-DP+ 请求')
+			assert.ok(calls.httpReqs.every((r) => r.allowInsecureTls === !!allowInsecureTls), '每轮原生请求必须准确透传 allowInsecureTls')
+			// 填自定义代理基址时隐藏原生 TLS 开关
+			elements['sk-esim-proxy-url'].value = 'https://127.0.0.1:8443'
+			listeners['sk-esim-proxy-url:input']()
+			assert.equal(elements['sk-esim-tls-wrap'].hidden, true, '自定义代理基址非空时应隐藏原生 TLS 开关')
 		}
 	}
 
-	// 10a. 单路模式（getMode==='single', getActiveSendSid==='A'，仅 'S' 打开、'A' 返回 false）：mode=0 与 mode=1 均以 'S' 路由
+	// 10a. 单路模式（getMode==='single', getActiveSendSid==='A'，仅 'S' 打开、'A' 返回 false）：mode=0 与 mode=1（严格/跳过 TLS）均以 'S' 路由
 	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 0 })
-	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 1 })
+	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 1, allowInsecureTls: false })
+	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 1, allowInsecureTls: true })
 
 	// 10b. 双路模式（getMode==='dual', getActiveSendSid==='B'，仅 'B' 打开）：mode=0 与 mode=1 均以 'B' 路由
 	await runPanelDownloadCase({ serialMode: 'dual', activeUiSid: 'B', openPhysSid: 'B', downloadMode: 0 })
-	await runPanelDownloadCase({ serialMode: 'dual', activeUiSid: 'B', openPhysSid: 'B', downloadMode: 1 })
+	await runPanelDownloadCase({ serialMode: 'dual', activeUiSid: 'B', openPhysSid: 'B', downloadMode: 1, allowInsecureTls: true })
 }
 
 runAsyncTests().then(() => {

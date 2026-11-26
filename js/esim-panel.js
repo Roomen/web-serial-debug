@@ -11,6 +11,21 @@
 	const POLL_MAX_DELETE_MS = 120000
 	const POLL_MAX_MANAGE_MS = 60000
 	const MAX_LOG_LINES = 120
+	const STORAGE_INSECURE_TLS = 'skEsimAllowInsecureTls'
+
+	function readBoolStorage(key) {
+		try {
+			return typeof localStorage !== 'undefined' && localStorage.getItem(key) === '1'
+		} catch (e) {
+			return false
+		}
+	}
+
+	function writeBoolStorage(key, val) {
+		try {
+			if (typeof localStorage !== 'undefined') localStorage.setItem(key, val ? '1' : '0')
+		} catch (e) {}
+	}
 
 	function $(id) { return document.getElementById(id) }
 
@@ -76,6 +91,8 @@
 			ccInput: $('sk-esim-cc'),
 			proxyRow: $('sk-esim-proxy-row'),
 			proxyNotice: $('sk-esim-proxy-notice'),
+			tlsWrap: $('sk-esim-tls-wrap'),
+			insecureTls: $('sk-esim-insecure-tls'),
 			proxyUrl: $('sk-esim-proxy-url'),
 			downloadBtn: $('sk-esim-download'),
 			progressBar: $('sk-esim-progress-bar'),
@@ -100,14 +117,33 @@
 			return !!(P && typeof P.service === 'function' && P.service('esim-http'))
 		}
 
+		function isInsecureTlsAllowed() {
+			return !!(el.insecureTls && el.insecureTls.checked)
+		}
+
+		if (el.insecureTls) {
+			el.insecureTls.checked = readBoolStorage(STORAGE_INSECURE_TLS)
+		}
+
 		function updateModeNotice() {
 			const mode = Number(el.modeSelect ? el.modeSelect.value : 0)
 			if (!el.proxyRow) return
 			if (mode === 1) {
 				el.proxyRow.hidden = false
-				if (hasNativeHttp()) {
-					el.proxyNotice.textContent = '桌面端已就绪：将通过内置原生 HTTPS 通道转发四轮 SM-DP+ 请求（保留 TLS 校验，绕过浏览器 CORS）。'
+				const hasNative = hasNativeHttp()
+				const hasCustomProxy = !!(el.proxyUrl && el.proxyUrl.value.trim())
+				if (el.tlsWrap) el.tlsWrap.hidden = !hasNative || hasCustomProxy
+				if (hasCustomProxy) {
+					el.proxyNotice.textContent = '将通过下方自定义 CORS 转发代理基地址转发四轮 SM-DP+ 请求。'
 					el.proxyNotice.className = 'sk-esim-notice is-ok'
+				} else if (hasNative) {
+					if (isInsecureTlsAllowed()) {
+						el.proxyNotice.textContent = '桌面端已就绪（已跳过 SM-DP+ TLS 证书校验，适用于 GSMA CI / 测试环境）：仍强制 HTTPS 与 ES9+ 路径，eUICC 在应用层校验签名。'
+						el.proxyNotice.className = 'sk-esim-notice is-warn'
+					} else {
+						el.proxyNotice.textContent = '桌面端已就绪：将通过内置原生 HTTPS 通道转发四轮 SM-DP+ 请求（保留系统 TLS 校验）。连接 GSMA CI / 测试 SM-DP+ 如遇证书报错，请开启下方开关。'
+						el.proxyNotice.className = 'sk-esim-notice is-ok'
+					}
 				} else {
 					el.proxyNotice.textContent = '网页版受浏览器 CORS 限制，无法直连 SM-DP+。请改用桌面客户端，或在下方填写本地 CORS 转发代理基地址。'
 					el.proxyNotice.className = 'sk-esim-notice is-warn'
@@ -117,6 +153,13 @@
 			}
 		}
 		if (el.modeSelect) el.modeSelect.addEventListener('change', updateModeNotice)
+		if (el.proxyUrl) el.proxyUrl.addEventListener('input', updateModeNotice)
+		if (el.insecureTls) {
+			el.insecureTls.addEventListener('change', function () {
+				writeBoolStorage(STORAGE_INSECURE_TLS, !!el.insecureTls.checked)
+				updateModeNotice()
+			})
+		}
 		updateModeNotice()
 
 		function addLog(text, level) {
@@ -149,6 +192,8 @@
 			if (el.pollBtn) el.pollBtn.disabled = running
 			if (el.downloadBtn) el.downloadBtn.disabled = running
 			if (el.modeSelect) el.modeSelect.disabled = running
+			if (el.insecureTls) el.insecureTls.disabled = running
+			if (el.proxyUrl) el.proxyUrl.disabled = running
 			const btns = el.profileList ? el.profileList.querySelectorAll('button') : []
 			btns.forEach(function (b) { b.disabled = running || b.dataset.hardDisabled === '1' })
 		}
@@ -491,11 +536,15 @@
 			return { frame, logFrame, seq }
 		}
 
-		function createHttpPoster(proxyBaseUrl) {
+		function createHttpPoster(proxyBaseUrl, allowInsecureTls) {
 			const nativeSvc = P && typeof P.service === 'function' ? P.service('esim-http') : null
 			if (nativeSvc && !proxyBaseUrl) {
 				return function (req) {
-					return nativeSvc.post({ url: req.url, bodyBytes: req.bodyBytes })
+					return nativeSvc.post({
+						url: req.url,
+						bodyBytes: req.bodyBytes,
+						allowInsecureTls: !!allowInsecureTls,
+					})
 				}
 			}
 			if (proxyBaseUrl) {
@@ -522,6 +571,7 @@
 			const acRaw = el.acInput ? el.acInput.value.trim() : ''
 			const ccRaw = el.ccInput ? el.ccInput.value.trim() : ''
 			const proxyBaseUrl = el.proxyUrl ? el.proxyUrl.value.trim() : ''
+			const allowInsecureTls = !proxyBaseUrl && isInsecureTlsAllowed()
 
 			const acInfo = Core.parseActivationCode(acRaw)
 			if (!acInfo.ok) {
@@ -535,7 +585,7 @@
 
 			let httpPost = null
 			if (mode === 1) {
-				httpPost = createHttpPoster(proxyBaseUrl)
+				httpPost = createHttpPoster(proxyBaseUrl, allowInsecureTls)
 				if (!httpPost) {
 					await dialogAlert('当前浏览器环境不支持直接向 SM-DP+ 发起 HTTPS POST（CORS 限制）。\n请使用桌面客户端，或在「本地代理基地址」填入支持 CORS 的转发代理。', '无法启动近端外部代理')
 					return
@@ -555,7 +605,8 @@
 			setProgress(5, '触发下载')
 			const modeName = Core.MODE_LABELS[mode] || ('mode=' + mode)
 			setStatusText('正在发送下载触发 (' + modeName + ')…')
-			addLog('触发 Profile 下载：' + modeName + '，SM-DP+=' + acInfo.smdpHost + '（AC/CC 已脱敏）', 'info')
+			const tlsTag = mode === 1 && allowInsecureTls ? '，已跳过 TLS 证书校验' : ''
+			addLog('触发 Profile 下载：' + modeName + '，SM-DP+=' + acInfo.smdpHost + tlsTag + '（AC/CC 已脱敏）', 'info')
 
 			const sid = activePhysSid()
 			let pinned = false
@@ -631,6 +682,7 @@
 								addLog(ev.label + ' 开始', 'info')
 							} else if (ev.type === 'http-start') {
 								setStatusText('第 ' + (ev.round + 1) + '/4 轮：转发 HTTPS POST (' + ev.reqBytes + 'B)…')
+								addLog('第 ' + (ev.round + 1) + '/4 轮已收到 MCU 请求 (' + ev.reqBytes + 'B)，正在请求 SM-DP+…', 'info')
 							} else if (ev.type === 'http-done') {
 								addLog('第 ' + (ev.round + 1) + '/4 轮 SM-DP+ 响应 HTTP ' + ev.httpStatus + ' (' + ev.respBytes + 'B)', ev.httpStatus === 200 || ev.httpStatus === 204 ? 'ok' : 'bad')
 							} else if (ev.type === 'zmodem-tx-start') {
