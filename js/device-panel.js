@@ -603,7 +603,10 @@
 		const metrics = []
 		const blocks = []
 		c.dev.status.forEach(function (w) {
-			if (w.type === 'metric') metrics.push(renderMetric(c, w))
+			if (w.type === 'metric') {
+				if (w.optional && !M.reading(c.L, w.key) && !(w.sub || []).some(function (k) { return !!M.reading(c.L, k) })) return
+				metrics.push(renderMetric(c, w))
+			}
 			else if (w.type === 'identity') blocks.push(renderIdentity(c, w, narrow))
 			else if (w.type === 'deviceTime') blocks.push(renderDeviceTime(c, w))
 			else if (w.type === 'flags') blocks.push(renderFlags(c, w))

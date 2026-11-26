@@ -796,7 +796,12 @@ window.SK_PRESET_CODEC = (function () {
 		if (!match) return null
 		const signed = !match[1]
 		const limit = 2 ** (+match[2] - (signed ? 1 : 0))
-		return { min: param.min == null ? (signed ? -limit : 0) : +param.min, max: param.max == null ? limit - 1 : +param.max }
+		const lo = signed ? -limit : 0
+		const hi = limit - 1
+		return {
+			min: param.min == null ? lo : Math.max(lo, +param.min),
+			max: param.max == null ? hi : Math.min(hi, +param.max),
+		}
 	}
 
 	function settingNumber(param, input) {
@@ -817,8 +822,22 @@ window.SK_PRESET_CODEC = (function () {
 		}
 		if (param.type === 'ascii') {
 			const length = param.fillLen || param.length
-			if (typeof value !== 'string' || /[^\x20-\x7e]/.test(value) || value.length > length) throw new Error('请输入长度合规的可打印 ASCII')
+			if (typeof value !== 'string' || /[^\x20-\x7e]/.test(value) || (length != null && value.length > length)) throw new Error('请输入长度合规的可打印 ASCII')
 			return codec.encodeFieldValue(param.type, value, Object.assign({ allowEmpty: true }, param))
+		}
+		if (param.type === 'bcd') {
+			const length = param.fillLen || param.length
+			const digits = typeof value === 'string' ? value.trim() : ''
+			if (!/^\d+$/.test(digits) || (length != null && digits.length > length * 2)) throw new Error('请输入长度合规的纯数字 BCD')
+			return codec.encodeFieldValue(param.type, digits, param)
+		}
+		if (param.type === 'hexbytes') {
+			const length = param.fillLen || param.length
+			const raw = typeof value === 'string' ? value.trim() : ''
+			if (!raw || /[^0-9a-fA-F\s:-]/.test(raw)) throw new Error('请输入合法的十六进制字节')
+			const hex = raw.replace(/[\s:-]/g, '')
+			if (!hex.length || hex.length % 2 !== 0 || (length != null && hex.length / 2 > length)) throw new Error('请输入长度合规的偶数位十六进制字节')
+			return codec.encodeFieldValue(param.type, hex, param)
 		}
 		return codec.encodeFieldValue(param.type, settingNumber(param, value), param)
 	}

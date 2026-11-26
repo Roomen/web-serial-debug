@@ -327,6 +327,7 @@
 		if (w.type === 'metric') {
 			const mk = devKey(w.meter)
 			out.meter = mk && hasOwn(fieldMap, mk) ? mk : null
+			out.optional = !!w.optional
 		}
 		if (w.type === 'dayBitmap') {
 			out.days = devNum(w.days, 1, 31, 31)
