@@ -941,6 +941,10 @@
                                         <div class="sk-esim-section mb-2">
                                             <div class="sk-esim-sec-head">
                                                 <span>Profile 下载 (ID2)</span>
+                                                <div class="form-check form-switch ctl-switch sk-esim-redact-switch" title="开启时隐藏 AC/CC 输入内容并在串口与操作日志中打码脱敏；关闭后可查看明文与真实下发帧便于联调（AC/CC 始终不落盘）">
+                                                    <input class="form-check-input" type="checkbox" id="sk-esim-redact" checked>
+                                                    <label class="form-check-label" for="sk-esim-redact">脱敏</label>
+                                                </div>
                                             </div>
                                             <div class="mb-2">
                                                 <div class="input-group input-group-sm">
@@ -967,7 +971,7 @@
                                             <div class="mb-2">
                                                 <div class="input-group input-group-sm">
                                                     <span class="input-group-text">激活码 AC</span>
-                                                    <input type="password" class="form-control" id="sk-esim-ac" placeholder="LPA:1$smdp.example.com$MATCHING-ID（不落盘、不写明文日志）" autocomplete="off" spellcheck="false">
+                                                    <input type="password" class="form-control" id="sk-esim-ac" placeholder="LPA:1$smdp.example.com$MATCHING-ID（不落盘、当前已脱敏）" autocomplete="off" spellcheck="false">
                                                 </div>
                                             </div>
                                             <div class="mb-2">
@@ -983,7 +987,7 @@
                                             <div class="sk-rw-status" id="sk-esim-status">就绪</div>
                                         </div>
                                         <div class="sk-esim-log-head d-flex align-items-center justify-content-between mb-1">
-                                            <span class="sk-esim-kv-label">操作日志（凭证已脱敏）</span>
+                                            <span class="sk-esim-kv-label" id="sk-esim-log-title">操作日志（凭证已脱敏）</span>
                                             <button class="btn btn-xs btn-outline-secondary" id="sk-esim-log-clear" type="button">清空</button>
                                         </div>
                                         <div class="sk-rw-log sk-esim-log" id="sk-esim-log"></div>
@@ -1156,6 +1160,8 @@
                     <!--最右侧停靠图标栏：每个已注册面板一个按钮-->
                     <div id="wb-dock-bar" role="toolbar" aria-label="工具面板" aria-orientation="vertical"></div>
                 </div>
+                <!--固件升级子视图：与设备面板同级，由 js/device-panel.js 控制切换，js/modern-firmware.js 挂入升级与校验卡片-->
+                <section class="dp dp-fw" id="firmware-panel" data-feature="panel.firmware" aria-label="固件升级" hidden></section>
                 <!--底部状态栏：连接时长 / 收发字节 / 后台任务-->
                 <div id="serial-statusbar" role="status" aria-live="off"></div>
             </div>

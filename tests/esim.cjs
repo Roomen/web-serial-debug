@@ -496,7 +496,7 @@ async function runAsyncTests() {
 	}
 
 	// 10. esim-panel.js 会话 ID 路由与 TLS 证书开关回归：单路模式路由到 'S'，双路路由到 'B'，透传 allowInsecureTls 并持久化
-	async function runPanelDownloadCase({ serialMode, activeUiSid, openPhysSid, downloadMode, allowInsecureTls = false }) {
+	async function runPanelDownloadCase({ serialMode, activeUiSid, openPhysSid, downloadMode, allowInsecureTls = false, redact = true }) {
 		const listeners = Object.create(null)
 		const storageMap = Object.create(null)
 		function makeEl(id, extra) {
@@ -541,8 +541,9 @@ async function runAsyncTests() {
 			'sk-esim-profile-count': makeEl('sk-esim-profile-count'),
 			'sk-esim-profile-list': makeEl('sk-esim-profile-list'),
 			'sk-esim-mode': makeEl('sk-esim-mode', { value: String(downloadMode) }),
-			'sk-esim-ac': makeEl('sk-esim-ac', { value: 'LPA:1$smdp.test.invalid$MATCH-12345' }),
-			'sk-esim-cc': makeEl('sk-esim-cc', { value: '' }),
+			'sk-esim-redact': makeEl('sk-esim-redact', { checked: true }),
+			'sk-esim-ac': makeEl('sk-esim-ac', { type: 'password', value: 'LPA:1$smdp.test.invalid$MATCH-12345' }),
+			'sk-esim-cc': makeEl('sk-esim-cc', { type: 'password', value: 'CC-9988' }),
 			'sk-esim-proxy-row': makeEl('sk-esim-proxy-row'),
 			'sk-esim-proxy-notice': makeEl('sk-esim-proxy-notice'),
 			'sk-esim-tls-wrap': makeEl('sk-esim-tls-wrap'),
@@ -551,6 +552,7 @@ async function runAsyncTests() {
 			'sk-esim-download': makeEl('sk-esim-download'),
 			'sk-esim-progress-bar': makeEl('sk-esim-progress-bar'),
 			'sk-esim-status': makeEl('sk-esim-status'),
+			'sk-esim-log-title': makeEl('sk-esim-log-title'),
 			'sk-esim-log': makeEl('sk-esim-log'),
 			'sk-esim-log-clear': makeEl('sk-esim-log-clear'),
 		}
@@ -692,6 +694,19 @@ async function runAsyncTests() {
 		vm.createContext(panelCtx)
 		vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/esim-panel.js'), 'utf8'), panelCtx)
 
+		// 默认开启脱敏；支持手动关闭切换明文调试
+		assert.equal(elements['sk-esim-redact'].checked, true, '脱敏开关默认开启')
+		assert.equal(elements['sk-esim-ac'].type, 'password', '脱敏开启时 AC 输入框为密码框')
+		assert.equal(elements['sk-esim-cc'].type, 'password', '脱敏开启时 CC 输入框为密码框')
+		if (!redact) {
+			elements['sk-esim-redact'].checked = false
+			listeners['sk-esim-redact:change']()
+			assert.equal(storageMap.skEsimRedact, '0', '关闭脱敏应持久化开关偏好')
+			assert.equal(elements['sk-esim-ac'].type, 'text', '关闭脱敏后 AC 输入框应切为明文')
+			assert.equal(elements['sk-esim-cc'].type, 'text', '关闭脱敏后 CC 输入框应切为明文')
+			assert.ok(elements['sk-esim-log-title'].textContent.includes('关闭脱敏'), '日志标题应提示已关闭脱敏')
+		}
+
 		if (downloadMode === 1) {
 			assert.equal(elements['sk-esim-tls-wrap'].hidden, false, '桌面原生 mode=1 应显示 TLS 证书开关')
 			assert.equal(elements['sk-esim-insecure-tls'].checked, false, 'TLS 证书开关默认关闭')
@@ -716,6 +731,13 @@ async function runAsyncTests() {
 		assert.equal(calls.unpinCount, 1, '结束后必须解除钉扎')
 		assert.ok(calls.writeRawTo.length >= 1, '应至少触发一次 writeRawTo')
 		assert.ok(calls.writeRawTo.every((c) => c.id === openPhysSid), '所有 writeRawTo 必须路由到 ' + openPhysSid)
+		assert.equal(calls.writeRawTo[0].hasLogData, !!redact, redact ? '脱敏开启时下载触发帧必须提供打码 logData' : '关闭脱敏时下载触发帧不应替换 logData')
+		if (redact) {
+			assert.ok(!logs.some((l) => l.includes('MATCH-12345') || l.includes('CC-9988')), '脱敏开启时面板日志绝不能包含明文 AC/CC')
+		} else {
+			assert.ok(logs.some((l) => l.includes('MATCH-12345') && l.includes('CC-9988')), '关闭脱敏后面板日志应显示明文 AC/CC 便于联调')
+		}
+		assert.ok(!Object.values(storageMap).some((v) => v.includes('MATCH-12345') || v.includes('CC-9988')), '无论是否关闭脱敏，AC/CC 均不落盘 localStorage')
 		assert.ok(calls.isSessionOpen.every((id) => id === openPhysSid), '所有 isSessionOpen 必须查询 ' + openPhysSid)
 		if (downloadMode === 1) {
 			assert.deepEqual(calls.onReceiveFrom, [openPhysSid], 'onReceiveFrom 必须订阅 ' + openPhysSid)
@@ -737,6 +759,9 @@ async function runAsyncTests() {
 	// 10b. 双路模式（getMode==='dual', getActiveSendSid==='B'，仅 'B' 打开）：mode=0 与 mode=1 均以 'B' 路由
 	await runPanelDownloadCase({ serialMode: 'dual', activeUiSid: 'B', openPhysSid: 'B', downloadMode: 0 })
 	await runPanelDownloadCase({ serialMode: 'dual', activeUiSid: 'B', openPhysSid: 'B', downloadMode: 1, allowInsecureTls: true })
+
+	// 10c. 关闭脱敏开关：输入明文、串口记真实帧、面板日志可见，且 AC/CC 仍不落盘
+	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 0, redact: false })
 }
 
 runAsyncTests().then(() => {
