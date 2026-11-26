@@ -953,6 +953,12 @@
                                             </div>
                                             <div class="mb-2" id="sk-esim-proxy-row" hidden>
                                                 <div class="sk-esim-notice mb-1" id="sk-esim-proxy-notice"></div>
+                                                <div class="mb-1" id="sk-esim-tls-wrap" hidden>
+                                                    <div class="form-check form-switch ctl-switch" title="GSMA Live/Test CI 或测试环境 SM-DP+ 证书通常不在系统根证书库或 SAN 域名不一致；开启后仅跳过 TLS 证书校验，仍强制 HTTPS、限定 ES9+ 路径，eUICC 仍在应用层校验 SM-DP+ 签名">
+                                                        <input class="form-check-input" type="checkbox" id="sk-esim-insecure-tls">
+                                                        <label class="form-check-label" for="sk-esim-insecure-tls">允许 GSMA CI / 测试 SM-DP+ 证书（跳过 TLS 校验）</label>
+                                                    </div>
+                                                </div>
                                                 <div class="input-group input-group-sm">
                                                     <span class="input-group-text">代理基址</span>
                                                     <input type="url" class="form-control" id="sk-esim-proxy-url" placeholder="可选：自定义 CORS 转发代理，如 https://127.0.0.1:8443" autocomplete="off">
