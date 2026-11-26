@@ -303,6 +303,13 @@
 			return applyTag66Frame(res.frame)
 		}
 
+		function activePhysSid() {
+			// getActiveSendSid 返回 UI 路号（单路固定为 'A'）；底层会话操作需要物理会话 ID（单路 'S'，双路 'A'/'B'）
+			return typeof window.serialApi.getMode === 'function' && window.serialApi.getMode() === 'single'
+				? 'S'
+				: window.serialApi.getActiveSendSid()
+		}
+
 		function acquirePin(sid) {
 			if (window.serialApi.isPinned()) {
 				throw new Error('当前已有其他串口事务正在运行，请稍后重试')
@@ -381,7 +388,7 @@
 			setBusy(true)
 			setProgress(20, '轮询中')
 			addLog('开始持续轮询 ID4 状态，直到离开执行中状态…', 'info')
-			const sid = window.serialApi.getActiveSendSid()
+			const sid = activePhysSid()
 			let pinned = false
 			try {
 				pinned = acquirePin(sid)
@@ -423,7 +430,7 @@
 			setProgress(15, opLabel)
 			addLog('下发 Tag66-ID3 ' + opLabel + ' ICCID=' + profile.iccid, 'info')
 
-			const sid = window.serialApi.getActiveSendSid()
+			const sid = activePhysSid()
 			let pinned = false
 			try {
 				pinned = acquirePin(sid)
@@ -550,7 +557,7 @@
 			setStatusText('正在发送下载触发 (' + modeName + ')…')
 			addLog('触发 Profile 下载：' + modeName + '，SM-DP+=' + acInfo.smdpHost + '（AC/CC 已脱敏）', 'info')
 
-			const sid = window.serialApi.getActiveSendSid()
+			const sid = activePhysSid()
 			let pinned = false
 			let rxLogSuppressed = false
 			let unsubRx = null
