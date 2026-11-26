@@ -147,6 +147,8 @@
 			title: '示例设备',
 			nameKey: 'ver',
 			timeoutMs: 3000,
+			// 设备面板里底部「通信记录」条的初始偏好：collapsed 收起成一行 / strip 矮条（默认）/ tall 高条；用户调整过就以用户为准
+			log: 'tall',
 			fields: [
 				{ key: 'ver', name: '固件版本', kind: 'text', group: 'info', copy: true },
 				{ key: 'temp', name: '温度', kind: 'number', scale: 0.1, decimals: 1, unit: '℃', group: 'sensor' },

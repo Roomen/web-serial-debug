@@ -1111,7 +1111,12 @@
 			termHost.hidden = !isTerm
 			if (isTerm && window.SerialTerm) {
 				const done = window.SerialTerm.ensure(mode, termHost, {
-					onSend: function (bytes) { writeTermBytes(SerialHub.activeSendPhys(), bytes) },
+					// 设备面板子视图里终端只读：入口再复核一次，挡住禁用前已排队的输入
+					onSend: function (bytes) {
+						const vs = document.getElementById('view-serial')
+						if (vs && vs.dataset.subview === 'device') return
+						writeTermBytes(SerialHub.activeSendPhys(), bytes)
+					},
 				})
 				function afterTermReady() {
 					window.SerialTerm.fit(mode)
@@ -6184,9 +6189,12 @@
 		const COLLAPSED_KEY = 'sidebarCollapsedModern'
 		//左栏已被顶部连接条取代，这里只剩右栏；left 分支保留但会安全退化
 		const DEFAULTS = { right: 428 }
-		//拖拽宽度上下限，避免被拖成不可用的窄条或吃掉整个日志区
-		const LIMITS = { right: [280, 760] }
+		//右栏最窄 PANE_MIN；最宽不设固定值，只保证日志区不窄于 LogLayout.LOG_MIN（按 #main 当前宽度算，窗口缩小时重新钳制）
+		const LL = window.LogLayout
+		const LIMITS = { right: [LL ? LL.PANE_MIN : 280] }
 		const PANES = Object.keys(LIMITS)
+		//用户要的宽度（拖拽或存档）；实际宽度是它按当前可用宽度钳过的值，窗口放大后回到用户要的宽度
+		const wanted = {}
 		const DRAG_THRESHOLD = 4
 		//折叠时暂存被拖出来的内联宽度，展开后还回去
 		const stashedWidth = {}
@@ -6200,22 +6208,74 @@
 		function isNarrow() {
 			return window.matchMedia('(max-width: 768px)').matches
 		}
-		function applyWidth(pane, px) {
+		//#main 去掉停靠栏后的宽度：右栏 + 日志区可分的总宽；#main 没布局（视图隐藏）时返回 NaN，只钳下限
+		function availWidth() {
+			const w = main.getBoundingClientRect().width
+			if (!w) return NaN
+			const dock = document.getElementById('wb-dock-bar')
+			return w - (dock ? dock.getBoundingClientRect().width : 0)
+		}
+		function clampWidth(pane, px) {
 			const lim = LIMITS[pane]
-			if (!lim) return
-			px = Math.min(lim[1], Math.max(lim[0], Math.round(px)))
-			main.style.setProperty('--pane-' + pane, px + 'px')
+			if (!lim) return NaN
+			return LL ? LL.clampRightPane(px, availWidth(), { paneMin: lim[0] }) : Math.max(lim[0], Math.round(px))
+		}
+		//拖拽 / Alt+点击：用户要的就是钳过的值（拖过头不记成超大宽度）
+		function applyWidth(pane, px) {
+			if (!LIMITS[pane]) return
+			const v = clampWidth(pane, px)
+			if (isNaN(v)) return
+			wanted[pane] = v
+			return setWidth(pane, v)
+		}
+		//恢复存档：记下原值，按当前可用宽度钳制后生效（#main 还没布局时只钳下限，等 ResizeObserver 再钳）
+		function restoreWidth(pane, px) {
+			if (!LIMITS[pane] || !(px > 0)) return
+			wanted[pane] = Math.max(LIMITS[pane][0], Math.round(px))
+			setWidth(pane, wanted[pane])
+		}
+		function setWidth(pane, px) {
+			px = clampWidth(pane, px)
+			if (isNaN(px)) return
+			//折叠时内联宽度让位（见 setCollapsed），这里只更新暂存值
+			if (isCollapsed(pane)) stashedWidth[pane] = px + 'px'
+			else if (main.style.getPropertyValue('--pane-' + pane) !== px + 'px') main.style.setProperty('--pane-' + pane, px + 'px')
 			return px
 		}
+		//存用户要的宽度（不是被窗口钳过的值），窗口放大后还能回到原宽
 		function saveWidths() {
-			const cs = getComputedStyle(main)
 			const o = {}
 			for (const p of PANES) {
-				if (isCollapsed(p)) continue
-				const v = parseInt(cs.getPropertyValue('--pane-' + p), 10)
-				if (!isNaN(v)) o[p] = v
+				if (wanted[p]) o[p] = wanted[p]
 			}
 			localStorage.setItem(WIDTH_KEY, JSON.stringify(o))
+		}
+		//窗口或停靠栏变化时按新的可用宽度重新钳制（不写存档）
+		function reclamp() {
+			for (const p of PANES) {
+				if (wanted[p] && !main.classList.contains('pane-dragging')) setWidth(p, wanted[p])
+			}
+		}
+		//日志区窄到工具条排不下一行时，#log-main 标 data-logw，CSS 据此紧凑换行（WebView 最低 Safari 14 没有容器查询）
+		const logMain = document.getElementById('log-main')
+		function markLogWidth() {
+			if (!logMain) return
+			const w = logMain.getBoundingClientRect().width
+			const v = !w ? '' : (w < 360 ? 'tiny' : (w < 520 ? 'narrow' : ''))
+			if ((logMain.dataset.logw || '') !== v) {
+				if (v) logMain.dataset.logw = v
+				else delete logMain.dataset.logw
+			}
+		}
+		if (typeof ResizeObserver === 'function') {
+			new ResizeObserver(reclamp).observe(main)
+			//改 data-logw 会改 #log-main 的高度（窄屏是 height:auto），在回调里同步改会报 ResizeObserver loop，推到下一轮
+			let markTimer = 0
+			if (logMain) new ResizeObserver(function () {
+				if (!markTimer) markTimer = setTimeout(function () { markTimer = 0; markLogWidth() }, 0)
+			}).observe(logMain)
+		} else {
+			window.addEventListener('resize', function () { reclamp(); markLogWidth() })
 		}
 		function saveSidebarState() {
 			const state = {}
@@ -6238,6 +6298,8 @@
 				main.style.setProperty('--pane-' + pane, stashedWidth[pane])
 				stashedWidth[pane] = ''
 			}
+			//展开时 #main 宽度没变、ResizeObserver 不会触发，按当前可用宽度补钳一次
+			if (!collapsed && wanted[pane]) setWidth(pane, wanted[pane])
 			if (body) body.classList.toggle('show', !collapsed)
 			if (icon) {
 				//箭头永远指向"点下去会往哪边动"
@@ -6301,7 +6363,7 @@
 		try {
 			const w = JSON.parse(localStorage.getItem(WIDTH_KEY) || '{}')
 			for (const p of PANES) {
-				if (w[p]) applyWidth(p, w[p])
+				if (w[p]) restoreWidth(p, w[p])
 			}
 		} catch (e) {}
 		try {

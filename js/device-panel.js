@@ -9,6 +9,8 @@
 
 	const SUBVIEW_KEY = 'serial-debug-subview'
 	const NARROW = 760
+	// 通信记录条的窄屏判定与 #main 变单列的断点一致（761–768px 已是单列、整页滚动）
+	const STRIP_NARROW = 768
 	const M = window.DeviceModel
 	const R = window.ProtocolRequest
 	if (!M || !R) return
@@ -260,6 +262,14 @@
 		const vs = document.getElementById('view-serial')
 		if (vs) vs.dataset.subview = view
 		if (root) root.hidden = view !== 'device'
+		// 终端在通信记录条里只读：键入 / 粘贴不写主发口（common.js 的发送回调入口另有复核）
+		if (window.SerialTerm && typeof window.SerialTerm.setInputEnabled === 'function') window.SerialTerm.setInputEnabled(view !== 'device')
+		if (view === 'device') syncStrip(true)
+		else {
+			const panes = document.getElementById('serial-log-panes')
+			if (panes) panes.inert = false
+			if (window.SerialTerm && typeof window.SerialTerm.setFitSuspended === 'function') window.SerialTerm.setFitSuspended(false)
+		}
 		renderViewbar()
 		if (view === 'device') render()
 		if (!quiet && view === 'device') {
@@ -296,6 +306,7 @@
 			lastSig = sig
 			if (view === 'device') render()
 		}
+		if (view === 'device') syncStrip(false)
 	}
 
 	// ---------- 渲染 ----------
@@ -702,6 +713,7 @@
 		if (document.hidden) return
 		sync()
 		if (!root || view !== 'device') return
+		updateStripSummary()
 		const c = ctx()
 		if (!c.L) return
 		root.querySelectorAll('[data-dp-est]').forEach(function (el) {
@@ -712,6 +724,191 @@
 		if (c.L.task && c.L.task.until && c.L.task.until <= Date.now()) {
 			c.L.task = null
 			render()
+		}
+	}
+
+	// ---------- 通信记录条（设备面板子视图里，日志降为面板下方可收起的条） ----------
+	// 日志节点原样不动、不克隆，也不往 #serial-logs-* 里插节点：只在 #log-main 末尾追加条头 #dp-log-head，
+	// 由 #view-serial 上的 data-dplog（open / collapsed）与 --dp-log-h 交给 CSS 换布局（#main 排到面板下方并限高，
+	// 右栏、停靠栏、日志工具条、协议解析与发送区隐藏），所以裁剪、导出、会话缓存、聊天视图、过滤、缩放都照旧。
+	// 条的状态按主发那一路的协议 id 各存一份（js/log-layout.js），协议可用 device.log 给初始偏好，用户调整过就以用户为准。
+	const LL = window.LogLayout
+	const strip = { head: null, sum: null, cnt: null, tog: null, pid: undefined, dev: undefined, st: null, sumTimer: 0, drag: null }
+	function storage() {
+		try { return window.localStorage } catch (e) { return null }
+	}
+	function stripNarrow() {
+		const P = window.AppPlatform
+		if (P && P.profile === 'mobile') return true
+		return !!(window.matchMedia && window.matchMedia('(max-width: ' + STRIP_NARROW + 'px)').matches)
+	}
+	// 条能用的总高度：#view-serial 去掉视图切换条（面板 + 条共分）
+	function stripAvail() {
+		const vs = document.getElementById('view-serial')
+		if (!vs || !vs.clientHeight) return NaN
+		return vs.clientHeight - (viewbar ? viewbar.offsetHeight : 0)
+	}
+	function fmtBytes(n) {
+		n = Number(n) || 0
+		if (n < 1024) return n + ' B'
+		if (n < 1048576) return (n / 1024).toFixed(1) + ' KB'
+		return (n / 1048576).toFixed(1) + ' MB'
+	}
+	function visibleLogBox() {
+		return document.getElementById(isDual() ? 'serial-logs-dual' : 'serial-logs-single')
+	}
+	function termOn() {
+		const b = document.getElementById('serial-log-view-term')
+		return !!(b && b.getAttribute('aria-pressed') === 'true')
+	}
+	// 收起时那一行：最新一条记录的摘要 + 收发字节（只读日志行的文本，不改行）
+	function updateStripSummary() {
+		strip.sumTimer = 0
+		if (!strip.head) return
+		let text = ''
+		if (termOn()) {
+			text = '终端视图（切回通信调试查看完整终端）'
+		} else {
+			const box = visibleLogBox()
+			let last = null
+			if (box) {
+				for (let i = box.children.length - 1; i >= 0; i--) {
+					// 被日志过滤隐藏的行不算：摘要与用户在日志里看到的一致
+					const r = box.children[i]
+					if (r.classList.contains('log-row') && !r.classList.contains('mdn-flt-out')) { last = r; break }
+				}
+			}
+			if (last) {
+				const part = function (sel) { const el = last.querySelector(':scope > ' + sel); return el ? el.textContent.replace(/\s+/g, ' ').trim() : '' }
+				text = [part('.log-time'), part('.log-dir'), part('.log-sess'), part('.log-body')].filter(Boolean).join(' ').slice(0, 240)
+			} else {
+				text = '还没有记录'
+			}
+		}
+		strip.sum.textContent = text
+		const hb = hub()
+		const sids = isDual() ? ['A', 'B'] : ['S']
+		strip.cnt.textContent = !hb || typeof hb.getStats !== 'function' ? '' : sids.map(function (sid) {
+			const st = hb.getStats(sid)
+			return (sid === 'S' ? '' : laneLabel(sid) + ' ') + 'TX ' + fmtBytes(st.txBytes) + ' · RX ' + fmtBytes(st.rxBytes)
+		}).join('　')
+	}
+	function scheduleStripSummary() {
+		if (strip.sumTimer || view !== 'device') return
+		strip.sumTimer = setTimeout(updateStripSummary, 200)
+	}
+	function applyStrip() {
+		const vs = document.getElementById('view-serial')
+		if (!vs || !strip.st || !LL) return
+		const h = LL.clampStripH(strip.st.h, stripAvail())
+		const mode = strip.st.collapsed ? 'collapsed' : 'open'
+		// 只在值变了时写：#view-serial 的 ResizeObserver 会因为这里改了布局再次触发
+		if (vs.dataset.dplog !== mode) vs.dataset.dplog = mode
+		if (vs.style.getPropertyValue('--dp-log-h') !== h + 'px') vs.style.setProperty('--dp-log-h', h + 'px')
+		// 收起时日志窗只是压成 0 高（不用 display:none，导出的 innerText 才与展开时一致），inert 挡住其中控件的焦点与点击
+		const panes = document.getElementById('serial-log-panes')
+		if (panes) panes.inert = strip.st.collapsed && view === 'device'
+		// 收起期间终端不 fit（否则被压成 1 行、裁掉历史），展开或离开设备视图时恢复并补 fit
+		const T = window.SerialTerm
+		if (T && typeof T.setFitSuspended === 'function') T.setFitSuspended(strip.st.collapsed && view === 'device')
+		strip.tog.setAttribute('aria-expanded', strip.st.collapsed ? 'false' : 'true')
+		strip.tog.title = strip.st.collapsed ? '展开通信记录' : '收起通信记录（拖动这一条可调高度）'
+		updateStripSummary()
+		// 自动滚动开着时，条变矮 / 展开后回到最新一行（只改滚动位置，不动行）
+		const as = document.getElementById('serial-auto-scroll')
+		if (!strip.st.collapsed && as && as.getAttribute('aria-pressed') === 'true') {
+			setTimeout(function () {
+				const box = visibleLogBox()
+				if (box) box.scrollTop = box.scrollHeight
+			}, 0)
+		}
+	}
+	// 主发那一路的协议变了、或同 id 重新注册（device 声明对象换了，device.log 偏好可能变了）就重新套用；
+	// 用户存档仍优先（stripStateFor）。force：窗口跨过窄屏断点等需要重新判定时
+	function syncStrip(force) {
+		if (!strip.head || !LL) return
+		const c = ctx()
+		const pid = c.dev ? c.pid : null
+		const dev = c.dev || null
+		if (!force && pid === strip.pid && dev === strip.dev && strip.st) return
+		strip.pid = pid
+		strip.dev = dev
+		const st = LL.stripStateFor(LL.readStore(storage()), pid, c.dev && c.dev.log, stripNarrow())
+		strip.st = { collapsed: st.collapsed, h: st.h }
+		applyStrip()
+	}
+	function saveStrip() {
+		if (strip.pid && LL) LL.saveStripState(storage(), strip.pid, strip.st)
+	}
+	function toggleStrip() {
+		if (!strip.st) return
+		strip.st.collapsed = !strip.st.collapsed
+		applyStrip()
+		saveStrip()
+	}
+	function mountStrip() {
+		const logMain = document.getElementById('log-main')
+		if (!logMain || !LL) return
+		strip.tog = h('button', { type: 'button', class: 'dp-log-tog', 'aria-controls': 'serial-log-panes', 'aria-expanded': 'true', onclick: toggleStrip },
+			h('i', { class: 'bi bi-chevron-down', 'aria-hidden': 'true' }), h('span', { text: '通信记录' }))
+		strip.sum = h('span', { class: 'dp-log-sum' })
+		strip.cnt = h('span', { class: 'dp-log-cnt' })
+		strip.head = h('div', { class: 'dp-log-head', id: 'dp-log-head', role: 'group', 'aria-label': '通信记录' },
+			strip.tog, strip.sum, strip.cnt,
+			h('button', { type: 'button', class: 'dp-log-go', text: '通信调试', title: '切回通信调试：完整的日志工具、过滤与发送', onclick: function () { setView('comm') } }))
+		// 追加在末尾（CSS 用 order 排到最前）：插到最前会抢走 #log-main > div:first-child 给日志工具条的样式
+		logMain.appendChild(strip.head)
+		const head = strip.head
+		// 拖条头调高度（收起时向上拖即展开），不动就是点击：切换收起
+		head.addEventListener('pointerdown', function (e) {
+			if (e.button !== 0 || (e.target.closest && e.target.closest('button'))) return
+			const main = document.getElementById('main')
+			strip.drag = { y: e.clientY, h: main ? main.getBoundingClientRect().height : strip.st.h, moved: false }
+			try { head.setPointerCapture(e.pointerId) } catch (x) {}
+		})
+		head.addEventListener('pointermove', function (e) {
+			const d = strip.drag
+			if (!d) return
+			const dy = d.y - e.clientY
+			if (!d.moved && Math.abs(dy) < 4) return
+			d.moved = true
+			strip.st.collapsed = false
+			strip.st.h = LL.clampStripH(d.h + dy, stripAvail())
+			applyStrip()
+		})
+		function end(e) {
+			const d = strip.drag
+			if (!d) return
+			strip.drag = null
+			try { head.releasePointerCapture(e.pointerId) } catch (x) {}
+			if (d.moved) saveStrip()
+			else if (e.type === 'pointerup') toggleStrip()
+		}
+		head.addEventListener('pointerup', end)
+		head.addEventListener('pointercancel', end)
+		// 最新记录摘要：只观察日志容器的子节点增减（读文本，不改节点）
+		if (typeof MutationObserver === 'function') {
+			const mo = new MutationObserver(scheduleStripSummary)
+			;['serial-logs-single', 'serial-logs-dual'].forEach(function (id) {
+				const box = document.getElementById(id)
+				if (box) mo.observe(box, { childList: true })
+			})
+		}
+		// 窗口变高变矮：重新钳制高度；跨过窄屏断点：没调整过的协议重新判定默认（窄屏收起成一行）
+		const vs = document.getElementById('view-serial')
+		// 回调里不直接改布局（改了会在同一帧再触发观察，报 ResizeObserver loop），推到下一轮再钳
+		let roTimer = 0
+		if (vs && typeof ResizeObserver === 'function') {
+			new ResizeObserver(function () {
+				if (view !== 'device' || roTimer) return
+				roTimer = setTimeout(function () { roTimer = 0; if (view === 'device' && !strip.drag) applyStrip() }, 50)
+			}).observe(vs)
+		}
+		if (window.matchMedia) {
+			const mq = window.matchMedia('(max-width: ' + STRIP_NARROW + 'px)')
+			const onMq = function () { syncStrip(true) }
+			if (mq.addEventListener) mq.addEventListener('change', onMq)
+			else if (mq.addListener) mq.addListener(onMq)
 		}
 	}
 
@@ -733,6 +930,7 @@
 		root.hidden = true
 		vs.insertBefore(viewbar, main)
 		vs.insertBefore(root, main.nextSibling)
+		mountStrip()
 		;['S', 'A', 'B'].forEach(function (sid) { pumps[sid] = makePump(sid) })
 		document.addEventListener('serial-session', function (ev) {
 			const d = ev && ev.detail
@@ -779,6 +977,8 @@
 		},
 		showComm: function () { if (view !== 'comm') setView('comm', true) },
 		view: function () { return view },
+		// 通信记录条当前状态（测试与自检用）：{ pid, collapsed, h }
+		logStrip: function () { return strip.st ? { pid: strip.pid, collapsed: strip.st.collapsed, h: strip.st.h } : null },
 		available: function () { return availability().ok },
 		// 状态栏任务芯片：主发那一路的读取进度 / 结果（结果保留几秒）
 		task: function () {

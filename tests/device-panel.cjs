@@ -922,6 +922,32 @@ test('json: device 校验报错', () => {
 	assert.equal(JP.compile(none).device, null)
 })
 
+test('device.log: 注册表与 JSON 协议同一白名单，非法值两边都丢弃、不拒绝整份声明', () => {
+	for (const v of ['collapsed', 'strip', 'tall']) {
+		assert.equal(Reg.normalizeDevice(Object.assign({}, synthDevice, { log: v }), { id: 't' }).log, v)
+	}
+	for (const v of [undefined, null, 'TALL', 'hidden', 1, {}, ['tall']]) {
+		const dev = Reg.normalizeDevice(Object.assign({}, synthDevice, { log: v }), { id: 't' })
+		assert.ok(dev, '非法 log 不拒绝整份声明')
+		assert.equal(dev.log, null, '非法 log 丢弃：' + JSON.stringify(v))
+	}
+	const LL = require('../js/log-layout.js')
+	assert.deepEqual(LL.PREFS, ['collapsed', 'strip', 'tall'], '布局与注册表同一白名单')
+	const ok = JSON.parse(JSON.stringify(jsonSpec))
+	ok.device.log = 'collapsed'
+	assert.equal(JP.validateSpec(ok).ok, true)
+	const dev = Reg.normalizeDevice(JP.compile(ok).device, { id: ok.id })
+	assert.equal(dev.log, 'collapsed', 'JSON 协议的 device.log 透传到注册表')
+	assert.equal(Reg.normalizeDevice(JP.compile(jsonSpec).device, { id: jsonSpec.id }).log, null, '没写就是 null')
+	for (const v of ['huge', 3, ['tall'], { a: 1 }]) {
+		const bad = JSON.parse(JSON.stringify(jsonSpec))
+		bad.device.log = v
+		const chk = JP.validateSpec(bad)
+		assert.equal(chk.ok, true, 'JSON 非法 device.log 不拒绝整份协议：' + JSON.stringify(v) + ' ' + (chk.errors || []).join('；'))
+		assert.equal(Reg.normalizeDevice(JP.compile(bad).device, { id: bad.id }).log, null, '非法值丢弃')
+	}
+})
+
 test('json: 可查询必须有应答规则；特殊键与超限明确拒绝', () => {
 	const noReply = JSON.parse(JSON.stringify(jsonSpec))
 	delete noReply.device.groups[0].reply

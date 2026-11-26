@@ -237,6 +237,18 @@ body {
   --pane-right: auto;
 }
 
+/* 右栏宽度没有固定上限，只保证日志区不窄于 --log-min(与 js/log-layout.js 的 LOG_MIN 一致)。
+   JS 按 #main 宽度钳制 --pane-right，这里再用 min() 兜底：钳制落后一帧(窗口正在缩小)时日志区也不会被挤窄 */
+@media (min-width: 769px) {
+  #main {
+    --log-min: 240px;
+  }
+
+  #main:not(.right-collapsed) {
+    grid-template-columns: minmax(0, 1fr) min(var(--pane-right), max(0px, calc(100% - var(--log-min) - var(--dock-bar-w)))) var(--dock-bar-w);
+  }
+}
+
 #main.pane-dragging {
   user-select: none;
 }
@@ -14631,8 +14643,142 @@ html[data-layout='modern'] .dp-why {
 	text-overflow: ellipsis;
 	min-width: 0;
 }
+/* 设备面板子视图：日志降为面板下方的「通信记录」条。节点不搬：#main 排到面板之后(order)并限高，
+   只留 #log-main 里的日志窗与条头(右栏、停靠栏、日志工具条、协议解析、发送区隐藏)；高度与收起由 js/device-panel.js
+   写在 #view-serial 的 --dp-log-h / data-dplog 上。!important 压过窄屏的 #main { height: auto !important } 与右栏网格 */
 html[data-layout='modern'] #view-serial[data-subview='device'] > #main {
+	order: 1;
+	flex: 0 0 auto;
+	height: var(--dp-log-h, 120px) !important;
+	min-height: 0;
+	grid-template-columns: minmax(0, 1fr) !important;
+	grid-template-rows: minmax(0, 1fr);
+	border-top: 1px solid var(--border-color);
+}
+html[data-layout='modern'] #view-serial[data-subview='device'][data-dplog='collapsed'] > #main {
+	height: auto !important;
+}
+/* 窄屏整页滚动(视图高度随内容)，条贴在视口底部，否则落在长面板的最下面看不到；
+   窄屏通用规则给日志窗的固定高度 / 最小高度(面板 200、列表与终端 40vh / 160)在条里要还原成桌面的弹性填充，否则溢出条、拖矮无效 */
+@media (max-width: 768px) {
+	html[data-layout='modern'] #view-serial[data-subview='device'] #serial-log-panes,
+	html[data-layout='modern'] #view-serial[data-subview='device'] .serial-log-mode,
+	html[data-layout='modern'] #view-serial[data-subview='device'] .serial-logs,
+	html[data-layout='modern'] #view-serial[data-subview='device'] .serial-term-host {
+		flex: 1 1 0;
+		height: auto;
+		min-height: 0;
+	}
+	html[data-layout='modern'] #view-serial[data-subview='device'] > #main {
+		position: sticky;
+		bottom: 0;
+		z-index: 5;
+		background: var(--bg-surface);
+		box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.08);
+	}
+}
+html[data-layout='modern'] #view-serial[data-subview='device'] > #main > :not(#log-main),
+html[data-layout='modern'] #view-serial[data-subview='device'] #log-main > :not(#serial-log-panes):not(#dp-log-head) {
+	display: none !important;
+}
+html[data-layout='modern'] #view-serial[data-subview='device'] #log-main {
+	grid-column: 1;
+	grid-row: 1;
+	height: 100%;
+	min-height: 0;
+	padding: 0;
+}
+/* 收起：日志窗压成 0 高而不是 display:none——display:none 下 innerText 退化成无排版文本，
+   命令面板 / 原生菜单的复制与导出(getLogsText 用 innerText)会丢掉 HEX 与 TEXT 之间的换行；
+   不能用 visibility:hidden(innerText 对它返回空)。焦点与点击由 js/device-panel.js 给 #serial-log-panes 设 inert 挡住 */
+html[data-layout='modern'] #view-serial[data-subview='device'][data-dplog='collapsed'] #serial-log-panes {
+	flex: 0 0 0 !important;
+	height: 0 !important;
+	min-height: 0 !important;
+	overflow: hidden !important;
+}
+html[data-layout='modern'] .dp-log-head {
 	display: none;
+}
+html[data-layout='modern'] #view-serial[data-subview='device'] .dp-log-head {
+	order: -1;
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+	height: 32px;
+	padding: 0 8px 0 4px;
+	border-bottom: 1px solid var(--border-light);
+	background: var(--bg-surface);
+	font-size: 0.75rem;
+	touch-action: none;
+	user-select: none;
+}
+html[data-layout='modern'] #view-serial[data-subview='device'][data-dplog='collapsed'] .dp-log-head {
+	border-bottom: 0;
+}
+html[data-layout='modern'] .dp-log-tog,
+html[data-layout='modern'] .dp-log-go {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	height: 24px;
+	padding: 0 8px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--text-primary);
+	font-size: 0.75rem;
+	font-weight: 600;
+}
+html[data-layout='modern'] .dp-log-go {
+	font-weight: 400;
+	color: var(--accent);
+}
+html[data-layout='modern'] .dp-log-tog:hover,
+html[data-layout='modern'] .dp-log-go:hover {
+	background: var(--bg-surface-hover);
+}
+html[data-layout='modern'] .dp-log-tog .bi {
+	font-size: 0.7rem;
+	transition: transform var(--transition-fast);
+}
+html[data-layout='modern'] .dp-log-tog[aria-expanded='false'] .bi {
+	transform: rotate(180deg);
+}
+html[data-layout='modern'] .dp-log-sum {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	color: var(--text-secondary);
+	font-family: var(--font-mono, ui-monospace, monospace);
+}
+html[data-layout='modern'] .dp-log-cnt {
+	flex: 0 0 auto;
+	max-width: 50%;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+}
+/* 窄屏：条头的「通信调试」与顶上的视图切换重复，让出宽度给摘要 */
+@media (max-width: 768px) {
+	html[data-layout='modern'] .dp-log-go {
+		display: none;
+	}
+	html[data-layout='modern'] .dp-log-cnt {
+		flex-shrink: 1;
+	}
+	html[data-layout='modern'] .dp-log-sum {
+		flex: 1 1 0;
+		min-width: 5em;
+	}
 }
 html[data-layout='modern'] .dp {
 	flex: 1 1 auto;
@@ -15345,4 +15491,63 @@ html[data-layout='modern'] .dp-insp-parse-body {
 	html[data-layout='modern'] .dp-spin {
 		animation: none;
 	}
+}
+
+/* ===== 日志区变窄(js/common.js 按 #log-main 宽度写 data-logw：narrow < 520px、tiny < 360px) =====
+   右栏可以拉到只给日志区留 240px(js/log-layout.js 的 LOG_MIN)，工具条、快捷行、发送选项都要换行到这个宽度内，不能溢出 */
+html[data-layout='modern'] #log-main[data-logw] .mdn-logbar {
+	padding: 6px 8px;
+	gap: 4px 6px;
+}
+html[data-layout='modern'] #log-main[data-logw] .mdn-grp-split,
+html[data-layout='modern'] #log-main[data-logw] .mdn-grp-rows,
+html[data-layout='modern'] #log-main[data-logw] .mdn-grp-filter {
+	padding-left: 0;
+	border-left: 0;
+}
+/* 两枚分段(列表/聊天、行日志/终端)排到同一行，动作组紧随，设置项与过滤放后面 */
+html[data-layout='modern'] #log-main[data-logw] .mdn-grp-chat { order: 0; }
+html[data-layout='modern'] #log-main[data-logw] .mdn-grp-view { order: 1; }
+html[data-layout='modern'] #log-main[data-logw] .mdn-grp-act { order: 2; }
+html[data-layout='modern'] #log-main[data-logw] .mdn-grp-fmt { order: 3; }
+html[data-layout='modern'] #log-main[data-logw] .mdn-grp-split { order: 4; }
+html[data-layout='modern'] #log-main[data-logw] .mdn-grp-rows { order: 5; }
+html[data-layout='modern'] #log-main[data-logw] .mdn-grp-filter { order: 6; }
+html[data-layout='modern'] #log-main[data-logw] .mdn-grp-filter {
+	flex: 1 1 100%;
+}
+html[data-layout='modern'] #log-main[data-logw] .mdn-filter {
+	min-width: 0;
+}
+html[data-layout='modern'] #log-main[data-logw] .mdn-grp-fmt,
+html[data-layout='modern'] #log-main[data-logw] .mdn-fmt-lane,
+html[data-layout='modern'] #log-main[data-logw] .mdn-fmt-pop {
+	max-width: 100%;
+	min-width: 0;
+}
+html[data-layout='modern'] #log-main[data-logw] .mdn-grp-fmt:not(.is-dual) .mdn-fmt-pop .serial-log-fmt-row {
+	flex: 1 1 auto;
+	flex-wrap: wrap;
+	min-width: 0;
+}
+html[data-layout='modern'] #log-main[data-logw] .mdn-quickrow {
+	flex-wrap: wrap;
+}
+html[data-layout='modern'] #log-main[data-logw] #serial-send-panel {
+	padding: 8px;
+}
+html[data-layout='modern'] #log-main[data-logw='tiny'] .mdn-logbar .ctl-seg > button {
+	padding: 4px 8px;
+}
+html[data-layout='modern'] #log-main[data-logw='tiny'] .mdn-logbar .serial-log-actions .btn {
+	padding: 0 7px;
+}
+/* 列表视图：窄日志区里行头(时间 / 方向 / 路 / 长度)占一行，正文换到下一行占满宽度，否则正文被挤成一列一个字符。
+   只改行盒的排版(flex 换行)，不动行内节点；聊天视图的气泡自带宽度规则，不受影响 */
+html[data-layout='modern']:not([data-dual-view='bubble']) #log-main[data-logw] .serial-logs .log-row {
+	flex-wrap: wrap;
+	row-gap: 0;
+}
+html[data-layout='modern']:not([data-dual-view='bubble']) #log-main[data-logw] .serial-logs .log-row > .log-body {
+	flex: 1 1 100%;
 }

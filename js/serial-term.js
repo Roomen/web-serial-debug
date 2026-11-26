@@ -1,5 +1,5 @@
 // 串口终端：xterm.js 胶水。每个会话最多一个 Terminal。
-// 通过 window.SerialTerm 暴露：ensure / write / clear / fit / setTheme / getText / dispose
+// 通过 window.SerialTerm 暴露：ensure / write / clear / fit / setTheme / getText / dispose / setInputEnabled（键盘输入总开关）/ setFitSuspended（暂停 fit）/ size
 ;(function () {
 	'use strict'
 
@@ -24,6 +24,13 @@
 	]
 
 	let loadPromise = null
+	const SCROLLBACK = 5000
+	// 宿主内容高度至少放得下这么多行才 fit；更矮（收起的通信记录条、被压扁的布局）时保持原行列数
+	const MIN_FIT_ROWS = 2
+	// 外部明确要求暂停 fit（设备面板收起通信记录条期间）；恢复时补 fit
+	let fitSuspended = false
+	// 终端键盘输入总开关：设备面板子视图里通信记录条只用来看，键入 / 粘贴不能写口（终端实例、接收与滚动照旧）
+	let inputEnabled = true
 
 	function loadScript(src) {
 		return new Promise(function (resolve, reject) {
@@ -147,11 +154,46 @@
 		return id ? terms[id] || null : null
 	}
 
+	// 宿主内容区（去掉内边距）的高度；宿主或祖先 display:none 时没有布局盒，返回 0
+	function contentHeight(el) {
+		if (!el.getClientRects().length) return 0
+		const cs = getComputedStyle(el)
+		return el.clientHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0)
+	}
+	function cellHeight(rec) {
+		const o = rec.term.options || {}
+		return (o.fontSize || 13) * (o.lineHeight || 1.2)
+	}
+	// 不可见、被暂停或高度放不下 MIN_FIT_ROWS 行时不 fit：FitAddon 会把终端缩到 1 行，
+	// 而 xterm 缩行时缓冲区上限（scrollback + rows）跟着变小，超出的最早历史被裁掉，再放大也找不回。
+	// 不要靠宿主内边距去碰 offsetHeight 门槛，判据是内容高度能不能放下若干行。
 	function fit(sid) {
 		const rec = recOf(sid)
-		if (!rec || !rec.fit || !rec.host) return
-		if (rec.host.hidden || rec.host.offsetWidth < 4 || rec.host.offsetHeight < 4) return
-		try { rec.fit.fit() } catch (e) { /* ignore */ }
+		if (!rec || !rec.fit || !rec.host || !rec.term) return
+		if (fitSuspended || rec.host.hidden || rec.host.offsetWidth < 4) return
+		if (contentHeight(rec.host) < MIN_FIT_ROWS * cellHeight(rec)) return
+		let next = null
+		try { next = rec.fit.proposeDimensions() } catch (e) { next = null }
+		if (!next || !(next.rows > 0) || !(next.cols > 0)) return
+		// 缓冲区总容量（scrollback + rows）保持不变：行数变少时先把少掉的行数补进 scrollback，
+		// 否则正常缩矮（通信记录条 120px 只放得下几行）也会在历史满时裁掉最早的行
+		rec.maxRows = Math.max(rec.maxRows || 0, rec.term.rows, next.rows)
+		const want = SCROLLBACK + (rec.maxRows - next.rows)
+		try {
+			if (want > rec.term.options.scrollback) rec.term.options.scrollback = want
+			rec.fit.fit()
+			if (rec.term.options.scrollback !== want) rec.term.options.scrollback = want
+		} catch (e) { /* ignore */ }
+	}
+
+	function fitAll() {
+		Object.keys(terms).forEach(function (k) { fit(k) })
+	}
+
+	function setFitSuspended(v) {
+		const was = fitSuspended
+		fitSuspended = !!v
+		if (was && !fitSuspended) setTimeout(fitAll, 0)
 	}
 
 	function setTheme(sid) {
@@ -192,11 +234,11 @@
 		const term = new window.Terminal({
 			convertEol: false,
 			cursorBlink: true,
-			disableStdin: false,
+			disableStdin: !inputEnabled,
 			fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
 			fontSize: 13,
 			lineHeight: 1.2,
-			scrollback: 5000,
+			scrollback: SCROLLBACK,
 			theme: themeOf(),
 		})
 		const Ctor = FitCtor()
@@ -217,7 +259,7 @@
 		}
 		terms[sid] = rec
 		term.onData(function (str) {
-			if (!rec.onSend) return
+			if (!inputEnabled || !rec.onSend) return
 			try { rec.onSend(new TextEncoder().encode(str)) } catch (e) { /* ignore */ }
 		})
 		if (term.element) {
@@ -331,7 +373,25 @@
 		drop(sid)
 	}
 
+	function setInputEnabled(v) {
+		inputEnabled = !!v
+		Object.keys(terms).forEach(function (k) {
+			const rec = terms[k]
+			if (rec && rec.term) {
+				try { rec.term.options.disableStdin = !inputEnabled } catch (e) { /* ignore */ }
+			}
+		})
+	}
+
 	window.SerialTerm = {
+		setInputEnabled: setInputEnabled,
+		setFitSuspended: setFitSuspended,
+		// 当前行列数（自检用）：{ rows, cols }，没有实例时 null
+		size: function (sid) {
+			const rec = recOf(sid)
+			return rec && rec.term ? { rows: rec.term.rows, cols: rec.term.cols } : null
+		},
+		inputEnabled: function () { return inputEnabled },
 		ensure: ensure,
 		write: write,
 		clear: clear,
