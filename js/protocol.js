@@ -9,17 +9,36 @@
 		0: '1000L/圈', 1: '100L/圈', 2: '10L/圈', 3: '1L/圈',
 		4: '100mL/圈', 5: '10mL/圈', 6: '1mL/圈'
 	}
+	function cleanModuleText(str) {
+		const s = String(str == null ? '' : str).replace(/\x00/g, '').trim()
+		if (!s) return ''
+		for (let i = 0; i < s.length; i++) {
+			const c = s.charCodeAt(i)
+			if (c < 0x20 || c > 0x7e) return ''
+		}
+		if (/^[-_0.\s]+$/.test(s)) return ''
+		return s
+	}
+
 	W.skSession = {
 		deviceUid: null,
 		baseCode: null,
 		baseLiters: 1,
 		baseLabel: '1L(默认·未读基准)',
 		baseSource: null,
+		moduleVersion: null,
+		moduleModel: null,
+		moduleSource: null,
 		resetBase: function () {
 			this.baseCode = null
 			this.baseLiters = 1
 			this.baseLabel = '1L(默认·未读基准)'
 			this.baseSource = null
+		},
+		resetModule: function () {
+			this.moduleVersion = null
+			this.moduleModel = null
+			this.moduleSource = null
 		},
 		setBase: function (code, source) {
 			if (code == null || code < 0 || code > 6) return false
@@ -29,10 +48,49 @@
 			this.baseSource = source || 'frame'
 			return true
 		},
+		setModuleVersion: function (ver, source) {
+			const v = cleanModuleText(ver)
+			if (!v) return false
+			this.moduleVersion = v
+			this.moduleSource = source || 'Tag1-ID10'
+			return true
+		},
+		setModuleModel: function (model, source) {
+			const m = cleanModuleText(model)
+			if (!m) return false
+			this.moduleModel = m
+			if (!this.moduleSource) this.moduleSource = source || 'Tag1-ID12'
+			return true
+		},
+		hasModule: function () {
+			return !!(this.moduleVersion || this.moduleModel)
+		},
+		isEg800z: function () {
+			return /^eg800z/i.test(this.moduleVersion || '') || /^(?:quectel[\s_-]*)?eg800z/i.test(this.moduleModel || '')
+		},
+		getModuleInfo: function () {
+			const ver = this.moduleVersion || ''
+			const model = this.moduleModel || ''
+			const known = !!(ver || model)
+			const isEg800z = known && (/^eg800z/i.test(ver) || /^(?:quectel[\s_-]*)?eg800z/i.test(model))
+			const prefixMatch = /^([A-Za-z]{2,4}\d{2,4}[A-Za-z]?)/.exec((model || ver).replace(/^quectel[\s_-]+/i, ''))
+			const modelPrefix = isEg800z ? 'EG800Z' : (prefixMatch ? prefixMatch[1].toUpperCase() : '')
+			return {
+				known: known,
+				isEg800z: isEg800z,
+				family: !known ? 'unknown' : (isEg800z ? 'eg800z' : 'other'),
+				modelPrefix: modelPrefix,
+				label: modelPrefix || model || ver,
+				moduleVersion: ver,
+				moduleModel: model,
+				source: this.moduleSource || '',
+			}
+		},
 		touchDevice: function (uid) {
 			const u = uid != null ? String(uid) : null
 			if (u && this.deviceUid && this.deviceUid !== u) {
 				this.resetBase()
+				this.resetModule()
 			}
 			if (u) this.deviceUid = u
 		},
@@ -41,7 +99,16 @@
 		},
 		// 历史重渲要在隔离的会话里重放(见 common.js rerenderLogBodies)，用这对函数换入/换出状态
 		snapshot: function () {
-			return { deviceUid: this.deviceUid, baseCode: this.baseCode, baseLiters: this.baseLiters, baseLabel: this.baseLabel, baseSource: this.baseSource }
+			return {
+				deviceUid: this.deviceUid,
+				baseCode: this.baseCode,
+				baseLiters: this.baseLiters,
+				baseLabel: this.baseLabel,
+				baseSource: this.baseSource,
+				moduleVersion: this.moduleVersion,
+				moduleModel: this.moduleModel,
+				moduleSource: this.moduleSource,
+			}
 		},
 		restore: function (s) {
 			this.deviceUid = s.deviceUid
@@ -49,6 +116,9 @@
 			this.baseLiters = s.baseLiters
 			this.baseLabel = s.baseLabel
 			this.baseSource = s.baseSource
+			this.moduleVersion = s.moduleVersion != null ? s.moduleVersion : null
+			this.moduleModel = s.moduleModel != null ? s.moduleModel : null
+			this.moduleSource = s.moduleSource != null ? s.moduleSource : null
 		}
 	}
 
@@ -561,7 +631,7 @@
 		return opName + '(' + op + ') ICCID=' + (iccid || '(空)')
 	}
 
-	function renderEsimStatus(raw) {
+	function renderEsimStatus(raw, moduleInfo) {
 		if (!raw || raw.length < 12) return hexbytes(raw || []) + ' (不完整)'
 		const st = raw[0] & 0xff
 		const op = raw[1] & 0xff
@@ -570,8 +640,14 @@
 		const stName = ESIM_STATE_MAP[st] != null ? ESIM_STATE_MAP[st] : ('未知' + st)
 		const opName = ESIM_LAST_OP_MAP[op] != null ? ESIM_LAST_OP_MAP[op] : ('未知' + op)
 		const fsName = ESIM_FAIL_STAGE_MAP[fs] != null ? ESIM_FAIL_STAGE_MAP[fs] : ('未知' + fs)
-		const errHex = err.toString(16).toUpperCase().padStart(4, '0')
-		const errText = err === 0 ? '0x0000' : ('0x' + errHex + ' (0x8500' + errHex + ')')
+		const mod = moduleInfo !== undefined ? moduleInfo : W.skSession.getModuleInfo()
+		let errText
+		if (W.EsimCore && typeof W.EsimCore.decodeModuleErrCode === 'function') {
+			errText = W.EsimCore.decodeModuleErrCode(err, mod).displayText
+		} else {
+			const errHex = err.toString(16).toUpperCase().padStart(4, '0')
+			errText = err === 0 ? '0x0000' : ('0x' + errHex)
+		}
 		const timeText = bcdTimeOrEmpty(raw.subarray(5, 12))
 		return '状态:' + stName + ' 操作:' + opName + ' 失败阶段:' + fsName + ' 模组码:' + errText + ' 时间:' + timeText
 	}
@@ -989,13 +1065,22 @@
 		const uid = result.fields['设备唯一编码']
 		if (uid != null) W.skSession.touchDevice(uid)
 		const tlv = result.tlv || []
+		const acceptModule = result.dir === 'up' && !result.needKey && (!result.encrypted || result.decryptOk) && result.crcOk
 		for (let i = 0; i < tlv.length; i++) {
 			const tag = tlv[i].tag
-			if (tag !== 2 && tag !== 3) continue
 			const items = tlv[i].items || []
-			for (let j = 0; j < items.length; j++) {
-				if (items[j].id === 29 && items[j].raw && items[j].raw.length) {
-					W.skSession.setBase(items[j].raw[0], tag === 2 ? 'Tag2-ID29' : 'Tag3-ID29')
+			if (tag === 2 || tag === 3) {
+				for (let j = 0; j < items.length; j++) {
+					if (items[j].id === 29 && items[j].raw && items[j].raw.length) {
+						W.skSession.setBase(items[j].raw[0], tag === 2 ? 'Tag2-ID29' : 'Tag3-ID29')
+					}
+				}
+			} else if (tag === 1 && acceptModule && !tlv[i].error) {
+				for (let j = 0; j < items.length; j++) {
+					const it = items[j]
+					if (it.partial || it.resultCode !== undefined || !it.raw || !it.raw.length) continue
+					if (it.id === 10) W.skSession.setModuleVersion(ascii(it.raw), 'Tag1-ID10')
+					else if (it.id === 12) W.skSession.setModuleModel(ascii(it.raw), 'Tag1-ID12')
 				}
 			}
 		}
@@ -1960,11 +2045,15 @@
 		if (!chosen.truncated && !chosen.missingTail && b.length !== expectedLen) {
 			errors.push('报文长度不符 期望' + expectedLen + ' 实际' + b.length)
 		}
-		// 会话: 设备唯一码 / 基准水量
+		// 会话: 设备唯一码 / 基准水量 / 模组版本号
 		noteSessionFromParse(result)
 		// 同帧基准在序列之后出现时, 回算 series 行/统计
 		if (W.skSession.hasBase() && result.tlv && result.tlv.length) {
 			applyBaseToSeriesTlv(result.tlv)
+		}
+		// 统一按会话最新模组信息重渲染 Tag66-ID4（处理设备切换重置或同帧含 Tag1 的情况）
+		if (result.tlv && result.tlv.length) {
+			applyModuleToEsimStatusTlv(result.tlv, W.skSession.getModuleInfo())
 		}
 		result.sessionBase = {
 			has: W.skSession.hasBase(),
@@ -1974,7 +2063,21 @@
 			source: W.skSession.baseSource,
 			deviceUid: W.skSession.deviceUid
 		}
+		result.sessionModule = W.skSession.getModuleInfo()
 		return result
+	}
+
+	function applyModuleToEsimStatusTlv(tlv, moduleInfo) {
+		for (let i = 0; i < tlv.length; i++) {
+			if (tlv[i].tag !== 66) continue
+			const items = tlv[i].items || []
+			for (let j = 0; j < items.length; j++) {
+				const it = items[j]
+				if (it.id !== 4 || it.partial || it.resultCode !== undefined) continue
+				if (!it.raw || it.raw.length < 12) continue
+				it.decoded = renderEsimStatus(Uint8Array.from(it.raw), moduleInfo)
+			}
+		}
 	}
 
 	function applyBaseToSeriesTlv(tlv) {
@@ -2411,6 +2514,18 @@
 			if (usesBase) m.notes.push({ kind: 'info', text: '基准水量 ' + sb.label + (sb.source ? '（' + sb.source + '·本会话）' : '') + '，流量已换算为升/立方米' })
 		} else if (usesBase) {
 			m.notes.push({ kind: 'warn', text: '未读到基准水量（Tag2/3 ID29），流量暂按 1L/圈 显示，建议先「查询核心数据」或「查询终端参数」' })
+		}
+		const sm = r.sessionModule || W.skSession.getModuleInfo()
+		const hasUnidentifiedModuleErr = !sm.known && tlv.some(function (t) {
+			if (t.tag !== 66) return false
+			return (t.items || []).some(function (it) {
+				if (it.id !== 4 || it.partial || it.resultCode !== undefined || !it.raw || it.raw.length < 12) return false
+				const err = u16leRead(it.raw, 3)
+				return err >= 0x0001 && err <= 0x117f
+			})
+		})
+		if (hasUnidentifiedModuleErr) {
+			m.notes.push({ kind: 'warn', text: '未识别模组型号，暂不套用 EG800Z 专属错误码表；如需解析模组原码，请先「查询基础数据」(Tag1) 读取模组版本号' })
 		}
 		const detail = fcName ? logTitleDetail(fc & 0xff, tlv) : ''
 		if (detail) m.title += ' · ' + detail
