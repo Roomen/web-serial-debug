@@ -136,6 +136,12 @@
 		return val
 	}
 
+	function allowsEmpty(dev, field) {
+		const rule = field && field.write
+		if (!rule || !rule.allowEmpty || rule.options) return false
+		try { return inputValue(dev, field, '') !== undefined } catch (e) { return false }
+	}
+
 	function writeAllowed(L, field, gen) {
 		const current = reading(L, field.key)
 		return !!(field.write && (!field.group || (current && current.gen === gen)))
@@ -435,6 +441,7 @@
 		laneKey: laneKey,
 		lane: lane,
 		inputValue: inputValue,
+		allowsEmpty: allowsEmpty,
 		sameValue: sameValue,
 		writeAllowed: writeAllowed,
 		writeResult: writeResult,

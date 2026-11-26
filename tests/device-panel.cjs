@@ -280,7 +280,7 @@ test('registry: 外部协议 device 只留约定的数据与函数', () => {
 	assert.equal(d.fields[0].onRender, undefined)
 	assert.equal(Object.getPrototypeOf(d.fields[0].options), null, '键表无原型')
 	assert.equal(Object.prototype.hasOwnProperty.call(d.fields[0].options, '__proto__'), false, '__proto__ 不进键表')
-	assert.deepEqual(Object.keys(d.fields[0].write).sort(), ['confirm', 'hint', 'max', 'maxLen', 'min', 'options', 'pattern', 'step'])
+	assert.deepEqual(Object.keys(d.fields[0].write).sort(), ['allowEmpty', 'confirm', 'hint', 'max', 'maxLen', 'min', 'options', 'pattern', 'step'])
 	assert.equal(d.fields[0].secret, true)
 	assert.equal(d.fields[0].write.confirm, '先确认')
 	assert.equal(Object.getPrototypeOf(d.fields[0].write.options), null)
@@ -1424,6 +1424,123 @@ test('json write: 模板输入和应答分流，拒绝有歧义或超限的声�
 	}
 	spec.device.fields[1].write.pattern = '(a+)+b'
 	assert.equal(JP.validateSpec(spec).ok, false)
+
+	// JSON 协议支持 write.allowEmpty 布尔声明并拒绝非布尔值
+	const emptySpec = JSON.parse(JSON.stringify(jsonSpec))
+	emptySpec.frames[0].fields.push({ name: 'apn', offset: 6, type: 'ascii', length: 32 })
+	emptySpec.device.fields.push({ key: 'apn', name: 'APN', group: 'live', from: 'apn', kind: 'text', write: { maxLen: 32, pattern: '[ -~]*', allowEmpty: true } })
+	emptySpec.downlink.templates.push({ name: '写APN', cmd: 0x13, param: { type: 'ascii', length: 32 } })
+	emptySpec.device.writes = [{ field: 'apn', template: '写APN', reply: {
+		ok: { match: [{ offset: 2, value: 0x93 }, { offset: 3, value: 1 }] },
+	} }]
+	const emptyChk = JP.validateSpec(emptySpec)
+	assert.equal(emptyChk.ok, true, emptyChk.errors && emptyChk.errors.join('；'))
+	const emptyDev = Reg.normalizeDevice(JP.compile(emptySpec).device)
+	assert.equal(M.allowsEmpty(emptyDev, emptyDev.fieldMap.apn), true)
+	const builtEmpty = emptyDev.buildWrite(emptyDev.fieldMap.apn, M.inputValue(emptyDev, emptyDev.fieldMap.apn, ''))
+	assert.deepEqual(Array.from(builtEmpty.slice(3, 35)), new Array(32).fill(0))
+	emptySpec.device.fields[emptySpec.device.fields.length - 1].write.allowEmpty = 'yes'
+	assert.equal(JP.validateSpec(emptySpec).ok, false)
+})
+
+test('write panel: APN 等允许写空字段可通过「置空」草稿并写空回读确认，非可空字段删空撤回草稿', async () => {
+	const win = loadSek()
+	const dev = Reg.normalizeDevice(win.SekDevice, { id: 'sek' })
+	assert.equal(M.allowsEmpty(dev, dev.fieldMap['3:7']), true, 'APN 允许写空')
+	assert.equal(M.allowsEmpty(dev, dev.fieldMap['38:4']), true, '用户账号允许写空')
+	assert.equal(M.allowsEmpty(dev, dev.fieldMap['3:9']), false, '数值字段不允许写空')
+	assert.equal(M.allowsEmpty(dev, dev.fieldMap['3:19']), false, 'BCD 字段不允许写空')
+	assert.equal(M.allowsEmpty(dev, dev.fieldMap['35:1']), false, 'hexbytes 字段不允许写空')
+
+	const fake = fakeEnv()
+	fake.entries.sek = {
+		findFrame: win.skFindFrame,
+		parseFrame: (bytes) => win.skParseFrame(bytes, {}),
+		device: dev,
+	}
+	fake.state.proto.S = 'sek'
+	const request = Req.create(fake.env)
+	const fakeElement = name => ({ name, children: [], events: {}, attrs: {}, textContent: '', disabled: false,
+		append(child) { this.children.push(child) },
+		addEventListener(type, listener) { this.events[type] = listener },
+		setAttribute(key, value) { this.attrs[key] = value; if (key === 'disabled') this.disabled = true },
+	})
+	const walk = node => [node, ...(node.children || []).flatMap(walk)]
+	const sandbox = {
+		window: { DeviceModel: M, ProtocolRequest: request, ProtocolRegistry: fake.env.registry, serialApi: fake.env.serialApi, serialLanes: fake.env.serialLanes,
+			AppDialog: { confirm: async () => true } },
+		document: { readyState: 'loading', addEventListener() {}, createElement: fakeElement, getElementById: () => null },
+	}
+	const source = fs.readFileSync(path.join(ROOT, 'js/device-panel.js'), 'utf8')
+	const exportPoint = 'window.DevicePanel = {'
+	vm.runInNewContext(source.replace(exportPoint, 'window.DevicePanel = { _testWrite: runWrite, _testCtx: ctx, _testPump: makePump, _testRow: paramRow,'), sandbox)
+	const panel = sandbox.window.DevicePanel
+	const pump = panel._pumps.S = panel._testPump('S')
+	const context = () => panel._testCtx()
+	const lane = context().L
+
+	// 1. 设备当前 APN 为 "stmiot"（32B），置空按钮可用，写入按钮初始禁用
+	const apn32 = s => { const a = new Array(32).fill(0); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return a }
+	fake.rx('S', sekUp(win, 0x83, [[3, [[7, apn32('stmiot')], [9, [0xa0, 0x05]]]]]))
+	assert.equal(M.reading(lane, '3:7').raw, 'stmiot')
+	const apnRow = walk(panel._testRow(context(), '3:7'))
+	const buttons = apnRow.filter(n => n.name === 'button')
+	const clearBtn = buttons.find(n => n.textContent === '置空')
+	const commitBtn = buttons.find(n => n.textContent === '写入')
+	const preview = apnRow.find(n => n.className && n.className.includes('dp-write-preview'))
+	assert.ok(clearBtn, '允许写空字段应渲染置空按钮')
+	assert.equal(clearBtn.disabled, false)
+	assert.equal(commitBtn.disabled, true)
+
+	// 2. 点击「置空」→ 记入空草稿、预览 (空)、启用写入、按钮切为「取消置空」
+	clearBtn.events.click()
+	assert.equal(lane.drafts['3:7'], '')
+	assert.equal(preview.textContent, '预览：(空)')
+	assert.equal(commitBtn.disabled, false)
+	assert.equal(clearBtn.textContent, '取消置空')
+
+	// 3. 再点「取消置空」→ 撤回草稿、禁用写入
+	clearBtn.events.click()
+	assert.equal(Object.prototype.hasOwnProperty.call(lane.drafts, '3:7'), false)
+	assert.equal(preview.textContent, '')
+	assert.equal(commitBtn.disabled, true)
+	assert.equal(clearBtn.textContent, '置空')
+
+	// 4. 再次点击「置空」并执行写入 → 下发 Tag3-ID7 全0 32B，回读全0 确认 confirmed
+	clearBtn.events.click()
+	const job = panel._testWrite(context(), ['3:7'])
+	await flush()
+	assert.equal(fake.state.writes.length, 1)
+	const sentParsed = win.skParseFrame(fake.state.writes[0].bytes, {})
+	assert.equal(sentParsed.tlv[0].tag, 3)
+	assert.equal(sentParsed.tlv[0].items[0].id, 7)
+	assert.deepEqual(sentParsed.tlv[0].items[0].raw, new Array(32).fill(0))
+	fake.rx('S', sekUp(win, 0x81, [[3, [[7, [1]]]]]))
+	await flush()
+	fake.rx('S', sekUp(win, 0x83, [[3, [[7, new Array(32).fill(0)]]]]))
+	await job
+	assert.equal(lane.writes['3:7'].state, 'confirmed')
+	assert.equal(Object.prototype.hasOwnProperty.call(lane.drafts, '3:7'), false)
+
+	// 5. 设备值已为空后，「置空」按钮应禁用
+	const apnRowAfter = walk(panel._testRow(context(), '3:7'))
+	const clearBtnAfter = apnRowAfter.filter(n => n.name === 'button').find(n => n.textContent === '置空')
+	assert.equal(clearBtnAfter.disabled, true)
+
+	// 6. 非可空字段（3:9 上报频率）不渲染置空按钮，输入后删空撤回草稿
+	const freqRow = walk(panel._testRow(context(), '3:9'))
+	assert.equal(freqRow.filter(n => n.name === 'button').some(n => n.textContent === '置空'), false)
+	const freqInput = freqRow.find(n => n.name === 'input')
+	const freqCommit = freqRow.filter(n => n.name === 'button').find(n => n.textContent === '写入')
+	freqInput.value = '60'
+	freqInput.events.input()
+	assert.equal(lane.drafts['3:9'], '60')
+	assert.equal(freqCommit.disabled, false)
+	freqInput.value = ''
+	freqInput.events.input()
+	assert.equal(Object.prototype.hasOwnProperty.call(lane.drafts, '3:9'), false)
+	assert.equal(freqCommit.disabled, true)
+	pump.stop()
 })
 
 let current = null

@@ -295,6 +295,7 @@
 				max: devNum(w.max, null, null, null),
 				step: devNum(w.step, 0, null, null),
 				maxLen: devNum(w.maxLen, 0, 4096, null),
+				allowEmpty: w.allowEmpty === true,
 				pattern: pattern,
 				hint: devText(w.hint, 200),
 				options: options,

@@ -660,6 +660,7 @@
 		let editor = null
 		if (f.write) {
 			const opts = f.write.options
+			const canEmpty = M.allowsEmpty(c.dev, f)
 			const attrs = { id: 'dp-set-' + k, disabled: disabled || !ready, 'aria-label': f.name + '设置值', title: f.write.hint }
 			const input = opts
 				? h('select', Object.assign(attrs, { class: 'form-select form-select-sm' }), h('option', { value: '', text: '请选择', disabled: true }), Object.keys(opts).map(function (value) { return h('option', { value: value, text: opts[value] }) }))
@@ -673,16 +674,52 @@
 				if (preview) preview.textContent = raw === undefined ? '' : '预览：' + M.formatValue(c.dev, k, raw, M.getter(c.L, c.gen))
 				return raw
 			}
-			parseSetting(hasDraft)
-			input.addEventListener('input', function () {
+			const clearBtn = canEmpty ? button('置空', function () {
+				const draftedEmpty = Object.prototype.hasOwnProperty.call(c.L.drafts, k) && c.L.drafts[k] === ''
+				if (draftedEmpty) {
+					delete c.L.drafts[k]
+					input.value = ''
+					if (preview) preview.textContent = ''
+					commit.disabled = true
+					syncClearBtn()
+					syncDraftToolbar(c)
+					return
+				}
+				input.value = ''
+				applyDraft(true)
+			}, true) : null
+			function syncClearBtn() {
+				if (!clearBtn) return
+				const draftedEmpty = Object.prototype.hasOwnProperty.call(c.L.drafts, k) && c.L.drafts[k] === ''
+				const alreadyEmpty = !!(r && !stale && r.raw === '')
+				clearBtn.textContent = draftedEmpty ? '取消置空' : '置空'
+				clearBtn.title = draftedEmpty ? '撤销置空草稿' : '将此项设为空值待写入'
+				clearBtn.disabled = disabled || !ready || (!draftedEmpty && alreadyEmpty)
+			}
+			function applyDraft(explicitEmpty) {
+				if (!explicitEmpty && input.value === '' && !canEmpty) {
+					delete c.L.drafts[k]
+					if (preview) preview.textContent = ''
+					commit.disabled = true
+					syncClearBtn()
+					syncDraftToolbar(c)
+					return
+				}
 				const raw = parseSetting(true)
 				const changed = raw === undefined || !r || stale || !M.sameValue(r.raw, raw)
 				if (changed) c.L.drafts[k] = input.value
-				else delete c.L.drafts[k]
-				commit.disabled = !changed
+				else {
+					delete c.L.drafts[k]
+					if (preview) preview.textContent = ''
+				}
+				commit.disabled = disabled || !ready || !changed
+				syncClearBtn()
 				syncDraftToolbar(c)
-			})
-			editor = h('div', { class: 'dp-row-edit' }, input, commit, preview,
+			}
+			parseSetting(hasDraft)
+			syncClearBtn()
+			input.addEventListener('input', function () { applyDraft(false) })
+			editor = h('div', { class: 'dp-row-edit' }, input, clearBtn, commit, preview,
 				!ready && h('span', { class: 'dp-ph', text: '先读取' }))
 		}
 		const rowActions = result && result.state === 'mismatch' && hasDraft ? [
