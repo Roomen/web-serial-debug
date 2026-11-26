@@ -685,13 +685,14 @@
 					setProgress(25, '模组下载中')
 					await pollUntilTerminal(POLL_MAX_DOWNLOAD_MS, '内网下载', abortCtrl.signal)
 				} else if (mode === 1) {
-					// 0x81 就绪后立刻独占串口进入 ZMODEM，屏蔽旧协议日志解析，绝不回落旧解析器
-					addLog('设备已就绪 (' + resultCodeText(code) + ')，独占通道切入 ZMODEM 四轮 ES9+ 代理…', 'info')
+					// 0x81 就绪后立刻独占串口进入 ZMODEM，屏蔽旧协议日志解析，绝不回落旧解析器；
+					// 脱敏开启时屏蔽 RX 日志并用摘要占位 TX；关闭脱敏时原样记录 ZMODEM 原始 TX/RX 报文便于排查
+					addLog('设备已就绪 (' + resultCodeText(code) + ')，独占通道切入 ZMODEM 四轮 ES9+ 代理' + (redact ? '' : '（已关闭脱敏，串口日志记录原始 ZMODEM 报文）') + '…', 'info')
 					setProgress(15, 'ZMODEM 准备')
 
 					const queue = ZM.createByteQueue()
 					window.serialApi.suppressParse = true
-					if (typeof window.serialApi.setSuppressRxLog === 'function') {
+					if (redact && typeof window.serialApi.setSuppressRxLog === 'function') {
 						window.serialApi.setSuppressRxLog(sid, true)
 						rxLogSuppressed = true
 					}
@@ -707,7 +708,7 @@
 							return queue.readByte(ms)
 						},
 						writeBytes: function (bytes) {
-							return window.serialApi.writeRawTo(sid, bytes, { logData: zmodemLogPlaceholder(bytes.length) })
+							return window.serialApi.writeRawTo(sid, bytes, redact ? { logData: zmodemLogPlaceholder(bytes.length) } : undefined)
 						},
 					}
 

@@ -741,7 +741,13 @@ async function runAsyncTests() {
 		assert.ok(calls.isSessionOpen.every((id) => id === openPhysSid), '所有 isSessionOpen 必须查询 ' + openPhysSid)
 		if (downloadMode === 1) {
 			assert.deepEqual(calls.onReceiveFrom, [openPhysSid], 'onReceiveFrom 必须订阅 ' + openPhysSid)
-			assert.deepEqual(calls.setSuppressRxLog, [[openPhysSid, true], [openPhysSid, false]], 'setSuppressRxLog 必须成对作用于 ' + openPhysSid)
+			if (redact) {
+				assert.deepEqual(calls.setSuppressRxLog, [[openPhysSid, true], [openPhysSid, false]], '脱敏开启时 setSuppressRxLog 必须成对屏蔽与恢复 ' + openPhysSid)
+				assert.ok(calls.writeRawTo.every((c) => c.hasLogData === true), '脱敏开启时触发帧与 ZMODEM TX 均须使用脱敏/占位 logData')
+			} else {
+				assert.deepEqual(calls.setSuppressRxLog, [], '关闭脱敏时不屏蔽 ZMODEM RX 串口日志')
+				assert.ok(calls.writeRawTo.every((c) => c.hasLogData === false), '关闭脱敏时触发帧与 ZMODEM TX 均不替换 logData，原样记入串口日志')
+			}
 			assert.equal(httpCount, 4, 'mode=1 应完成四轮 SM-DP+ 请求')
 			assert.ok(calls.httpReqs.every((r) => r.allowInsecureTls === !!allowInsecureTls), '每轮原生请求必须准确透传 allowInsecureTls')
 			// 填自定义代理基址时隐藏原生 TLS 开关
@@ -760,8 +766,9 @@ async function runAsyncTests() {
 	await runPanelDownloadCase({ serialMode: 'dual', activeUiSid: 'B', openPhysSid: 'B', downloadMode: 0 })
 	await runPanelDownloadCase({ serialMode: 'dual', activeUiSid: 'B', openPhysSid: 'B', downloadMode: 1, allowInsecureTls: true })
 
-	// 10c. 关闭脱敏开关：输入明文、串口记真实帧、面板日志可见，且 AC/CC 仍不落盘
+	// 10c. 关闭脱敏开关：输入明文、串口记真实帧（含 mode=1 ZMODEM 原始 TX/RX）、面板日志可见，且 AC/CC 仍不落盘
 	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 0, redact: false })
+	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 1, allowInsecureTls: false, redact: false })
 }
 
 runAsyncTests().then(() => {
