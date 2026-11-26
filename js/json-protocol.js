@@ -673,6 +673,7 @@
 			if (Array.isArray(w.keys)) nw.keys = w.keys.slice()
 			if (Array.isArray(w.sub)) nw.sub = w.sub.slice()
 			if (w.meter != null) nw.meter = w.meter
+			if (w.type === 'metric' && w.optional != null) nw.optional = !!w.optional
 			if (w.type === 'dayBitmap') {
 				if (w.days != null) nw.days = Number(w.days)
 				if (w.firstBit != null) nw.firstBit = Number(w.firstBit)

@@ -110,4 +110,18 @@ assert.strictEqual(f2[0].filtered[0].name, '设置逆流阶段预警阈值参数
 const f3 = codec.filterPresets(presets, '0x03', '大口径')
 assert.strictEqual(f3.length, 0)
 
+// 4. settingRange 钳制类型边界 + settingBytes 支持 bcd / hexbytes
+sandbox.window.ProtocolDownlink = require('../js/protocol-downlink.js')
+const clamped = codec.settingRange({ type: 'uint8', min: '1', max: '365' })
+assert.strictEqual(clamped.min, 1)
+assert.strictEqual(clamped.max, 255)
+assert.deepStrictEqual(Array.from(codec.settingBytes({ type: 'bcd', fillLen: 7 }, '123456')), [0x56, 0x34, 0x12, 0x00, 0x00, 0x00, 0x00])
+assert.throws(() => codec.settingBytes({ type: 'bcd', fillLen: 7 }, '12a4'))
+assert.throws(() => codec.settingBytes({ type: 'bcd', fillLen: 7 }, '1'.repeat(15)))
+assert.deepStrictEqual(Array.from(codec.settingBytes({ type: 'hexbytes', fillLen: 3 }, '07:66:88')), [0x07, 0x66, 0x88])
+assert.deepStrictEqual(Array.from(codec.settingBytes({ type: 'hexbytes', fillLen: 4 }, '00 01')), [0x00, 0x01, 0x00, 0x00])
+assert.throws(() => codec.settingBytes({ type: 'hexbytes', fillLen: 3 }, '076'))
+assert.throws(() => codec.settingBytes({ type: 'hexbytes', fillLen: 3 }, '07 66 88 99'))
+assert.throws(() => codec.settingBytes({ type: 'hexbytes', fillLen: 3 }, '07 ZZ 88'))
+
 console.log('sek-presets.cjs: all assertions passed')

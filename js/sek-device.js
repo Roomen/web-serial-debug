@@ -16,6 +16,7 @@
 	const GROUP_TAGS = [
 		['base', 1], ['core', 2], ['alarm', 4], ['uplink', 92], ['run', 91],
 		['param', 3], ['valve', 36], ['ble', 37],
+		['ultra', 30], ['cam', 32], ['bus', 33], ['mag', 34], ['lora', 35], ['auth', 38], ['leak', 64],
 	]
 	const STATUS_GROUPS = ['base', 'core', 'alarm', 'uplink', 'run']
 
@@ -46,15 +47,32 @@
 	const IDENTITY = [[1, 0], [1, 1], [1, 2], [1, 4], [1, 5], [1, 10], [1, 12]]
 	const STATUS_KEYS = [[2, 9], [2, 29], [2, 5], [2, 10], [2, 30], [2, 15], [2, 31], [2, 12], [2, 3], [2, 11], [1, 6],
 		[92, 7], [92, 8], [92, 6], [92, 9], [92, 0], [92, 1], [92, 4], [91, 0]]
-	const CATEGORIES = [
-		{ id: 'biz', title: '业务平台', keys: [[3, 9], [3, 6], [3, 7], [3, 8], [3, 10], [3, 11], [3, 23]] },
-		{ id: 'maint', title: '维护平台', keys: [[3, 22], [3, 21], [3, 40]] },
-		{ id: 'alarm', title: '告警阈值', keys: [[3, 0], [3, 1], [3, 2], [3, 3], [3, 4], [3, 5]] },
-		{ id: 'usage', title: '用水告警', keys: [[39, 3]] },
-		{ id: 'meter', title: '计量参数', keys: [[3, 18], [3, 17], [3, 35], [3, 36], [3, 29], [3, 24], [3, 28], [3, 30], [3, 12], [3, 15]] },
-		{ id: 'valve', title: '阀控', keys: [[36, 13], [36, 6], [36, 4], [36, 5], [36, 7], [36, 8], [36, 1]] },
-		{ id: 'ble', title: '蓝牙', keys: [[37, 0], [37, 1]] },
+	// 核心分类置顶并保留既有顺序与 id，其余 0x01 参数预设分类按 SK_DOWN_PRESETS 顺序自动派生
+	const CORE_CATEGORIES = [
+		{ group: '参数设置-业务平台配置 (0x01)', id: 'biz', title: '业务平台', keys: [[3, 9], [3, 6], [3, 7], [3, 8], [3, 10], [3, 11], [3, 23]] },
+		{ group: '参数设置-维护平台配置 (0x01)', id: 'maint', title: '维护平台', keys: [[3, 22], [3, 21], [3, 40]] },
+		{ group: '参数设置-告警阈值 (0x01)', id: 'alarm', title: '告警阈值', keys: [[3, 0], [3, 1], [3, 2], [3, 3], [3, 4], [3, 5]] },
+		{ group: '参数设置-TAG39告警 (0x01)', id: 'usage', title: '用水告警', keys: [[39, 3]] },
+		{ group: '参数设置-计量参数 (0x01)', id: 'meter', title: '计量参数', keys: [[3, 18], [3, 17], [3, 35], [3, 36], [3, 29], [3, 24], [3, 28], [3, 30], [3, 12], [3, 15]] },
+		{ group: '参数设置-TAG36阀控 (0x01)', id: 'valve', title: '阀控', keys: [[36, 13], [36, 6], [36, 4], [36, 5], [36, 7], [36, 8], [36, 1]] },
+		{ group: '参数设置-TAG37蓝牙 (0x01)', id: 'ble', title: '蓝牙', keys: [[37, 0], [37, 1]] },
 	]
+	const EXTRA_CATEGORY_META = {
+		'参数设置-设备标识 (0x01)': { id: 'ident', title: '设备标识' },
+		'参数设置-设备管理 (0x01)': { id: 'mgmt', title: '设备管理' },
+		'参数设置-TAG32摄像表 (0x01)': { id: 'cam', title: '摄像表' },
+		'参数设置-TAG33总线采集器 (0x01)': { id: 'bus', title: '总线采集器' },
+		'参数设置-TAG34无磁传感器 (0x01)': { id: 'mag', title: '无磁传感器' },
+		'参数设置-TAG35LoRa (0x01)': { id: 'lora', title: 'LoRa' },
+		'参数设置-TAG38通讯认证 (0x01)': { id: 'auth', title: '通讯认证' },
+		'参数设置-TAG30超声波 (0x01)': { id: 'ultra', title: '超声波' },
+		'参数设置-TAG64渗漏仪 (0x01)': { id: 'leak', title: '渗漏仪' },
+	}
+	function hexSpaced(bytes) {
+		const out = []
+		for (let i = 0; i < bytes.length; i++) out.push((bytes[i] & 0xff).toString(16).toUpperCase().padStart(2, '0'))
+		return out.join(' ')
+	}
 	// 基准水量（每圈升数），与 protocol.js 的 skSession 同一张表
 	const BASE_LITERS = { 0: 1000, 1: 100, 2: 10, 3: 1, 4: 0.1, 5: 0.01, 6: 0.001 }
 
@@ -129,25 +147,46 @@
 	const FIELD_SETTING = Object.create(null)
 	const SETTINGS = Object.create(null)
 	const LIMITS = { '3:9': { step: 30 }, '3:10': { max: 4 }, '3:12': { min: 30, max: 1440, step: 30 }, '3:15': { step: 5 }, '3:22': { step: 1440 }, '36:1': { max: 31 }, '36:8': { min: 1, max: 45 } }
-	const DANGER = { '3:6': '更改服务器地址可能使设备无法上报。', '3:7': '更改 APN 可能使设备无法联网。', '3:17': '这会改写设备累计底度。', '3:35': '这会改写设备正累计底度。', '3:36': '这会改写设备逆累计底度。', '3:18': '变更口径会重置部分告警阈值。', '3:21': '更改维护服务器地址可能导致失联。', '3:23': '更改通信方式可能导致失联。', '3:29': '这会更改流量换算基准。', '36:6': '这会更改阀门的应急开阀行为。', '36:7': '这会更改低电压关阀行为。', '37:1': '关闭广播可能影响蓝牙连接。' }
-	const SECRET_FIELDS = [[3, 16], [38, 1]]
+	const DANGER = { '3:6': '更改服务器地址可能使设备无法上报。', '3:7': '更改 APN 可能使设备无法联网。', '3:17': '这会改写设备累计底度。', '3:35': '这会改写设备正累计底度。', '3:36': '这会改写设备逆累计底度。', '3:18': '变更口径会重置部分告警阈值。', '3:21': '更改维护服务器地址可能导致失联。', '3:23': '更改通信方式可能导致失联。', '3:29': '这会更改流量换算基准。', '36:6': '这会更改阀门的应急开阀行为。', '36:7': '这会更改低电压关阀行为。', '37:1': '关闭广播可能影响蓝牙连接。', '38:0': '更改加密方式可能导致通信无法解密。' }
+	const SECRET_FIELDS = [[3, 16], [38, 1], [38, 5]]
+	const PRESET_GROUPS = []
+	const PRESET_GROUP_MAP = Object.create(null)
 	const presetCodec = W.SK_PRESET_CODEC
 	if (presetCodec) (W.SK_DOWN_PRESETS || []).forEach(function (category) {
+		const pairs = []
 		category.items.forEach(function (preset) {
 			const block = preset.tlv && preset.tlv.length === 1 && preset.tlv[0]
 			const item = block && block.items.length === 1 && block.items[0]
-			if (!item || !preset.param || preset.func !== '0x01' || block.tag === 34) return
+			if (!item || !preset.param || preset.func !== '0x01') return
 			const name = key(block.tag, item.id)
 			const param = name === '3:5' ? { type: 'uint16le', label: '16 位告警位域（十进制）' } : preset.param
-			if (!presetCodec.settingRange(param) && !['multi', 'ascii', 'largeFlow'].includes(param.type)) return
+			if (!presetCodec.settingRange(param) && !['multi', 'ascii', 'largeFlow', 'bcd', 'hexbytes'].includes(param.type)) return
 			SETTINGS[name] = { tag: block.tag, id: item.id, param: param }
+			pairs.push([block.tag, item.id])
 		})
+		if (pairs.length) {
+			const gname = category.group || ''
+			if (!PRESET_GROUP_MAP[gname]) {
+				PRESET_GROUP_MAP[gname] = pairs
+				PRESET_GROUPS.push(gname)
+			} else {
+				PRESET_GROUP_MAP[gname] = PRESET_GROUP_MAP[gname].concat(pairs)
+			}
+		}
 	})
 
 	function rulesFor(k, param) {
 		const range = presetCodec.settingRange(param)
 		if (range) return Object.assign({ step: 1, hint: param.label, options: param.options, confirm: DANGER[k] }, range, LIMITS[k])
 		if (param.type === 'ascii') return { maxLen: param.fillLen || param.length, pattern: '[ -~]*', hint: param.placeholder || param.label, confirm: DANGER[k] }
+		if (param.type === 'bcd') {
+			const len = param.fillLen || param.length
+			return { maxLen: len ? len * 2 : 64, pattern: '[0-9]+', hint: param.placeholder || (param.label + (len ? '（最多 ' + (len * 2) + ' 位数字）' : '')), confirm: DANGER[k] }
+		}
+		if (param.type === 'hexbytes') {
+			const len = param.fillLen || param.length
+			return { maxLen: len ? len * 3 + 16 : 256, pattern: '[0-9a-fA-F :\\-]+', hint: param.placeholder || (param.label + (len ? '（' + len + 'B HEX）' : '')), confirm: DANGER[k] }
+		}
 		if (param.type === 'largeFlow') return { maxLen: 32, pattern: '[0-9]+(?:\\.[0-9]+)?', hint: '底度 (m³)，先读取当量', confirm: DANGER[k] }
 		return { maxLen: 96, hint: param.fields.map(function (part) { return part.label }).join('，'), confirm: DANGER[k] }
 	}
@@ -159,6 +198,8 @@
 		const disp = deriveDisplay(tag, d)
 		FIELD_DECODE[k] = disp.decode
 		FIELD_DESC[k] = d.desc || ''
+		const setting = SETTINGS[k]
+		const isEnumLike = !!(disp.options || (setting && setting.param.type === 'enum'))
 		const f = {
 			key: k,
 			name: d.name,
@@ -170,13 +211,16 @@
 			options: disp.options || null,
 			bits: disp.bits || null,
 			group: TAG_GROUP[tag] || null,
-			secret: SECRET_FIELDS.some(function (pair) { return pair[0] === tag && pair[1] === id }) || /PAK|密钥/i.test(d.name),
+			secret: SECRET_FIELDS.some(function (pair) { return pair[0] === tag && pair[1] === id }) || (!isEnumLike && /PAK|密钥|密码/i.test(d.name)),
 		}
-		const setting = SETTINGS[k]
 		if (setting && !f.secret) {
 			FIELD_SETTING[k] = setting.param
 			f.write = rulesFor(k, setting.param)
 			if (setting.param.type === 'largeFlow') f.unit = 'm³'
+			else if (setting.param.type === 'multi') { f.kind = 'text'; f.options = null }
+			else if (setting.param.type === 'hexbytes' && f.kind !== 'time') { f.kind = 'hex'; f.options = null }
+			else if (setting.param.type === 'bcd') { f.kind = 'text'; f.options = null }
+			else if (setting.param.type === 'enum' && setting.param.options && !f.options) { f.kind = 'enum'; f.options = setting.param.options }
 		}
 		return Object.assign(f, DISPLAY[k] || {})
 	}
@@ -196,8 +240,33 @@
 	const IDENTITY_KEYS = IDENTITY.map(function (p) { return addField(p[0], p[1]) }).filter(Boolean)
 	STATUS_KEYS.forEach(function (p) { addField(p[0], p[1]) })
 	SECRET_FIELDS.forEach(function (pair) { addField(pair[0], pair[1]) })
-	const categories = CATEGORIES.map(function (c) {
-		return { id: c.id, title: c.title, keys: c.keys.map(function (p) { return addField(p[0], p[1]) }).filter(Boolean) }
+	const usedInCat = Object.create(null)
+	const usedGroups = Object.create(null)
+	function collectCatKeys(pairs) {
+		const out = []
+		pairs.forEach(function (p) {
+			const k = addField(p[0], p[1])
+			if (!k || usedInCat[k]) return
+			usedInCat[k] = true
+			out.push(k)
+		})
+		return out
+	}
+	const categories = []
+	CORE_CATEGORIES.forEach(function (c) {
+		usedGroups[c.group] = true
+		const keys = collectCatKeys(c.keys.concat(PRESET_GROUP_MAP[c.group] || []))
+		if (keys.length) categories.push({ id: c.id, title: c.title, keys: keys })
+	})
+	let extraIdx = 1
+	PRESET_GROUPS.forEach(function (gname) {
+		if (usedGroups[gname]) return
+		usedGroups[gname] = true
+		const meta = EXTRA_CATEGORY_META[gname]
+		const id = meta ? meta.id : ('preset-' + extraIdx++)
+		const title = meta ? meta.title : (gname.replace(/^参数设置-/, '').replace(/\s*\(0x01\)\s*$/i, '').replace(/^TAG\d+/i, '').trim() || gname)
+		const keys = collectCatKeys(PRESET_GROUP_MAP[gname] || [])
+		if (keys.length) categories.push({ id: id, title: title, keys: keys })
 	})
 
 	const groups = GROUP_TAGS.filter(function (g) { return queryIdFor(g[1]) != null }).map(function (g) {
@@ -240,6 +309,24 @@
 
 	function settingRaw(param, raw, base) {
 		if (param.type === 'ascii') return String.fromCharCode.apply(null, raw).replace(/\x00+$/, '')
+		if (param.type === 'bcd') {
+			const len = param.fillLen || param.length
+			if (!raw.length || (len != null && raw.length !== len)) return undefined
+			let digits = ''
+			for (let i = raw.length - 1; i >= 0; i--) {
+				const b = raw[i] & 0xff
+				const hi = b >> 4
+				const lo = b & 0xf
+				if (hi > 9 || lo > 9) return hexSpaced(raw)
+				digits += String(hi) + String(lo)
+			}
+			return digits
+		}
+		if (param.type === 'hexbytes') {
+			const len = param.fillLen || param.length
+			if (!raw.length || (len != null && raw.length !== len)) return undefined
+			return hexSpaced(raw)
+		}
 		if (param.type === 'largeFlow') {
 			if (raw.length !== 8 || (raw[0] & 1) || base == null) return undefined
 			let units = 0n
@@ -248,7 +335,10 @@
 		}
 		let offset = 0
 		function number(part) {
-			if (part.bits) return (raw[0] >> part.bits[1]) & ((1 << (part.bits[0] - part.bits[1] + 1)) - 1)
+			if (part.bits) {
+				if (!raw.length) return undefined
+				return (raw[0] >> part.bits[1]) & ((1 << (part.bits[0] - part.bits[1] + 1)) - 1)
+			}
 			const type = part.type === 'enum' ? part.valueType || 'uint8' : part.type
 			const size = +(/(8|16|32)/.exec(type) || [0, 8])[1] / 8
 			if (offset + size > raw.length) return undefined
@@ -265,6 +355,24 @@
 	function parseInput(field, text) {
 		const param = SETTINGS[field.key].param
 		if (param.type === 'ascii') return text
+		if (param.type === 'bcd') {
+			const s = String(text).trim()
+			const len = param.fillLen || param.length
+			if (!/^\d+$/.test(s) || (len != null && s.length > len * 2)) return undefined
+			return len != null ? s.padStart(len * 2, '0') : (s.length % 2 ? '0' + s : s)
+		}
+		if (param.type === 'hexbytes') {
+			const s = String(text).trim()
+			if (!s || /[^0-9a-fA-F\s:-]/.test(s)) return undefined
+			const hex = s.replace(/[\s:-]/g, '').toUpperCase()
+			if (!hex.length || hex.length % 2 !== 0) return undefined
+			const len = param.fillLen || param.length
+			if (len != null && hex.length / 2 > len) return undefined
+			const bytes = []
+			for (let i = 0; i < hex.length; i += 2) bytes.push(parseInt(hex.slice(i, i + 2), 16))
+			if (len != null) while (bytes.length < len) bytes.push(0x00)
+			return hexSpaced(bytes)
+		}
 		if (param.type === 'largeFlow') {
 			const match = /^(\d+)(?:\.(\d+))?$/.exec(text)
 			if (!match) return undefined
@@ -350,6 +458,21 @@
 	function format(k, raw, get) {
 		const param = FIELD_SETTING[k]
 		if (param && param.type === 'largeFlow' && typeof raw === 'string') return raw + ' m³'
+		if (param && param.type === 'hexbytes' && typeof raw === 'string') {
+			if (k === '3:20') {
+				const d = raw.replace(/\s+/g, '')
+				if (/^\d{14}$/.test(d)) {
+					const y = +d.slice(0, 4), mo = +d.slice(4, 6), day = +d.slice(6, 8)
+					const hh = +d.slice(8, 10), mm = +d.slice(10, 12), ss = +d.slice(12, 14)
+					const dt = new Date(y, mo - 1, day, hh, mm, ss)
+					if (y >= 1970 && y <= 2099 && dt.getMonth() === mo - 1 && dt.getDate() === day && hh <= 23 && mm <= 59 && ss <= 59) {
+						return d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) + ' ' + d.slice(8, 10) + ':' + d.slice(10, 12) + ':' + d.slice(12, 14)
+					}
+				}
+			}
+			return raw
+		}
+		if (param && param.type === 'bcd' && typeof raw === 'string') return raw
 		if (param && param.type === 'multi' && Array.isArray(raw)) {
 			return param.fields.map(function (part, index) {
 				const value = raw[index]
@@ -385,7 +508,7 @@
 		{ type: 'metric', title: '累计流量', key: '2:9', sub: ['2:29', '2:5'] },
 		{ type: 'metric', title: '电池', key: '2:10', sub: ['2:30', '2:15', '2:31'], meter: '2:30' },
 		{ type: 'metric', title: '信号', key: '92:7', sub: ['92:8', '92:6', '92:9'] },
-		{ type: 'metric', title: '阀门', key: '2:12', sub: ['2:3', '2:11'] },
+		{ type: 'metric', title: '阀门', key: '2:12', sub: ['2:3', '2:11'], optional: true },
 		{ type: 'identity', title: '设备标识', keys: IDENTITY_KEYS },
 		{ type: 'deviceTime', title: '设备时间', key: '1:6' },
 		{ type: 'flags', title: '告警', keys: ALARM_KEYS },

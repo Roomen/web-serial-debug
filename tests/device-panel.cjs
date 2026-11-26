@@ -433,8 +433,26 @@ test('sek: 组与查询 ID 从 SK_TAGS 派生，合成帧取值与格式化', ()
 	assert.deepEqual(q.uplink, { tag: 92, query: 8 })
 	assert.deepEqual(q.run, { tag: 91, query: 7 })
 	assert.deepEqual(q.valve, { tag: 36, query: 15 })
+	assert.deepEqual(q.ultra, { tag: 30, query: 30 })
+	assert.deepEqual(q.cam, { tag: 32, query: 10 })
+	assert.deepEqual(q.bus, { tag: 33, query: 11 })
+	assert.deepEqual(q.mag, { tag: 34, query: 34 })
+	assert.deepEqual(q.lora, { tag: 35, query: 35 })
+	assert.deepEqual(q.auth, { tag: 38, query: 22 })
+	assert.deepEqual(q.leak, { tag: 64, query: 19 })
+	assert.equal(dev.groups.length, 15, '5 个状态组 + 10 个可查询参数组')
+	assert.equal(dev.categories.length, 16, '覆盖全部 16 个 0x01 参数预设分类')
+	assert.deepEqual(dev.categories.slice(0, 7).map((c) => c.id), ['biz', 'maint', 'alarm', 'usage', 'meter', 'valve', 'ble'], '核心 7 个分类置顶且保持原顺序')
+	const allCatKeys = dev.categories.flatMap((c) => c.keys)
+	assert.equal(allCatKeys.length, 141, '覆盖全部 141 个 0x01 参数预设')
+	assert.equal(new Set(allCatKeys).size, 141, '各分类之间无重复字段')
+	assert.equal(dev.status.find((w) => w.key === '2:12').optional, true, '阀门卡片标为 optional')
+	assert.equal(dev.status.find((w) => w.key === '2:9').optional, false, '核心卡片默认非 optional')
 	assert.equal(dev.fieldMap['1:0'].name, W.SK_TAGS['1'].find((d) => d.id === 0).name, '名称来自 SK_TAGS')
 	assert.equal(M.readable(dev, '39:3'), false, '没有查询的 Tag 标成读不到')
+	assert.equal(M.readable(dev, '34:2'), true, 'Tag34 接入 mag 查询组')
+	assert.equal(M.readable(dev, '30:8'), true, 'Tag30 接入 ultra 查询组')
+	assert.equal(M.readable(dev, '64:1'), true, 'Tag64 接入 leak 查询组')
 	const f = sekUp(W, 0x83, [
 		[2, [[9, [0x87, 0xD6, 0x12, 0]], [29, [3]], [10, [0x69, 1]], [12, [1]]]],
 		[1, [[6, [0x20, 0x26, 0x01, 0x02, 0x03, 0x04, 0x05]], [0, ascii('000000000000001')]]],
@@ -1237,7 +1255,7 @@ test('write panel: 确认合并、处理中不自动回读、组归属不明、�
 	pump.stop()
 })
 
-test('sek write: 按预设编码与解析往返，Tag34 禁写，Tag39 仅应答', () => {
+test('sek write: 按预设编码与解析往返（含 bcd/hexbytes/Tag34），密钥禁写，Tag39 仅应答', () => {
 	const win = loadSek()
 	const dev = Reg.normalizeDevice(win.SekDevice, { id: 'sek' })
 	const roundTrip = (key, text, base, expectedBytes) => {
@@ -1257,14 +1275,54 @@ test('sek write: 按预设编码与解析往返，Tag34 禁写，Tag39 仅应答
 			const ack = win.skParseFrame(sekUp(win, 0x81, [[tag, [[id, [code]]]]]), {})
 			assert.equal(dev.matchWriteReply(field, ack), result)
 		}
+		return expected
 	}
 	roundTrip('3:0', '300', null, [44, 1, 0, 0])
 	roundTrip('3:23', '1, 2', null, [34])
 	roundTrip('3:35', '123.456', 3, win.SK_PRESET_CODEC.largeFlowM3ToBytes('123.456', 3).bytes)
 	roundTrip('39:3', '30, 5', null, [30, 0, 5, 0])
-	assert.ok(dev.fieldMap['3:16'].secret)
-	assert.ok(dev.fieldMap['38:1'].secret)
-	assert.ok(!dev.fields.some(field => field.key.startsWith('34:') && field.write))
+	// Tag34 无磁传感器读写与回读
+	roundTrip('34:2', '2', null, [2])
+	roundTrip('34:3', '10, 20, 3, 0, 500', null, [10, 20, 3, 0, 0xf4, 0x01])
+	roundTrip('34:5', '12', null, [12])
+	assert.equal(dev.fieldMap['34:2'].group, 'mag')
+	// BCD 类型（短输入自动左侧补零到定长以与回读对齐）
+	const bcdUid = roundTrip('3:25', '123456', null, [0x56, 0x34, 0x12, 0x00, 0x00, 0x00, 0x00])
+	assert.equal(bcdUid, '00000000123456')
+	assert.equal(M.formatValue(dev, '3:25', bcdUid), '00000000123456')
+	roundTrip('3:19', '202600001234', null, [0x34, 0x12, 0x00, 0x00, 0x26, 0x20, 0x00, 0x00, 0x00, 0x00])
+	roundTrip('33:1', '9876543210', null, [0x10, 0x32, 0x54, 0x76, 0x98, 0x00, 0x00])
+	assert.throws(() => M.inputValue(dev, dev.fieldMap['3:25'], '12a4'), /格式|转换/)
+	assert.throws(() => M.inputValue(dev, dev.fieldMap['3:25'], '1'.repeat(15)), /过长|转换/)
+	// 非 BCD 字节（如全 FF 删除标记）安全可读不崩溃
+	const deletedAddr = win.skParseFrame(sekUp(win, 0x83, [[33, [[1, [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]]]]]), {})
+	assert.equal(dev.extract(deletedAddr)['33:1'], 'FF FF FF FF FF FF FF')
+	// hexbytes 类型（支持冒号/空格/连续，短输入右侧补 0x00）
+	const freq = roundTrip('35:1', '07:66:88', null, [0x07, 0x66, 0x88])
+	assert.equal(freq, '07 66 88')
+	assert.equal(M.formatValue(dev, '35:1', freq), '07 66 88')
+	roundTrip('37:3', '00:1a:2b:3c:4d:5e', null, [0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e])
+	roundTrip('3:44', '0800 1200', null, [0x08, 0x00, 0x12, 0x00, 0, 0, 0, 0, 0, 0, 0, 0])
+	roundTrip('35:3', '00 01', null, [0x00, 0x01])
+	const rtc = roundTrip('3:20', '20260102030405', null, [0x20, 0x26, 0x01, 0x02, 0x03, 0x04, 0x05])
+	assert.equal(rtc, '20 26 01 02 03 04 05')
+	assert.equal(M.formatValue(dev, '3:20', rtc), '2026-01-02 03:04:05')
+	assert.throws(() => M.inputValue(dev, dev.fieldMap['35:1'], '076'), /转换/)
+	assert.throws(() => M.inputValue(dev, dev.fieldMap['35:1'], '07 GG 88'), /格式|转换/)
+	assert.throws(() => M.inputValue(dev, dev.fieldMap['35:1'], '07 66 88 99'), /转换/)
+	// 密钥类字段脱敏且禁写，普通枚举开关不误判为密钥
+	assert.equal(dev.fieldMap['3:16'].secret, true)
+	assert.equal(dev.fieldMap['3:16'].write, null)
+	assert.equal(dev.fieldMap['38:1'].secret, true)
+	assert.equal(dev.fieldMap['38:1'].write, null)
+	assert.equal(dev.fieldMap['38:5'].secret, true)
+	assert.equal(dev.fieldMap['38:5'].write, null)
+	assert.equal(dev.fieldMap['38:6'].secret, false)
+	assert.ok(dev.fieldMap['38:6'].write, '38:6 动态密钥加密功能是开关，应可写')
+	// 既有规则（LIMITS / DANGER / DISPLAY）保留
+	assert.equal(dev.fieldMap['3:9'].write.step, 30)
+	assert.ok(dev.fieldMap['3:6'].write.confirm)
+	assert.ok(dev.fieldMap['3:7'].note)
 	assert.equal(dev.fieldMap['39:3'].group, null)
 	const operationAck = win.skParseFrame(sekUp(win, 0x91, [[39, [[3, [1]]]]]), {})
 	assert.equal(dev.matchWriteReply(dev.fieldMap['39:3'], operationAck), 'ok')
@@ -1272,6 +1330,77 @@ test('sek write: 按预设编码与解析往返，Tag34 禁写，Tag39 仅应答
 	const legacy = win.skParseFrame(sekUp(win, 0x81, [[11, [[1, [1]]]]]), {})
 	assert.equal(dev.matchWriteReply(dev.fieldMap['39:3'], legacy), 'ok')
 	assert.equal(M.writeResult('ok', null).state, 'unconfirmed')
+})
+
+test('status panel: optional metric（阀门卡片）未上报相关 ID 时隐藏，主字段或任一 sub 有读数即显示', () => {
+	const win = loadSek()
+	const dev = Reg.normalizeDevice(win.SekDevice, { id: 'sek' })
+	const fake = fakeEnv()
+	fake.entries.sek = {
+		findFrame: win.skFindFrame,
+		parseFrame: (bytes) => win.skParseFrame(bytes, {}),
+		device: dev,
+	}
+	fake.state.proto.S = 'sek'
+	const request = Req.create(fake.env)
+	const fakeElement = (name) => ({
+		name, children: [], events: {}, attrs: {}, textContent: '',
+		append(child) { this.children.push(child) },
+		addEventListener(type, listener) { this.events[type] = listener },
+		setAttribute(key, value) { this.attrs[key] = value },
+	})
+	const walk = (node) => [node, ...(node && node.children ? node.children.flatMap(walk) : [])]
+	const metricTitles = (tree) => walk(tree).filter((n) => n && n.className === 'dp-metric-l').map((n) => n.textContent)
+	const sandbox = {
+		window: {
+			DeviceModel: M,
+			ProtocolRequest: request,
+			ProtocolRegistry: fake.env.registry,
+			serialApi: fake.env.serialApi,
+			serialLanes: fake.env.serialLanes,
+		},
+		document: { readyState: 'loading', addEventListener() {}, createElement: fakeElement, getElementById: () => null },
+	}
+	const source = fs.readFileSync(path.join(ROOT, 'js/device-panel.js'), 'utf8')
+	const exportPoint = 'window.DevicePanel = {'
+	vm.runInNewContext(source.replace(exportPoint, 'window.DevicePanel = { _testStatus: renderStatus, _testCtx: ctx, _testPump: makePump,'), sandbox)
+	const panel = sandbox.window.DevicePanel
+	const pump = panel._pumps.S = panel._testPump('S')
+	const renderTitles = () => metricTitles(panel._testStatus(panel._testCtx(), false))
+
+	// 1. 初始无读数：非 optional 卡片仍显示，阀门卡片隐藏
+	const initial = renderTitles()
+	assert.ok(initial.includes('累计流量') && initial.includes('电池') && initial.includes('信号'))
+	assert.equal(initial.includes('阀门'), false, '未收到 2:12/2:3/2:11 时不渲染阀门卡片')
+
+	// 2. 仅收到其它核心字段（如累计流量 2:9、电池 2:10）：阀门卡片仍隐藏
+	fake.rx('S', sekUp(win, 0x02, [[2, [[9, [0x01, 0, 0, 0]], [10, [0x69, 1]]]]]))
+	assert.equal(renderTitles().includes('阀门'), false, '仅收到非阀门字段时阀门卡片仍隐藏')
+
+	// 3. 收到 sub 字段之一（2:3 当前水温，主动上报 0x02）：阀门卡片立即显示
+	fake.rx('S', sekUp(win, 0x02, [[2, [[3, [0xfa, 0x00]]]]]))
+	assert.equal(renderTitles().includes('阀门'), true, '任一 sub 字段有读数即渲染阀门卡片')
+
+	// 4. 新建隔离状态，验证仅收到主字段 2:12（查询应答 0x83）时也渲染阀门卡片
+	const lane = panel._testCtx().L
+	delete lane.readings['2:3']
+	assert.equal(renderTitles().includes('阀门'), false, '清空相关读数后隐藏')
+	fake.rx('S', sekUp(win, 0x83, [[2, [[12, [1]]]]]))
+	assert.equal(renderTitles().includes('阀门'), true, '主字段 2:12 有读数即渲染阀门卡片')
+
+	// 5. 仅收到另一 sub 字段 2:11（工作电流）：同样渲染阀门卡片
+	delete lane.readings['2:12']
+	assert.equal(renderTitles().includes('阀门'), false)
+	fake.rx('S', sekUp(win, 0x83, [[2, [[11, [0x10, 0x00]]]]]))
+	assert.equal(renderTitles().includes('阀门'), true, 'sub 字段 2:11 有读数即渲染阀门卡片')
+	pump.stop()
+
+	// 6. JSON 协议声明 metric.optional 同样经注册表透传
+	const spec = JSON.parse(JSON.stringify(jsonSpec))
+	spec.device.status[0].optional = true
+	assert.equal(JP.validateSpec(spec).ok, true)
+	const jsonDev = Reg.normalizeDevice(JP.compile(spec).device, { id: spec.id })
+	assert.equal(jsonDev.status[0].optional, true)
 })
 
 test('json write: 模板输入和应答分流，拒绝有歧义或超限的声明', () => {
