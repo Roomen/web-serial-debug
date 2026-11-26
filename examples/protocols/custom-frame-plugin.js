@@ -40,6 +40,7 @@
 	registerProtocol('demo-frame-plugin', {
 		name: 'JS 协议参考例程',
 		version: '1.0.0',
+		// firmware: { method: 'pcp' }, // 仅在设备确实支持 PCP 升级时启用
 		description: '5A A5 + Cmd(1B) + Len(1B) + Payload + XOR8（含解析、下行预设与随机测试）',
 
 		findFrame(bytes) {

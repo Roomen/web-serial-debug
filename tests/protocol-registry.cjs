@@ -21,6 +21,29 @@ vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/parse-view.js'), 
 const ParseView = pvSandbox.window.ParseView
 assert.ok(ParseView && typeof ParseView.render === 'function' && typeof ParseView.esc === 'function')
 
+{
+	const reg = ProtocolRegistryMod.createRegistry({ window: {} })
+	const device = { fields: [{ key: 'version' }], groups: [{ id: 'info' }], extract: () => ({}) }
+	const firmware = { method: 'pcp', versionKey: ' version ', extra: 'discard' }
+	reg.register('sek', { builtin: true, device, firmware })
+	reg.register('external-pcp', { device, firmware })
+	firmware.method = 'changed'
+	assert.deepEqual(reg.get('sek').firmware, { method: 'pcp', versionKey: 'version' })
+	assert.deepEqual(reg.get('external-pcp').firmware, reg.get('sek').firmware)
+	reg.register('wmbus', { builtin: true, firmware })
+	assert.equal(reg.get('wmbus').firmware, null)
+	;[undefined, 'pcp', ['pcp'], { method: 'PCP' }, { method: ['pcp'] }, { method: 'other' }].forEach((value, index) => {
+		const id = 'no-firmware-' + index
+		reg.register(id, { firmware: value })
+		assert.equal(reg.get(id).firmware, null)
+	})
+	;['missing', {}, '__proto__'].forEach((versionKey, index) => {
+		const id = 'no-version-' + index
+		reg.register(id, { device, firmware: { method: 'pcp', versionKey } })
+		assert.deepEqual(reg.get(id).firmware, { method: 'pcp' })
+	})
+}
+
 function makeStorage(initial) {
 	const map = Object.assign({}, initial || {})
 	return {

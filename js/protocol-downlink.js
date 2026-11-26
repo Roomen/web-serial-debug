@@ -1528,6 +1528,7 @@
 			funcTabs: SEK_FUNC_TABS,
 			// 设备面板声明在 SEK 自己的 js/sek-device.js（在本文件之前加载）
 			device: root.SekDevice || null,
+			firmware: { method: 'pcp', versionKey: '1:5' },
 			mountPanel: mountSekPanel,
 			unmountPanel: unmountSekPanel,
 		})

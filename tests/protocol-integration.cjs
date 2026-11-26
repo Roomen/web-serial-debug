@@ -707,6 +707,26 @@ async function run() {
 		assert.equal(failDirEnv.els.downCard.dataset.mode, 'sek')
 	}
 
+	{
+		const { sandbox } = createIntegrationEnv()
+		const reg = sandbox.ProtocolRegistry
+		const JP = sandbox.JsonProtocol
+		const JS = sandbox.JsProtocolPlugin
+		const optIn = { method: 'pcp', versionKey: 'absent', extra: true }
+		const spec = { ...JP.EXAMPLES[0].spec, id: 'json-pcp', firmware: optIn }
+		assert.equal(JP.importJson(JSON.stringify(spec)).ok, true)
+		assert.equal(JP.upsert({ ...spec, id: 'json-not-pcp', firmware: { method: 'wrong' } }).ok, true)
+		const code = 'registerProtocol("js-pcp", { firmware: ' + JSON.stringify(optIn) + ' }); registerProtocol("js-not-pcp", { firmware: { method: "wrong" } })'
+		const saved = JS.saveLocalPlugin({ pluginId: 'firmware-contract', name: 'Firmware contract', code })
+		assert.equal(saved.ok, true)
+		assert.equal(JS.trustAndEnable(saved.pluginKey, JS.hashCode(code)).ok, true)
+		assert.equal(reg.get('sek').firmware.method, 'pcp')
+		assert.equal(JSON.stringify(reg.get('json-pcp').firmware), '{"method":"pcp"}')
+		assert.deepEqual(reg.get('json-pcp').firmware, reg.get('js-pcp').firmware)
+		assert.equal(reg.get('json-not-pcp').firmware, null)
+		assert.equal(reg.get('js-not-pcp').firmware, null)
+	}
+
 	// ---- 4. JSON 协议 ↔ protocol-downlink.js 通用下行全链路闭环（含 formatFrame 无双重转义） ----
 	{
 		const env = createIntegrationEnv()

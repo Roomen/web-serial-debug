@@ -608,6 +608,7 @@
 		const verifyBtn = h('button', 'btn btn-sm btn-outline-secondary', '查询版本')
 		verifyBtn.type = 'button'
 		verifyBtn.id = 'mdn-fw-verify'
+		verifyBtn.setAttribute('aria-describedby', 'fw-protocol-reason')
 		const verifyHint = h('p', 'mdn-fw-hint', '升级命令发出、设备重启后点「查询版本」，与目标版本比对；也可随时查询当前版本。')
 		c4.el.append(verdict, verifyBtn, verifyHint)
 

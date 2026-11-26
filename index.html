@@ -1127,12 +1127,13 @@
                                         <div class="fw-upgrade-card mb-0">
                                             <h6 class="pane-section-title"><i class="bi bi-upload"></i> 升级控制</h6>
                                             <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-                                                <button class="btn btn-sm btn-primary" id="fw-start" disabled><i
+                                                <button class="btn btn-sm btn-primary" id="fw-start" aria-describedby="fw-protocol-reason" disabled><i
                                                         class="bi bi-upload"></i> 开始升级</button>
                                                 <button class="btn btn-sm btn-outline-secondary" id="fw-stop" disabled>停止升级</button>
-                                                <button class="btn btn-sm btn-outline-secondary" id="fw-query">查询版本</button>
+                                                <button class="btn btn-sm btn-outline-secondary" id="fw-query" aria-describedby="fw-protocol-reason" disabled>查询版本</button>
                                                 <button class="btn btn-sm btn-outline-secondary" id="fw-clear-log">清空日志</button>
                                                 <span id="fw-status" class="small text-muted ms-auto"></span>
+                                                <div id="fw-protocol-reason" class="small text-muted w-100" role="status" hidden></div>
                                             </div>
                                             <div class="progress mb-2" style="height: 18px;">
                                                 <div id="fw-progress" class="progress-bar" role="progressbar" style="width: 0%;"

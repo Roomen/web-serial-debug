@@ -135,6 +135,7 @@
 		'registerProtocol(\'demo-js-echo\', {',
 		'\tname: \'JS 回声协议示例\',',
 		'\tversion: \'1.0.0\',',
+		'\t// firmware: { method: \'pcp\' }, // 仅在设备确实支持 PCP 升级时启用',
 		'\tdescription: \'5A A5 + Cmd(1B) + Len(1B) + Payload + XOR8(1B)\',',
 		'\tfindFrame(bytes) {',
 		'\t\tconst b = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes || [])',
