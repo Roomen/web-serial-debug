@@ -132,6 +132,8 @@ eSIM 管理（SEK `Tag=66` 与 `Tag=10 ID=66`）以 Workbench 独立面板 `#sk-
 
 PR 正文只写 **Summary**（用户可见变化、版本号变化）；提交 PR 均不上传截图；修复串口设备兼容性问题时关联 issue 或说明设备/浏览器环境。**不要写 Test plan。**
 
+本仓库合入 PR 时跳过等待 GitHub Analyze（CodeQL）检查，本地验证通过后即可直接 squash merge。
+
 ## 安全与隐私
 
 不要提交个人串口日志、设备标识、账号凭据、私有端点或其他敏感信息。
