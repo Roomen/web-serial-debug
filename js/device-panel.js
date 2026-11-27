@@ -344,9 +344,13 @@
 	}
 
 	// ---------- 视图切换 ----------
+	function hasFirmwarePack() {
+		const P = window.AppPlatform
+		return !P || typeof P.has !== 'function' || P.has('view.firmware-pack')
+	}
 	function hasFirmwareView() {
 		const P = window.AppPlatform
-		return !!fwRoot && (!P || typeof P.has !== 'function' || P.has('panel.firmware'))
+		return !!fwRoot && (!P || typeof P.has !== 'function' || P.has('panel.firmware') || P.has('view.firmware-pack'))
 	}
 	function firmwareInfo() {
 		const hb = hub()
@@ -355,7 +359,14 @@
 		const entry = protocolEntry(pid)
 		const supported = !!(entry && entry.firmware && entry.firmware.method === 'pcp')
 		if (!supported) {
-			return { ok: false, sid: sid, pid: pid, why: protocolName(pid) + ' 不支持固件升级（仍可选择固件、管理本机固件库）' }
+			return {
+				ok: false,
+				sid: sid,
+				pid: pid,
+				why: protocolName(pid) + (hasFirmwarePack()
+					? ' 不支持在线升级（仍可生成固件打包、选择固件与管理本机固件库）'
+					: ' 不支持固件升级（仍可选择固件、管理本机固件库）'),
+			}
 		}
 		return { ok: true, sid: sid, pid: pid, why: isDual() ? '固件升级走主发 ' + laneWord(sid) + '（' + protocolName(pid) + '）' : '' }
 	}
@@ -1292,7 +1303,8 @@
 		if (mounted) return
 		const P = window.AppPlatform
 		const allowDevice = !P || typeof P.has !== 'function' || P.has('view.device')
-		const allowFw = !P || typeof P.has !== 'function' || P.has('panel.firmware')
+		const allowFwPack = !P || typeof P.has !== 'function' || P.has('view.firmware-pack')
+		const allowFw = !P || typeof P.has !== 'function' || P.has('panel.firmware') || allowFwPack
 		if (!allowDevice && !allowFw) return
 		const vs = document.getElementById('view-serial')
 		const main = document.getElementById('main')
@@ -1302,7 +1314,7 @@
 			h('div', { class: 'ctl-seg', role: 'group', 'aria-label': '通信调试视图' },
 				h('button', { type: 'button', id: 'dp-view-comm', 'aria-pressed': 'true', text: '通信调试', onclick: function () { setView('comm') } }),
 				allowDevice && h('button', { type: 'button', id: 'dp-view-device', 'aria-pressed': 'false', text: '设备面板', onclick: function () { setView('device') } }),
-				allowFw && h('button', { type: 'button', id: 'dp-view-firmware', 'aria-pressed': 'false', 'data-feature': 'panel.firmware', text: '固件升级', onclick: function () { setView('firmware') } })),
+				allowFw && h('button', { type: 'button', id: 'dp-view-firmware', 'aria-pressed': 'false', 'data-feature': 'panel.firmware', title: allowFwPack ? '固件打包与升级' : '固件升级', text: allowFwPack ? '固件' : '固件升级', onclick: function () { setView('firmware') } })),
 			h('span', { class: 'dp-why' }))
 		root = h('section', { class: 'dp', id: 'device-panel', 'aria-label': '设备面板' })
 		root.hidden = true

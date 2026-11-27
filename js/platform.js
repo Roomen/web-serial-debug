@@ -10,7 +10,7 @@
 
 	const FEATURES = [
 		'view.serial', // 串口调试视图(日志、发送；移动端承载协议与固件面板)
-		'view.firmware-pack', // 固件打包视图(原始包 / 压缩包 / 双向差分)
+		'view.firmware-pack', // 固件离线打包卡片(原始包 / 压缩包 / 双向差分，挂在固件子视图内)
 		'view.classic',
 		'view.power', // 功耗分析视图(BLU 电流计)
 		'view.device', // 设备面板(通信调试视图里与日志并列的子视图，由主发那一路协议的 device 声明驱动)

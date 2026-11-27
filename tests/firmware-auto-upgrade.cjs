@@ -29,17 +29,32 @@ const fakePatchWorker = class {
 
 function stubEl(id) {
 	const handlers = {}
+	const classes = new Set()
 	const el = {
 		id, value: '', checked: false, disabled: false, textContent: '', innerHTML: '', title: '', className: '',
 		dataset: {}, style: {}, scrollTop: 0, scrollHeight: 0, children: [],
-		classList: { add() {}, remove() {}, toggle() {}, contains() { return false } },
+		classList: {
+			add(c) { classes.add(c) },
+			remove(c) { classes.delete(c) },
+			toggle(c, force) {
+				const on = force === undefined ? !classes.has(c) : !!force
+				if (on) classes.add(c)
+				else classes.delete(c)
+				return on
+			},
+			contains(c) { return classes.has(c) },
+		},
 		addEventListener(t, fn) { (handlers[t] = handlers[t] || []).push(fn) },
+		dispatch(t, ev) {
+			const e = Object.assign({ stopPropagation() {}, preventDefault() {} }, ev || {})
+			;(handlers[t] || []).forEach((fn) => fn(e))
+		},
 		setAttribute() {}, getAttribute() { return null },
 		appendChild(c) { this.children.push(c); return c },
 		removeChild(c) { this.children.splice(this.children.indexOf(c), 1) },
 		get childElementCount() { return this.children.length },
 		get firstElementChild() { return this.children[0] },
-		click() { (handlers.click || []).forEach((fn) => fn({ stopPropagation() {}, preventDefault() {} })) },
+		click() { this.dispatch('click') },
 	}
 	return el
 }
@@ -60,6 +75,12 @@ function makeHarness(device, opts) {
 		fetch: opts.fetch || (() => Promise.reject(new Error('offline'))),
 		AbortController,
 		localStorage: { getItem: () => null, setItem() {} },
+		FileReader: class {
+			readAsArrayBuffer(file) {
+				this.result = file._bytes.buffer.slice(file._bytes.byteOffset, file._bytes.byteOffset + file._bytes.byteLength)
+				if (typeof this.onload === 'function') this.onload()
+			}
+		},
 		CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail } },
 	}
 	ctx.window = ctx
@@ -125,6 +146,11 @@ function makeHarness(device, opts) {
 			return false
 		},
 		load(bytes, name) { ctx.setFwUpgradeFile(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), name) },
+		dropFile(bytes, name) {
+			const file = { name, size: bytes.length, _bytes: bytes }
+			els['fw-drop-host'].dispatch('dragenter')
+			els['fw-drop-host'].dispatch('drop', { dataTransfer: { files: [file] } })
+		},
 		async upgrade(during) {
 			const before = events.length
 			els['fw-start'].click()
@@ -539,6 +565,52 @@ function makeDevice(current, opts) {
 		const end2 = await h.upgrade()
 		assert.equal(end2.ok, true, end2.error)
 		assert.deepEqual(dev.packages.map((p) => [p.pkgType, p.status]), [[2, 0]], '第二轮用的是取到的 BLANK')
+	}
+
+	// ---- 拖拽替换 + 每次加载自动读取固件信息、读取不到自动退档 ----
+	{
+		const dev = makeDevice(V1)
+		const h = makeHarness(dev)
+		dev.parser = h.ctx.FirmwareParser
+		// 1) 拖入不含包头也不含 0x4000 内嵌版本的普通固件：自动退档为整文件模式，版本号默认取自文件名
+		const plain = new Uint8Array(256).fill(0x5a)
+		h.dropFile(plain, 'CUSTOM_V3.bin')
+		assert.equal(h.els['fw-file-name'].textContent, 'CUSTOM_V3.bin')
+		assert.equal(h.els['fw-parse-info'].checked, false, '读不到固件信息时自动退档关闭解析开关')
+		assert.equal(h.els['fw-version-row'].classList.contains('d-none'), false, '退档后展开手动版本号输入框')
+		assert.equal(h.els['fw-version'].value, 'CUSTOM_V3')
+		assert.equal(h.els['fw-start'].disabled, false, '退档后直接可升级')
+		assert.ok(h.events.some(e => e.type === 'parsed' && e.ok && e.raw && e.fallback && e.version === 'CUSTOM_V3'))
+		assert.ok(h.logs.some(l => /自动退档为整文件模式/.test(l)))
+
+		// 2) 已载入旧文件状态下再拖拽新文件过去：自动替代旧文件，且重新尝试自动读取固件信息
+		h.dropFile(V2, 'V2.0.0.bin')
+		assert.equal(h.els['fw-file-name'].textContent, 'V2.0.0.bin', '拖拽新文件自动替换旧文件')
+		assert.equal(h.els['fw-parse-info'].checked, true, '新文件重新自动读取固件信息')
+		assert.equal(h.els['fw-version-row'].classList.contains('d-none'), true, '读出内嵌版本后隐藏手动版本输入')
+		const lastParsed = h.events.filter(e => e.type === 'parsed').pop()
+		assert.equal(lastParsed.ok, true)
+		assert.equal(lastParsed.auto, true)
+		assert.equal(lastParsed.version, 'V2.0.0')
+
+		// 3) 魔数匹配但 CRC 损坏的标准升级包：明确报解析失败，不静默退档下发坏包
+		const badPkg = await Core.buildPackage('compress', V2, Core.BLANK_BUILTIN, async (o, n) => new Uint8Array(64).fill(0xaa))
+		badPkg[badPkg.length - 1] ^= 0xff
+		h.dropFile(badPkg, 'corrupt_pkg.bin')
+		const badParsed = h.events.filter(e => e.type === 'parsed').pop()
+		assert.equal(badParsed.ok, false)
+		assert.equal(h.els['fw-start'].disabled, true, '损坏升级包禁止开始升级')
+
+		// 4) 升级运行中拖入新文件：被阻止，不覆盖当前文件
+		h.dropFile(V2, 'V2.0.0.bin')
+		dev.holdRequest = true
+		const stopped = await h.upgrade(async () => {
+			assert.ok(await h.waitFor(() => h.events.some(e => e.type === 'phase' && e.name === 'transfer')))
+			h.dropFile(plain, 'SHOULD_IGNORE.bin')
+			assert.equal(h.els['fw-file-name'].textContent, 'V2.0.0.bin', '升级中拖拽不替换当前文件')
+			h.els['fw-stop'].click()
+		})
+		assert.equal(stopped.stopped, true)
 	}
 
 	console.log('firmware-auto-upgrade: ok')

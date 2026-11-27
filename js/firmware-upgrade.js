@@ -34,6 +34,7 @@
 		select: document.getElementById('fw-select'),
 		fileName: document.getElementById('fw-file-name'),
 		fileSize: document.getElementById('fw-file-size'),
+		dropHost: document.getElementById('fw-drop-host'),
 		dropZone: document.getElementById('fw-drop-zone'),
 		fileCard: document.getElementById('fw-file-card'),
 		fileClear: document.getElementById('fw-file-clear'),
@@ -181,11 +182,24 @@
 
 	function loadFwFile(file) {
 		if (!file) return
+		if (running) {
+			log('正在升级中，请先停止升级再更换固件文件', 'warn')
+			return
+		}
 		el.fileName.dataset.name = file.name
 		el.version.value = defaultVersionFromName(file.name)
 		const reader = new FileReader()
 		reader.onload = function () {
+			if (running) {
+				log('正在升级中，已忽略新拖入的固件文件', 'warn')
+				return
+			}
+			fw = null
 			fwFileBuffer = reader.result
+			el.file.value = ''
+			// 每次加载新文件默认重新尝试自动读取固件信息，读不到再自动退档为整文件模式
+			el.parseInfo.checked = true
+			applyParseMode()
 			showFileCard(file.name, file.size)
 			log('已载入固件: ' + file.name + ' (' + fmtSize(file.size) + ')', 'info')
 			el.parse.click()
@@ -237,42 +251,83 @@
 	el.file.addEventListener('change', function (e) {
 		const f = e.target.files[0]
 		if (f) loadFwFile(f)
+		else el.file.value = ''
 	})
 
-	// Drag & Drop
-	;['dragenter', 'dragover', 'dragleave', 'drop'].forEach(function (evt) {
-		el.dropZone.addEventListener(evt, function (e) { e.preventDefault(); e.stopPropagation() }, false)
-	})
-	;['dragenter', 'dragover'].forEach(function (evt) {
-		el.dropZone.addEventListener(evt, function () { el.dropZone.classList.add('drag-over') }, false)
-	})
-	;['dragleave', 'drop'].forEach(function (evt) {
-		el.dropZone.addEventListener(evt, function () { el.dropZone.classList.remove('drag-over') }, false)
-	})
-	el.dropZone.addEventListener('drop', function (e) {
-		const files = e.dataTransfer.files
-		if (files.length > 0) loadFwFile(files[0])
-	}, false)
+	// Drag & Drop：同时覆盖空拖拽区与已选文件卡片，拖入新文件时自动替代旧文件
+	function bindDropTarget(target) {
+		if (!target) return
+		let dragDepth = 0
+		function setDragOver(on) {
+			el.dropZone.classList.toggle('drag-over', on)
+			if (el.fileCard) el.fileCard.classList.toggle('drag-over', on)
+			if (el.dropHost) el.dropHost.classList.toggle('drag-over', on)
+		}
+		;['dragenter', 'dragover', 'dragleave', 'drop'].forEach(function (evt) {
+			target.addEventListener(evt, function (e) { e.preventDefault(); e.stopPropagation() }, false)
+		})
+		target.addEventListener('dragenter', function () {
+			dragDepth++
+			setDragOver(true)
+		}, false)
+		target.addEventListener('dragover', function () {
+			setDragOver(true)
+		}, false)
+		target.addEventListener('dragleave', function () {
+			dragDepth = Math.max(0, dragDepth - 1)
+			if (dragDepth === 0) setDragOver(false)
+		}, false)
+		target.addEventListener('drop', function (e) {
+			dragDepth = 0
+			setDragOver(false)
+			const files = e.dataTransfer && e.dataTransfer.files
+			if (files && files.length > 0) loadFwFile(files[0])
+		}, false)
+	}
+	if (el.dropHost && el.dropHost !== el.dropZone) {
+		bindDropTarget(el.dropHost)
+	} else {
+		bindDropTarget(el.dropZone)
+		if (el.fileCard && el.fileCard !== el.dropZone) bindDropTarget(el.fileCard)
+	}
+
+	function loadAsRawManual(fallbackReason) {
+		const name = el.fileName.dataset.name
+		if (!el.version.value.trim()) el.version.value = defaultVersionFromName(name)
+		fw = {
+			ok: true,
+			raw: true,
+			fileName: name,
+			firmwareData: new Uint8Array(fwFileBuffer),
+			version: el.version.value.trim(),
+		}
+		if (fallbackReason) {
+			el.parseInfo.checked = false
+			applyParseMode()
+			el.info.textContent = manualInfoText(name, fw.firmwareData.length, fw.version) + '\n说明: ' + fallbackReason + '，已自动退档为整文件模式'
+			log('未能读取固件信息（' + fallbackReason + '），已自动退档为整文件模式，版本号默认取自文件名，可手动修改', 'warn')
+		} else {
+			el.info.textContent = manualInfoText(name, fw.firmwareData.length, fw.version)
+			log('已载入固件(不解析包头), ' + fw.firmwareData.length + ' 字节', 'success')
+		}
+		emit({ type: 'parsed', ok: true, raw: true, fallback: !!fallbackReason, version: fw.version, size: fw.firmwareData.length })
+		syncControls()
+	}
 
 	el.parse.addEventListener('click', () => {
 		if (!fwFileBuffer) {
 			log('请先选择固件文件', 'error')
 			return
 		}
-		if (!parseInfoEnabled()) {
-			const name = el.fileName.dataset.name
-			if (!el.version.value.trim()) el.version.value = defaultVersionFromName(name)
-			fw = {
-				ok: true,
-				raw: true,
-				fileName: name,
-				firmwareData: new Uint8Array(fwFileBuffer),
-				version: el.version.value.trim(),
-			}
-			el.info.textContent = manualInfoText(name, fw.firmwareData.length, fw.version)
-			log('已载入固件(不解析包头), ' + fw.firmwareData.length + ' 字节', 'success')
-			emit({ type: 'parsed', ok: true, raw: true, version: fw.version, size: fw.firmwareData.length })
+		if (!fwFileBuffer.byteLength) {
+			log('固件文件为空，无法载入', 'error')
+			emit({ type: 'parsed', ok: false, error: '固件文件为空' })
+			fw = null
 			syncControls()
+			return
+		}
+		if (!parseInfoEnabled()) {
+			loadAsRawManual(null)
 			return
 		}
 		const bytes = new Uint8Array(fwFileBuffer)
@@ -286,12 +341,20 @@
 			syncControls()
 			return
 		}
+		if (kind.kind !== 'package') {
+			loadAsRawManual('未识别到升级包包头或内嵌版本信息')
+			return
+		}
 		const r = FirmwareParser.parse(fwFileBuffer)
 		if (!r.ok) {
 			log('固件解析失败: ' + r.error, 'error')
 			emit({ type: 'parsed', ok: false, error: r.error })
 			fw = null
 			syncControls()
+			return
+		}
+		if (!r.version || !String(r.version).trim()) {
+			loadAsRawManual('升级包包头缺少版本号')
 			return
 		}
 		r.fileName = el.fileName.dataset.name
@@ -353,17 +416,16 @@
 
 	el.clearLog.addEventListener('click', () => { el.log.innerHTML = '' })
 
-	// 持久化分片大小
+	// 持久化分片大小；「读取固件信息」每次加载新文件自动开启，读不到时自动退档
 	;(function () {
 		var saved = localStorage.getItem('fwChunkSize')
 		if (saved) el.chunkSize.value = saved
 		el.chunkSize.addEventListener('change', function () {
 			localStorage.setItem('fwChunkSize', this.value)
 		})
-		el.parseInfo.checked = localStorage.getItem('fwParseInfo') !== '0'
+		el.parseInfo.checked = true
 		applyParseMode()
 		el.parseInfo.addEventListener('change', function () {
-			localStorage.setItem('fwParseInfo', this.checked ? '1' : '0')
 			applyParseMode()
 			// 模式变了, 已载入的文件要按新模式重新处理
 			fw = null
@@ -977,10 +1039,17 @@
 
 	// 供固件打包工具调用的外部接口
 	window.setFwUpgradeFile = function (arrayBuffer, fileName) {
+		if (running) {
+			log('正在升级中，请先停止升级再更换固件文件', 'warn')
+			return
+		}
 		fw = null
 		fwFileBuffer = arrayBuffer
 		el.fileName.dataset.name = fileName || 'packed_fw.bin'
 		el.version.value = defaultVersionFromName(fileName || 'packed_fw.bin')
+		// 每次加载默认先自动读取固件信息，读不到时再退档
+		el.parseInfo.checked = true
+		applyParseMode()
 		showFileCard(fileName || 'packed_fw.bin', arrayBuffer.byteLength)
 		log('已载入固件(来自打包): ' + (fileName || 'packed_fw.bin') + ' (' + fmtSize(arrayBuffer.byteLength) + ')', 'info')
 		var parseBtn = document.getElementById('fw-parse')
