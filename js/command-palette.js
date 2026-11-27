@@ -347,23 +347,48 @@
 				else if (window.Workbench) window.Workbench.open('firmware')
 			}
 		})
-		list.push({
-			group: '视图',
-			title: '切换到功耗分析',
-			feature: 'view.power',
-			alias: 'gonghao fenxi power blu blu100k ppk view',
-			run: function () { clickSel('.rail-item[data-view="view-blu"]') }
-		})
-		list.push({
-			group: '视图',
-			title: '打开串口发送',
-			feature: 'view.power',
-			alias: 'chuankou fasong serial send sheet',
-			run: function () {
-				clickSel('.rail-item[data-view="view-blu"]')
-				if (window.bluCmdSheet && !window.bluCmdSheet.isOpen()) window.bluCmdSheet.open()
-			}
-		})
+		const tpr = window.ToolPluginRegistry
+		const powerHidden = !!(tpr && typeof tpr.isHidden === 'function' && tpr.isHidden('power'))
+		if (!powerHidden) {
+			list.push({
+				group: '视图',
+				title: '切换到功耗分析',
+				feature: 'view.power',
+				alias: 'gonghao fenxi power blu blu100k ppk view',
+				run: function () { clickSel('.rail-item[data-view="view-blu"]') }
+			})
+			list.push({
+				group: '视图',
+				title: '打开串口发送',
+				feature: 'view.power',
+				alias: 'chuankou fasong serial send sheet',
+				run: function () {
+					clickSel('.rail-item[data-view="view-blu"]')
+					if (window.bluCmdSheet && !window.bluCmdSheet.isOpen()) window.bluCmdSheet.open()
+				}
+			})
+		}
+		if (tpr && typeof tpr.list === 'function') {
+			let tools = []
+			try { tools = tpr.list() || [] } catch (e) { tools = [] }
+			tools.forEach(function (item) {
+				if (!item || !item.id || item.id === 'power' || item.hidden) return
+				const tname = String(item.name || item.id)
+				list.push({
+					group: '视图',
+					title: '切换到：' + tname,
+					detail: item.description || item.id,
+					alias: 'gongju chajian tool plugin shitu view ' + item.id + ' ' + tname + ' ' + (item.label || ''),
+					run: function () {
+						if (window.ToolPluginRegistry && typeof window.ToolPluginRegistry.activateView === 'function') {
+							window.ToolPluginRegistry.activateView(item.viewId)
+						} else if (item.viewId) {
+							clickSel('.rail-item[data-view="' + item.viewId + '"]')
+						}
+					}
+				})
+			})
+		}
 		const themeNow = typeof window.getThemeChoice === 'function' ? window.getThemeChoice() : 'auto'
 		;[['auto', '跟随系统', 'zidong auto system'], ['light', '浅色', 'qianse liangse light'], ['dark', '深色', 'shense anse dark']].forEach(function (t) {
 			list.push({
@@ -480,9 +505,9 @@
 		const list = []
 		list.push({
 			group: '协议',
-			title: '协议管理（增删 / 导入导出 / 启停协议）',
+			title: '插件与协议管理（切换 / 启停 / JSON 与 JS 扩展）',
 			feature: 'protocol.manage',
-			alias: 'xieyi guanli protocol manager plugin json custom',
+			alias: 'chajian xieyi guanli 协议管理 protocol manager plugin json js custom',
 			run: function () {
 				if (window.ProtocolManager && typeof window.ProtocolManager.open === 'function') {
 					window.ProtocolManager.open()
@@ -522,6 +547,34 @@
 				}
 			})
 		})
+		const tpr = window.ToolPluginRegistry
+		const powerHidden = !!(tpr && typeof tpr.isHidden === 'function' && tpr.isHidden('power'))
+		if (!powerHidden && window.PowerDriverRegistry && typeof window.PowerDriverRegistry.list === 'function') {
+			let drivers = []
+			try { drivers = window.PowerDriverRegistry.list() || [] } catch (e) { drivers = [] }
+			const activePowerId = (window.bluApi && typeof window.bluApi.getActiveDriverId === 'function' && window.bluApi.getActiveDriverId())
+				|| (typeof window.PowerDriverRegistry.getActiveId === 'function' && window.PowerDriverRegistry.getActiveId())
+				|| ''
+			drivers.forEach(function (drv) {
+				if (!drv || !drv.id || drv.hidden) return
+				const did = String(drv.id)
+				const dname = String(drv.name || drv.shortName || did)
+				list.push({
+					group: '协议',
+					feature: 'view.power',
+					title: '切换功耗仪协议：' + dname,
+					detail: activePowerId === did ? '当前' : did,
+					alias: 'gonghaoyi xieyi qiehuan power driver ' + did + ' ' + dname,
+					run: function () {
+						if (window.bluApi && typeof window.bluApi.setActiveDriver === 'function') {
+							window.bluApi.setActiveDriver(did)
+						} else if (window.PowerDriverRegistry && typeof window.PowerDriverRegistry.setActiveId === 'function') {
+							window.PowerDriverRegistry.setActiveId(did)
+						}
+					}
+				})
+			})
+		}
 		return list
 	}
 

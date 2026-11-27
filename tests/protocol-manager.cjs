@@ -157,12 +157,15 @@ function makeManagerHarness(opts) {
 	const byId = {}
 	const manageMenuBtn = new FakeEl('button')
 	manageMenuBtn.id = 'serial-protocol-manage'
+	const manageRailBtn = new FakeEl('button')
+	manageRailBtn.id = 'rail-plugin-manage'
 	const manageInlineBtn = new FakeEl('button')
 	manageInlineBtn.id = 'serial-protocol-manage-inline'
 	const protoSelect = new FakeEl('select')
 	protoSelect.id = 'serial-protocol-select'
 	protoSelect.value = opts.activeProtocol || 'sek'
 	byId['serial-protocol-manage'] = manageMenuBtn
+	byId['rail-plugin-manage'] = manageRailBtn
 	byId['serial-protocol-manage-inline'] = manageInlineBtn
 	byId['serial-protocol-select'] = protoSelect
 
@@ -229,6 +232,10 @@ function makeManagerHarness(opts) {
 	const calls = {
 		setProtocol: [],
 		setHidden: [],
+		setActiveDriver: [],
+		setPowerHidden: [],
+		activateToolView: [],
+		setToolHidden: [],
 		upsert: [],
 		removeJson: [],
 		importJson: [],
@@ -282,9 +289,11 @@ function makeManagerHarness(opts) {
 		},
 		serialLanes: {
 			singleTarget: () => 'S',
+			protocolOf: (sid) => (opts.laneProtocols && opts.laneProtocols[sid]) || win._activeProtocol,
 			setProtocol: (target, id) => {
 				calls.setProtocol.push({ target, id })
-				win._activeProtocol = id
+				if (opts.laneProtocols) opts.laneProtocols[target] = id
+				if (target === 'S') win._activeProtocol = id
 			},
 		},
 		ProtocolRegistry: {
@@ -361,6 +370,11 @@ function makeManagerHarness(opts) {
 		},
 		JsProtocolPlugin: {
 			EXAMPLE_CODE: 'registerProtocol(\'sample-js\', { name: \'示例 JS 协议\', findFrame() { return null }, parseFrame() { return null } })\n',
+			EXAMPLE_TEMPLATES: {
+				protocol: 'registerProtocol(\'sample-js\', { name: \'示例 JS 协议\', findFrame() { return null }, parseFrame() { return null } })\n',
+				powerDriver: 'registerPowerDriver(\'sample-meter\', { name: \'示例电流表\', capabilities: { nominalHz: 100 } })\n',
+				tool: 'registerToolPlugin(\'sample-tool\', { name: \'示例工具\', label: \'工具\', icon: \'bi-calculator\' })\n',
+			},
 			listPlugins: () => plugins.slice(),
 			hasDesktopDir: () => !!opts.hasDesktopDir,
 			openDesktopDir: () => {
@@ -430,6 +444,64 @@ function makeManagerHarness(opts) {
 		},
 	}
 
+	if (opts.dualMode) {
+		win.SerialHub = { mode: 'dual' }
+	}
+	if (opts.powerDrivers) {
+		const drivers = opts.powerDrivers.map((d) => Object.assign({}, d))
+		let activeDriverId = opts.activePowerDriver || (drivers[0] ? drivers[0].id : '')
+		win.PowerDriverRegistry = {
+			list: (o) => (o && o.includeHidden ? drivers.slice() : drivers.filter((d) => !d.hidden)),
+			getActiveId: () => activeDriverId,
+			setActiveId: (id) => {
+				calls.setActiveDriver.push(id)
+				activeDriverId = id
+				return { ok: true }
+			},
+			isHidden: (id) => !!(drivers.find((d) => d.id === id) || {}).hidden,
+			setHidden: (id, hidden) => {
+				calls.setPowerHidden.push({ id, hidden })
+				if (opts.blockPowerHide && opts.blockPowerHide(id, hidden)) {
+					return { ok: false, error: '当前激活功耗仪驱动不可隐藏' }
+				}
+				const t = drivers.find((d) => d.id === id)
+				if (t) t.hidden = !!hidden
+				return { ok: true }
+			},
+		}
+		win.bluApi = {
+			isOpen: () => !!opts.powerBusy,
+			isBusyForUpdate: () => !!opts.powerBusy,
+			getActiveDriverId: () => activeDriverId,
+			setActiveDriver: (id) => {
+				calls.setActiveDriver.push(id)
+				if (opts.powerBusy) return { ok: false, code: 'busy', message: '功耗仪已连接，请先断开再切换驱动' }
+				activeDriverId = id
+				return { ok: true }
+			},
+		}
+	}
+	if (opts.toolPlugins) {
+		const tools = opts.toolPlugins.map((t) => Object.assign({}, t))
+		win.ToolPluginRegistry = {
+			list: (o) => (o && o.includeHidden ? tools.slice() : tools.filter((t) => !t.hidden)),
+			isHidden: (id) => !!(tools.find((t) => t.id === id) || {}).hidden,
+			activateView: (viewId) => {
+				calls.activateToolView.push(viewId)
+				return viewId
+			},
+			setHidden: (id, hidden) => {
+				calls.setToolHidden.push({ id, hidden })
+				const t = tools.find((x) => x.id === id)
+				if (hidden && t && t.busy) {
+					return { ok: false, error: t.busyReason || '该工具正在运行，请先断开' }
+				}
+				if (t) t.hidden = !!hidden
+				return { ok: true }
+			},
+		}
+	}
+
 	const ctx = { window: win, document: doc, console, setTimeout, clearTimeout, Promise }
 	vm.createContext(ctx)
 	vm.runInContext(managerSrc, ctx)
@@ -442,6 +514,7 @@ function makeManagerHarness(opts) {
 		savedJson,
 		plugins,
 		manageMenuBtn,
+		manageRailBtn,
 		manageInlineBtn,
 		get body() { return panelBody },
 		close() { if (closePanel) closePanel() },
@@ -463,19 +536,20 @@ test('移动端画像（protocol.manage 关闭）不挂载入口且 open() 返�
 	assert.equal(h.calls.dialogPanels.length, 0)
 })
 
-test('桌面端双入口可打开面板，三栏切换与关闭生命周期正常', async () => {
+test('桌面端三入口可打开面板，三栏切换与关闭生命周期正常', async () => {
 	const h = makeManagerHarness()
-	h.manageMenuBtn.click()
+	h.manageRailBtn.click()
 	assert.equal(h.win.ProtocolManager.isOpen(), true)
 	assert.equal(h.calls.dialogPanels.length, 1)
-	assert.equal(h.calls.dialogPanels[0].title, '协议管理')
+	assert.equal(h.calls.dialogPanels[0].title, '插件与协议')
 	assert.equal(h.calls.dialogPanels[0].wide, true)
 
 	// 重复点击不排队
+	h.manageMenuBtn.click()
 	h.manageInlineBtn.click()
 	assert.equal(h.calls.dialogPanels.length, 1)
 
-	const tabInstalled = h.btn('已装协议')
+	const tabInstalled = h.btn('已装扩展')
 	const tabJson = h.btn('JSON 协议')
 	const tabJs = h.btn('JS 插件')
 	assert.equal(tabInstalled.getAttribute('aria-pressed'), 'true')
@@ -788,9 +862,9 @@ test('命令面板：注册「协议管理」与动态「切换协议：<名称>
 		return { win, inp, listBox, get openedManager() { return openedManager }, switched }
 	}
 
-	// 桌面端：含「协议管理」与动态「切换协议」
+	// 桌面端：含「插件与协议管理」与动态「切换协议」
 	const desk = runPalette(true)
-	assert.ok(desk.listBox.innerHTML.includes('协议管理（增删 / 导入导出 / 启停协议）'))
+	assert.ok(desk.listBox.innerHTML.includes('插件与协议管理（切换 / 启停 / JSON 与 JS 扩展）'))
 	assert.ok(desk.listBox.innerHTML.includes('切换协议：默认 TLV 协议'))
 	assert.ok(desk.listBox.innerHTML.includes('切换协议：自定义传感器'))
 
@@ -807,13 +881,13 @@ test('命令面板：注册「协议管理」与动态「切换协议：<名称>
 	desk.inp.dispatchEvent({ type: 'keydown', key: 'Enter' })
 	assert.deepEqual(desk.switched, [{ t: 'S', id: 'custom-sensor' }])
 
-	// 移动端：门控隐藏「协议管理」
+	// 移动端：门控隐藏「插件与协议管理」
 	const mob = runPalette(false)
-	assert.equal(mob.listBox.innerHTML.includes('协议管理（增删 / 导入导出 / 启停协议）'), false)
+	assert.equal(mob.listBox.innerHTML.includes('插件与协议管理（切换 / 启停 / JSON 与 JS 扩展）'), false)
 	assert.ok(mob.listBox.innerHTML.includes('切换协议：默认 TLV 协议'))
 })
 
-test('协议管理：复制开发提示词按钮与 buildDevPrompt 契约覆盖 JSON / JS / 完整规范', async () => {
+test('插件与协议：复制开发提示词按钮与 buildDevPrompt 覆盖 JSON / 通信 JS / 功耗仪驱动 / 左栏工具 / 完整规范', async () => {
 	const h = makeManagerHarness()
 	const copied = []
 	h.win.navigator = {
@@ -827,13 +901,172 @@ test('协议管理：复制开发提示词按钮与 buildDevPrompt 契约覆盖 
 	assert.equal(h.win.ProtocolManager.open('installed'), true)
 	const body = h.body
 	const btns = findAllNodes(body, el => el.className && el.className.includes('pm-prompt-btn'))
-	assert.equal(btns.length, 3, '应提供 JSON / JS / 完整规范 三个复制提示词按钮')
+	assert.equal(btns.length, 5, '应提供 JSON / 通信协议 / 功耗仪驱动 / 左栏工具 / 完整规范 五个复制提示词按钮')
 	for (const b of btns) b.click()
 	await new Promise(r => setTimeout(r, 10))
-	assert.equal(copied.length, 3)
+	assert.equal(copied.length, 5)
 	assert.ok(copied[0].includes('schemaVersion') && copied[0].includes('checksum') && copied[0].includes('presets'))
 	assert.ok(copied[1].includes('registerProtocol') && copied[1].includes('logView') && copied[1].includes('randomTest') && copied[1].includes('subTabs'))
-	assert.ok(copied[2].includes('schemaVersion') && copied[2].includes('registerProtocol'))
+	assert.ok(copied[2].includes('registerPowerDriver') && copied[2].includes('createSession'))
+	assert.ok(copied[3].includes('registerToolPlugin') && copied[3].includes('mount'))
+	assert.ok(copied[4].includes('schemaVersion') && copied[4].includes('registerProtocol') && copied[4].includes('registerPowerDriver') && copied[4].includes('registerToolPlugin'))
+})
+
+test('已装扩展：分类筛选、设备面板/PCP 徽标、双路 A/B 一键切换、功耗仪驱动与左栏工具控制', async () => {
+	const h = makeManagerHarness({
+		dualMode: true,
+		laneProtocols: { A: 'sek', B: 'hostproto' },
+		protocols: [
+			{ id: 'sek', name: '默认 TLV', builtin: true, source: 'builtin', hidden: false, selectable: true, firmware: { method: 'pcp' }, capabilities: { parse: true, downlink: true, presets: true, customPanel: false, device: true } },
+			{ id: 'hostproto', name: '模组协议', builtin: true, source: 'builtin', hidden: false, selectable: true, capabilities: { parse: true, downlink: true, presets: true, customPanel: false, device: false } },
+		],
+		powerDrivers: [
+			{ id: 'blu100k', name: 'BLU 100k', shortName: 'BLU 100k', builtin: true, source: 'builtin', hidden: false, selectable: true, capabilities: { nominalHz: 100000, voltage: { supported: true, minMv: 800, maxMv: 5000 }, dutPower: { supported: true }, logicBits: 8 } },
+			{ id: 'csv-meter', name: 'CSV 电流表', shortName: 'CSV', builtin: false, source: 'js-local', ownerPluginId: 'local:p1', hidden: false, selectable: true, capabilities: { nominalHz: 100, voltage: { supported: false }, dutPower: { supported: false }, logicBits: 0 } },
+		],
+		activePowerDriver: 'blu100k',
+		powerBusy: true,
+		toolPlugins: [
+			{ id: 'power', name: '功耗分析', label: '功耗分析', viewId: 'view-blu', builtin: true, source: 'builtin', hidden: false, busy: true, busyReason: '功耗仪已连接，请先断开后再隐藏' },
+			{ id: 'hex-calc', name: 'HEX 校验器', label: '校验器', viewId: 'view-plugin-hex-calc', builtin: false, source: 'js-local', ownerPluginId: 'local:p1', hidden: false, busy: false },
+		],
+		plugins: [
+			{ pluginId: 'p1', pluginKey: 'local:p1', name: '多能力插件', fileName: 'multi.js', source: 'js-local', enabled: true, trusted: true, hash: 'aaa', registeredIds: ['demo-js'], registeredPowerIds: ['csv-meter'], registeredToolIds: ['hex-calc'], error: '', code: '// multi' },
+		],
+	})
+
+	h.win.ProtocolManager.open('installed', { filter: 'all' })
+
+	// 1) 通信协议徽标与双路按钮
+	const sekRow = findNode(h.body, (n) => n.dataset.protocolId === 'sek')
+	assert.ok(findNode(sekRow, (n) => n.classList.contains('pm-cap') && n.textContent === '设备面板'))
+	assert.ok(findNode(sekRow, (n) => n.classList.contains('pm-cap') && n.textContent === 'PCP 固件'))
+	assert.ok(findNode(sekRow, (n) => n.textContent === 'A 路使用中'))
+	const setB = findNode(sekRow, (n) => n.tagName === 'BUTTON' && n.textContent === '设为 B 路')
+	assert.ok(setB)
+	setB.click()
+	assert.deepEqual(h.calls.setProtocol, [{ target: 'B', id: 'sek' }])
+
+	// 2) 切换到「功耗仪协议」筛选：仅显示功耗仪行，检查能力徽标与连接中切换拦截
+	h.btn('功耗仪协议').click()
+	assert.equal(findAllNodes(h.body, (n) => n.dataset.protocolId).length, 0)
+	const bluRow = findNode(h.body, (n) => n.dataset.powerDriverId === 'blu100k')
+	assert.ok(findNode(bluRow, (n) => n.classList.contains('pm-cap') && n.textContent === '100kHz'))
+	assert.ok(findNode(bluRow, (n) => n.classList.contains('pm-cap') && n.textContent === '程控调压'))
+	assert.ok(findNode(bluRow, (n) => n.classList.contains('pm-cap') && n.textContent === '上下电'))
+	const csvRow = findNode(h.body, (n) => n.dataset.powerDriverId === 'csv-meter')
+	const setDrvBtn = findNode(csvRow, (n) => n.tagName === 'BUTTON' && n.textContent === '设为当前驱动')
+	assert.ok(setDrvBtn)
+	setDrvBtn.click()
+	const noticeText = findNode(h.body, (n) => n.classList.contains('pm-notice-text'))
+	assert.ok(noticeText && noticeText.textContent.includes('请先断开'))
+
+	// 3) 切换到「左栏工具」筛选：忙碌态拦截隐藏并还原勾选框；空闲工具点击「打开视图」跳转并关闭面板
+	h.btn('左栏工具').click()
+	assert.equal(findAllNodes(h.body, (n) => n.dataset.powerDriverId).length, 0)
+	const pwrToolRow = findNode(h.body, (n) => n.dataset.toolPluginId === 'power')
+	const pwrSw = findNode(pwrToolRow, (n) => n.tagName === 'INPUT' && n.type === 'checkbox')
+	pwrSw.checked = false
+	pwrSw.dispatchEvent({ type: 'change' })
+	assert.equal(pwrSw.checked, true, '忙碌态拦截隐藏后应还原勾选框')
+	assert.ok(findNode(h.body, (n) => n.classList.contains('pm-notice-text')).textContent.includes('功耗仪已连接'))
+
+	// 切到 JS 插件栏测试三套模板选择与多能力徽标显示
+	h.btn('JS 插件').click()
+	const p1Card = findNode(h.body, (n) => n.dataset.pluginKey === 'local:p1')
+	assert.ok(findNode(p1Card, (n) => n.textContent === '协议: demo-js'))
+	assert.ok(findNode(p1Card, (n) => n.textContent === '功耗仪: csv-meter'))
+	assert.ok(findNode(p1Card, (n) => n.textContent === '工具: hex-calc'))
+
+	const jsPane = findNode(h.body, (n) => n.classList.contains('pm-pane-js'))
+	const tplSel = findNode(jsPane, (n) => n.tagName === 'SELECT')
+	assert.equal(tplSel.options.length, 3)
+	tplSel.value = 'powerDriver'
+	tplSel.dispatchEvent({ type: 'change' })
+	h.btn('新建示例插件').click()
+	const jsTa = findNode(jsPane, (n) => n.tagName === 'TEXTAREA')
+	assert.ok(jsTa.value.includes('registerPowerDriver'))
+
+	tplSel.value = 'tool'
+	tplSel.dispatchEvent({ type: 'change' })
+	h.btn('新建示例插件').click()
+	assert.ok(jsTa.value.includes('registerToolPlugin'))
+
+	// 回到左栏工具点击「打开视图」应激活视图并关闭面板
+	h.btn('已装扩展').click()
+	h.btn('左栏工具').click()
+	const calcToolRow = findNode(h.body, (n) => n.dataset.toolPluginId === 'hex-calc')
+	findNode(calcToolRow, (n) => n.tagName === 'BUTTON' && n.textContent === '打开视图').click()
+	assert.deepEqual(h.calls.activateToolView, ['view-plugin-hex-calc'])
+	await flush()
+	assert.equal(h.win.ProtocolManager.isOpen(), false)
+})
+
+test('命令面板：联动 ToolPluginRegistry 与 PowerDriverRegistry（功耗隐藏时隐藏功耗命令，列出外部工具与功耗仪协议）', () => {
+	function openWith(powerHidden) {
+		const byId = {}
+		const body = new FakeEl('body')
+		const doc = {
+			body,
+			getElementById: (id) => byId[id] || null,
+			querySelector: () => null,
+			createElement: (tag) => new FakeEl(tag),
+			addEventListener() {},
+		}
+		const activatedViews = []
+		const switchedDrivers = []
+		const win = {
+			document: doc,
+			navigator: { platform: 'MacIntel', userAgent: '' },
+			localStorage: { getItem: () => null },
+			_activeProtocol: 'sek',
+			AppPlatform: { has: () => true },
+			ToolPluginRegistry: {
+				isHidden: (id) => id === 'power' && powerHidden,
+				list: () => [
+					{ id: 'power', name: '功耗分析', viewId: 'view-blu', hidden: powerHidden },
+					{ id: 'hex-calc', name: 'HEX 校验器', viewId: 'view-plugin-hex-calc', hidden: false },
+				],
+				activateView: (vid) => activatedViews.push(vid),
+			},
+			PowerDriverRegistry: {
+				list: () => [{ id: 'blu100k', name: 'BLU 100k', hidden: false }, { id: 'csv-meter', name: 'CSV 电流表', hidden: false }],
+				getActiveId: () => 'blu100k',
+				setActiveId: (id) => switchedDrivers.push(id),
+			},
+		}
+		const inp = new FakeEl('input')
+		inp.id = 'serial-cmdk-input'
+		const listBox = new FakeEl('div')
+		listBox.id = 'serial-cmdk-list'
+		byId['serial-cmdk-input'] = inp
+		byId['serial-cmdk-list'] = listBox
+		const ctx = {
+			window: win,
+			document: doc,
+			navigator: win.navigator,
+			localStorage: win.localStorage,
+			getComputedStyle: () => ({ display: 'none', visibility: 'hidden' }),
+			Event: function (t) { this.type = t },
+			console,
+		}
+		vm.createContext(ctx)
+		vm.runInContext(paletteSrc, ctx)
+		win.serialCommandPalette.open()
+		return { win, inp, listBox, activatedViews, switchedDrivers }
+	}
+
+	const vis = openWith(false)
+	assert.ok(vis.listBox.innerHTML.includes('切换到功耗分析'))
+	assert.ok(vis.listBox.innerHTML.includes('打开串口发送'))
+	assert.ok(vis.listBox.innerHTML.includes('切换到：HEX 校验器'))
+	assert.ok(vis.listBox.innerHTML.includes('切换功耗仪协议：CSV 电流表'))
+
+	const hid = openWith(true)
+	assert.equal(hid.listBox.innerHTML.includes('切换到功耗分析'), false, '隐藏功耗工具后不列功耗视图命令')
+	assert.equal(hid.listBox.innerHTML.includes('打开串口发送'), false, '隐藏功耗工具后不列串口发送面板命令')
+	assert.equal(hid.listBox.innerHTML.includes('切换功耗仪协议：CSV 电流表'), false, '隐藏功耗工具后不列功耗仪协议命令')
+	assert.ok(hid.listBox.innerHTML.includes('切换到：HEX 校验器'))
 })
 
 ;(async () => {

@@ -1755,6 +1755,9 @@
 		localStorage.removeItem(TOOL_OPTIONS_DUAL_KEY)
 		localStorage.removeItem('quickSendList')
 		localStorage.removeItem('protocolHiddenIds')
+		localStorage.removeItem('toolPluginHiddenIds')
+		localStorage.removeItem('powerDriverHiddenIds')
+		localStorage.removeItem('powerActiveDriverId')
 		localStorage.removeItem('customJsonProtocols')
 		localStorage.removeItem('customJsProtocols')
 		localStorage.removeItem('trustedJsPluginHashes')
@@ -1771,6 +1774,9 @@
 			toolOptionsDual: localStorage.getItem(TOOL_OPTIONS_DUAL_KEY),
 			quickSendList: localStorage.getItem('quickSendList'),
 			protocolHiddenIds: localStorage.getItem('protocolHiddenIds'),
+			toolPluginHiddenIds: localStorage.getItem('toolPluginHiddenIds'),
+			powerDriverHiddenIds: localStorage.getItem('powerDriverHiddenIds'),
+			powerActiveDriverId: localStorage.getItem('powerActiveDriverId'),
 			customJsonProtocols: localStorage.getItem('customJsonProtocols'),
 		}
 		let blob = new Blob([JSON.stringify(data)], { type: 'text/plain' })
@@ -1804,6 +1810,9 @@
 				setParam(TOOL_OPTIONS_DUAL_KEY, obj.toolOptionsDual)
 				setParam('quickSendList', obj.quickSendList)
 				setParam('protocolHiddenIds', obj.protocolHiddenIds == null ? null : (typeof obj.protocolHiddenIds === 'string' ? obj.protocolHiddenIds : JSON.stringify(obj.protocolHiddenIds)))
+				setParam('toolPluginHiddenIds', obj.toolPluginHiddenIds == null ? null : (typeof obj.toolPluginHiddenIds === 'string' ? obj.toolPluginHiddenIds : JSON.stringify(obj.toolPluginHiddenIds)))
+				setParam('powerDriverHiddenIds', obj.powerDriverHiddenIds == null ? null : (typeof obj.powerDriverHiddenIds === 'string' ? obj.powerDriverHiddenIds : JSON.stringify(obj.powerDriverHiddenIds)))
+				setParam('powerActiveDriverId', obj.powerActiveDriverId == null ? null : String(obj.powerActiveDriverId))
 				setParam('customJsonProtocols', obj.customJsonProtocols == null ? null : (typeof obj.customJsonProtocols === 'string' ? obj.customJsonProtocols : JSON.stringify(obj.customJsonProtocols)))
 				// 安全策略：若导入包包含外部 JS 插件，一律强制置为未启用并清除信任哈希，绝不静默执行
 				if (obj.customJsProtocols != null) {

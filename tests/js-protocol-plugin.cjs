@@ -9,6 +9,9 @@ function createEnv(opts) {
 	opts = opts || {}
 	const store = new Map()
 	const registered = {}
+	const registeredPower = {}
+	const registeredTools = {}
+	const batchCalls = { protocol: 0, power: 0, tool: 0 }
 	const events = []
 	const services = new Map()
 
@@ -60,8 +63,49 @@ function createEnv(opts) {
 				delete registered[id]
 				return { ok: true }
 			},
+			batch(fn) { batchCalls.protocol++; return fn() },
 			get(id) { return registered[id] || null },
 			has(id) { return !!registered[id] },
+		}
+		window.PowerDriverRegistry = {
+			RESERVED_IDS: ['blu-100k', 'blu100k'],
+			register(id, impl) {
+				if (impl.builtin !== true && this.RESERVED_IDS.includes(id)) {
+					throw new Error('保留功耗仪驱动 ID 不可占用：' + id)
+				}
+				if (opts.failPowerId && id === opts.failPowerId) {
+					throw new Error('模拟功耗仪驱动注册冲突：' + id)
+				}
+				registeredPower[id] = impl
+				return true
+			},
+			unregister(id) {
+				delete registeredPower[id]
+				return { ok: true }
+			},
+			batch(fn) { batchCalls.power++; return fn() },
+			get(id) { return registeredPower[id] || null },
+			has(id) { return !!registeredPower[id] },
+		}
+		window.ToolPluginRegistry = {
+			RESERVED_IDS: ['power'],
+			register(id, impl) {
+				if (impl.builtin !== true && this.RESERVED_IDS.includes(id)) {
+					throw new Error('保留工具视图 ID 不可占用：' + id)
+				}
+				if (opts.failToolId && id === opts.failToolId) {
+					throw new Error('模拟工具视图注册失败：' + id)
+				}
+				registeredTools[id] = impl
+				return true
+			},
+			unregister(id) {
+				delete registeredTools[id]
+				return { ok: true }
+			},
+			batch(fn) { batchCalls.tool++; return fn() },
+			get(id) { return registeredTools[id] || null },
+			has(id) { return !!registeredTools[id] },
 		}
 	}
 
@@ -73,6 +117,7 @@ function createEnv(opts) {
 		CustomEvent,
 		Uint8Array,
 		Uint32Array,
+		Float32Array,
 		ArrayBuffer,
 		DataView,
 		TextEncoder,
@@ -86,6 +131,9 @@ function createEnv(opts) {
 	return {
 		window,
 		registered,
+		registeredPower,
+		registeredTools,
+		batchCalls,
 		store,
 		events,
 		AppPlatform,
@@ -322,6 +370,106 @@ async function run() {
 		// 打开目录服务调用
 		const opened = await JSP.openDesktopDir()
 		assert.deepEqual(J(opened), { ok: true, dir: '/mock/app_data/protocols' })
+	}
+
+	// 7. 单插件同时注册协议 / 功耗仪驱动 / 左栏工具视图，停用与删除三路同步卸载
+	{
+		const { JSP, registered, registeredPower, registeredTools } = createEnv({ withRegistry: true })
+		const multiCode = `
+			registerProtocol('multi-proto', { name: '组合协议', parseFrame(b) { return { ok: true, raw: b } } })
+			registerPowerDriver('multi-meter', { name: '组合电流表', capabilities: { nominalHz: 500 }, createSession() { return { onBytes() {} } } })
+			registerToolPlugin('multi-tool', { name: '组合工具', label: '组合', icon: 'bi-tools', mount() {}, unmount() {} })
+		`
+		const saved = JSP.saveLocalPlugin({ pluginId: 'multi-p', name: '多能力插件', code: multiCode })
+		assert.equal(saved.ok, true)
+		assert.equal(JSP.getUntrustedCount(), 1)
+		const tr = JSP.trustAndEnable(saved.pluginKey)
+		assert.equal(tr.ok, true)
+		assert.deepEqual(J(tr.registeredIds), ['multi-proto'])
+		assert.deepEqual(J(tr.registeredPowerIds), ['multi-meter'])
+		assert.deepEqual(J(tr.registeredToolIds), ['multi-tool'])
+		assert.equal(JSP.getUntrustedCount(), 0)
+		assert.ok(registered['multi-proto'])
+		assert.ok(registeredPower['multi-meter'])
+		assert.ok(registeredTools['multi-tool'])
+
+		const info = JSP.listPlugins().find(p => p.pluginKey === saved.pluginKey)
+		assert.deepEqual(J(info.registeredIds), ['multi-proto'])
+		assert.deepEqual(J(info.registeredPowerIds), ['multi-meter'])
+		assert.deepEqual(J(info.registeredToolIds), ['multi-tool'])
+
+		// 停用 → 三类同步卸载
+		assert.equal(JSP.setEnabled(saved.pluginKey, false).ok, true)
+		assert.equal(registered['multi-proto'], undefined)
+		assert.equal(registeredPower['multi-meter'], undefined)
+		assert.equal(registeredTools['multi-tool'], undefined)
+
+		// 重启用后再删除 → 三类同步卸载
+		assert.equal(JSP.setEnabled(saved.pluginKey, true).ok, true)
+		assert.ok(registered['multi-proto'] && registeredPower['multi-meter'] && registeredTools['multi-tool'])
+		assert.equal(JSP.removeLocalPlugin(saved.pluginKey).ok, true)
+		assert.equal(registered['multi-proto'], undefined)
+		assert.equal(registeredPower['multi-meter'], undefined)
+		assert.equal(registeredTools['multi-tool'], undefined)
+	}
+
+	// 8. module.exports 数组按 kind 分流 + 部分失败原子回滚
+	{
+		const { JSP, registered, registeredPower, registeredTools } = createEnv({
+			withRegistry: true,
+			failToolId: 'boom-tool',
+		})
+		const rollbackCode = `
+			module.exports = [
+				{ kind: 'protocol', id: 'rb-proto', name: '待回滚协议', parseFrame() { return { ok: true } } },
+				{ kind: 'power-driver', id: 'rb-power', name: '待回滚功耗仪', createSession() { return {} } },
+				{ kind: 'tool', id: 'boom-tool', name: '触发失败工具' },
+			]
+		`
+		const saved = JSP.saveLocalPlugin({ pluginId: 'rb-p', name: '回滚测试', code: rollbackCode })
+		const res = JSP.trustAndEnable(saved.pluginKey)
+		assert.equal(res.ok, false)
+		assert.ok(res.error.includes('boom-tool'))
+		assert.equal(registered['rb-proto'], undefined, '协议必须被原子回滚')
+		assert.equal(registeredPower['rb-power'], undefined, '功耗仪驱动必须被原子回滚')
+		assert.equal(registeredTools['boom-tool'], undefined)
+	}
+
+	// 9. 保留功耗仪 ID ('blu100k') 与保留工具 ID ('power') 保护 + EXAMPLE_TEMPLATES 三套模板可执行 + scanDesktopDir 三路 batch
+	{
+		const { AppPlatform, JSP, registered, registeredPower, registeredTools, batchCalls } = createEnv({ withRegistry: true })
+		assert.equal(JSP.EXAMPLE_TEMPLATES.protocol, JSP.EXAMPLE_CODE)
+		assert.ok(typeof JSP.EXAMPLE_TEMPLATES.powerDriver === 'string' && JSP.EXAMPLE_TEMPLATES.powerDriver.includes('registerPowerDriver'))
+		assert.ok(typeof JSP.EXAMPLE_TEMPLATES.tool === 'string' && JSP.EXAMPLE_TEMPLATES.tool.includes('registerToolPlugin'))
+
+		const pPwr = JSP.saveLocalPlugin({ pluginId: 'tpl-pwr', name: '功耗仪模板', code: JSP.EXAMPLE_TEMPLATES.powerDriver })
+		const rPwr = JSP.trustAndEnable(pPwr.pluginKey)
+		assert.equal(rPwr.ok, true)
+		assert.ok(registeredPower['demo-csv-ammeter'])
+
+		const pTool = JSP.saveLocalPlugin({ pluginId: 'tpl-tool', name: '工具模板', code: JSP.EXAMPLE_TEMPLATES.tool })
+		const rTool = JSP.trustAndEnable(pTool.pluginKey)
+		assert.equal(rTool.ok, true)
+		assert.ok(registeredTools['demo-hex-calc'])
+
+		// 保留 ID 拦截（同时覆盖 blu-100k 与 blu100k）
+		const badPwrDash = JSP.saveLocalPlugin({ pluginId: 'hijack-blu-dash', name: '抢注 blu-100k', code: "registerPowerDriver('blu-100k', { name: '假' })" })
+		assert.equal(JSP.trustAndEnable(badPwrDash.pluginKey).ok, false)
+		const badPwr = JSP.saveLocalPlugin({ pluginId: 'hijack-blu', name: '抢注 blu100k', code: "registerPowerDriver('blu100k', { name: '假' })" })
+		assert.equal(JSP.trustAndEnable(badPwr.pluginKey).ok, false)
+		const badTool = JSP.saveLocalPlugin({ pluginId: 'hijack-pwr', name: '抢注 power', code: "registerToolPlugin('power', { name: '假' })" })
+		assert.equal(JSP.trustAndEnable(badTool.pluginKey).ok, false)
+
+		// scanDesktopDir 嵌套调用三个注册表的 batch
+		AppPlatform.provide('protocol-plugins', {
+			async list() { return { dir: '/mock/dir', files: [] } },
+			async openDir() { return '/mock/dir' },
+		})
+		await JSP.scanDesktopDir()
+		assert.equal(batchCalls.protocol, 1)
+		assert.equal(batchCalls.power, 1)
+		assert.equal(batchCalls.tool, 1)
+		assert.equal(registered['non-existent'], undefined)
 	}
 
 	console.log('js protocol plugin checks passed')

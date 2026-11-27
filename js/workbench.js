@@ -454,16 +454,20 @@
 	}
 	function refreshPowerBadge() {
 		const item = document.querySelector('.rail-item[data-view="view-blu"]')
-		if (!item) return
-		const on = powerConnected()
-		if (on) {
-			item.dataset.conn = 'open'
-			item.title = POWER_NAV_TITLE + ' · 功耗仪已连接'
-			item.setAttribute('aria-label', POWER_NAV_TITLE + ' · 功耗仪已连接')
-		} else if (item.dataset.conn) {
-			delete item.dataset.conn
-			item.title = POWER_NAV_TITLE
-			item.removeAttribute('aria-label')
+		if (item) {
+			const on = powerConnected()
+			if (on) {
+				item.dataset.conn = 'open'
+				item.title = POWER_NAV_TITLE + ' · 功耗仪已连接'
+				item.setAttribute('aria-label', POWER_NAV_TITLE + ' · 功耗仪已连接')
+			} else if (item.dataset.conn) {
+				delete item.dataset.conn
+				item.title = POWER_NAV_TITLE
+				item.removeAttribute('aria-label')
+			}
+		}
+		if (window.ToolPluginRegistry && typeof window.ToolPluginRegistry.refreshBadges === 'function') {
+			window.ToolPluginRegistry.refreshBadges()
 		}
 	}
 	const TASKS = [
