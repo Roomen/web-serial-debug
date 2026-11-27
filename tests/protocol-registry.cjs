@@ -96,7 +96,7 @@ class FakeCustomEvent {
 
 // ---- 1. 常量、规范排序（sek 第一 → 其余内置按注册序 → 自定义按注册序）与 list capabilities ----
 {
-	assert.deepEqual(ProtocolRegistryMod.RESERVED_IDS, ['sek', 'wmbus', 'gz', 'cjt188', 'sk-ultrasonic', 'hostproto', 'cellular-at'])
+	assert.deepEqual(ProtocolRegistryMod.RESERVED_IDS, ['sek', 'wmbus', 'gz', 'cjt188', 'sk-ultrasonic', 'hostproto', 'cellular-at', 'ac6d-meter'])
 	assert.equal(ProtocolRegistryMod.HIDDEN_KEY, 'protocolHiddenIds')
 
 	const sel = makeSelect('serial-protocol-select')

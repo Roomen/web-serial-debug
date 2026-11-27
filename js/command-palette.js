@@ -285,6 +285,11 @@
 	}
 
 	function ensureSerialView() {
+		const tpr = window.ToolPluginRegistry
+		if (tpr && typeof tpr.activateView === 'function') {
+			if (typeof tpr.getActiveView !== 'function' || tpr.getActiveView() !== 'view-serial') tpr.activateView('view-serial')
+			return
+		}
 		const rail = document.querySelector('.rail-item[data-view="view-serial"]')
 		if (rail && !rail.classList.contains('active')) rail.click()
 	}
@@ -323,7 +328,7 @@
 			title: '切换到通信调试',
 			alias: 'chuankou tiaoshi serial view',
 			run: function () {
-				clickSel('.rail-item[data-view="view-serial"]')
+				ensureSerialView()
 				if (window.DevicePanel && typeof window.DevicePanel.showComm === 'function') window.DevicePanel.showComm()
 			}
 		})
@@ -337,16 +342,19 @@
 			}
 		})
 		const hasFwPack = !window.AppPlatform || window.AppPlatform.has('view.firmware-pack')
-		list.push({
-			group: '视图',
-			title: hasFwPack ? '切换到固件（打包 / 升级）' : '切换到固件升级',
-			feature: 'panel.firmware',
-			alias: 'gujian shengji dabao firmware pack upgrade ota view',
-			run: function () {
-				if (window.DevicePanel && typeof window.DevicePanel.showFirmware === 'function') window.DevicePanel.showFirmware()
-				else if (window.Workbench) window.Workbench.open('firmware')
-			}
-		})
+		const fwAvail = !window.DevicePanel || typeof window.DevicePanel.firmwareAvailable !== 'function' || window.DevicePanel.firmwareAvailable()
+		if (fwAvail) {
+			list.push({
+				group: '视图',
+				title: hasFwPack ? '切换到固件（打包 / 升级）' : '切换到固件升级',
+				feature: 'panel.firmware',
+				alias: 'gujian shengji dabao firmware pack upgrade ota view',
+				run: function () {
+					if (window.DevicePanel && typeof window.DevicePanel.showFirmware === 'function') window.DevicePanel.showFirmware()
+					else if (window.Workbench) window.Workbench.open('firmware')
+				}
+			})
+		}
 		const tpr = window.ToolPluginRegistry
 		const powerHidden = !!(tpr && typeof tpr.isHidden === 'function' && tpr.isHidden('power'))
 		if (!powerHidden) {
@@ -374,7 +382,7 @@
 			tools.forEach(function (item) {
 				if (!item || !item.id || item.id === 'power' || item.hidden) return
 				const tname = String(item.name || item.id)
-				list.push({
+				const entry = {
 					group: '视图',
 					title: '切换到：' + tname,
 					detail: item.description || item.id,
@@ -386,7 +394,9 @@
 							clickSel('.rail-item[data-view="' + item.viewId + '"]')
 						}
 					}
-				})
+				}
+				if (item.feature) entry.feature = item.feature
+				list.push(entry)
 			})
 		}
 		const themeNow = typeof window.getThemeChoice === 'function' ? window.getThemeChoice() : 'auto'

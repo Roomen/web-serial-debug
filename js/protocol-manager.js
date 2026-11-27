@@ -218,7 +218,7 @@
 			'',
 			'### 注册入口',
 			'调用 `registerToolPlugin(id, impl)`（或 `module.exports = { kind: "tool", id, ...impl }`）：',
-			'- `id`: 唯一标识（`/^[a-z0-9][a-z0-9_-]{0,47}$/`，不能占用保留内置 ID `power`）',
+			'- `id`: 唯一标识（`/^[a-z0-9][a-z0-9_-]{0,47}$/`，不能占用保留内置 ID `power`、`ac6d`）',
 			'- `name`（<=48 字）、`label`（<=12 字，左栏短标签）、`icon`（合法 Bootstrap Icons 类名，如 `bi-calculator`）、`version`、`description`',
 			'- `hideTopbar?`: 布尔值，为 `true` 时在视图容器上标记 `data-hide-topbar="true"`',
 			'- `mount(container, { id, viewId })`: 首次挂载时构建 DOM（必须仅用 `document.createElement` + `textContent`，严禁拼接 `innerHTML` 或嵌套 `AppDialog.confirm`）',

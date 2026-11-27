@@ -12085,6 +12085,125 @@ html[data-layout='modern'] #activity-rail .rail-item[data-tool-plugin]:not([data
 	white-space: nowrap;
 }
 
+/* 串口左栏可折叠二级子导航（通信 / 设备 / 固件，按协议动态显隐） */
+html[data-layout='modern'] #activity-rail .rail-item[data-view='view-serial'][data-has-sub='true']::after {
+	content: '▸';
+	position: absolute;
+	top: 4px;
+	right: 4px;
+	font-size: 9px;
+	line-height: 1;
+	opacity: 0.72;
+	pointer-events: none;
+}
+
+html[data-layout='modern'] #activity-rail .rail-item[data-view='view-serial'][data-has-sub='true'][data-sub-open='true']::after {
+	content: '▾';
+}
+
+html[data-layout='modern'] #activity-rail .rail-sub-pill {
+	display: inline-block;
+	max-width: 48px;
+	padding: 1px 4px;
+	border-radius: 999px;
+	background: var(--accent);
+	color: #fff;
+	font-size: 9px;
+	line-height: 1.25;
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+html[data-layout='modern'] #activity-rail .rail-sub-pill[hidden] {
+	display: none;
+}
+
+html[data-layout='modern'] #activity-rail .rail-sublist {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	width: 58px;
+	margin: 0 auto 2px;
+	padding: 2px 0 2px 8px;
+	flex-shrink: 0;
+}
+
+html[data-layout='modern'] #activity-rail .rail-sublist[hidden] {
+	display: none !important;
+}
+
+html[data-layout='modern'] #activity-rail .rail-sublist::before {
+	content: '';
+	position: absolute;
+	left: 4px;
+	top: 4px;
+	bottom: 4px;
+	width: 1.5px;
+	border-radius: 1px;
+	background: var(--border-color);
+	opacity: 0.85;
+}
+
+html[data-layout='modern'] #activity-rail .rail-subitem {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 3px;
+	width: 100%;
+	padding: 5px 3px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--mdn-rail-fg);
+	font-size: 10.5px;
+	line-height: 1.2;
+	font-family: var(--font-sans);
+	text-align: center;
+	white-space: nowrap;
+	transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+html[data-layout='modern'] #activity-rail .rail-subitem i {
+	font-size: 11.5px;
+	line-height: 1;
+	flex-shrink: 0;
+}
+
+html[data-layout='modern'] #activity-rail .rail-sublabel {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+html[data-layout='modern'] #activity-rail .rail-subitem:hover {
+	background: var(--mdn-rail-hi);
+	color: var(--mdn-rail-hi-fg);
+}
+
+html[data-layout='modern'] #activity-rail .rail-subitem.active {
+	background: var(--mdn-rail-hi);
+	color: var(--mdn-rail-hi-fg);
+	font-weight: 600;
+}
+
+html[data-layout='modern'][data-theme='light'] #activity-rail .rail-subitem.active {
+	background: var(--accent-light);
+	color: var(--accent);
+}
+
+html[data-layout='modern'][data-theme='dark'] #activity-rail .rail-subitem.active {
+	background: rgba(88, 166, 255, 0.16);
+	color: var(--mdn-rail-accent, var(--mdn-rail-hi-fg));
+}
+
+html[data-layout='modern'] #activity-rail .rail-subitem:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
 html[data-layout='modern'] #activity-rail .rail-sep {
 	width: 32px;
 	height: 1px;
@@ -13076,6 +13195,29 @@ html[data-layout='modern'] #serial-log-panes:has(.serial-log-mode:not([hidden]) 
 		width: 48px;
 	}
 
+	html[data-layout='modern'] #activity-rail .rail-item[data-tool-plugin]:not([data-view='view-blu']) .rail-label {
+		max-width: 44px;
+	}
+
+	html[data-layout='modern'] #activity-rail .rail-sublist {
+		width: 48px;
+		padding-left: 6px;
+	}
+
+	html[data-layout='modern'] #activity-rail .rail-sublist::before {
+		left: 3px;
+	}
+
+	html[data-layout='modern'] #activity-rail .rail-subitem {
+		gap: 2px;
+		padding: 4px 2px;
+		font-size: 10px;
+	}
+
+	html[data-layout='modern'] #activity-rail .rail-subitem i {
+		font-size: 10.5px;
+	}
+
 	html[data-layout='modern'] .mdn-quickrow {
 		flex-wrap: wrap;
 	}
@@ -13472,6 +13614,14 @@ html[data-runtime='tauri'][data-glass='liquid'][data-theme='dark'] #activity-rai
 	background: rgba(255, 255, 255, 0.14);
 }
 
+html[data-runtime='tauri'][data-glass='liquid'] #activity-rail .rail-sublist::before {
+	background: rgba(28, 35, 48, 0.16);
+}
+
+html[data-runtime='tauri'][data-glass='liquid'][data-theme='dark'] #activity-rail .rail-sublist::before {
+	background: rgba(255, 255, 255, 0.18);
+}
+
 /* 导航栏底部的分隔线原本靠 rail 实色底遮，半透明后换细线：深色底用白线、浅色底用深线 */
 html[data-runtime='tauri'][data-glass='liquid'] #activity-rail .rail-bottom {
 	border-top-color: rgba(28, 35, 48, 0.1);
@@ -13680,6 +13830,8 @@ html[data-layout='modern'] #activity-rail .rail-item { flex-shrink: 0; }
 /* 小高度压缩节奏，保留所有入口。 */
 @media (max-height: 720px) {
 	html[data-layout='modern'] #activity-rail .rail-item { padding: 5px 0; gap: 2px; }
+	html[data-layout='modern'] #activity-rail .rail-sublist { gap: 1px; }
+	html[data-layout='modern'] #activity-rail .rail-subitem { padding: 3px 2px; font-size: 10px; }
 	html[data-layout='modern'] #activity-rail .rail-sep { margin: 2px auto; }
 	html[data-layout='modern'] #activity-rail .rail-bottom { gap: 2px; }
 }
@@ -14694,29 +14846,7 @@ html[data-layout='modern'][data-theme='dark'] .pm-badge-danger {
 
 
 
-/* ===== 设备面板(js/device-panel.js)：通信调试视图里与日志并列的子视图 ===== */
-html[data-layout='modern'] .dp-viewbar {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	padding: 6px 12px;
-	border-bottom: 1px solid var(--border-color);
-	background: var(--bg-surface);
-	flex: 0 0 auto;
-	min-width: 0;
-}
-html[data-layout='modern'] .dp-viewbar .ctl-seg > button {
-	font-size: 0.8rem;
-	padding: 2px 12px;
-}
-html[data-layout='modern'] .dp-why {
-	font-size: 0.75rem;
-	color: var(--text-muted);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	min-width: 0;
-}
+/* ===== 设备面板(js/device-panel.js)：通信调试视图里与日志并列的子视图（切换入口在左栏 #rail-serial-subnav） ===== */
 /* 设备面板与固件升级子视图：日志降为面板下方的「通信记录」条。节点不搬：#main 排到面板之后(order)并限高，
    只留 #log-main 里的日志窗与条头(右栏、停靠栏、日志工具条、协议解析、发送区隐藏)；高度与收起由 js/device-panel.js
    写在 #view-serial 的 --dp-log-h / data-dplog 上。!important 压过窄屏的 #main { height: auto !important } 与右栏网格 */
@@ -15766,9 +15896,6 @@ html[data-layout='modern'] .dp-insp-parse-body {
 }
 /* 窄屏：首屏只留名称 + 读取时间 + 指标卡，标识折叠；参数表竖排；来源帧从底部抽出 */
 @media (max-width: 760px) {
-	html[data-layout='modern'] .dp-viewbar {
-		padding: 6px 8px;
-	}
 	html[data-layout='modern'] .dp-head,
 	html[data-layout='modern'] .dp-body {
 		padding-left: 10px;

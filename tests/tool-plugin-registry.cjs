@@ -472,6 +472,75 @@ test('refreshBadges 同步外部插件连接角标，view-emk 兼容映射至 vi
 	assert.equal(btn.title, '示波器')
 })
 
+test('内置 ac6d 保留 ID、动态挂载、延迟恢复激活视图、findPortOwner 与 updateBlockers', () => {
+	const portA = { id: 'p-a' }
+	const portBlu = { id: 'p-blu' }
+	let ac6dBusy = false
+	let bluOpen = true
+	const h = makeHarness({
+		initialStorage: { 'serial-debug-active-view': 'view-ac6d' },
+		bluApi: { ownsPort: (p) => p === portBlu, isOpen: () => bluOpen, isBusyForUpdate: () => false },
+	})
+
+	// RESERVED_IDS 包含 ac6d，外部注册不得抢占
+	assert.ok(h.reg.RESERVED_IDS.includes('ac6d'))
+	assert.throws(() => h.reg.register('ac6d', { name: '恶意水表' }), /保留/)
+
+	// 初始 ac6d 尚未注册：暂回退 view-serial，但保留 localStorage 等待延迟注册恢复
+	assert.equal(h.reg.getActiveView(), 'view-serial')
+	assert.equal(h.store.get('serial-debug-active-view'), 'view-ac6d')
+
+	let mountedEl = null
+	let activated = 0
+	assert.equal(h.reg.register('ac6d', {
+		builtin: true,
+		viewId: 'view-ac6d',
+		feature: 'view.ac6d',
+		hideTopbar: true,
+		name: '容积水表校表台',
+		label: '水表',
+		icon: 'bi-droplet-half',
+		mount(el) { mountedEl = el },
+		onActivate() { activated++ },
+		ownsPort: (p) => p === portA,
+		isBusy: () => ac6dBusy,
+	}), true)
+
+	// 自动创建 #view-ac6d 容器与左栏按钮，并自动恢复激活 view-ac6d
+	const viewEl = h.doc.getElementById('view-ac6d')
+	assert.ok(viewEl)
+	assert.equal(mountedEl, viewEl)
+	assert.equal(viewEl.dataset.hideTopbar, 'true')
+	assert.equal(viewEl.dataset.feature, 'view.ac6d')
+	const btn = h.railTop.children.find((c) => c.dataset && c.dataset.view === 'view-ac6d')
+	assert.ok(btn)
+	assert.equal(btn.dataset.feature, 'view.ac6d')
+	assert.ok(h.railTop.children.indexOf(btn) < h.railTop.children.indexOf(h.divider))
+	assert.equal(h.reg.getActiveView(), 'view-ac6d')
+	assert.equal(activated, 1)
+
+	// findPortOwner：命中 ac6d、命中 power（bluApi 兜底，含 bluOpening 即 ownsPort===true && isOpen===false）、支持 exceptId
+	assert.deepEqual(Object.assign({}, h.reg.findPortOwner(portA)), { id: 'ac6d', name: '容积水表校表台', label: '水表' })
+	assert.equal(h.reg.findPortOwner(portA, { exceptId: 'ac6d' }), null)
+	assert.deepEqual(Object.assign({}, h.reg.findPortOwner(portBlu)), { id: 'power', name: '功耗分析', label: '功耗分析' })
+	assert.equal(h.reg.findPortOwner(portBlu, { exceptId: 'power' }), null)
+	assert.equal(h.reg.findPortOwner({ id: 'free' }), null)
+
+	// P1-4: bluOpening 态（ownsPort===true 但 isOpen===false）仍必须被 findPortOwner 识别占用
+	bluOpen = false
+	assert.deepEqual(Object.assign({}, h.reg.findPortOwner(portBlu)), { id: 'power', name: '功耗分析', label: '功耗分析' })
+	bluOpen = true
+
+	// updateBlockers：反映忙碌插件并支持排除 power
+	assert.deepEqual(Array.from(h.reg.updateBlockers()), ['功耗分析'])
+	assert.deepEqual(Array.from(h.reg.updateBlockers({ exceptIds: ['power'] })), [])
+	ac6dBusy = true
+	assert.deepEqual(Array.from(h.reg.updateBlockers()), ['功耗分析', '容积水表校表台'])
+	assert.deepEqual(Array.from(h.reg.updateBlockers({ exceptIds: ['power'] })), ['容积水表校表台'])
+	bluOpen = false
+	assert.deepEqual(Array.from(h.reg.updateBlockers()), ['容积水表校表台'])
+})
+
 let failed = 0
 for (const t of tests) {
 	try {

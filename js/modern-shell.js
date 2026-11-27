@@ -110,6 +110,9 @@
 		if (s.current && s.open) return { tag: '已连接', kind: 'open', disabled: false }
 		if (s.current) return { tag: '当前设备', kind: 'current', disabled: false }
 		if (s.owner) {
+			if (typeof s.owner === 'string' && s.owner.indexOf('TOOL:') === 0) {
+				return { tag: s.owner.slice(5) + '占用', kind: 'busy', disabled: true }
+			}
 			const who = s.owner === 'BLU' ? '功耗分析' : (s.owner === 'S' ? '单路' : s.owner + ' 路')
 			return { tag: who + '占用', kind: 'busy', disabled: true }
 		}

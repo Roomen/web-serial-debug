@@ -1554,6 +1554,244 @@ test('write panel: APN 等允许写空字段可通过「置空」草稿并写空
 	pump.stop()
 })
 
+test('rail subnav & firmwareAvailable: 按协议动态显隐左栏二级子导航、折叠持久化与固件回退', () => {
+	const win = loadSek()
+	const fake = fakeEnv()
+	const minDev = Reg.normalizeDevice(win.SekDevice, { id: 'sek' })
+	assert.ok(minDev)
+	fake.entries.sek = { name: 'SEK', device: minDev, firmware: { method: 'pcp', versionKey: '2:13' } }
+	fake.entries.hostproto = { name: 'HostProto', device: minDev }
+	fake.entries.wmbus = { name: 'W-MBUS' }
+	fake.state.proto.S = 'sek'
+
+	const toasts = []
+	fake.env.serialLanes.toast = (msg, kind) => toasts.push({ msg, kind })
+	const request = Req.create(fake.env)
+
+	class MiniEl {
+		constructor(tag) {
+			this.tagName = String(tag).toUpperCase()
+			this.id = ''
+			this.className = ''
+			this._text = ''
+			this.title = ''
+			this.hidden = false
+			this.disabled = false
+			this.dataset = {}
+			this.attrs = {}
+			this.children = []
+			this.parentNode = null
+			this.listeners = {}
+			this.style = { setProperty() {}, getPropertyValue: () => '' }
+			this.classList = {
+				toggle: (n, on) => {
+					const s = new Set(this.className.split(/\s+/).filter(Boolean))
+					if (on === undefined) { if (s.has(n)) s.delete(n); else s.add(n) }
+					else if (on) s.add(n); else s.delete(n)
+					this.className = Array.from(s).join(' ')
+				},
+				contains: (n) => this.className.split(/\s+/).includes(n),
+			}
+		}
+		get textContent() { return this._text }
+		set textContent(v) {
+			this._text = String(v == null ? '' : v)
+			this.children.forEach((c) => { c.parentNode = null })
+			this.children = []
+		}
+		get nextSibling() {
+			if (!this.parentNode) return null
+			const idx = this.parentNode.children.indexOf(this)
+			return idx >= 0 && idx + 1 < this.parentNode.children.length ? this.parentNode.children[idx + 1] : null
+		}
+		append(...nodes) { for (const n of nodes) if (n) this.appendChild(n) }
+		appendChild(c) {
+			if (c.parentNode) c.parentNode.removeChild(c)
+			c.parentNode = this
+			this.children.push(c)
+			return c
+		}
+		insertBefore(c, ref) {
+			if (c.parentNode) c.parentNode.removeChild(c)
+			c.parentNode = this
+			const idx = this.children.indexOf(ref)
+			if (idx < 0) this.children.push(c)
+			else this.children.splice(idx, 0, c)
+			return c
+		}
+		removeChild(c) {
+			const idx = this.children.indexOf(c)
+			if (idx >= 0) { this.children.splice(idx, 1); c.parentNode = null }
+			return c
+		}
+		setAttribute(k, v) {
+			this.attrs[k] = String(v)
+			if (k === 'id') this.id = String(v)
+			if (k.startsWith('data-')) {
+				const key = k.slice(5).replace(/-([a-z])/g, (_, ch) => ch.toUpperCase())
+				this.dataset[key] = String(v)
+			}
+		}
+		getAttribute(k) { return this.attrs[k] !== undefined ? this.attrs[k] : null }
+		removeAttribute(k) { delete this.attrs[k] }
+		addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn) }
+		click() { (this.listeners.click || []).slice().forEach((fn) => fn({ target: this })) }
+		querySelector(sel) { return this.querySelectorAll(sel)[0] || null }
+		querySelectorAll(sel) {
+			const out = []
+			const match = (n) => {
+				if (sel === '#activity-rail .rail-top') return n.classList.contains('rail-top') && n.parentNode && n.parentNode.id === 'activity-rail'
+				if (sel === '.rail-item[data-view="view-serial"]') return n.classList.contains('rail-item') && n.dataset.view === 'view-serial'
+				if (sel === '.rail-subitem') return n.classList.contains('rail-subitem')
+				return false
+			}
+			const walk = (n) => {
+				for (const c of n.children) {
+					if (match(c)) out.push(c)
+					walk(c)
+				}
+			}
+			walk(this)
+			return out
+		}
+	}
+
+	const body = new MiniEl('body')
+	const rail = new MiniEl('nav')
+	rail.id = 'activity-rail'
+	const railTop = new MiniEl('div')
+	railTop.className = 'rail-top'
+	const serialBtn = new MiniEl('button')
+	serialBtn.className = 'rail-item active'
+	serialBtn.dataset.view = 'view-serial'
+	railTop.appendChild(serialBtn)
+	rail.appendChild(railTop)
+	body.appendChild(rail)
+
+	const viewSerial = new MiniEl('div')
+	viewSerial.id = 'view-serial'
+	viewSerial.className = 'app-view active'
+	const main = new MiniEl('div')
+	main.id = 'main'
+	viewSerial.appendChild(main)
+	body.appendChild(viewSerial)
+
+	const fwStop = new MiniEl('button')
+	fwStop.id = 'fw-stop'
+	fwStop.disabled = true
+	body.appendChild(fwStop)
+
+	const findById = (n, id) => {
+		if (n.id === id) return n
+		for (const c of n.children) {
+			const hit = findById(c, id)
+			if (hit) return hit
+		}
+		return null
+	}
+
+	const lsMap = new Map()
+	const ssMap = new Map()
+	const docListeners = {}
+	const timers = []
+	const doc = {
+		readyState: 'complete',
+		hidden: false,
+		createElement: (tag) => new MiniEl(tag),
+		getElementById: (id) => findById(body, id),
+		querySelector: (sel) => body.querySelector(sel),
+		querySelectorAll: (sel) => body.querySelectorAll(sel),
+		addEventListener: (t, fn) => { (docListeners[t] = docListeners[t] || []).push(fn) },
+		dispatchEvent: (ev) => { (docListeners[ev.type] || []).slice().forEach((fn) => fn(ev)); return true },
+	}
+	const sandbox = {
+		window: {
+			DeviceModel: M,
+			ProtocolRequest: request,
+			ProtocolRegistry: fake.env.registry,
+			serialApi: fake.env.serialApi,
+			serialLanes: fake.env.serialLanes,
+			localStorage: {
+				getItem: (k) => (lsMap.has(k) ? lsMap.get(k) : null),
+				setItem: (k, v) => lsMap.set(k, String(v)),
+			},
+			AppPlatform: { has: () => true },
+		},
+		document: doc,
+		sessionStorage: {
+			getItem: (k) => (ssMap.has(k) ? ssMap.get(k) : null),
+			setItem: (k, v) => ssMap.set(k, String(v)),
+		},
+		CustomEvent: function (type, init) { this.type = type; this.detail = init && init.detail },
+		setTimeout: (fn) => { timers.push(fn); return timers.length },
+		clearTimeout: () => {},
+		setInterval: () => 1,
+		clearInterval: () => {},
+	}
+	const source = fs.readFileSync(path.join(ROOT, 'js/device-panel.js'), 'utf8')
+	vm.runInNewContext(source, sandbox)
+	while (timers.length) timers.shift()()
+
+	const panel = sandbox.window.DevicePanel
+	// 不再生成顶部 .dp-viewbar
+	assert.equal(findById(body, 'dp-viewbar'), null, '已移除顶部 .dp-viewbar')
+	const subnav = findById(body, 'rail-serial-subnav')
+	assert.ok(subnav, '应在左栏创建 #rail-serial-subnav')
+	assert.equal(serialBtn.nextSibling, subnav, '#rail-serial-subnav 应紧接在串口按钮之后')
+
+	// 1. SEK（device + pcp firmware）：firmwareAvailable = true，子项 3 个且展开
+	assert.equal(panel.firmwareAvailable(), true)
+	assert.equal(subnav.hidden, false)
+	assert.equal(serialBtn.dataset.hasSub, 'true')
+	assert.equal(serialBtn.dataset.subOpen, 'true')
+	assert.equal(serialBtn.title, '通信调试 · SEK')
+	assert.deepEqual(subnav.querySelectorAll('.rail-subitem').map((b) => b.dataset.subview), ['comm', 'device', 'firmware'])
+
+	// 2. 点击「固件」子项切到 firmware；再切协议到 hostproto（仅有 device，无 firmware）：自动回退 comm 且子项只剩 2 个
+	subnav.querySelectorAll('.rail-subitem')[2].click()
+	assert.equal(panel.view(), 'firmware')
+	fake.state.proto.S = 'hostproto'
+	panel._sync()
+	assert.equal(panel.firmwareAvailable(), false)
+	assert.equal(panel.view(), 'comm', '切到不支持固件的协议时自动回退到通信调试')
+	assert.ok(toasts.some((t) => t.kind === 'warn' && t.msg.includes('不支持 PCP 固件升级')))
+	assert.deepEqual(subnav.querySelectorAll('.rail-subitem').map((b) => b.dataset.subview), ['comm', 'device'])
+
+	// 3. 切协议到 wmbus（无 device 也无 firmware）：子菜单自动隐藏，无折叠标记，showFirmware 提示并返回 false
+	fake.state.proto.S = 'wmbus'
+	panel._sync()
+	assert.equal(panel.available(), false)
+	assert.equal(panel.firmwareAvailable(), false)
+	assert.equal(subnav.hidden, true, '仅剩 1 项时自动隐藏二级子导航')
+	assert.equal(serialBtn.dataset.hasSub, undefined)
+	assert.equal(panel.showFirmware(), false)
+
+	// 4. 升级进行中（#fw-stop 可用）即使协议为 wmbus 仍保留 firmwareAvailable = true
+	fwStop.disabled = false
+	panel._sync()
+	assert.equal(panel.firmwareAvailable(), true, '升级进行中保留固件视图可用')
+	assert.equal(subnav.hidden, false)
+	fwStop.disabled = true
+
+	// 5. 切回 sek：再次点击已激活的「串口」切换折叠并持久化；切到其它视图自动收起，切回恢复
+	fake.state.proto.S = 'sek'
+	panel._sync()
+	assert.equal(subnav.hidden, false)
+	serialBtn.click()
+	assert.equal(lsMap.get('railSerialSubnavCollapsed'), '1')
+	assert.equal(subnav.hidden, true)
+	serialBtn.click()
+	assert.equal(lsMap.get('railSerialSubnavCollapsed'), '0')
+	assert.equal(subnav.hidden, false)
+
+	viewSerial.classList.toggle('active', false)
+	doc.dispatchEvent(new sandbox.CustomEvent('serial-active-view-change', { detail: { viewId: 'view-blu', prevViewId: 'view-serial' } }))
+	assert.equal(subnav.hidden, true, '切到其它左栏视图时自动收起串口子菜单')
+	viewSerial.classList.toggle('active', true)
+	doc.dispatchEvent(new sandbox.CustomEvent('serial-active-view-change', { detail: { viewId: 'view-serial', prevViewId: 'view-blu' } }))
+	assert.equal(subnav.hidden, false, '切回串口视图时恢复展开')
+})
+
 let current = null
 let finished = false
 process.on('exit', (code) => {

@@ -506,6 +506,16 @@ function createIntegrationEnv(opts) {
 		vm.runInContext(readJs('js/tool-plugin-registry.js'), sandbox, { filename: 'js/tool-plugin-registry.js' })
 		vm.runInContext(readJs('js/blu-protocol.js'), sandbox, { filename: 'js/blu-protocol.js' })
 	}
+	if (opts.withAc6d) {
+		sandbox.BigInt = BigInt
+		sandbox.Uint16Array = Uint16Array
+		sandbox.setInterval = (fn, ms) => {
+			const h = setInterval(fn, ms)
+			if (h && typeof h.unref === 'function') h.unref()
+			return h
+		}
+		sandbox.clearInterval = clearInterval
+	}
 
 	// 记录是否发生过嵌套 AppDialog.confirm/alert/prompt 调用
 	let nestedDialogCalls = 0
@@ -618,14 +628,20 @@ function createIntegrationEnv(opts) {
 		setGenericPanelHandlers: (h) => { genericHandlers = h },
 	}
 
-	// 3. 按 index.html 顺序加载：hostproto → protocol-downlink → json-protocol → js-protocol-plugin → protocol-manager → collapsible-cards → command-palette
+	// 3. 按 index.html 顺序加载：hostproto → (可选 ac6d-protocol) → protocol-downlink → json-protocol → js-protocol-plugin → protocol-manager → collapsible-cards → command-palette → (可选 ac6d-workbench)
 	vm.runInContext(readJs('js/hostproto-protocol.js'), sandbox, { filename: 'js/hostproto-protocol.js' })
+	if (opts.withAc6d) {
+		vm.runInContext(readJs('js/ac6d-protocol.js'), sandbox, { filename: 'js/ac6d-protocol.js' })
+	}
 	vm.runInContext(readJs('js/protocol-downlink.js'), sandbox, { filename: 'js/protocol-downlink.js' })
 	vm.runInContext(readJs('js/json-protocol.js'), sandbox, { filename: 'js/json-protocol.js' })
 	vm.runInContext(readJs('js/js-protocol-plugin.js'), sandbox, { filename: 'js/js-protocol-plugin.js' })
 	vm.runInContext(readJs('js/protocol-manager.js'), sandbox, { filename: 'js/protocol-manager.js' })
 	vm.runInContext(readJs('js/collapsible-cards.js'), sandbox, { filename: 'js/collapsible-cards.js' })
 	vm.runInContext(readJs('js/command-palette.js'), sandbox, { filename: 'js/command-palette.js' })
+	if (opts.withAc6d) {
+		vm.runInContext(readJs('js/ac6d-workbench.js'), sandbox, { filename: 'js/ac6d-workbench.js' })
+	}
 
 	return {
 		sandbox,
@@ -669,6 +685,7 @@ async function run() {
 			'js/cjt188-protocol.js',
 			'js/hostproto-protocol.js',
 			'js/at-modem-protocol.js',
+			'js/ac6d-protocol.js',
 			'js/protocol-downlink.js',
 			'js/json-protocol.js',
 			'js/js-protocol-plugin.js',
@@ -676,6 +693,8 @@ async function run() {
 			'js/blu-protocol.js',
 			'js/blu-power.js',
 			'js/modern-power.js',
+			'js/ac6d-workbench.js',
+			'js/app-update.js',
 		]
 		let prev = -1
 		for (const s of seq) {
@@ -1240,6 +1259,491 @@ async function run() {
 		assert.equal(document.getElementById('view-plugin-e2e-multi-tool'), null, '动态工具视图 DOM 必须清理干净')
 		assert.equal(railTop.children.some((c) => c.dataset && c.dataset.toolPlugin === 'e2e-multi-tool'), false, '动态左栏按钮必须清理干净')
 		assert.deepEqual([...sandbox.__e2eLog], ['mount:e2e-multi-tool', 'activate:e2e-multi-tool', 'deactivate:e2e-multi-tool', 'unmount:e2e-multi-tool'])
+	}
+
+	// ---- 10. 真实 AC6D 协议 + 真实 AC6D 校表工作台 + 真实 ToolPluginRegistry + 真实 ProtocolManager + 真实命令面板全链路联调 ----
+	{
+		const SerialAdapter = require('../js/serial-adapter.js')
+		const Ac6dProtoReal = require('../js/ac6d-protocol.js')
+		const Ac6dWbReal = require('../js/ac6d-workbench.js')
+
+		const env = createIntegrationEnv({ withRailAndPower: true, withAc6d: true })
+		const { sandbox, document, els } = env
+		const PR = sandbox.ProtocolRegistry
+		const TPR = sandbox.ToolPluginRegistry
+		const JSP = sandbox.JsProtocolPlugin
+
+		// 10.1 注册表与保留 ID 防护
+		assert.equal(PR.has('ac6d-meter'), true, '内置 ac6d-meter 通信协议应自动注册')
+		assert.equal(PR.get('ac6d-meter').name, '容积水表 (AC6D)')
+		assert.equal(PR.get('ac6d-meter').builtin, true)
+		assert.equal(TPR.has('ac6d'), true, '内置 ac6d 左栏工具应自动注册')
+		assert.equal(TPR.get('ac6d').name, '容积水表校表台')
+		assert.equal(TPR.get('ac6d').viewId, 'view-ac6d')
+		assert.equal(TPR.get('ac6d').builtin, true)
+
+		const spoofTool = JSP.saveLocalPlugin({ pluginId: 'spoof-ac6d-tool', name: '伪造水表', code: "registerToolPlugin('ac6d', { name: '假水表' })" })
+		assert.equal(JSP.trustAndEnable(spoofTool.pluginKey).ok, false, '外部 JS 插件不得抢注保留工具 ID ac6d')
+		const spoofProto = JSP.saveLocalPlugin({ pluginId: 'spoof-ac6d-proto', name: '伪造协议', code: "registerProtocol('ac6d-meter', { name: '假协议' })" })
+		assert.equal(JSP.trustAndEnable(spoofProto.pluginKey).ok, false, '外部 JS 插件不得抢注保留协议 ID ac6d-meter')
+
+		// 10.2 ProtocolManager 列出 ac6d-meter（通信协议）与 ac6d（左栏工具，含打开与显隐开关）
+		assert.equal(sandbox.ProtocolManager.open('installed'), true)
+		const allRows = document.body.querySelectorAll('.pm-item')
+		const ac6dProtoRow = allRows.find((r) => r.dataset && r.dataset.protocolId === 'ac6d-meter')
+		const ac6dToolRow = allRows.find((r) => r.dataset && r.dataset.toolPluginId === 'ac6d')
+		const powerToolRow = allRows.find((r) => r.dataset && r.dataset.toolPluginId === 'power')
+		assert.ok(ac6dProtoRow && ac6dProtoRow.textContent.includes('容积水表 (AC6D)'), 'ProtocolManager 通信协议列表应包含 ac6d-meter')
+		assert.ok(ac6dToolRow && ac6dToolRow.textContent.includes('容积水表校表台'), 'ProtocolManager 左栏工具列表应包含 ac6d')
+		assert.ok(powerToolRow && powerToolRow.textContent.includes('功耗分析'), 'ProtocolManager 左栏工具列表应并列包含 power')
+		const ac6dSwitch = document.getElementById('pm-tool-vis-ac6d')
+		assert.ok(ac6dSwitch && ac6dSwitch.checked === true, 'ac6d 左栏工具开关应默认启用')
+		const openAc6dBtn = ac6dToolRow.querySelectorAll('button').find((b) => b.textContent.trim() === '打开视图')
+		assert.ok(openAc6dBtn && !openAc6dBtn.disabled, 'ac6d 左栏工具应提供可用的「打开视图」按钮')
+		openAc6dBtn.click()
+		await Promise.resolve()
+		assert.equal(TPR.getActiveView(), 'view-ac6d', '点击「打开视图」应激活 view-ac6d')
+		assert.equal(sandbox.ProtocolManager.isOpen(), false, '打开视图后管理对话框应自动关闭')
+
+		// 10.3 Command Palette 列出 容积水表校表台 一次且不重复功耗分析，隐藏后消失
+		sandbox.serialCommandPalette.open()
+		const cmdHtml = els.cmdkList.innerHTML
+		assert.equal(cmdHtml.split('切换到：容积水表校表台').length - 1, 1, '命令面板应恰好列出一次「容积水表校表台」')
+		assert.equal(cmdHtml.split('切换到功耗分析').length - 1, 1, '命令面板应恰好列出一次「功耗分析」')
+		assert.equal(cmdHtml.includes('切换到：功耗分析'), false, '命令面板不得重复列出功耗分析')
+		sandbox.serialCommandPalette.close()
+
+		assert.equal(TPR.setHidden('ac6d', true).ok, true)
+		assert.equal(TPR.getActiveView(), 'view-serial', '隐藏当前激活的 ac6d 视图后应回退 view-serial')
+		sandbox.serialCommandPalette.open()
+		assert.equal(els.cmdkList.innerHTML.includes('容积水表校表台'), false, '隐藏 ac6d 后命令面板不应再显示它')
+		sandbox.serialCommandPalette.close()
+		assert.equal(TPR.setHidden('ac6d', false).ok, true)
+
+		// 10.4 真实二进制帧端到端联调：Real Ac6dProtocol + Real Ac6dWorkbench + Real SerialAdapter.createStreamPort
+		const packU16 = (v) => [v & 0xff, (v >> 8) & 0xff]
+		const packI16 = (v) => [(v & 0xff), ((v >> 8) & 0xff)]
+		const packU32 = (v) => [v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff]
+		const packU64 = (v) => {
+			let bi = typeof v === 'bigint' ? v : BigInt(v)
+			const out = []
+			for (let i = 0; i < 8; i++) { out.push(Number(bi & 0xffn)); bi >>= 8n }
+			return out
+		}
+		const asciiPad = (s, n) => {
+			const out = new Array(n).fill(0)
+			for (let i = 0; i < Math.min(s.length, n); i++) out[i] = s.charCodeAt(i) & 0xff
+			return out
+		}
+		const makeAc6dRsp = (seq, cmd, status, addr, dataBytes) => {
+			const pkt = addr == null
+				? Uint8Array.from([cmd & 0xff, status & 0xff, ...(dataBytes || [])])
+				: Uint8Array.from([cmd & 0xff, status & 0xff, ...packU32(addr), ...(dataBytes || [])])
+			return Ac6dProtoReal.buildFrame(seq, pkt)
+		}
+		const makeA99aUplink = (userNumberHex, imei, iccid, seqOverride) => {
+			const revBytes = (hex) => {
+				const b = Ac6dProtoReal.hexToBytes(hex)
+				const r = new Uint8Array(b.length)
+				for (let i = 0; i < b.length; i++) r[i] = b[b.length - 1 - i]
+				return Array.from(r)
+			}
+			const tlv1Val = [
+				0x00, ...asciiPad(imei, 15),
+				0x02, ...asciiPad(iccid, 20),
+				0x03, ...revBytes(userNumberHex),
+				0x04, ...revBytes('08091011121314'),
+			]
+			const tlv1 = [0x01, ...packU16(tlv1Val.length), ...tlv1Val]
+			const dataDom = [...packU16(tlv1.length), ...tlv1]
+			const seqNum = seqOverride != null ? seqOverride : 7
+			const body = Uint8Array.from([
+				0xa9, 0x9a, ...packU16(seqNum), 0x02, 0x01, 0x10,
+				...revBytes('08091011121314'),
+				...packI16(-860), ...packI16(110), 1, 22,
+				0x83, 0x00, ...packU16(dataDom.length), ...dataDom,
+			])
+			const crc = Ac6dProtoReal.crc16(body)
+			return Uint8Array.from([...body, ...packU16(crc), 0x16])
+		}
+
+		// 确定性虚拟时钟 + 真实 SerialAdapter.createStreamPort
+		let fakeNow = new Date(2026, 10, 27, 12, 30, 45).getTime()
+		let timerSeq = 1
+		const timerQ = new Map()
+		const clock = {
+			now: () => fakeNow,
+			setTimeout(fn, ms) {
+				const id = timerSeq++
+				timerQ.set(id, { id, at: fakeNow + Math.max(0, Number(ms) || 0), fn })
+				return id
+			},
+			clearTimeout(id) { timerQ.delete(id) },
+			async flush() { for (let i = 0; i < 32; i++) await Promise.resolve() },
+			async advance(ms) {
+				await this.flush()
+				const end = fakeNow + ms
+				while (true) {
+					let next = null
+					timerQ.forEach((t) => { if (t.at <= end && (!next || t.at < next.at)) next = t })
+					if (!next) break
+					fakeNow = next.at
+					timerQ.delete(next.id)
+					next.fn()
+					await this.flush()
+				}
+				fakeNow = end
+				await this.flush()
+			},
+		}
+
+		let pushRx = null
+		const txFrames = []
+		let deviceResponder = null
+		const realPort = SerialAdapter.createStreamPort({
+			getInfo: () => ({ path: 'COM88', usbVendorId: 0x1a86, usbProductId: 0x7523 }),
+			open: async (_opts, sink) => { pushRx = (u8) => sink.data(u8) },
+			write: async (u8) => {
+				const copy = u8.slice()
+				txFrames.push(copy)
+				if (deviceResponder) deviceResponder(copy)
+			},
+			close: async () => { pushRx = null },
+		})
+		const fakeAdapter = {
+			isSupported: () => true,
+			canEnumerate: () => true,
+			listPorts: async () => [realPort],
+			getPorts: async () => [realPort],
+			grantPort: () => {},
+			addEventListener: () => {},
+		}
+		const ctrl = Ac6dWbReal.createController({
+			protocol: Ac6dProtoReal,
+			serialAdapter: fakeAdapter,
+			appDialog: { alert: async () => {}, confirm: async () => true },
+			now: clock.now,
+			setTimeout: clock.setTimeout,
+			clearTimeout: clock.clearTimeout,
+			timings: {
+				saveTimeouts: [300, 400, 300, 300],
+				saveGapMs: 30,
+				saveRetryDelays: [100, 200],
+				otaStepGapMs: 20,
+				otaHandshakeMs: 300,
+				otaEraseMs: 300,
+				otaChunkMs: 300,
+				otaCrcMs: 300,
+				otaResetWaitMs: 500,
+				otaVerifyMs: 300,
+				otaRetryDelayMs: 100,
+			},
+		})
+		await ctrl.refreshPorts()
+		assert.equal((await ctrl.openPort({ port: realPort })).ok, true)
+
+		// 构造真实 0x33 / 0x31 / 0x40 / 0x42(0) / 0x37 应答载荷
+		const uidBytes = [0xaa, 0xbb, 0xcc, 0x78, 0x56, 0x34, 0x12] // authCode = 0x12345678
+		const dev33Payload = Uint8Array.from([
+			...uidBytes,
+			...asciiPad('V2.7.0', 16),
+			24, ...packU16(365), 0x01,
+			0x26, 0x11, 0x27, 0x12, 0x30, 0x00, 0x05, 0x00,
+			2, ...packU16(3), ...packU16(1), ...packU32(86400), ...packU32(1200),
+			0, 0, 0,
+		])
+		const flow31Payload = Uint8Array.from([
+			...packU64(100), ...packU64(5),
+			...packU64(1708500), ...packU64(85425),
+			...packU16(1250), // 0.1250 m3/h = 125.0 L/h
+			1, 22, ...packU16(362), ...packU16(17085),
+			0x21, // flowing + quadRemainder=2
+			0x00, ...packU16(450),
+			0x20, 0x26, 0x11, 0x27, 0x12, 0x30, 0x05,
+		])
+		const calib192Payload = new Uint8Array(192)
+		calib192Payload.set(packU32(0xaa55aa55), 0)
+		calib192Payload.set(packU32(1), 4)
+		calib192Payload.set(packU32(17085), 8)
+		calib192Payload.set(packU32(1000), 12)
+		calib192Payload.set(packU32(60000), 16)
+		calib192Payload[22] = 18
+		calib192Payload[23] = 18
+		for (let i = 0; i < 20; i++) {
+			calib192Payload.set(packU16(100 + i * 10), 24 + i * 4)
+			calib192Payload.set(packU16(10000 + i), 24 + i * 4 + 2)
+			calib192Payload.set(packU16(120 + i * 10), 104 + i * 4)
+			calib192Payload.set(packU16(9950 + i), 104 + i * 4 + 2)
+		}
+		calib192Payload.set(packU16(Ac6dProtoReal.crc16(calib192Payload.subarray(0, 190))), 190)
+
+		const base40Body = new Uint8Array(40)
+		base40Body.set(uidBytes, 0)
+		base40Body.set(packU16(310), 7) // 3.10V
+		base40Body.set(packU16(60), 9)
+		base40Body.set(packU64(9007199254740993n), 11)
+		base40Body[19] = 0x55
+		base40Body.set(packU32(17085), 20)
+		base40Body.set(packU32(1000), 24)
+		base40Body.set(packU32(60000), 28)
+		base40Body[32] = 1
+		base40Body[33] = 0
+		base40Body.set(packI16(10000), 34)
+		base40Body.set(packU16(200), 36) // 20.0C
+		base40Body.set(packU16(Ac6dProtoReal.crc16(base40Body.subarray(0, 38))), 38)
+		const param42Type0Payload = Uint8Array.from([0x00, ...base40Body])
+
+		const makeFreezeEntry = (serial, dayBcd, cumL100) => {
+			const e = new Uint8Array(32)
+			e.set(packU16(0x5a5a), 0)
+			e.set(packU16(serial), 2)
+			e.set([0x20, 0x26, 0x11, dayBcd], 4)
+			e.set(packU32(cumL100), 8)
+			e.set(packU32(50), 12)
+			e.set(packU32(cumL100 + 50), 16)
+			e.set(packU16(800), 20)
+			e.set(packI16(215), 22)
+			e[24] = 0x00
+			e.set(packU16(Ac6dProtoReal.crc16(e.subarray(0, 28))), 28)
+			return e
+		}
+
+		// 验证 0x33 -> 0x31 -> 0x40 -> 被动 0x42(0) 不建立快照 -> 主动 sendParamRead(0) + uint64 字符串写回 -> 0x37 自动翻页
+		pushRx(makeAc6dRsp(1, 0x33, 0x00, 0, dev33Payload))
+		pushRx(makeAc6dRsp(2, 0x31, 0x00, 0, flow31Payload))
+		pushRx(makeAc6dRsp(3, 0x40, 0x00, 0, calib192Payload))
+		pushRx(makeAc6dRsp(4, 0x42, 0x00, 0, param42Type0Payload))
+		await clock.flush()
+		assert.equal(ctrl.isBaseParamsSnapshotValid(), false, '被动 0x42(0) 不得建立可写快照')
+
+		// 主动发起 0x42(0) 并回匹配 SEQ -> 建立当前表快照
+		const paramReadRes = await ctrl.sendParamRead(0)
+		const pReq42 = Ac6dProtoReal.parseFrame(paramReadRes.frame)
+		pushRx(makeAc6dRsp(pReq42.seq, 0x42, 0x00, 0, param42Type0Payload))
+		await clock.flush()
+		assert.equal(ctrl.isBaseParamsSnapshotValid(), true)
+
+		assert.equal(ctrl.state.device.onlyAddrHex, 'AABBCC78563412')
+		assert.equal(ctrl.getEffectiveAuthCode(), 0x12345678)
+		assert.equal(ctrl.state.device.firmwareVersion, 'V2.7.0')
+		assert.equal(ctrl.state.flow.posPulse, 100)
+		assert.equal(ctrl.state.flow.displayPosVolUl, 1708500 + Math.floor(17085 * 2 / 4), '真实 0x31 帧应触发 4x 象限余数插值')
+		assert.equal(ctrl.state.flow.flowRateLph, 125)
+		assert.equal(ctrl.state.calib.fwdCoeffs[0], 10000)
+		assert.equal(ctrl.state.calib.fwdCoeffs[5], 10005)
+		assert.equal(ctrl.state.params.detectedLayout, 'v27-40')
+		assert.equal(ctrl.state.params.base.baseDegree, '9007199254740993')
+
+		// 验证大整数 uint64 baseDegree 写回经真实 Ac6dProtocol 编解码无精度丢失
+		const writeRes = await ctrl.sendParamWriteBase({ baseDegree: '9007199254740993' })
+		assert.equal(writeRes.ok, true)
+		const parsedWrite = Ac6dProtoReal.parseFrame(writeRes.frame)
+		assert.equal(parsedWrite.ok, true)
+		assert.equal(parsedWrite.detail.base.baseDegree, 9007199254740993n, '大整数 uint64 baseDegree 写回必须保持精确 BigInt')
+
+		// 验证 0x37 日冻结两页自动翻页
+		deviceResponder = (tx) => {
+			const p = Ac6dProtoReal.parseFrame(tx)
+			if (p.ok && p.cmd === 0x37) {
+				if (p.detail.startIndex === 0) {
+					pushRx(makeAc6dRsp(p.seq, 0x37, 0x00, 0, Uint8Array.from([...packU16(2), ...packU16(1), ...makeFreezeEntry(0, 0x25, 12345)])))
+				} else if (p.detail.startIndex === 1) {
+					pushRx(makeAc6dRsp(p.seq, 0x37, 0x00, 0, Uint8Array.from([...packU16(2), ...packU16(1), ...makeFreezeEntry(1, 0x26, 23456)])))
+				}
+			}
+		}
+		ctrl.startDailyFreezeAll()
+		await clock.advance(50)
+		assert.equal(ctrl.state.freeze.autoReading, false)
+		assert.equal(ctrl.state.freeze.entries.length, 2)
+		assert.equal(ctrl.state.freeze.entries[0].cumulativeL, 123.45)
+		assert.equal(ctrl.state.freeze.entries[1].date, '2026-11-26')
+
+		// 10.5 Save-All 4 步实帧联调（0x33 -> 0x40 -> 0x42(0) -> 裸发 A99A）
+		deviceResponder = (tx) => {
+			const p = Ac6dProtoReal.parseFrame(tx)
+			if (!p.ok) return
+			if (p.kind === 'ac6d' && p.cmd === 0x33) pushRx(makeAc6dRsp(p.seq, 0x33, 0x00, 0, dev33Payload))
+			else if (p.kind === 'ac6d' && p.cmd === 0x40) pushRx(makeAc6dRsp(p.seq, 0x40, 0x00, 0, calib192Payload))
+			else if (p.kind === 'ac6d' && p.cmd === 0x42) pushRx(makeAc6dRsp(p.seq, 0x42, 0x00, 0, param42Type0Payload))
+			else if (p.kind === 'a99a-query') pushRx(makeA99aUplink('00000003115261005007', '861234567890123', '89860412345678901234', p.seq))
+		}
+		const savePromise = ctrl.startSaveAll({ skipDownload: true })
+		await clock.advance(300)
+		const saveRes = await savePromise
+		assert.equal(saveRes.ok, true)
+		assert.equal(saveRes.fileName, '0311526100_5007_N_N_N_N_N_N_N_N_N_校表数据_20261127_123045.json')
+		assert.equal(saveRes.record.schema, 'SK-CALIB-BIND')
+		assert.equal(saveRes.record.schema_version, 4)
+		assert.equal(saveRes.record.saved_at, '2026-11-27 12:30:45', 'buildCalibBindJson 必须使用传入的确定性日期')
+		assert.equal(saveRes.record.source.port, 'COM88', 'buildCalibBindJson 必须写入真实端口名')
+		assert.equal(saveRes.record['台位0'].serial.port, 'COM88')
+		assert.equal(saveRes.record['台位0'].statu['读取传感器信息'], '成功')
+		assert.equal(saveRes.record['台位0'].statu['读取远传模组信息'], '成功')
+		assert.equal(saveRes.record['台位0'].nb_module.imei, '861234567890123')
+		assert.equal(saveRes.record['台位0'].nb_module.user_number, '00000003115261005007')
+		assert.ok(saveRes.record['台位0'].serial.serial_io.device_info.rx && saveRes.record['台位0'].serial.serial_io.module.rx)
+
+		// 10.6 OTA 6 步实帧联调（原始 App.bin 自动加 16B 头 + 半双工回显免疫 + 0x25 格式B + 主动 0x33 验证）
+		const rawApp = new Uint8Array(300)
+		for (let i = 0; i < rawApp.length; i++) rawApp[i] = (i * 7 + 3) & 0xff
+		ctrl.loadFirmwareBytes(rawApp, 'App_V280.bin')
+		const writtenFlash = new Uint8Array(rawApp.length + 16)
+		const newDev33Payload = dev33Payload.slice()
+		newDev33Payload.set(asciiPad('V2.8.0', 16), 7)
+
+		deviceResponder = (tx) => {
+			// 先模拟半双工 TX 回显（验证 handleAc6dEvent 忽略 dir==='req' 不误中断 OTA）
+			pushRx(tx)
+			const p = Ac6dProtoReal.parseFrame(tx)
+			if (!p.ok || p.kind !== 'ac6d') return
+			if (p.cmd === 0x20) {
+				pushRx(makeAc6dRsp(p.seq, 0x20, 0x00, 0, asciiPad('V2.7.0', 16)))
+			} else if (p.cmd === 0x24) {
+				pushRx(makeAc6dRsp(p.seq, 0x24, 0x00, 0x8000, []))
+			} else if (p.cmd === 0x22) {
+				const off = p.addr - 0x8000
+				writtenFlash.set(p.data, off)
+				pushRx(makeAc6dRsp(p.seq, 0x22, 0x00, p.addr, []))
+			} else if (p.cmd === 0x25) {
+				const crcCalc = Ac6dProtoReal.crc16(writtenFlash.subarray(0, p.detail.length))
+				// 返回格式 B（含 4B 起始地址 0x8000 + 2B CRC）
+				pushRx(makeAc6dRsp(p.seq, 0x25, 0x00, 0x8000, packU16(crcCalc)))
+			} else if (p.cmd === 0x26) {
+				pushRx(makeAc6dRsp(p.seq, 0x26, 0x00, 0, []))
+				// 模拟重启后主动上报新版本 0x33
+				clock.setTimeout(() => {
+					pushRx(makeAc6dRsp(99, 0x33, 0x00, 0, newDev33Payload))
+				}, 100)
+			}
+		}
+		const otaStart = ctrl.startAutoOta({ chunkSize: 128 })
+		assert.equal(otaStart.ok, true)
+		assert.equal(otaStart.autoWrapped, true)
+		await clock.advance(600)
+		assert.equal(ctrl.state.ota.running, false)
+		assert.equal(ctrl.state.ota.lastResult && ctrl.state.ota.lastResult.ok, true, '真实二进制帧 6 步 OTA 必须成功完成')
+		assert.equal(ctrl.state.ota.lastResult.newVersion, 'V2.8.0')
+
+		// 10.7 实帧回归：0x41 写入后 3s 回读 raw176 字节比对（匹配 SEQ）、0x37 跳过 CRC 损坏条目、0x43 未读新表 0x42 被拦截
+		const verifyLog = []
+		ctrl.onChange((topic, payload) => {
+			if (topic === 'calib-verify') verifyLog.push(payload)
+		})
+		let writtenCalibBytes = null
+		deviceResponder = (tx) => {
+			const p = Ac6dProtoReal.parseFrame(tx)
+			if (!p.ok || p.kind !== 'ac6d') return
+			if (p.cmd === 0x41) {
+				writtenCalibBytes = p.data.slice()
+				// 先发错误 SEQ 的 0x41 ACK（必须被忽略）
+				pushRx(makeAc6dRsp((p.seq + 50) & 0xff, 0x41, 0x01, 0, []))
+				// 再发正确 SEQ 的 0x41 OK
+				pushRx(makeAc6dRsp(p.seq, 0x41, 0x00, 0, []))
+			} else if (p.cmd === 0x40) {
+				const rsp192 = new Uint8Array(192)
+				rsp192.set(packU32(0xaa55aa55), 0)
+				rsp192.set(packU32(2), 4)
+				rsp192.set(writtenCalibBytes, 8)
+				rsp192.set(packU16(Ac6dProtoReal.crc16(rsp192.subarray(0, 190))), 190)
+				pushRx(makeAc6dRsp(p.seq, 0x40, 0x00, 0, rsp192))
+			}
+		}
+		await ctrl.writeAllCalibCoeffs()
+		await clock.advance(3100)
+		assert.equal(verifyLog.length, 1)
+		assert.equal(verifyLog[0].ok, true, '实帧 0x41 -> 3s -> 0x40 raw176 比对应通过')
+
+		// 0x37 混入 1 条 CRC 损坏条目，分页按 batchCount 推进但跳过损坏记录
+		const corruptFreeze = makeFreezeEntry(9, 0x27, 9999)
+		corruptFreeze[28] ^= 0x55
+		deviceResponder = (tx) => {
+			const p = Ac6dProtoReal.parseFrame(tx)
+			if (p.ok && p.cmd === 0x37) {
+				if (p.detail.startIndex === 0) {
+					pushRx(makeAc6dRsp(p.seq, 0x37, 0x00, 0, Uint8Array.from([...packU16(3), ...packU16(2), ...makeFreezeEntry(0, 0x25, 1000), ...corruptFreeze])))
+				} else if (p.detail.startIndex === 2) {
+					pushRx(makeAc6dRsp(p.seq, 0x37, 0x00, 0, Uint8Array.from([...packU16(3), ...packU16(1), ...makeFreezeEntry(2, 0x26, 2000)])))
+				}
+			}
+		}
+		ctrl.startDailyFreezeAll()
+		await clock.advance(50)
+		assert.equal(ctrl.state.freeze.autoReading, false)
+		assert.equal(ctrl.state.freeze.entries.length, 2, '损坏 CRC 日冻结条目必须跳过，保留 2 条有效记录')
+		assert.equal(ctrl.state.freeze.skippedCorruptCount, 1)
+
+		// 切表（不同 UID）后 0x43 必须被拒绝
+		const otherDev33 = dev33Payload.slice()
+		otherDev33[0] = 0xee
+		pushRx(makeAc6dRsp(12, 0x33, 0x00, 0, otherDev33))
+		await clock.flush()
+		const blocked43 = await ctrl.sendParamWriteBase({ voltageAlarmV: 3.2 })
+		assert.equal(blocked43.ok, false)
+
+		await ctrl.closePort({ manual: true })
+		ctrl.destroy()
+	}
+
+	// 10.8 P2-A: common.js 双路 A/B 同 SEQ 0x25 独立 crcReqTracker 隔离验证（含 resetLaneParseSession）
+	{
+		const Ac6dProtoReal = require('../js/ac6d-protocol.js')
+		const commonSrc = fs.readFileSync(path.join(__dirname, '../js/common.js'), 'utf8')
+		const parseViewSrc = fs.readFileSync(path.join(__dirname, '../js/parse-view.js'), 'utf8')
+		const a = commonSrc.indexOf('\tfunction bytesToHexArr(')
+		const b = commonSrc.indexOf('\t//日志正文渲染到此为止', a)
+		assert.ok(a > 0 && b > a, 'common.js 日志渲染锚点应存在')
+		const laneCtx = vm.createContext({
+			Map, Set, Array, Object, Number, String, Uint8Array, ArrayBuffer, DataView, Math, Date,
+			textdecoder: new TextDecoder(),
+			toolOptions: { showTime: false },
+			HTMLEncode: (t) => String(t),
+			attrEscape: (t) => String(t),
+			ansi_up: { ansi_to_html: (t) => t },
+			AnsiUp: function () { this.ansi_to_html = (t) => t },
+			logSeq: 0,
+			formatDate: () => '',
+			laneLive: { A: null, B: null },
+			sessionResetSeq: { S: 0, A: 0, B: 0 },
+			protocolIdForSid: () => 'ac6d-meter',
+			document: { createElement: () => ({ attrs: {}, children: [], setAttribute() {}, getAttribute() { return null }, appendChild() {} }) },
+			window: {
+				_activeProtocol: 'ac6d-meter',
+				Ac6dProtocol: Ac6dProtoReal,
+				getActiveProtocol: () => Ac6dProtoReal,
+			},
+			getProtocolParseOpts: () => ({}),
+			skParseFrame: (data, opts) => Ac6dProtoReal.parseFrame(data, opts),
+			SerialHub: { activeSendPhys: () => 'A', logModeOf: () => 'dual', getSessionLabel: () => 'A路', getLogContainerFor: () => ({ children: [] }) },
+			logType: 'parse',
+			getLogTypeForSid: () => 'parse',
+			appendLogNode: () => {},
+			isRowLogType: () => true,
+		})
+		vm.runInContext(parseViewSrc, laneCtx)
+		vm.runInContext(commonSrc.slice(a, b) + '\nglobalThis.laneApi = { inLiveLane, renderParseSegment, resetLaneParseSession }', laneCtx)
+
+		const reqA = Ac6dProtoReal.builders.otaCrc(0x8000, 0x400, { seq: 0x33 })
+		const reqB = Ac6dProtoReal.builders.otaCrc(0x9000, 0x400, { seq: 0x33 })
+		const rspA = Ac6dProtoReal.buildFrame(0x33, Uint8Array.from([0x25, 0x00, 0x00, 0x80, 0x00, 0x00, 0x34, 0x12]))
+		const rspB = Ac6dProtoReal.buildFrame(0x33, Uint8Array.from([0x25, 0x00, 0x00, 0x90, 0x00, 0x00, 0x78, 0x56]))
+
+		// A 路发 0x8000，B 路同 seq 发 0x9000
+		laneCtx.laneApi.inLiveLane('A', () => laneCtx.laneApi.renderParseSegment(reqA, { isReceive: false }))
+		laneCtx.laneApi.inLiveLane('B', () => laneCtx.laneApi.renderParseSegment(reqB, { isReceive: false }))
+		const htmlA = laneCtx.laneApi.inLiveLane('A', () => laneCtx.laneApi.renderParseSegment(rspA, { isReceive: true }))
+		const htmlB = laneCtx.laneApi.inLiveLane('B', () => laneCtx.laneApi.renderParseSegment(rspB, { isReceive: true }))
+		assert.ok(htmlA.includes('0x1234') && htmlA.includes('格式 B'), 'A 路同 seq 应正确解析格式 B 0x1234')
+		assert.ok(htmlB.includes('0x5678') && htmlB.includes('格式 B'), 'B 路同 seq 应正确解析格式 B 0x5678 且不被 A 路污染')
+
+		// 重置 A 路不得清空 B 路的 tracker
+		laneCtx.laneApi.resetLaneParseSession('A')
+		const htmlBAfterResetA = laneCtx.laneApi.inLiveLane('B', () => laneCtx.laneApi.renderParseSegment(rspB, { isReceive: true }))
+		assert.ok(htmlBAfterResetA.includes('0x5678') && !htmlBAfterResetA.includes('缺请求地址上下文'))
+		// 重置 B 路后，非 0x8000 应答回退为候选模糊态
+		laneCtx.laneApi.resetLaneParseSession('B')
+		const htmlBAfterResetB = laneCtx.laneApi.inLiveLane('B', () => laneCtx.laneApi.renderParseSegment(rspB, { isReceive: true }))
+		assert.ok(htmlBAfterResetB.includes('缺请求地址上下文'))
 	}
 
 	console.log('protocol-integration: ok')
