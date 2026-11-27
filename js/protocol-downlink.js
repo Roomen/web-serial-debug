@@ -689,6 +689,13 @@
 			if (!iso) return null
 			return histDateQueryBytes(iso)
 		}
+		if (p.type === 'cellularLock') {
+			const raw = paramVal ? paramVal.value.trim() : ''
+			const result = root.SK_PRESET_CODEC ? root.SK_PRESET_CODEC.cellularLockToBytes(p.field, raw) : null
+			setParamUnit(result && result.error ? result.error : (raw ? '' : '不锁定'), !!(result && result.error))
+			if (!result || result.error) return null
+			return result.bytes
+		}
 		if (p.type === 'hexbytes' || p.type === 'hex') {
 			const s = paramVal ? paramVal.value.trim() : ''
 			const fl = p.fillLen != null ? Number(p.fillLen) : (p.length != null ? Number(p.length) : null)
@@ -1199,6 +1206,15 @@
 					paramVal.placeholder = preset.param.placeholder || 'HEX, 如 01 02 03 04'
 					setParamUnit(fl ? ('(' + fl + 'B)') : '', false)
 					_currentParamType = preset.param.type
+				} else if (preset.param.type === 'cellularLock') {
+					paramVal.type = 'text'
+					paramVal.style.display = ''
+					paramVal.style.width = '180px'
+					paramSelEnum.style.display = 'none'
+					if (preset.param.inputMode) paramVal.inputMode = preset.param.inputMode
+					paramVal.value = ''
+					paramVal.placeholder = preset.param.placeholder || ''
+					_currentParamType = 'cellularLock'
 				} else if (preset.param.type === 'largeFlow') {
 					paramVal.type = 'text'
 					paramVal.inputMode = 'decimal'

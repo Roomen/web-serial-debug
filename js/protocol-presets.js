@@ -457,6 +457,20 @@ window.SK_DOWN_PRESETS = [
 		]
 	},
 	{
+		group: '参数设置-TAG40蜂窝搜网 (0x01)',
+		items: [
+			{ name: '设置锁定运营商', func: '0x01', desc: 'Tag40-ID1，5 或 6 位 MCC+MNC，留空自动选网',
+				param: { label: 'MCC+MNC', type: 'cellularLock', field: 'operator', placeholder: '留空不锁运营商', inputMode: 'numeric' },
+				tlv: [{ tag: 40, items: [{ id: 1 }] }] },
+			{ name: '设置锁定频段', func: '0x01', desc: 'Tag40-ID2，最多 8 个十进制频段号，留空不锁频段；与频点互斥，由设备清除另一项',
+				param: { label: '频段', type: 'cellularLock', field: 'bands', placeholder: '如 3, 8, 20；留空不锁频段' },
+				tlv: [{ tag: 40, items: [{ id: 2 }] }] },
+			{ name: '设置锁定频点', func: '0x01', desc: 'Tag40-ID3，EARFCN 1–262143，留空不锁频点；与频段互斥，由设备清除另一项',
+				param: { label: 'EARFCN', type: 'cellularLock', field: 'earfcn', placeholder: '留空不锁频点', inputMode: 'numeric' },
+				tlv: [{ tag: 40, items: [{ id: 3 }] }] },
+		]
+	},
+	{
 		group: '参数设置-TAG30超声波 (0x01)',
 		items: [
 			{ name: '设置流量点', func: '0x01', desc: 'Tag30-ID1 7个4字节流量值 28B',
@@ -664,6 +678,8 @@ window.SK_DOWN_PRESETS = [
 				tlv: [{ tag: 10, items: [{ id: 15 }] }] },
 			{ name: '查询通信认证参数', func: '0x03', desc: 'Tag38 通信认证',
 				tlv: [{ tag: 10, items: [{ id: 22 }] }] },
+			{ name: '查询蜂窝搜网参数', func: '0x03', desc: 'Tag40 读取锁定配置与最近驻网信息（运营商、频段、频点）',
+				tlv: [{ tag: 10, items: [{ id: 40 }] }] },
 			{ name: '查询设备运行信息', func: '0x03', desc: 'Tag91 运行信息',
 				tlv: [{ tag: 10, items: [{ id: 7 }] }] },
 			{ name: '查询设备上行信息', func: '0x03', desc: 'Tag92 上行信息',
@@ -869,6 +885,27 @@ window.SK_PRESET_CODEC = (function () {
 		return out
 	}
 
+	function cellularLockToBytes(field, input) {
+		const text = String(input == null ? '' : input).trim()
+		if (field === 'operator') {
+			if (text && !/^\d{5,6}$/.test(text)) return { error: '请输入 5 或 6 位数字，或留空不锁' }
+			return { bytes: Array.from(text.padEnd(6, '\0'), digit => digit.charCodeAt(0)) }
+		}
+		if (field === 'bands') {
+			const bands = text ? text.split(/\s*[,，]\s*|\s+/) : []
+			if (bands.length > 8 || bands.some(band => !/^\d{1,3}$/.test(band) || Number(band) < 1 || Number(band) > 255)) {
+				return { error: '请输入最多 8 个 1–255 的频段号，用逗号或空格分隔，或留空不锁' }
+			}
+			return { bytes: bands.map(Number).concat(Array(8 - bands.length).fill(0)) }
+		}
+		if (field === 'earfcn') {
+			const value = Number(text)
+			if (text && (!/^\d+$/.test(text) || value < 1 || value > 262143)) return { error: '请输入 1–262143 的整数，或留空不锁' }
+			return { bytes: [value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff] }
+		}
+		return { error: '未知蜂窝搜网参数' }
+	}
+
 	return {
 		BASE_WATER_LABEL: BASE_WATER_LABEL,
 		largeFlowM3ToBytes: largeFlowM3ToBytes,
@@ -876,6 +913,7 @@ window.SK_PRESET_CODEC = (function () {
 		settingNumber: settingNumber,
 		settingBytes: settingBytes,
 		unitsToM3: unitsToM3,
+		cellularLockToBytes: cellularLockToBytes,
 		filterPresets: filterPresets
 	}
 })()

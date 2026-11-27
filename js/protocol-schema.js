@@ -9,7 +9,7 @@ window.SK_TAG_NAME = {
 	'30': '超声波表参数', '31': '超声波表状态参数',
 	'32': '摄像表参数', '33': '总线采集器参数', '34': '无磁传感器参数',
 	'35': 'LoRa/LoRaWAN参数', '36': '阀控参数', '37': '蓝牙参数',
-	'38': '通讯认证参数', '39': '告警参数',
+	'38': '通讯认证参数', '39': '告警参数', '40': '蜂窝搜网参数',
 	'62': '渗漏噪声数据', '63': '渗漏音频数据', '64': '渗漏仪运行参数',
 	'66': 'eSIM管理',
 	'90': '总线采集器数据',
@@ -35,9 +35,9 @@ window.SK_PLATFORM_REPLY = {
 }
 
 window.SK_FUNC_CODES = {
-	'0x01': { name: '参数设置', reqTags: [3, 31, 32, 33, 34, 35, 36, 37, 38, 39, 66], ack: '0x81' },
+	'0x01': { name: '参数设置', reqTags: [3, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 66], ack: '0x81' },
 	'0x02': { name: '终端数据上报', ack: '0x82', ackTag: 12 },
-	'0x03': { name: '信息查询', reqTag: 10, ack: '0x83', ackTags: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21, 22, 23, 24, 25, 26, 27, 31, 32, 33, 34, 35, 36, 37, 38, 39, 62, 63, 64, 66, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 254] },
+	'0x03': { name: '信息查询', reqTag: 10, ack: '0x83', ackTags: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21, 22, 23, 24, 25, 26, 27, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 62, 63, 64, 66, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 254] },
 	'0x04': { name: '数据透传', reqTag: 7, ack: '0x84', ackTag: 7 },
 	'0x11': { name: '指令操作', reqTag: 93, ack: '0x91', ackTag: 93 },
 	// 应答功能码: 0x81/0x91 的 TLV Value 为处理结果码(见 Tag11), 非参数原值
@@ -328,6 +328,14 @@ window.SK_TAGS = {
 		{ id: 3, name: '持续小流量告警参数', type: 'BYTE[4]', desc: '持续时间2B(min)+流量阈值2B(L)' },
 		{ id: 4, name: '逆流阶段预警阈值参数', type: 'BYTE[1+4+4+4]', desc: '使能1B(0关1开默认1)+一级逆流预警阈值4B(L,默认10)+二级逆流预警阈值4B(L,默认50)+三级逆流预警阈值4B(L,默认100)' }
 	],
+	'40': [
+		{ id: 1, name: '锁定运营商', type: 'BYTE[6]', desc: 'ASCII MCC+MNC，尾部补0；全0自动选网', dec: { t: 'cellularOperator', zero: '自动选网' } },
+		{ id: 2, name: '锁定频段', type: 'BYTE[8]', desc: '最多8个频段号，尾部补0；全0自动搜网', dec: { t: 'cellularBands', zero: '全频段自动搜网' } },
+		{ id: 3, name: '锁定频点', type: 'BYTE[4]', desc: 'EARFCN uint32 LE，1~262143；全0自动选频', dec: { t: 'cellularEarfcn', zero: '自动选频' } },
+		{ id: 4, name: '当前驻网运营商', type: 'BYTE[6]', desc: '只读，最近成功驻网的 MCC+MNC，ASCII 尾部补0', dec: { t: 'cellularOperator', zero: '未知' } },
+		{ id: 5, name: '当前驻网频段', type: 'BYTE', desc: '只读，0表示未知或未驻网', dec: { t: 'cellularBands', zero: '未知或未驻网' } },
+		{ id: 6, name: '当前驻网频点', type: 'BYTE[4]', desc: '只读，EARFCN uint32 LE，0表示未知', dec: { t: 'cellularEarfcn', zero: '未知' } }
+	],
 	'4': [
 		{ id: 0, name: '通讯电池低电压报警', type: 'BYTE[1+7]', desc: 'BYTE1报警/0 BYTE2-8时间YYYYMMDDhhmmss' },
 		{ id: 1, name: '磁干扰报警', type: 'BYTE[1+7]', desc: 'BYTE1报警/0 BYTE2-8时间' },
@@ -591,6 +599,7 @@ window.SK_TAGS = {
 		{ id: 31, name: '超声波表状态参数', type: 'NULL', desc: '响应返回tag31' },
 		{ id: 34, name: '无磁传感器参数', type: 'NULL', desc: '响应返回tag34' },
 		{ id: 35, name: 'Lora参数', type: 'NULL', desc: '响应返回tag35' },
+		{ id: 40, name: '蜂窝搜网参数', type: 'NULL', desc: '响应返回tag40' },
 		{ id: 66, name: 'eSIM信息', type: 'NULL', desc: '响应返回tag66 (ID0/ID1/ID4)' }
 	],
 	'66': [

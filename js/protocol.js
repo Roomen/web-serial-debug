@@ -679,6 +679,9 @@
 		if (dec) {
 			switch (dec.t) {
 				case 'ascii': return ascii(raw)
+				case 'cellularOperator': return ascii(raw) || dec.zero
+				case 'cellularBands': return Array.from(raw).filter(Boolean).map(band => 'B' + band).join(', ') || dec.zero
+				case 'cellularEarfcn': return String(u32leRead(raw, 0) || dec.zero)
 				case 'bcd': return bcdDecode(raw)
 				case 'time7': return bcdTime(raw)
 				case 'pct': return raw[0] + '%'
