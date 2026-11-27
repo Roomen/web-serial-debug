@@ -334,7 +334,8 @@ window.SK_TAGS = {
 		{ id: 3, name: '锁定频点', type: 'BYTE[4]', desc: 'EARFCN uint32 LE，1~262143；全0自动选频', dec: { t: 'cellularEarfcn', zero: '自动选频' } },
 		{ id: 4, name: '当前驻网运营商', type: 'BYTE[6]', desc: '只读，最近成功驻网的 MCC+MNC，ASCII 尾部补0', dec: { t: 'cellularOperator', zero: '未知' } },
 		{ id: 5, name: '当前驻网频段', type: 'BYTE', desc: '只读，0表示未知或未驻网', dec: { t: 'cellularBands', zero: '未知或未驻网' } },
-		{ id: 6, name: '当前驻网频点', type: 'BYTE[4]', desc: '只读，EARFCN uint32 LE，0表示未知', dec: { t: 'cellularEarfcn', zero: '未知' } }
+		{ id: 6, name: '当前驻网频点', type: 'BYTE[4]', desc: '只读，EARFCN uint32 LE，0表示未知', dec: { t: 'cellularEarfcn', zero: '未知' } },
+		{ id: 7, name: '搜网状态与诊断信息', type: 'BYTE[6]', desc: '只读，锁频状态1B(0未锁频/1锁频生效中/2锁频失败已自动回退)+PDP协议族1B(0未知/1仅IPv4/2仅IPv6/3双栈)+最近搜网耗时2B(uint16 LE,0.1s)+RSRQ 1B(int8 dB,0x7F未知)+TxPower 1B(int8 dBm,0x7F未知)', dec: { t: 'cellularDiag' } }
 	],
 	'4': [
 		{ id: 0, name: '通讯电池低电压报警', type: 'BYTE[1+7]', desc: 'BYTE1报警/0 BYTE2-8时间YYYYMMDDhhmmss' },

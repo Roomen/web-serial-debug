@@ -678,7 +678,7 @@ window.SK_DOWN_PRESETS = [
 				tlv: [{ tag: 10, items: [{ id: 15 }] }] },
 			{ name: '查询通信认证参数', func: '0x03', desc: 'Tag38 通信认证',
 				tlv: [{ tag: 10, items: [{ id: 22 }] }] },
-			{ name: '查询蜂窝搜网参数', func: '0x03', desc: 'Tag40 读取锁定配置与最近驻网信息（运营商、频段、频点）',
+			{ name: '查询蜂窝搜网参数', func: '0x03', desc: 'Tag40 读取锁定配置、最近驻网信息（运营商、频段、频点）及搜网状态与诊断信息',
 				tlv: [{ tag: 10, items: [{ id: 40 }] }] },
 			{ name: '查询设备运行信息', func: '0x03', desc: 'Tag91 运行信息',
 				tlv: [{ tag: 10, items: [{ id: 7 }] }] },

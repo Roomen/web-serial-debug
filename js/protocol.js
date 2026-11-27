@@ -671,6 +671,22 @@
 		return null
 	}
 
+	function renderCellularDiag(raw) {
+		if (!raw || raw.length < 6) return hexbytes(raw || [])
+		const lockMap = { 0: '未锁频', 1: '锁频生效中', 2: '锁频失败已自动回退' }
+		const pdpMap = { 0: '未知', 1: '仅IPv4', 2: '仅IPv6', 3: 'IPv4/IPv6双栈' }
+		const lock = raw[0] & 0xff
+		const pdp = raw[1] & 0xff
+		const ds = u16leRead(raw, 2)
+		const rsrq = (raw[4] & 0xff) === 0x7f ? '未知' : (signed8([raw[4]]) + 'dB')
+		const txPower = (raw[5] & 0xff) === 0x7f ? '未知' : (signed8([raw[5]]) + 'dBm')
+		return '锁频:' + (lockMap[lock] != null ? lockMap[lock] : ('未知(' + lock + ')')) +
+			' PDP:' + (pdpMap[pdp] != null ? pdpMap[pdp] : ('未知(' + pdp + ')')) +
+			' 耗时:' + (ds / 10).toFixed(1) + 's' +
+			' RSRQ:' + rsrq +
+			' TxPower:' + txPower
+	}
+
 	function renderValue(def, raw) {
 		if (!raw || raw.length === 0) return ''
 		const dec = def && def.dec
@@ -682,6 +698,7 @@
 				case 'cellularOperator': return ascii(raw) || dec.zero
 				case 'cellularBands': return Array.from(raw).filter(Boolean).map(band => 'B' + band).join(', ') || dec.zero
 				case 'cellularEarfcn': return String(u32leRead(raw, 0) || dec.zero)
+				case 'cellularDiag': return renderCellularDiag(raw)
 				case 'bcd': return bcdDecode(raw)
 				case 'time7': return bcdTime(raw)
 				case 'pct': return raw[0] + '%'
