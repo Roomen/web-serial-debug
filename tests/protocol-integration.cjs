@@ -1746,6 +1746,220 @@ async function run() {
 		assert.ok(htmlBAfterResetB.includes('缺请求地址上下文'))
 	}
 
+	// 10.9 启动回归：启用解析(hex&parse)且存在缓存日志时，整份 js/common.js 不踩 TDZ 崩溃，serialLanes / serialApi 正常导出且切协议生效不回弹
+	{
+		const lsMap = new Map()
+		const ssMap = new Map()
+		lsMap.set('toolOptions', JSON.stringify({ logType: 'hex&parse', skProtocol: 'sek' }))
+		ssMap.set('serialLogCache', JSON.stringify({
+			v: 2,
+			seq: 1,
+			single: '<div class="log-row" data-dir="rx" data-hex="68 01 16" data-sid="S"><span class="log-body">68 01 16</span></div>',
+			dual: '',
+		}))
+		const makeStorage = (map) => ({
+			getItem(k) { return map.has(k) ? map.get(k) : null },
+			setItem(k, v) { map.set(k, String(v)) },
+			removeItem(k) { map.delete(k) },
+		})
+
+		const byId = new Map()
+		const makeStubNode = (tag, id) => {
+			const n = new DomNode(tag, id)
+			n.scrollTop = 0
+			n.scrollHeight = 0
+			n.clientHeight = 0
+			n.offsetWidth = 0
+			n.offsetHeight = 0
+			n.getBoundingClientRect = () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 })
+			n.insertAdjacentHTML = () => { n.appendChild(makeStubNode('DIV')) }
+			n.scrollTo = () => {}
+			const styleProps = new Map()
+			n.style.getPropertyValue = (k) => styleProps.get(k) || ''
+			n.style.setProperty = (k, v) => styleProps.set(k, String(v))
+			n.style.removeProperty = (k) => styleProps.delete(k)
+			Object.defineProperty(n, 'childElementCount', { get() { return this.children.length } })
+			Object.defineProperty(n, 'firstElementChild', { get() { return this.children[0] || null } })
+			Object.defineProperty(n, 'lastElementChild', { get() { return this.children[this.children.length - 1] || null } })
+			Object.defineProperty(n, 'nextElementSibling', { get() { return this.nextSibling } })
+			const origMatches = n.matches.bind(n)
+			n.matches = (sel) => {
+				if (/^[a-z]+$/i.test(sel)) return n.tagName === sel.toUpperCase()
+				return origMatches(sel)
+			}
+			return n
+		}
+		const ensureId = (id, tag) => {
+			if (!byId.has(id)) {
+				const inferred = tag || (id.includes('select') || id === 'serial-quick-send' || id === 'serial-protocol-decrypt' || id === 'serial-protocol-enc-type' ? 'SELECT' : 'DIV')
+				const n = makeStubNode(inferred, id)
+				byId.set(id, n)
+			}
+			return byId.get(id)
+		}
+		ensureId('rail-theme-btn', 'BUTTON').appendChild(makeStubNode('I'))
+		ensureId('serial-parse-lock', 'BUTTON').appendChild(makeStubNode('I'))
+
+		// 让 serial-logs-single 在 innerHTML 赋入缓存行时构造真实 .log-row / .log-body 子节点，确保 rerenderLogBodies 走过 inLane 与 finish
+		const singleLogsEl = ensureId('serial-logs-single', 'DIV')
+		Object.defineProperty(singleLogsEl, 'innerHTML', {
+			get() { return this._innerHTML },
+			set(v) {
+				this._innerHTML = v == null ? '' : String(v)
+				this.children = []
+				if (this._innerHTML.includes('class="log-row"')) {
+					const row = makeStubNode('DIV')
+					row.className = 'log-row'
+					row.setAttribute('data-dir', 'rx')
+					row.setAttribute('data-hex', '68 01 16')
+					row.setAttribute('data-sid', 'S')
+					const bodySpan = makeStubNode('SPAN')
+					bodySpan.className = 'log-body'
+					bodySpan.innerHTML = '68 01 16'
+					row.appendChild(bodySpan)
+					this.appendChild(row)
+				}
+			},
+		})
+		const protoSel = ensureId('serial-protocol-select', 'SELECT')
+		const optSek = makeStubNode('OPTION')
+		optSek.value = 'sek'
+		optSek.textContent = 'SEK（默认）'
+		protoSel.appendChild(optSek)
+
+		const docBody = makeStubNode('BODY')
+		const docEl = makeStubNode('HTML')
+		const docListeners = {}
+		const timers = []
+		const fakeDoc = {
+			readyState: 'complete',
+			body: docBody,
+			documentElement: docEl,
+			activeElement: null,
+			createElement(tag) { return makeStubNode(tag) },
+			createTextNode(t) { return { nodeType: 3, textContent: String(t), parentNode: null } },
+			getElementById(id) { return ensureId(id) },
+			querySelector(sel) {
+				if (sel.startsWith('#')) return ensureId(sel.slice(1))
+				return docBody.querySelector(sel)
+			},
+			querySelectorAll() { return [] },
+			addEventListener(type, fn) { (docListeners[type] ||= []).push(fn) },
+			removeEventListener(type, fn) { docListeners[type] = (docListeners[type] || []).filter((x) => x !== fn) },
+			dispatchEvent(ev) {
+				;(docListeners[ev.type] || []).slice().forEach((fn) => fn(ev))
+				return true
+			},
+		}
+		const winListeners = {}
+		const fakeWin = {
+			document: fakeDoc,
+			localStorage: makeStorage(lsMap),
+			sessionStorage: makeStorage(ssMap),
+			matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+			addEventListener(type, fn) { (winListeners[type] ||= []).push(fn) },
+			removeEventListener(type, fn) { winListeners[type] = (winListeners[type] || []).filter((x) => x !== fn) },
+			getSelection: () => ({ toString: () => '' }),
+			scrollX: 0,
+			scrollY: 0,
+			AppDialog: { alert() {}, confirm: async () => true },
+			skParseFrame: (data) => ({ raw: Array.from(data || []) }),
+		}
+		fakeWin.window = fakeWin
+		const bootCtx = vm.createContext({
+			window: fakeWin,
+			self: fakeWin,
+			globalThis: fakeWin,
+			document: fakeDoc,
+			localStorage: fakeWin.localStorage,
+			sessionStorage: fakeWin.sessionStorage,
+			navigator: { clipboard: { writeText: async () => {}, readText: async () => '' } },
+			performance: { getEntriesByType: (t) => (t === 'navigation' ? [{ type: 'reload' }] : []) },
+			SerialAdapter: {
+				isSupported: () => true,
+				getPorts: async () => [],
+				canEnumerate: () => false,
+				listPorts: async () => [],
+				getUsbDevices: async () => [],
+				addEventListener() {},
+				removeEventListener() {},
+			},
+			AnsiUp: function () { this.ansi_to_html = (t) => String(t) },
+			bootstrap: {
+				Modal: function () { this.show = () => {}; this.hide = () => {} },
+				Dropdown: Object.assign(function () { this.hide = () => {}; this.show = () => {} }, {
+					getOrCreateInstance: () => ({ hide() {}, show() {}, toggle() {} }),
+				}),
+			},
+			Event: function (type, init) { this.type = type; Object.assign(this, init || {}) },
+			CustomEvent: function (type, init) { this.type = type; this.detail = init && init.detail },
+			TextDecoder,
+			TextEncoder,
+			URL,
+			Blob,
+			Uint8Array,
+			ArrayBuffer,
+			DataView,
+			Map,
+			Set,
+			WeakMap,
+			WeakSet,
+			Promise,
+			Date,
+			Math,
+			JSON,
+			Number,
+			String,
+			Array,
+			Object,
+			RegExp,
+			Error,
+			console,
+			queueMicrotask,
+			setTimeout(fn) { timers.push(fn); return timers.length },
+			clearTimeout() {},
+			setInterval() { return 1 },
+			clearInterval() {},
+		})
+		// 与 index.html 保持一致：在 common.js 之前加载 dual-config / parse-view / protocol-registry
+		vm.runInContext(readJs('js/dual-config.js'), bootCtx, { filename: 'js/dual-config.js' })
+		vm.runInContext(readJs('js/parse-view.js'), bootCtx, { filename: 'js/parse-view.js' })
+		vm.runInContext(readJs('js/protocol-registry.js'), bootCtx, { filename: 'js/protocol-registry.js' })
+		// 执行完整 js/common.js：启用解析且带缓存日志时不得抛 ReferenceError（ac6dCrcTracker TDZ）
+		assert.doesNotThrow(() => {
+			vm.runInContext(readJs('js/common.js'), bootCtx, { filename: 'js/common.js' })
+		}, '启用 hex&parse 且带缓存日志启动时 js/common.js 不得抛 TDZ 异常')
+
+		assert.ok(fakeWin.serialLanes && typeof fakeWin.serialLanes.setProtocol === 'function', 'window.serialLanes 必须正常导出')
+		assert.ok(fakeWin.serialApi && typeof fakeWin.serialApi.writeRaw === 'function' && typeof fakeWin.serialApi.isOpen === 'function', 'window.serialApi 必须正常导出')
+		assert.equal(singleLogsEl.children.length, 1, '应已从 serialLogCache 恢复缓存日志行并完成重渲')
+
+		// 注册 sek 与 wmbus 协议（与运行时 protocol-downlink.js / wmbus-protocol.js 一致）并切换，验证生效、持久化且不回弹回 sek
+		fakeWin.registerProtocol('sek', {
+			builtin: true,
+			name: 'SEK（默认）',
+			parseFrame: (d) => ({ raw: Array.from(d || []) }),
+			logView: () => null,
+		})
+		fakeWin.registerProtocol('wmbus', {
+			builtin: true,
+			name: 'W-MBUS',
+			parseFrame: (d) => ({ raw: Array.from(d || []) }),
+			logView: () => null,
+		})
+		assert.equal(protoSel.value, 'sek', '切换前协议下拉应停在 sek')
+		fakeWin.serialLanes.setProtocol('S', 'wmbus')
+		// 执行期间排队的定时器回调，确认不会把协议冲回 sek
+		while (timers.length) {
+			const fn = timers.shift()
+			try { fn() } catch (e) {}
+		}
+		assert.equal(fakeWin._activeProtocol, 'wmbus', '切换协议后 window._activeProtocol 应保持为 wmbus')
+		assert.equal(fakeWin.serialLanes.protocolOf('S'), 'wmbus', '单路协议应保持为 wmbus')
+		assert.equal(protoSel.value, 'wmbus', '协议下拉值应保持为 wmbus 不回弹')
+		assert.equal(JSON.parse(lsMap.get('toolOptions')).skProtocol, 'wmbus', '切换后的协议应持久化到 toolOptions.skProtocol')
+	}
+
 	console.log('protocol-integration: ok')
 }
 

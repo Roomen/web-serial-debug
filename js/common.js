@@ -796,6 +796,9 @@
 	// 单路(S)的实时状态就是全局的 window.skSession 与 ansi_up(不在某一路的上下文里时它们就是 S 的)；A/B 各存一份：
 	// sess 为会话快照(null 表示从未起步，用时按全新会话)，ansi 为该路自己的 AnsiUp。换入换出的函数(inLane 等)在日志正文渲染段里
 	const laneLive = { A: null, B: null }
+	var ansi_up = new AnsiUp()
+	// 单路(S)的 AC6D 0x25 请求地址追踪器：启动恢复与 rerenderLogBodies 在 IIFE 早期就会读写，须靠前初始化且避免 let TDZ
+	var ac6dCrcTracker = newCrcTracker()
 	function isValidLogType(t) {
 		return typeof t === 'string' && LOG_TYPES.indexOf(t) !== -1
 	}
@@ -5389,7 +5392,7 @@
 			]
 		},
 	}
-	var ansi_up = new AnsiUp()
+	if (!ansi_up) ansi_up = new AnsiUp()
 	//行数之外再按数据量裁剪：单行可以是最多 64KB 的合并包，正文 HEX 与 data-hex 属性各存一份，只限行数时 DOM 能涨到几个 GB。
 	//按 data-hex 的字符数计(约 3 个字符一个字节)，上限约 4 MiB 原始数据，日常的短帧、文本行远到不了
 	function rowHexChars(row) {
@@ -5685,8 +5688,9 @@
 			clear: function () { map.clear() },
 		}
 	}
-	let ac6dCrcTracker = newCrcTracker()
+	var ac6dCrcTracker = ac6dCrcTracker || newCrcTracker()
 	function newLaneState() {
+		if (!ac6dCrcTracker) ac6dCrcTracker = newCrcTracker()
 		return { sess: null, ansi: new AnsiUp(), ac6dCrc: newCrcTracker() }
 	}
 	function laneLiveState(sid) {
@@ -5696,6 +5700,7 @@
 	// 在 sid 那一路的上下文里同步执行 fn：当前协议换成该路协议；st 给出时再换入它的会话与 ansi 状态，结束后存回 st、全局还原。
 	// 只给同步代码用(解析、渲染、点行解析派发的事件都在 fn 里同步跑完)，不要在 fn 里 await
 	function inLane(sid, st, fn) {
+		if (!ac6dCrcTracker) ac6dCrcTracker = newCrcTracker()
 		const prevProto = window._activeProtocol
 		const prevAnsi = ansi_up
 		const prevCrc = ac6dCrcTracker
@@ -5738,6 +5743,7 @@
 			return
 		}
 		if (ac6dCrcTracker) ac6dCrcTracker.clear()
+		else ac6dCrcTracker = newCrcTracker()
 		const g = skSess()
 		if (!g) return
 		try {
@@ -5750,6 +5756,7 @@
 	//不是本协议的帧（logView 返回 null）、解析抛异常、固件升级期间(opts.noParse)都返回空串，由调用方决定怎么显示这一行
 	function renderParseSegment(data, opts) {
 		if (opts.noParse) return ''
+		if (!ac6dCrcTracker) ac6dCrcTracker = newCrcTracker()
 		try {
 			const r = skParseFrame(data, Object.assign({}, getProtocolParseOpts(), { crcReqTracker: ac6dCrcTracker }))
 			const p = window.getActiveProtocol()
@@ -5840,6 +5847,7 @@
 	//opts.sids: 只重渲这几路(只改了那一路的格式)，其余路的行与流式状态不动
 	function rerenderLogBodies(container, logType, opts) {
 		if (!container) return
+		if (!ac6dCrcTracker) ac6dCrcTracker = newCrcTracker()
 		// term 不是行日志格式,渲染出来会是空正文,会把历史行洗白,必须挡在这里
 		const gen = ++rerenderGen
 		const supersedes = rerenderPending
@@ -5921,7 +5929,7 @@
 				const sessOk = sessionResetSeq[sid] === resetSeqAtStart[sid]
 				if (sid === 'S') {
 					if (fmtOf(sid).ansi && sessOk) ansi_up = st.ansi
-					if (fmtOf(sid).parse && sessOk) ac6dCrcTracker = st.ac6dCrc
+					if (fmtOf(sid).parse && sessOk) ac6dCrcTracker = st.ac6dCrc || newCrcTracker()
 					if (g && sessOk) g.restore(st.sess || freshSessSnap(g))
 					return
 				}
