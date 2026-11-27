@@ -17,6 +17,7 @@
     <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.2.3/js/bootstrap.bundle.min.js"></script>
 
     <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/ac6d-workbench.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
     <link rel="icon" href="imgs/logo.svg" type="image/svg+xml">
     <link rel="mask-icon" href="imgs/logo.svg" color="#007aff">
@@ -103,6 +104,10 @@
                 <button class="rail-item" data-view="view-blu" data-feature="view.power" title="功耗分析">
                     <i class="bi bi-speedometer2"></i>
                     <span class="rail-label">功耗分析</span>
+                </button>
+                <button class="rail-item" data-view="view-ac6d" data-feature="view.ac6d" title="容积水表校表台">
+                    <i class="bi bi-droplet-half"></i>
+                    <span class="rail-label">水表</span>
                 </button>
                 <div class="rail-sep rail-divider" data-rail-anchor="plugin-manage" data-feature="protocol.manage" aria-hidden="true"></div>
                 <button class="rail-item rail-plugin-btn" id="serial-protocol-manage" type="button" data-feature="protocol.manage" title="插件与协议：切换协议、启停工具插件、管理 JSON/JS 扩展">
@@ -1683,6 +1688,8 @@
                 </div>
             </div>
 
+            <div id="view-ac6d" class="app-view plugin-view" data-feature="view.ac6d" data-hide-topbar="true"></div>
+
             <!--固件打包控件源（隐藏，启动时由 js/modern-firmware.js 搬入通信调试的固件子视图 #firmware-panel）-->
             <div id="fw-pack-source" hidden aria-hidden="true">
                 <div class="form-check form-switch ctl-switch fw-zip-switch" title="生成的所有文件打成一个 ZIP 下载">
@@ -1823,16 +1830,17 @@
             var rail = document.getElementById('activity-rail')
             if (!rail) return
             var KEY = 'serial-debug-active-view'
-            function isPowerHidden() {
+            function isToolHidden(pluginId) {
                 try {
                     var arr = JSON.parse(localStorage.getItem('toolPluginHiddenIds') || '[]')
-                    return Array.isArray(arr) && arr.indexOf('power') >= 0
+                    return Array.isArray(arr) && arr.indexOf(pluginId) >= 0
                 } catch (e) { return false }
             }
             function allowedStatic(id) {
                 var it = rail.querySelector('.rail-item[data-view="' + id + '"]')
                 if (!it || !document.getElementById(id)) return false
-                if (id === 'view-blu' && isPowerHidden()) return false
+                if (id === 'view-blu' && isToolHidden('power')) return false
+                if (id === 'view-ac6d' && isToolHidden('ac6d')) return false
                 var f = it.dataset.feature
                 if (!f || !window.AppPlatform) return true
                 return f.split(/\s+/).every(function (x) { return window.AppPlatform.has(x) })
@@ -1904,6 +1912,7 @@
     <script src="js/hostproto-protocol.js"></script>
     <script src="js/hostproto-transaction.js"></script>
     <script src="js/at-modem-protocol.js"></script>
+    <script src="js/ac6d-protocol.js"></script>
     <script src="js/protocol-downlink.js"></script>
     <script src="js/json-protocol.js"></script>
     <script src="js/js-protocol-plugin.js"></script>
@@ -1938,6 +1947,7 @@
     <script src="js/blu-power.js"></script>
     <script src="js/blu-cmd-sheet.js"></script>
     <script src="js/modern-power.js"></script>
+    <script src="js/ac6d-workbench.js"></script>
     <script src="js/app-update.js"></script>
     <script src="js/mcp-ring.js"></script>
     <script src="js/mcp-bridge.js"></script>

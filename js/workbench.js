@@ -139,8 +139,13 @@
 	}
 
 	function ensureSerialView() {
-		const rail = document.querySelector('.rail-item[data-view="view-serial"]')
-		if (rail && !rail.classList.contains('active')) rail.click()
+		const tpr = window.ToolPluginRegistry
+		if (tpr && typeof tpr.activateView === 'function') {
+			if (typeof tpr.getActiveView !== 'function' || tpr.getActiveView() !== 'view-serial') tpr.activateView('view-serial')
+		} else {
+			const rail = document.querySelector('.rail-item[data-view="view-serial"]')
+			if (rail && !rail.classList.contains('active')) rail.click()
+		}
 		// 停靠区面板在「通信调试」子视图里，设备面板开着时先切回来，否则打开的面板看不见
 		if (window.DevicePanel && typeof window.DevicePanel.showComm === 'function') window.DevicePanel.showComm()
 	}
@@ -893,7 +898,16 @@
 	window.Workbench = {
 		// 安装更新前复用后台任务的真实运行判据，不依赖状态栏是否可见。blocksUpdate 为 false 的任务(循环发送、常驻的 MCP 服务)不阻止更新
 		updateBlockers: function () {
-			return TASKS.filter(function (t) { return t.blocksUpdate !== false && t.running() }).map(function (t) { return t.label })
+			const out = TASKS.filter(function (t) { return t.blocksUpdate !== false && t.running() }).map(function (t) { return t.label })
+			const tpr = window.ToolPluginRegistry
+			if (tpr && typeof tpr.updateBlockers === 'function') {
+				let list = []
+				try { list = tpr.updateBlockers({ exceptIds: ['power'] }) || [] } catch (e) { list = [] }
+				list.forEach(function (name) {
+					if (name && out.indexOf(name) < 0) out.push(name)
+				})
+			}
+			return out
 		},
 		refreshStatus: function () { if (ready) updateStatusBar() },
 		// 检查器里放结构化视图的节点(还没建过时为 null)

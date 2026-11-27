@@ -3805,6 +3805,12 @@
 		if (window.bluApi && typeof window.bluApi.ownsPort === 'function' && window.bluApi.ownsPort(port)) {
 			return 'BLU'
 		}
+		if (window.ToolPluginRegistry && typeof window.ToolPluginRegistry.findPortOwner === 'function') {
+			const owner = window.ToolPluginRegistry.findPortOwner(port)
+			if (owner && owner.id !== 'power') {
+				return 'TOOL:' + (owner.label || owner.name || owner.id)
+			}
+		}
 		// 关闭后仍保留 session.port 是有意的: 芯片继续显示上次设备, 点打开即可重连。
 		// 已打开或尚未确认释放的口都仍被占用，不能只按设备归属判。
 		return SerialHub.busyOwnerOfPort(port, exceptSid)
@@ -3812,6 +3818,7 @@
 
 	function portConflictMsg(taken) {
 		if (taken === 'BLU') return '该口已被功耗分析占用'
+		if (typeof taken === 'string' && taken.indexOf('TOOL:') === 0) return '该口已被' + taken.slice(5) + '占用'
 		if (taken === 'S') return '该口已被单路串口占用'
 		if (taken === 'A' || taken === 'B') return '该口已被' + sidName(taken) + '占用'
 		return '该口已被其它会话占用'
@@ -3825,8 +3832,12 @@
 			if (SerialHub.getPort(all[i]) === port && (SerialHub.isOpen(all[i]) || SerialHub.isReleaseFailed(all[i]) || SerialHub._sess(all[i]).releaseTask)) return true
 		}
 		if (window.bluApi && typeof window.bluApi.ownsPort === 'function' &&
-			window.bluApi.ownsPort(port) && window.bluApi.isOpen()) {
+			window.bluApi.ownsPort(port)) {
 			return true
+		}
+		if (window.ToolPluginRegistry && typeof window.ToolPluginRegistry.findPortOwner === 'function') {
+			const owner = window.ToolPluginRegistry.findPortOwner(port)
+			if (owner && owner.id !== 'power') return true
 		}
 		return false
 	}
@@ -5655,8 +5666,28 @@
 		g.restore(live)
 		return fresh
 	}
+	function newCrcTracker() {
+		if (window.Ac6dProtocol && typeof window.Ac6dProtocol.createCrcReqTracker === 'function') {
+			return window.Ac6dProtocol.createCrcReqTracker(32)
+		}
+		const map = new Map()
+		return {
+			set: function (seq, addr) {
+				const k = Number(seq) & 0xff
+				if (map.has(k)) map.delete(k)
+				map.set(k, Number(addr) >>> 0)
+				if (map.size > 32) map.delete(map.keys().next().value)
+			},
+			get: function (seq) {
+				const k = Number(seq) & 0xff
+				return map.has(k) ? map.get(k) : null
+			},
+			clear: function () { map.clear() },
+		}
+	}
+	let ac6dCrcTracker = newCrcTracker()
 	function newLaneState() {
-		return { sess: null, ansi: new AnsiUp() }
+		return { sess: null, ansi: new AnsiUp(), ac6dCrc: newCrcTracker() }
 	}
 	function laneLiveState(sid) {
 		if (!laneLive[sid]) laneLive[sid] = newLaneState()
@@ -5667,10 +5698,15 @@
 	function inLane(sid, st, fn) {
 		const prevProto = window._activeProtocol
 		const prevAnsi = ansi_up
+		const prevCrc = ac6dCrcTracker
 		const g = st ? skSess() : null
 		const rest = g ? g.snapshot() : null
 		if (g) g.restore(st.sess || freshSessSnap(g))
-		if (st) ansi_up = st.ansi
+		if (st) {
+			ansi_up = st.ansi
+			if (!st.ac6dCrc) st.ac6dCrc = newCrcTracker()
+			ac6dCrcTracker = st.ac6dCrc
+		}
 		window._activeProtocol = protocolIdForSid(sid)
 		try {
 			return fn()
@@ -5682,6 +5718,8 @@
 			if (st) {
 				st.ansi = ansi_up
 				ansi_up = prevAnsi
+				st.ac6dCrc = ac6dCrcTracker
+				ac6dCrcTracker = prevCrc
 			}
 			window._activeProtocol = prevProto
 		}
@@ -5693,9 +5731,13 @@
 	// 新连接清空这一路的 SEK 会话(ansi 颜色状态不清，与改动前一致)
 	function resetLaneParseSession(sid) {
 		if (sid === 'A' || sid === 'B') {
-			if (laneLive[sid]) laneLive[sid].sess = null
+			if (laneLive[sid]) {
+				laneLive[sid].sess = null
+				if (laneLive[sid].ac6dCrc) laneLive[sid].ac6dCrc.clear()
+			}
 			return
 		}
+		if (ac6dCrcTracker) ac6dCrcTracker.clear()
 		const g = skSess()
 		if (!g) return
 		try {
@@ -5709,7 +5751,7 @@
 	function renderParseSegment(data, opts) {
 		if (opts.noParse) return ''
 		try {
-			const r = skParseFrame(data, getProtocolParseOpts())
+			const r = skParseFrame(data, Object.assign({}, getProtocolParseOpts(), { crcReqTracker: ac6dCrcTracker }))
 			const p = window.getActiveProtocol()
 			if (p && typeof p.logView === 'function') {
 				const model = p.logView(r)
@@ -5879,11 +5921,13 @@
 				const sessOk = sessionResetSeq[sid] === resetSeqAtStart[sid]
 				if (sid === 'S') {
 					if (fmtOf(sid).ansi && sessOk) ansi_up = st.ansi
+					if (fmtOf(sid).parse && sessOk) ac6dCrcTracker = st.ac6dCrc
 					if (g && sessOk) g.restore(st.sess || freshSessSnap(g))
 					return
 				}
 				const live = laneLiveState(sid)
 				if (fmtOf(sid).ansi && sessOk) live.ansi = st.ansi
+				if (fmtOf(sid).parse && sessOk) live.ac6dCrc = st.ac6dCrc
 				if (sessOk) live.sess = st.sess
 			})
 		}

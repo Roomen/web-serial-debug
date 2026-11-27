@@ -5,7 +5,7 @@
 ;(function (root) {
 	'use strict'
 
-	const RESERVED_IDS = ['power']
+	const RESERVED_IDS = ['power', 'ac6d']
 	const RESERVED_SET = new Set(RESERVED_IDS)
 	const HIDDEN_KEY = 'toolPluginHiddenIds'
 	const ACTIVE_VIEW_KEY = 'serial-debug-active-view'
@@ -51,6 +51,7 @@
 		const hiddenSet = new Set()
 		const changeListeners = new Set()
 		let activeViewId = 'view-serial'
+		let pendingRestoreView = null
 		let batchDepth = 0
 		let batchChanges = []
 		let batchUnregisteredIds = new Set()
@@ -231,64 +232,64 @@
 			const viewsRoot = doc.getElementById ? doc.getElementById('views') : null
 			let container = doc.getElementById ? doc.getElementById(entry.viewId) : null
 
-			if (!entry.builtin) {
-				if (!container && viewsRoot && typeof doc.createElement === 'function') {
-					container = doc.createElement('div')
-					container.id = entry.viewId
-					container.className = 'app-view plugin-view'
-					if (container.dataset) {
-						container.dataset.toolPlugin = entry.id
-						if (entry.hideTopbar) container.dataset.hideTopbar = 'true'
-					}
-					viewsRoot.appendChild(container)
-					entry._ownsContainer = true
+			if (!container && viewsRoot && typeof doc.createElement === 'function') {
+				container = doc.createElement('div')
+				container.id = entry.viewId
+				container.className = 'app-view plugin-view'
+				if (container.dataset) {
+					container.dataset.toolPlugin = entry.id
+					if (entry.hideTopbar) container.dataset.hideTopbar = 'true'
+					if (entry.feature) container.dataset.feature = entry.feature
 				}
-				entry._container = container
-
-				let btn = entry._railBtn || queryRailButton(entry.viewId)
-				const railTop = getRailTop()
-				if (!btn && railTop && typeof doc.createElement === 'function') {
-					btn = doc.createElement('button')
-					btn.type = 'button'
-					btn.className = 'rail-item'
-					if (btn.dataset) {
-						btn.dataset.view = entry.viewId
-						btn.dataset.toolPlugin = entry.id
-					}
-					btn.title = entry.name
-					if (typeof btn.setAttribute === 'function') btn.setAttribute('aria-label', entry.name)
-
-					const ic = doc.createElement('i')
-					ic.className = 'bi ' + entry.icon
-					if (typeof ic.setAttribute === 'function') ic.setAttribute('aria-hidden', 'true')
-					const lbl = doc.createElement('span')
-					lbl.className = 'rail-label'
-					lbl.textContent = entry.label
-					btn.appendChild(ic)
-					btn.appendChild(lbl)
-
-					const anchor = findRailInsertAnchor(railTop)
-					if (anchor && typeof railTop.insertBefore === 'function') {
-						railTop.insertBefore(btn, anchor)
-					} else {
-						railTop.appendChild(btn)
-					}
-					entry._ownsRailBtn = true
-				} else if (btn && entry._ownsRailBtn) {
-					btn.title = entry.name
-					if (typeof btn.setAttribute === 'function') btn.setAttribute('aria-label', entry.name)
-					const kids = btn.children || []
-					for (let i = 0; i < kids.length; i++) {
-						const k = kids[i]
-						if (k.tagName === 'I') k.className = 'bi ' + entry.icon
-						else if (k.classList && k.classList.contains('rail-label')) k.textContent = entry.label
-					}
-				}
-				entry._railBtn = btn
-			} else {
-				entry._container = container
-				entry._railBtn = entry._railBtn || queryRailButton(entry.viewId)
+				viewsRoot.appendChild(container)
+				entry._ownsContainer = true
+			} else if (container && container.dataset) {
+				if (entry.hideTopbar && !container.dataset.hideTopbar) container.dataset.hideTopbar = 'true'
+				if (entry.feature && !container.dataset.feature) container.dataset.feature = entry.feature
 			}
+			entry._container = container
+
+			let btn = entry._railBtn || queryRailButton(entry.viewId)
+			const railTop = getRailTop()
+			if (!btn && railTop && typeof doc.createElement === 'function') {
+				btn = doc.createElement('button')
+				btn.type = 'button'
+				btn.className = 'rail-item'
+				if (btn.dataset) {
+					btn.dataset.view = entry.viewId
+					btn.dataset.toolPlugin = entry.id
+					if (entry.feature) btn.dataset.feature = entry.feature
+				}
+				btn.title = entry.name
+				if (typeof btn.setAttribute === 'function') btn.setAttribute('aria-label', entry.name)
+
+				const ic = doc.createElement('i')
+				ic.className = 'bi ' + entry.icon
+				if (typeof ic.setAttribute === 'function') ic.setAttribute('aria-hidden', 'true')
+				const lbl = doc.createElement('span')
+				lbl.className = 'rail-label'
+				lbl.textContent = entry.label
+				btn.appendChild(ic)
+				btn.appendChild(lbl)
+
+				const anchor = findRailInsertAnchor(railTop)
+				if (anchor && typeof railTop.insertBefore === 'function') {
+					railTop.insertBefore(btn, anchor)
+				} else {
+					railTop.appendChild(btn)
+				}
+				entry._ownsRailBtn = true
+			} else if (btn && entry._ownsRailBtn) {
+				btn.title = entry.name
+				if (typeof btn.setAttribute === 'function') btn.setAttribute('aria-label', entry.name)
+				const kids = btn.children || []
+				for (let i = 0; i < kids.length; i++) {
+					const k = kids[i]
+					if (k.tagName === 'I') k.className = 'bi ' + entry.icon
+					else if (k.classList && k.classList.contains('rail-label')) k.textContent = entry.label
+				}
+			}
+			entry._railBtn = btn
 
 			syncRailButtonState(entry)
 
@@ -352,7 +353,7 @@
 			return true
 		}
 
-		function activateView(viewId) {
+		function activateView(viewId, opts) {
 			let nextId = cleanText(viewId, 96) || 'view-serial'
 			if (nextId === 'view-emk') nextId = 'view-blu'
 			if (!isViewAllowed(nextId)) nextId = 'view-serial'
@@ -382,14 +383,24 @@
 			}
 
 			activeViewId = nextId
-			if (storage) {
-				try { storage.setItem(ACTIVE_VIEW_KEY, nextId) } catch (e) {}
+			if (!(opts && opts.preserveStorage)) {
+				pendingRestoreView = null
+				if (storage) {
+					try { storage.setItem(ACTIVE_VIEW_KEY, nextId) } catch (e) {}
+				}
 			}
 
 			if (nextEntry && typeof nextEntry.onActivate === 'function') {
 				try { nextEntry.onActivate({ id: nextEntry.id, viewId: nextEntry.viewId }) } catch (e) {
 					console.warn('[ToolPluginRegistry] onActivate 失败(' + nextEntry.id + '):', e)
 				}
+			}
+
+			if (prevId !== activeViewId && doc && typeof doc.dispatchEvent === 'function') {
+				try {
+					const Ctor = win.CustomEvent || (typeof CustomEvent !== 'undefined' ? CustomEvent : null)
+					if (Ctor) doc.dispatchEvent(new Ctor('serial-active-view-change', { detail: { viewId: activeViewId, prevViewId: prevId } }))
+				} catch (e) {}
 			}
 
 			return activeViewId
@@ -453,6 +464,7 @@
 				onDeactivate: typeof impl.onDeactivate === 'function' ? impl.onDeactivate : null,
 				isBusy: typeof impl.isBusy === 'function' ? impl.isBusy : null,
 				busyReason: typeof impl.busyReason === 'function' ? impl.busyReason : null,
+				ownsPort: typeof impl.ownsPort === 'function' ? impl.ownsPort : null,
 				statusBadge: typeof impl.statusBadge === 'function' ? impl.statusBadge : null,
 				_mounted: false,
 				_container: null,
@@ -505,6 +517,16 @@
 			if (!entries.has(id)) regOrder.push(id)
 			entries.set(id, entry)
 			ensureMounted(entry)
+			if (domInitialized && !hiddenSet.has(entry.id) && isViewAllowed(entry.viewId)) {
+				let savedView = pendingRestoreView
+				if (!savedView && storage) {
+					try { savedView = storage.getItem(ACTIVE_VIEW_KEY) } catch (e) {}
+				}
+				if (savedView === entry.viewId && activeViewId !== entry.viewId) {
+					pendingRestoreView = null
+					activateView(entry.viewId)
+				}
+			}
 			notifyChange({ action: 'register', id: id })
 			return true
 		}
@@ -719,6 +741,49 @@
 			return count
 		}
 
+		function findPortOwner(port, opts) {
+			if (!port) return null
+			const exceptId = opts && opts.exceptId ? String(opts.exceptId) : ''
+			const ids = orderedIds()
+			for (let i = 0; i < ids.length; i++) {
+				const id = ids[i]
+				if (exceptId && id === exceptId) continue
+				const entry = entries.get(id)
+				if (!entry) continue
+				if (typeof entry.ownsPort === 'function') {
+					try {
+						if (entry.ownsPort(port)) {
+							return { id: entry.id, name: entry.name, label: entry.label }
+						}
+					} catch (e) {}
+				} else if (entry.id === 'power' && win.bluApi) {
+					try {
+						if (typeof win.bluApi.ownsPort === 'function' && win.bluApi.ownsPort(port)) {
+							return { id: entry.id, name: entry.name, label: entry.label }
+						}
+					} catch (e) {}
+				}
+			}
+			return null
+		}
+
+		function updateBlockers(opts) {
+			const except = opts && Array.isArray(opts.exceptIds) ? new Set(opts.exceptIds) : null
+			const out = []
+			const ids = orderedIds()
+			for (let i = 0; i < ids.length; i++) {
+				const id = ids[i]
+				if (except && except.has(id)) continue
+				const entry = entries.get(id)
+				if (!entry) continue
+				if (isEntryBusy(entry)) {
+					const label = entry.name || entry.label || entry.id
+					if (out.indexOf(label) < 0) out.push(label)
+				}
+			}
+			return out
+		}
+
 		function initDom() {
 			if (!doc || domInitialized) return
 			domInitialized = true
@@ -756,6 +821,12 @@
 				}
 			}
 
+			if (!entries.has('ac6d') && win.Ac6dToolPluginSpec && typeof win.Ac6dToolPluginSpec === 'object') {
+				try {
+					register('ac6d', Object.assign({ builtin: true, viewId: 'view-ac6d', feature: 'view.ac6d' }, win.Ac6dToolPluginSpec))
+				} catch (e) {}
+			}
+
 			entries.forEach(function (entry) {
 				ensureMounted(entry)
 			})
@@ -765,7 +836,15 @@
 				try { saved = storage.getItem(ACTIVE_VIEW_KEY) } catch (e) {}
 			}
 			if (saved) {
-				activateView(saved)
+				const norm = saved === 'view-emk' ? 'view-blu' : saved
+				if (isViewAllowed(norm)) {
+					activateView(norm)
+				} else if (norm === 'view-ac6d' || norm.indexOf('view-plugin-') === 0) {
+					pendingRestoreView = norm
+					activateView('view-serial', { preserveStorage: true })
+				} else {
+					activateView(norm)
+				}
 			} else {
 				const curEntry = findByViewId(activeViewId)
 				if (curEntry && hiddenSet.has(curEntry.id)) activateView('view-serial')
@@ -805,6 +884,8 @@
 			batch: batch,
 			activateView: activateView,
 			getActiveView: getActiveView,
+			findPortOwner: findPortOwner,
+			updateBlockers: updateBlockers,
 			refreshBadges: refreshBadges,
 			refreshPluginDot: refreshPluginDot,
 			initDom: initDom,

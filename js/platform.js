@@ -13,6 +13,7 @@
 		'view.firmware-pack', // 固件离线打包卡片(原始包 / 压缩包 / 双向差分，挂在固件子视图内)
 		'view.classic',
 		'view.power', // 功耗分析视图(BLU 电流计)
+		'view.ac6d', // 容积水表校表台视图
 		'view.device', // 设备面板(通信调试视图里与日志并列的子视图，由主发那一路协议的 device 声明驱动)
 		'lane.dual', // 双路 A/B(由画像的 lanes 推出)
 		'panel.quick-send',

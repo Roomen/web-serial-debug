@@ -5,7 +5,7 @@
 
 	const STORAGE_KEY = 'customJsonProtocols'
 	const ID_RE = /^[a-z0-9][a-z0-9_-]{0,47}$/
-	const DEFAULT_RESERVED_IDS = ['sek', 'wmbus', 'gz', 'cjt188', 'sk-ultrasonic', 'hostproto', 'cellular-at']
+	const DEFAULT_RESERVED_IDS = ['sek', 'wmbus', 'gz', 'cjt188', 'sk-ultrasonic', 'hostproto', 'cellular-at', 'ac6d-meter']
 	const FIELD_TYPES = [
 		'uint8', 'int8',
 		'uint16le', 'uint16be', 'int16le', 'int16be',

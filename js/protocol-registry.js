@@ -13,6 +13,7 @@
 		'sk-ultrasonic',
 		'hostproto',
 		'cellular-at',
+		'ac6d-meter',
 	]
 	const RESERVED_SET = new Set(RESERVED_IDS)
 	const HIDDEN_KEY = 'protocolHiddenIds'

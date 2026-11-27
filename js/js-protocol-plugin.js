@@ -8,9 +8,9 @@
 	const DIR_DISABLED_KEY = 'disabledDirJsPlugins'
 	const MAX_CODE_BYTES = 1024 * 1024
 	const ID_RE = /^[a-z0-9][a-z0-9_-]{0,47}$/
-	const DEFAULT_RESERVED_IDS = ['sek', 'wmbus', 'gz', 'cjt188', 'sk-ultrasonic', 'hostproto', 'cellular-at']
+	const DEFAULT_RESERVED_IDS = ['sek', 'wmbus', 'gz', 'cjt188', 'sk-ultrasonic', 'hostproto', 'cellular-at', 'ac6d-meter']
 	const DEFAULT_RESERVED_POWER_IDS = ['blu-100k', 'blu100k']
-	const DEFAULT_RESERVED_TOOL_IDS = ['power']
+	const DEFAULT_RESERVED_TOOL_IDS = ['power', 'ac6d']
 	const BAD_KEYS = ['__proto__', 'constructor', 'prototype']
 
 	function getReservedIds() {

@@ -8,6 +8,7 @@
 	'use strict'
 
 	const SUBVIEW_KEY = 'serial-debug-subview'
+	const RAIL_SUBNAV_COLLAPSED_KEY = 'railSerialSubnavCollapsed'
 	const NARROW = 760
 	// 通信记录条的窄屏判定与 #main 变单列的断点一致（761–768px 已是单列、整页滚动）
 	const STRIP_NARROW = 768
@@ -22,7 +23,9 @@
 	let view = 'comm'
 	let root = null
 	let fwRoot = null
-	let viewbar = null
+	let subnav = null
+	let serialRailBtn = null
+	let serialRailPill = null
 	let mounted = false
 	let renderTimer = 0
 	let lastSig = ''
@@ -344,31 +347,65 @@
 	}
 
 	// ---------- 视图切换 ----------
+	function allowDeviceFeature() {
+		const P = window.AppPlatform
+		return !P || typeof P.has !== 'function' || P.has('view.device')
+	}
 	function hasFirmwarePack() {
 		const P = window.AppPlatform
 		return !P || typeof P.has !== 'function' || P.has('view.firmware-pack')
 	}
-	function hasFirmwareView() {
+	function firmwarePlatformAllowed() {
 		const P = window.AppPlatform
-		return !!fwRoot && (!P || typeof P.has !== 'function' || P.has('panel.firmware') || P.has('view.firmware-pack'))
+		return !P || typeof P.has !== 'function' || P.has('panel.firmware') || P.has('view.firmware-pack')
 	}
-	function firmwareInfo() {
+	function firmwareRunning() {
+		const stop = typeof document !== 'undefined' && document && typeof document.getElementById === 'function' ? document.getElementById('fw-stop') : null
+		return !!(stop && !stop.disabled)
+	}
+	function firmwareProtocolInfo() {
 		const hb = hub()
 		const sid = hb && typeof hb.activeSendPhys === 'function' ? hb.activeSendPhys() : mainSid()
 		const pid = protocolOf(sid)
 		const entry = protocolEntry(pid)
 		const supported = !!(entry && entry.firmware && entry.firmware.method === 'pcp')
-		if (!supported) {
+		return { sid: sid, pid: pid, entry: entry, supported: supported }
+	}
+	function firmwareSupported() {
+		return firmwareProtocolInfo().supported
+	}
+	function hasFirmwareView() {
+		if (mounted && !fwRoot) return false
+		if (!firmwarePlatformAllowed()) return false
+		return firmwareSupported() || firmwareRunning()
+	}
+	function firmwareInfo() {
+		const info = firmwareProtocolInfo()
+		if (!firmwarePlatformAllowed()) {
 			return {
 				ok: false,
-				sid: sid,
-				pid: pid,
-				why: protocolName(pid) + (hasFirmwarePack()
-					? ' 不支持在线升级（仍可生成固件打包、选择固件与管理本机固件库）'
-					: ' 不支持固件升级（仍可选择固件、管理本机固件库）'),
+				sid: info.sid,
+				pid: info.pid,
+				why: '当前平台不支持固件升级',
 			}
 		}
-		return { ok: true, sid: sid, pid: pid, why: isDual() ? '固件升级走主发 ' + laneWord(sid) + '（' + protocolName(pid) + '）' : '' }
+		if (!info.supported) {
+			if (firmwareRunning()) {
+				return {
+					ok: true,
+					sid: info.sid,
+					pid: info.pid,
+					why: '固件升级进行中（' + protocolName(info.pid) + ' 不支持新建升级任务）',
+				}
+			}
+			return {
+				ok: false,
+				sid: info.sid,
+				pid: info.pid,
+				why: protocolName(info.pid) + ' 不支持 PCP 固件升级',
+			}
+		}
+		return { ok: true, sid: info.sid, pid: info.pid, why: isDual() ? '固件升级走主发 ' + laneWord(info.sid) + '（' + protocolName(info.pid) + '）' : '' }
 	}
 	function availability() {
 		const sid = mainSid()
@@ -382,9 +419,54 @@
 		return { ok: false, sid: sid, pid: pid, why: protocolName(pid) + ' 没有声明设备面板，只能用通信调试' }
 	}
 
+	function availableSubviews() {
+		const list = [{ id: 'comm', label: '通信', title: '通信调试', icon: 'bi-terminal' }]
+		if (allowDeviceFeature()) {
+			const av = availability()
+			if (av.ok) list.push({ id: 'device', label: '设备', title: av.why ? ('设备面板 · ' + av.why) : '设备面板', icon: 'bi-hdd-network' })
+		}
+		if (hasFirmwareView()) {
+			const fw = firmwareInfo()
+			const base = hasFirmwarePack() ? '固件打包与升级' : '固件升级'
+			list.push({ id: 'firmware', label: '固件', title: fw.why ? (base + ' · ' + fw.why) : base, icon: 'bi-cpu' })
+		}
+		return list
+	}
+
+	function isSerialViewActive() {
+		const vs = document.getElementById('view-serial')
+		if (vs && vs.classList) return vs.classList.contains('active')
+		const tpr = window.ToolPluginRegistry
+		if (tpr && typeof tpr.getActiveView === 'function') return tpr.getActiveView() === 'view-serial'
+		return true
+	}
+
+	function activateSerialView() {
+		if (isSerialViewActive()) return
+		const tpr = window.ToolPluginRegistry
+		if (tpr && typeof tpr.activateView === 'function') {
+			tpr.activateView('view-serial')
+			return
+		}
+		const rail = document.querySelector('.rail-item[data-view="view-serial"]')
+		if (rail && !rail.classList.contains('active')) rail.click()
+	}
+
+	function isRailSubnavCollapsed() {
+		const st = storage()
+		if (!st) return false
+		try { return st.getItem(RAIL_SUBNAV_COLLAPSED_KEY) === '1' } catch (e) { return false }
+	}
+
+	function setRailSubnavCollapsed(collapsed) {
+		const st = storage()
+		if (!st) return
+		try { st.setItem(RAIL_SUBNAV_COLLAPSED_KEY, collapsed ? '1' : '0') } catch (e) {}
+	}
+
 	function setView(v, quiet) {
 		const want = v === 'device' ? 'device' : (v === 'firmware' ? 'firmware' : 'comm')
-		if (want === 'device' && !availability().ok) return false
+		if (want === 'device' && (!allowDeviceFeature() || !availability().ok)) return false
 		if (want === 'firmware' && !hasFirmwareView()) return false
 		view = want
 		try { sessionStorage.setItem(SUBVIEW_KEY, view) } catch (e) {}
@@ -400,7 +482,7 @@
 			if (panes) panes.inert = false
 			if (window.SerialTerm && typeof window.SerialTerm.setFitSuspended === 'function') window.SerialTerm.setFitSuspended(false)
 		}
-		renderViewbar()
+		renderSubnav()
 		if (view === 'device') render()
 		if (!quiet && view === 'device') {
 			const c = ctx()
@@ -410,37 +492,77 @@
 		return true
 	}
 
-	function renderViewbar() {
-		if (!viewbar) return
-		const av = availability()
-		const devBtn = viewbar.querySelector('#dp-view-device')
-		const commBtn = viewbar.querySelector('#dp-view-comm')
-		const fwBtn = viewbar.querySelector('#dp-view-firmware')
-		if (devBtn) {
-			devBtn.disabled = !av.ok
-			devBtn.title = av.ok ? '' : av.why
-			devBtn.setAttribute('aria-pressed', view === 'device' ? 'true' : 'false')
+	function renderSubnav() {
+		if (!serialRailBtn && !subnav) return
+		const c = ctx()
+		const protoText = isDual() ? ('主发 ' + laneWord(c.sid) + ' · ' + protocolName(c.pid)) : protocolName(c.pid)
+		const items = availableSubviews()
+		const hasSub = items.length >= 2
+		const serialActive = isSerialViewActive()
+		const collapsed = isRailSubnavCollapsed()
+		const isOpen = hasSub && serialActive && !collapsed
+
+		if (serialRailBtn) {
+			serialRailBtn.title = '通信调试 · ' + protoText
+			if (hasSub) {
+				serialRailBtn.dataset.hasSub = 'true'
+				serialRailBtn.dataset.subOpen = isOpen ? 'true' : 'false'
+				serialRailBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false')
+				serialRailBtn.setAttribute('aria-controls', 'rail-serial-subnav')
+			} else {
+				delete serialRailBtn.dataset.hasSub
+				delete serialRailBtn.dataset.subOpen
+				serialRailBtn.removeAttribute('aria-expanded')
+				serialRailBtn.removeAttribute('aria-controls')
+			}
+			if (serialRailPill) {
+				const showPill = hasSub && serialActive && !isOpen && view !== 'comm'
+				serialRailPill.hidden = !showPill
+				serialRailPill.textContent = showPill ? (view === 'device' ? '设备' : '固件') : ''
+			}
 		}
-		if (commBtn) commBtn.setAttribute('aria-pressed', view === 'comm' ? 'true' : 'false')
-		if (fwBtn) {
-			fwBtn.hidden = !hasFirmwareView()
-			fwBtn.setAttribute('aria-pressed', view === 'firmware' ? 'true' : 'false')
-		}
-		const whyEl = viewbar.querySelector('.dp-why')
-		if (whyEl) whyEl.textContent = view === 'firmware' ? firmwareInfo().why : av.why
+
+		if (!subnav) return
+		subnav.hidden = !isOpen
+		const sig = items.map(function (it) { return it.id + ':' + it.label + ':' + it.title }).join('|') + '#' + view
+		if (subnav.dataset.sig === sig) return
+		subnav.dataset.sig = sig
+		subnav.textContent = ''
+		items.forEach(function (it) {
+			const active = view === it.id
+			const btn = h('button', {
+				type: 'button',
+				class: 'rail-subitem' + (active ? ' active' : ''),
+				'data-subview': it.id,
+				title: it.title,
+				'aria-label': it.title,
+				'aria-current': active ? 'page' : null,
+				onclick: function () {
+					activateSerialView()
+					setView(it.id)
+				},
+			},
+			h('i', { class: 'bi ' + it.icon, 'aria-hidden': 'true' }),
+			h('span', { class: 'rail-sublabel', text: it.label }))
+			subnav.appendChild(btn)
+		})
 	}
 
-	// 主发路 / 协议 / 连接代次变化时同步：协议没有 device 了就退回通信调试；固件升级子视图不踢回（遵循升级中切协议不打断本轮）
+	// 主发路 / 协议 / 连接代次变化时同步：协议不支持设备面板或不支持固件（且未在升级中）时自动回退通信调试
 	function sync() {
 		if (!mounted) return
 		const av = availability()
-		if (view === 'device' && !av.ok) {
+		if (view === 'device' && (!allowDeviceFeature() || !av.ok)) {
 			setView('comm', true)
 			toast(av.why.replace('，只能用通信调试', '') + '，已回到通信调试', 'warn')
 		}
+		if (view === 'firmware' && !hasFirmwareView()) {
+			setView('comm', true)
+			toast(firmwareInfo().why + '，已回到通信调试', 'warn')
+		}
 		const c = ctx()
 		const sig = [view, c.sid, c.pid, c.gen, c.open, isDual(), laneLabel(c.sid)].join('|')
-		renderViewbar()
+		renderSubnav()
 		if (sig !== lastSig) {
 			lastSig = sig
 			if (view === 'device') render()
@@ -653,7 +775,7 @@
 		})
 		const protocol = protocolEntry(c.pid)
 		const firmware = protocol && protocol.firmware
-		if (firmware && (hasFirmwareView() || window.Workbench)) {
+		if (firmware && hasFirmwareView()) {
 			const key = firmware.versionKey
 			blocks.push(h('div', { class: 'dp-ids d-flex flex-wrap align-items-center gap-2' },
 				key && c.dev.fieldMap[key] && h('span', { class: 'd-inline-flex align-items-center gap-2' },
@@ -1128,11 +1250,11 @@
 		if (P && P.profile === 'mobile') return true
 		return !!(window.matchMedia && window.matchMedia('(max-width: ' + STRIP_NARROW + 'px)').matches)
 	}
-	// 条能用的总高度：#view-serial 去掉视图切换条（面板 + 条共分）
+	// 条能用的总高度：#view-serial 的可用高度（面板 + 条共分）
 	function stripAvail() {
 		const vs = document.getElementById('view-serial')
 		if (!vs || !vs.clientHeight) return NaN
-		return vs.clientHeight - (viewbar ? viewbar.offsetHeight : 0)
+		return vs.clientHeight
 	}
 	function fmtBytes(n) {
 		n = Number(n) || 0
@@ -1298,27 +1420,48 @@
 		}
 	}
 
+	function mountSubnav() {
+		const railTop = document.querySelector('#activity-rail .rail-top')
+		const serialBtn = railTop ? railTop.querySelector('.rail-item[data-view="view-serial"]') : document.querySelector('.rail-item[data-view="view-serial"]')
+		if (!serialBtn) return
+		serialRailBtn = serialBtn
+		if (!serialRailPill) {
+			serialRailPill = h('span', { class: 'rail-sub-pill', hidden: true })
+			serialBtn.appendChild(serialRailPill)
+		}
+		if (serialBtn.dataset && serialBtn.dataset.dpSubnavBound !== '1') {
+			serialBtn.dataset.dpSubnavBound = '1'
+			serialBtn.addEventListener('click', function () {
+				if (!isSerialViewActive()) {
+					setTimeout(renderSubnav, 0)
+					return
+				}
+				if (availableSubviews().length < 2) return
+				setRailSubnavCollapsed(!isRailSubnavCollapsed())
+				renderSubnav()
+			})
+		}
+		if (!railTop) return
+		let box = document.getElementById('rail-serial-subnav')
+		if (!box) {
+			box = h('div', { id: 'rail-serial-subnav', class: 'rail-sublist', role: 'group', 'aria-label': '串口子视图', hidden: true })
+			railTop.insertBefore(box, serialBtn.nextSibling)
+		}
+		subnav = box
+	}
+
 	// ---------- 挂载 ----------
 	function mount() {
 		if (mounted) return
-		const P = window.AppPlatform
-		const allowDevice = !P || typeof P.has !== 'function' || P.has('view.device')
-		const allowFwPack = !P || typeof P.has !== 'function' || P.has('view.firmware-pack')
-		const allowFw = !P || typeof P.has !== 'function' || P.has('panel.firmware') || allowFwPack
+		const allowDevice = allowDeviceFeature()
+		const allowFw = firmwarePlatformAllowed()
 		if (!allowDevice && !allowFw) return
 		const vs = document.getElementById('view-serial')
 		const main = document.getElementById('main')
 		if (!vs || !main || main.parentNode !== vs) return
 		mounted = true
-		viewbar = h('div', { class: 'dp-viewbar', id: 'dp-viewbar' },
-			h('div', { class: 'ctl-seg', role: 'group', 'aria-label': '通信调试视图' },
-				h('button', { type: 'button', id: 'dp-view-comm', 'aria-pressed': 'true', text: '通信调试', onclick: function () { setView('comm') } }),
-				allowDevice && h('button', { type: 'button', id: 'dp-view-device', 'aria-pressed': 'false', text: '设备面板', onclick: function () { setView('device') } }),
-				allowFw && h('button', { type: 'button', id: 'dp-view-firmware', 'aria-pressed': 'false', 'data-feature': 'panel.firmware', title: allowFwPack ? '固件打包与升级' : '固件升级', text: allowFwPack ? '固件' : '固件升级', onclick: function () { setView('firmware') } })),
-			h('span', { class: 'dp-why' }))
 		root = h('section', { class: 'dp', id: 'device-panel', 'aria-label': '设备面板' })
 		root.hidden = true
-		vs.insertBefore(viewbar, main)
 		vs.insertBefore(root, main.nextSibling)
 		if (allowFw) {
 			fwRoot = document.getElementById('firmware-panel')
@@ -1330,6 +1473,7 @@
 				vs.insertBefore(fwRoot, root.nextSibling)
 			}
 		}
+		mountSubnav()
 		mountStrip()
 		;['S', 'A', 'B'].forEach(function (sid) { pumps[sid] = makePump(sid) })
 		document.addEventListener('serial-session', function (ev) {
@@ -1339,6 +1483,7 @@
 		})
 		document.addEventListener('serial-lane-config', sync)
 		document.addEventListener('serial-protocol-registry-change', function () { sync(); if (view === 'device') render() })
+		document.addEventListener('serial-active-view-change', renderSubnav)
 		const sel = document.getElementById('serial-protocol-select')
 		if (sel) sel.addEventListener('change', function () { setTimeout(sync, 0) })
 		document.addEventListener('click', function (e) {
@@ -1364,27 +1509,35 @@
 		setInterval(tick, 1000)
 		let saved = null
 		try { saved = sessionStorage.getItem(SUBVIEW_KEY) } catch (e) {}
-		setView(saved === 'device' ? 'device' : (saved === 'firmware' ? 'firmware' : 'comm'), true)
+		const initWant = saved === 'device' ? 'device' : (saved === 'firmware' ? 'firmware' : 'comm')
+		if (!setView(initWant, true)) setView('comm', true)
 		lastSig = ''
 		sync()
 	}
 
 	window.DevicePanel = {
 		show: function () {
-			const rail = document.querySelector('.rail-item[data-view="view-serial"]')
-			if (rail && !rail.classList.contains('active')) rail.click()
+			activateSerialView()
 			if (!setView('device')) toast(availability().why, 'warn')
 		},
 		showFirmware: function () {
-			const rail = document.querySelector('.rail-item[data-view="view-serial"]')
-			if (rail && !rail.classList.contains('active')) rail.click()
-			return setView('firmware')
+			if (!hasFirmwareView()) {
+				toast(firmwareInfo().why, 'warn')
+				return false
+			}
+			activateSerialView()
+			if (!setView('firmware')) {
+				toast(firmwareInfo().why, 'warn')
+				return false
+			}
+			return true
 		},
 		showComm: function () { if (view !== 'comm') setView('comm', true) },
 		view: function () { return view },
 		// 通信记录条当前状态（测试与自检用）：{ pid, collapsed, h }
 		logStrip: function () { return strip.st ? { pid: strip.pid, collapsed: strip.st.collapsed, h: strip.st.h } : null },
 		available: function () { return availability().ok },
+		firmwareAvailable: function () { return hasFirmwareView() },
 		// 状态栏任务芯片：主发那一路的读取进度 / 结果（结果保留几秒）
 		task: function () {
 			const c = ctx()

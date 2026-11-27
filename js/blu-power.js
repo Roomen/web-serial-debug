@@ -7013,7 +7013,11 @@
 	// 只挡"串口页正开着"的口。关过但仍被记住的口是空闲的, 按归属判会让 BLU
 	// 扫不到设备, 还会误报"该口已被串口调试占用"。
 	function serialOwnsPort(port) {
-		if (!port || !window.SerialHub) return false
+		if (!port) return false
+		if (window.ToolPluginRegistry && typeof window.ToolPluginRegistry.findPortOwner === 'function') {
+			if (window.ToolPluginRegistry.findPortOwner(port, { exceptId: 'power' })) return true
+		}
+		if (!window.SerialHub) return false
 		if (typeof window.SerialHub.busyOwnerOfPort === 'function') {
 			return !!window.SerialHub.busyOwnerOfPort(port)
 		}
