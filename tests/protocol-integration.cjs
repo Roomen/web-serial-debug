@@ -192,6 +192,11 @@ class DomNode {
 			}
 			if (p === 'button' || p === 'input' || p === 'select' || p === 'textarea') return this.tagName === p.toUpperCase()
 			if (p.startsWith('#')) return this.id === p.slice(1)
+			if (p === '.rail-item[data-view]') return this.classList.contains('rail-item') && !!this.dataset.view
+			if (p.startsWith('.rail-item[data-view="')) {
+				const m = p.match(/^\.rail-item\[data-view="([^"]+)"\]$/)
+				return !!m && this.classList.contains('rail-item') && this.dataset.view === m[1]
+			}
 			if (p.startsWith('.')) return this.classList.contains(p.slice(1))
 			if (p === 'button[data-func]') return this.tagName === 'BUTTON' && this.dataset.func != null
 			if (p.startsWith('[data-index="')) {
@@ -267,7 +272,42 @@ function createIntegrationEnv(opts) {
 
 	const manageMenuBtn = new DomNode('BUTTON', 'serial-protocol-manage')
 	const manageInlineBtn = new DomNode('BUTTON', 'serial-protocol-manage-inline')
-	body.appendChild(manageMenuBtn)
+	if (opts.withRailAndPower) {
+		const rail = new DomNode('NAV', 'activity-rail')
+		const railTop = new DomNode('DIV')
+		railTop.className = 'rail-top'
+		const btnSerial = new DomNode('BUTTON')
+		btnSerial.className = 'rail-item active'
+		btnSerial.dataset.view = 'view-serial'
+		btnSerial.title = '通信调试'
+		railTop.appendChild(btnSerial)
+		const btnBlu = new DomNode('BUTTON')
+		btnBlu.className = 'rail-item'
+		btnBlu.dataset.view = 'view-blu'
+		btnBlu.dataset.feature = 'view.power'
+		btnBlu.title = '功耗分析'
+		railTop.appendChild(btnBlu)
+		const sep = new DomNode('DIV')
+		sep.className = 'rail-sep rail-divider'
+		sep.dataset.railAnchor = 'plugin-manage'
+		railTop.appendChild(sep)
+		manageMenuBtn.className = 'rail-item rail-plugin-btn'
+		manageMenuBtn.title = '插件与协议'
+		railTop.appendChild(manageMenuBtn)
+		rail.appendChild(railTop)
+		body.appendChild(rail)
+
+		const views = new DomNode('DIV', 'views')
+		const viewSerial = new DomNode('DIV', 'view-serial')
+		viewSerial.className = 'app-view active'
+		const viewBlu = new DomNode('DIV', 'view-blu')
+		viewBlu.className = 'app-view'
+		views.appendChild(viewSerial)
+		views.appendChild(viewBlu)
+		body.appendChild(views)
+	} else {
+		body.appendChild(manageMenuBtn)
+	}
 	body.appendChild(manageInlineBtn)
 
 	const navProtocol = new DomNode('DIV', 'nav-protocol')
@@ -456,11 +496,16 @@ function createIntegrationEnv(opts) {
 	sandbox.addEventListener = () => {}
 	sandbox.removeEventListener = () => {}
 
-	// 1. 加载 parse-view.js、app-dialog.js、protocol-registry.js（按 index.html 顺序）
+	// 1. 加载 parse-view.js、app-dialog.js、protocol-registry.js（可选 power-driver-registry / tool-plugin-registry）
 	vm.createContext(sandbox)
 	vm.runInContext(readJs('js/parse-view.js'), sandbox, { filename: 'js/parse-view.js' })
 	vm.runInContext(readJs('js/app-dialog.js'), sandbox, { filename: 'js/app-dialog.js' })
 	vm.runInContext(readJs('js/protocol-registry.js'), sandbox, { filename: 'js/protocol-registry.js' })
+	if (opts.withRailAndPower) {
+		vm.runInContext(readJs('js/power-driver-registry.js'), sandbox, { filename: 'js/power-driver-registry.js' })
+		vm.runInContext(readJs('js/tool-plugin-registry.js'), sandbox, { filename: 'js/tool-plugin-registry.js' })
+		vm.runInContext(readJs('js/blu-protocol.js'), sandbox, { filename: 'js/blu-protocol.js' })
+	}
 
 	// 记录是否发生过嵌套 AppDialog.confirm/alert/prompt 调用
 	let nestedDialogCalls = 0
@@ -616,6 +661,8 @@ async function run() {
 			'js/dual-config.js',
 			'js/text-byte-encoder.js',
 			'js/protocol-registry.js',
+			'js/power-driver-registry.js',
+			'js/tool-plugin-registry.js',
 			'js/common.js',
 			'js/wmbus-protocol.js',
 			'js/gz-protocol.js',
@@ -626,10 +673,13 @@ async function run() {
 			'js/json-protocol.js',
 			'js/js-protocol-plugin.js',
 			'js/protocol-manager.js',
+			'js/blu-protocol.js',
+			'js/blu-power.js',
+			'js/modern-power.js',
 		]
 		let prev = -1
 		for (const s of seq) {
-			const idx = html.indexOf(s)
+			const idx = html.indexOf('src="' + s + '"')
 			assert.ok(idx > prev, 'index.html 脚本顺序不满足契约：' + s)
 			prev = idx
 		}
@@ -1067,6 +1117,129 @@ async function run() {
 		})
 		assert.equal(mobEnv.sandbox.__mobileRan, undefined, '移动端画像下绝不可执行任何外部 JS 插件代码')
 		assert.equal(mobEnv.sandbox.ProtocolRegistry.has('mob-p'), false)
+	}
+
+	// ---- 9. 端到端多能力插件联调：单个受信任 JS 插件同时注册通信协议 + 功耗仪驱动 + 左栏工具视图，停用后三处同步卸载并安全回退 ----
+	{
+		const env = createIntegrationEnv({ withRailAndPower: true })
+		const { sandbox, document, els } = env
+		const PR = sandbox.ProtocolRegistry
+		const PDR = sandbox.PowerDriverRegistry
+		const TPR = sandbox.ToolPluginRegistry
+		const JSP = sandbox.JsProtocolPlugin
+
+		assert.equal(PDR.has('blu-100k'), true, '内置 blu-100k 功耗仪驱动应已就绪')
+		assert.equal(PDR.getActiveId(), 'blu-100k')
+		assert.equal(TPR.has('power'), true, '内置 power 左栏工具应已就绪')
+
+		sandbox.__e2eLog = []
+		const multiCode = [
+			"registerProtocol('e2e-multi-proto', {",
+			"  name: '联调三合一协议',",
+			"  version: '1.0.0',",
+			"  parseFrame(b) { return { ok: true, matchedHead: true, raw: b } },",
+			"  logView() { return { title: '联调帧' } },",
+			"})",
+			"registerPowerDriver('e2e-multi-meter', {",
+			"  name: '联调 CSV 电流表',",
+			"  shortName: '联调表',",
+			"  version: '1.0.0',",
+			"  serialOptions: { baudRate: 115200 },",
+			"  capabilities: { nominalHz: 200, voltage: { supported: false }, dutPower: { supported: false }, logicBits: 0 },",
+			"  createSession() {",
+			"    let buf = ''",
+			"    const dec = new TextDecoder()",
+			"    return {",
+			"      pushChunk(u8) {",
+			"        buf += dec.decode(u8, { stream: true })",
+			"        const lines = buf.split(/\\r?\\n/)",
+			"        buf = lines.pop() || ''",
+			"        return lines.map(s => Number(s.trim())).filter(Number.isFinite)",
+			"      },",
+			"      resetStream() { buf = '' },",
+			"    }",
+			"  },",
+			"})",
+			"registerToolPlugin('e2e-multi-tool', {",
+			"  name: '联调校验工装',",
+			"  label: '工装',",
+			"  icon: 'bi-tools',",
+			"  hideTopbar: true,",
+			"  mount(container, ctx) {",
+			"    window.__e2eLog.push('mount:' + ctx.id)",
+			"    const p = document.createElement('div')",
+			"    p.textContent = '联调工具已挂载'",
+			"    container.appendChild(p)",
+			"  },",
+			"  onActivate(ctx) { window.__e2eLog.push('activate:' + ctx.id) },",
+			"  onDeactivate(ctx) { window.__e2eLog.push('deactivate:' + ctx.id) },",
+			"  unmount(ctx) { window.__e2eLog.push('unmount:' + ctx.id) },",
+			"})",
+		].join('\n')
+
+		const saved = JSP.saveLocalPlugin({ pluginId: 'e2e-tri', name: '三合一联调插件', fileName: 'e2e-tri.js', code: multiCode })
+		assert.equal(saved.ok, true)
+		assert.equal(saved.needsTrust, true)
+		assert.equal(PR.has('e2e-multi-proto'), false)
+		assert.equal(PDR.has('e2e-multi-meter'), false)
+		assert.equal(TPR.has('e2e-multi-tool'), false)
+
+		// 待信任时左栏插件按钮应亮起提示圆点
+		const manageBtn = document.getElementById('serial-protocol-manage')
+		const dotBefore = manageBtn && manageBtn.querySelector('.rail-status-dot')
+		assert.ok(dotBefore && dotBefore.hidden === false, '待信任插件应在左栏 #serial-protocol-manage 显示提示点')
+
+		// 显式信任并启用（绑定哈希防 TOCTOU）
+		const tr = JSP.trustAndEnable(saved.pluginKey, JSP.hashCode(multiCode))
+		assert.equal(tr.ok, true)
+		assert.deepEqual([...tr.registeredIds], ['e2e-multi-proto'])
+		assert.deepEqual([...tr.registeredPowerIds], ['e2e-multi-meter'])
+		assert.deepEqual([...tr.registeredToolIds], ['e2e-multi-tool'])
+		assert.equal(dotBefore.hidden, true, '信任后待确认提示点应隐藏')
+
+		// 1) ProtocolRegistry 生效并切到该协议
+		assert.equal(PR.has('e2e-multi-proto'), true)
+		els.protoSelect.value = 'e2e-multi-proto'
+		els.protoSelect.dispatchEvent(new sandbox.Event('change'))
+		assert.equal(sandbox._activeProtocol, 'e2e-multi-proto')
+
+		// 2) PowerDriverRegistry 生效、会话解析正常并切到该驱动
+		assert.equal(PDR.has('e2e-multi-meter'), true)
+		const drv = PDR.get('e2e-multi-meter')
+		const sess = drv.createSession()
+		const samples = sess.pushChunk(new TextEncoder().encode('12.5\n34.0\n'))
+		assert.deepEqual([...samples.map((x) => x.iUA)], [12.5, 34])
+		assert.equal(PDR.setActiveId('e2e-multi-meter').ok, true)
+		assert.equal(PDR.getActiveId(), 'e2e-multi-meter')
+
+		// 3) ToolPluginRegistry 生效、按钮插在分隔线上方、容器建好并可激活
+		assert.equal(TPR.has('e2e-multi-tool'), true)
+		const toolItem = TPR.list().find((x) => x.id === 'e2e-multi-tool')
+		assert.ok(toolItem && toolItem.visible === true && toolItem.selectable === true)
+		const railTop = document.querySelector('.rail-top')
+		const toolBtnIdx = railTop.children.findIndex((c) => c.dataset && c.dataset.toolPlugin === 'e2e-multi-tool')
+		const sepIdx = railTop.children.findIndex((c) => c.classList && c.classList.contains('rail-divider'))
+		assert.ok(toolBtnIdx >= 0 && toolBtnIdx < sepIdx, '外部工具按钮必须位于左栏分隔线上方')
+		const toolView = document.getElementById('view-plugin-e2e-multi-tool')
+		assert.ok(toolView && toolView.dataset.hideTopbar === 'true')
+		assert.equal(TPR.activateView('view-plugin-e2e-multi-tool'), 'view-plugin-e2e-multi-tool')
+		assert.equal(TPR.getActiveView(), 'view-plugin-e2e-multi-tool')
+
+		// 4) 停用插件 → 三处注册表同步卸载并全部安全回退到默认项
+		const disRes = JSP.setEnabled(saved.pluginKey, false)
+		assert.equal(disRes.ok, true)
+		assert.equal(PR.has('e2e-multi-proto'), false)
+		assert.equal(sandbox._activeProtocol, 'sek', '停用多能力插件后通信协议应安全回退 sek')
+		assert.equal(els.protoSelect.value, 'sek')
+
+		assert.equal(PDR.has('e2e-multi-meter'), false)
+		assert.equal(PDR.getActiveId(), 'blu-100k', '停用多能力插件后功耗仪驱动应安全回退 blu-100k')
+
+		assert.equal(TPR.has('e2e-multi-tool'), false)
+		assert.equal(TPR.getActiveView(), 'view-serial', '停用多能力插件后左栏活动视图应安全回退 view-serial')
+		assert.equal(document.getElementById('view-plugin-e2e-multi-tool'), null, '动态工具视图 DOM 必须清理干净')
+		assert.equal(railTop.children.some((c) => c.dataset && c.dataset.toolPlugin === 'e2e-multi-tool'), false, '动态左栏按钮必须清理干净')
+		assert.deepEqual([...sandbox.__e2eLog], ['mount:e2e-multi-tool', 'activate:e2e-multi-tool', 'deactivate:e2e-multi-tool', 'unmount:e2e-multi-tool'])
 	}
 
 	console.log('protocol-integration: ok')

@@ -425,6 +425,105 @@ test('功耗仪队列：MCP 的 failFast 不会排在正在执行的操作后面
 	await slow
 })
 
+test('驱动能力门控：不支持程控调压与上下电时返回 unsupported_capability', async () => {
+	const PowerDriverRegistry = require('../js/power-driver-registry.js')
+	const h = makeHarness()
+	const reg = PowerDriverRegistry.createRegistry({ window: { BluProtocol: h.ctx.PROTO }, document: null, localStorage: null })
+	reg.register('ina226-meter', {
+		name: 'INA226 串联电流表',
+		shortName: 'INA226',
+		capabilities: {
+			nominalHz: 1000,
+			voltage: { supported: false, requiresBeforeStart: false },
+			dutPower: { supported: false },
+		},
+		buildStart: () => null,
+		buildStop: () => null,
+		pushChunk: () => [],
+	})
+	assert.equal(reg.setActiveId('ina226-meter').ok, true)
+	h.ctx.window.PowerDriverRegistry = reg
+
+	const vr = await h.api.setVoltage(3300)
+	assert.equal(vr.ok, false)
+	assert.equal(vr.code, 'unsupported_capability')
+
+	const pr = await h.api.setPower(true)
+	assert.equal(pr.ok, false)
+	assert.equal(pr.code, 'unsupported_capability')
+	assert.equal(h.writes.length, 0, '不支持能力时不得向串口写入任何字节')
+})
+
+test('驱动能力门控：被动流电流表无启停帧且不要求采样前设电压', async () => {
+	const PowerDriverRegistry = require('../js/power-driver-registry.js')
+	const h = makeHarness()
+	const reg = PowerDriverRegistry.createRegistry({ window: { BluProtocol: h.ctx.PROTO }, document: null, localStorage: null })
+	reg.register('passive-meter', {
+		name: '被动流电流表',
+		shortName: 'PASSIVE',
+		capabilities: {
+			nominalHz: 500,
+			voltage: { supported: false, requiresBeforeStart: false },
+			dutPower: { supported: false },
+		},
+		buildStart: () => null,
+		buildStop: () => null,
+		pushChunk: () => [120, 130],
+	})
+	assert.equal(reg.setActiveId('passive-meter').ok, true)
+	h.ctx.window.PowerDriverRegistry = reg
+	h.state.setVoltageMv = null
+
+	const sr = await h.api.startCapture()
+	assert.equal(sr.ok, true)
+	assert.equal(h.state.bluSampling, true)
+	assert.equal(h.writes.length, 0, '被动流开始采样不发串口帧')
+
+	const tr = await h.api.stopCapture()
+	assert.equal(tr.ok, true)
+	assert.equal(h.state.bluSampling, false)
+	assert.equal(h.writes.length, 0, '被动流停止采样不发串口帧')
+})
+
+test('驱动切换门控：连接中禁止切换协议，powerState 携带驱动元信息与能力', async () => {
+	const PowerDriverRegistry = require('../js/power-driver-registry.js')
+	const h = makeHarness()
+	const reg = PowerDriverRegistry.createRegistry({ window: { BluProtocol: h.ctx.PROTO }, document: null, localStorage: null })
+	reg.register('custom-meter', {
+		name: '自定义工装电流表',
+		shortName: 'JIG',
+		capabilities: {
+			nominalHz: 2000,
+			voltage: { supported: true, minMv: 1800, maxMv: 3600, requiresBeforeStart: true },
+			dutPower: { supported: true },
+		},
+		buildSetVoltage: (mv) => [0xA1, (mv >> 8) & 0xff, mv & 0xff],
+		buildSetDutPower: (on) => [0xA2, on ? 1 : 0],
+		buildStart: () => [0xA3],
+		buildStop: () => [0xA4],
+		pushChunk: () => [],
+	})
+	h.ctx.window.PowerDriverRegistry = reg
+
+	const st0 = h.api.powerState()
+	assert.equal(st0.driverId, 'blu-100k')
+	assert.equal(st0.driverName, 'BLU 100k 电流表')
+	assert.equal(st0.capabilities.voltage.supported, true)
+
+	const blocked = h.api.setActiveDriver('custom-meter')
+	assert.equal(blocked.ok, false)
+	assert.equal(blocked.code, 'blu_busy')
+
+	h.state.bluOpen = false
+	const switched = h.api.setActiveDriver('custom-meter')
+	assert.equal(switched.ok, true)
+	assert.equal(h.api.getActiveDriverId(), 'custom-meter')
+	const st1 = h.api.powerState()
+	assert.equal(st1.driverId, 'custom-meter')
+	assert.equal(st1.capabilities.voltage.minMv, 1800)
+	assert.equal(st1.capabilities.voltage.maxMv, 3600)
+})
+
 ;(async () => {
 	let failed = 0
 	for (const t of tests) {

@@ -74,12 +74,53 @@
 		isOpen: function () { return !!bluOpen },
 		isBusyForUpdate: function () { return !!(bluOpen || bluOpening) },
 		getPort: function () { return bluPort },
+		log: function (msg, level) { bluLog(msg, level) },
+		getActiveDriverId: function () { return activeDriver().id },
+		setActiveDriver: function (id) {
+			if (bluOpen || bluOpening) {
+				return { ok: false, code: 'blu_busy', message: '请先关闭当前功耗仪连接再切换协议' }
+			}
+			const reg = window.PowerDriverRegistry
+			if (!reg || typeof reg.setActiveId !== 'function') {
+				if (id === activeDriver().id) return { ok: true, id: id, changed: false }
+				return { ok: false, code: 'registry_unavailable', message: '功耗仪协议注册表未加载' }
+			}
+			const r = reg.setActiveId(id)
+			if (!r || !r.ok) {
+				return {
+					ok: false,
+					code: (r && r.code) || 'driver_switch_failed',
+					message: (r && r.error) || '切换功耗仪协议失败',
+				}
+			}
+			return { ok: true, id: r.id, changed: !!r.changed }
+		},
+		listDrivers: function (opts) {
+			const reg = window.PowerDriverRegistry
+			if (reg && typeof reg.list === 'function') return reg.list(opts)
+			const d = activeDriver()
+			return [{
+				id: d.id,
+				name: d.name || d.id,
+				shortName: d.shortName || d.name || d.id,
+				builtin: !!d.builtin,
+				source: d.source || 'builtin',
+				version: d.version || '',
+				description: d.description || '',
+				ownerPluginId: d.ownerPluginId || null,
+				hidden: false,
+				selectable: true,
+				active: true,
+				capabilities: driverCaps(d),
+			}]
+		},
 		// 排查样点流用：先 captureRaw() 再采样，停采后 dumpRaw() 导出 .bin + .json
 		captureRaw: function (bytes) { return rawCapArm(bytes) },
 		dumpRaw: function () { return rawCapDump() },
 		streamStats: function () { return rawCapStats() },
 		// ---- MCP 用的类型化业务接口：与 UI 共用同一套函数与同一条串行队列 ----
 		powerState: function () {
+			const drv = activeDriver()
 			return {
 				connected: !!bluOpen,
 				opening: !!bluOpening,
@@ -90,6 +131,9 @@
 				sampleRateHz: targetRateHz,
 				sampleCount: dataCount(),
 				connectionGeneration: bluConnGen(),
+				driverId: drv.id,
+				driverName: drv.name || drv.id,
+				capabilities: driverCaps(drv),
 			}
 		},
 		captureSummary: function () { return captureSummary() },
@@ -98,6 +142,9 @@
 			return runBluOp(async function () {
 				const g = await guardStart(guard)
 				if (g) return g
+				if (!driverCaps().dutPower.supported) {
+					return { ok: false, code: 'unsupported_capability', message: '当前功耗仪协议不支持上下电控制' }
+				}
 				if (!bluOpen) return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
 				const gen = bluConnGen()
 				// 只有「上次命令」的状态才能跳过；实测/未知都不足以代替一次显式命令
@@ -116,9 +163,13 @@
 			return runBluOp(async function () {
 				const g = await guardStart(guard)
 				if (g) return g
+				const vcap = driverCaps().voltage
+				if (!vcap.supported) {
+					return { ok: false, code: 'unsupported_capability', message: '当前功耗仪协议不支持程控调压' }
+				}
 				if (!bluOpen) return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
-				if (!isFinite(requested) || requested < PROTO.VDD_LOW_MV || requested > PROTO.VDD_HIGH_MV) {
-					return { ok: false, code: 'out_of_range', message: '电压必须在 ' + PROTO.VDD_LOW_MV + '..' + PROTO.VDD_HIGH_MV + ' mV' }
+				if (!isFinite(requested) || requested < vcap.minMv || requested > vcap.maxMv) {
+					return { ok: false, code: 'out_of_range', message: '电压必须在 ' + vcap.minMv + '..' + vcap.maxMv + ' mV' }
 				}
 				const gen = bluConnGen()
 				const applied = await applyVoltageMv(requested, guard)
@@ -193,6 +244,134 @@
 	// 连接代次：打开与关闭都会推进(读循环每次启动 +1)，迟到的写/结果据此作废
 	function bluConnGen() { return bluReadGen }
 	function stillSameConn(gen) { return !!bluOpen && bluReadGen === gen }
+	let driverSession = null
+	let driverSessionId = ''
+	let fallbackBluDriverCache = null
+	function getFallbackBluDriver() {
+		if (fallbackBluDriverCache) return fallbackBluDriverCache
+		if (PROTO && typeof PROTO.createPowerDriver === 'function') {
+			fallbackBluDriverCache = PROTO.createPowerDriver()
+			return fallbackBluDriverCache
+		}
+		fallbackBluDriverCache = {
+			id: 'blu-100k',
+			name: 'BLU 100k 电流表',
+			shortName: 'BLU',
+			builtin: true,
+			source: 'builtin',
+			version: '1.0.0',
+			description: '',
+			ownerPluginId: null,
+			usbFilters: PROTO.USB_FILTERS || [],
+			matchPort: function (info) { return !!(info && info.usbVendorId === 0x15A2 && info.usbProductId === 0x300A) },
+			serialOptions: {
+				baudRate: 1000000,
+				dataBits: 8,
+				stopBits: 1,
+				parity: 'none',
+				bufferSize: 1024 * 1024,
+				flowControl: 'none',
+				dtr: true,
+				rts: true,
+			},
+			capabilities: {
+				nominalHz: PROTO.NOMINAL_BASE_HZ || 100000,
+				voltage: {
+					supported: true,
+					minMv: PROTO.VDD_LOW_MV || 500,
+					maxMv: PROTO.VDD_HIGH_MV || 5000,
+					defaultMv: null,
+					requiresBeforeStart: true,
+					requiresBeforePowerOn: true,
+				},
+				dutPower: {
+					supported: true,
+					probeOnConnect: true,
+				},
+				logicBits: 8,
+			},
+			createSession: function () {
+				return {
+					buildSetVoltage: function (mv) { return PROTO.cmdRegulatorSet(mv) },
+					buildSetDutPower: function (on) { return PROTO.cmdDutPower(on) },
+					buildStart: function () { return PROTO.cmdAverageStart() },
+					buildStop: function () { return PROTO.cmdAverageStop() },
+					pushChunk: function (u8) { return parser.push(u8) },
+					resetStream: function (opts) {
+						if (parser && typeof parser.reset === 'function') parser.reset()
+						if (opts && opts.resetStats && parser && typeof parser.resetStats === 'function') parser.resetStats()
+						if (converter && typeof converter.resetFilter === 'function') converter.resetFilter()
+					},
+					getStreamStats: function () { return {} },
+				}
+			},
+		}
+		return fallbackBluDriverCache
+	}
+	function activeDriver() {
+		const reg = window.PowerDriverRegistry
+		if (reg && typeof reg.getActiveDriver === 'function') {
+			const d = reg.getActiveDriver()
+			if (d) return d
+		}
+		return getFallbackBluDriver()
+	}
+	function driverCaps(d) {
+		const drv = d || activeDriver()
+		const c = (drv && drv.capabilities) || {}
+		const v = c.voltage || {}
+		const p = c.dutPower || {}
+		return {
+			nominalHz: (typeof c.nominalHz === 'number' && isFinite(c.nominalHz) && c.nominalHz > 0)
+				? c.nominalHz
+				: (PROTO.NOMINAL_BASE_HZ || 100000),
+			voltage: {
+				supported: !!v.supported,
+				minMv: (typeof v.minMv === 'number' && isFinite(v.minMv)) ? v.minMv : (PROTO.VDD_LOW_MV || 500),
+				maxMv: (typeof v.maxMv === 'number' && isFinite(v.maxMv)) ? v.maxMv : (PROTO.VDD_HIGH_MV || 5000),
+				defaultMv: (typeof v.defaultMv === 'number' && isFinite(v.defaultMv)) ? v.defaultMv : null,
+				requiresBeforeStart: !!v.requiresBeforeStart,
+				requiresBeforePowerOn: v.requiresBeforePowerOn !== false,
+			},
+			dutPower: {
+				supported: !!p.supported,
+				probeOnConnect: !!p.probeOnConnect,
+			},
+			logicBits: (typeof c.logicBits === 'number' && isFinite(c.logicBits)) ? (c.logicBits | 0) : 0,
+		}
+	}
+	function resetDriverSession(forceNew) {
+		const d = activeDriver()
+		if (!d) {
+			driverSession = null
+			driverSessionId = ''
+			return null
+		}
+		if (forceNew || !driverSession || driverSessionId !== d.id) {
+			driverSessionId = d.id
+			driverSession = typeof d.createSession === 'function'
+				? d.createSession({ driverId: d.id, log: bluLog })
+				: null
+		}
+		return driverSession
+	}
+	function ensureDriverSession() {
+		return resetDriverSession(false)
+	}
+	function driverBuildFrame(kind, arg) {
+		const sess = ensureDriverSession()
+		if (!sess) return { ok: true, bytes: null }
+		try {
+			let bytes = null
+			if (kind === 'setVoltage' && typeof sess.buildSetVoltage === 'function') bytes = sess.buildSetVoltage(arg)
+			else if (kind === 'setDutPower' && typeof sess.buildSetDutPower === 'function') bytes = sess.buildSetDutPower(arg)
+			else if (kind === 'start' && typeof sess.buildStart === 'function') bytes = sess.buildStart(arg)
+			else if (kind === 'stop' && typeof sess.buildStop === 'function') bytes = sess.buildStop()
+			return { ok: true, bytes: bytes }
+		} catch (e) {
+			return { ok: false, bytes: null, error: e && e.message ? e.message : String(e) }
+		}
+	}
 	let bluReader = null
 	// 对照 Python BLU2_MP：STOP 后 / START 前丢弃串口残留样点，避免半帧与旧数据进波形
 	let dropSampleStream = false
@@ -1328,10 +1507,30 @@
 		else if (level === 'warn') console.warn('[blu]', msg)
 	}
 
+	function notifyConnectionState() {
+		if (typeof document === 'undefined' || typeof document.dispatchEvent !== 'function') return
+		try {
+			const Ctor = window.CustomEvent || (typeof CustomEvent !== 'undefined' ? CustomEvent : null)
+			if (Ctor) {
+				document.dispatchEvent(new Ctor('blu-connection-state-change', {
+					detail: {
+						open: !!bluOpen,
+						opening: !!bluOpening,
+						sampling: !!bluSampling,
+						driverId: activeDriver().id,
+					},
+				}))
+			}
+		} catch (e) {}
+	}
+
 	/** 连接状态合并进「打开/关闭」按钮（不再单独显示未连接/已连接） */
 	function setStatus(text, connected) {
 		const toggle = E('blu-open')
-		if (!toggle) return
+		if (!toggle) {
+			notifyConnectionState()
+			return
+		}
 		const on = !!connected
 		toggle.classList.toggle('is-open', on)
 		toggle.classList.toggle('btn-primary', !on)
@@ -1340,6 +1539,7 @@
 			? '<i class="bi bi-plug-fill"></i> 关闭'
 			: '<i class="bi bi-plug"></i> 打开'
 		toggle.title = on ? (text || '已连接 · 点击关闭') : (text || '未连接 · 点击打开')
+		notifyConnectionState()
 	}
 
 	function setDeviceMenuOpen(open) {
@@ -1354,33 +1554,42 @@
 		if (menu) menu.classList.toggle('is-open', on)
 	}
 
-	// 返回 { text, html }: text 为设备自报等不可信内容(必须 textContent 渲染),
-	// html 仅在工具自拼时给出(可 innerHTML)。不要退回"按内容里有没有 < 判断"的写法:
-	// 设备自报的 SN 里含 < 就会被当成 HTML 注入。
+	// 设备自报与外部驱动名称一律经 textContent 渲染，绝不拼进 innerHTML
 	function shortDeviceLabel(port, index) {
+		const drv = activeDriver()
+		const tag = (drv && (drv.shortName || drv.name)) || 'BLU'
 		if (!port) return { text: '未选设备' }
 		let info = {}
 		try { info = port.getInfo ? port.getInfo() : {} } catch (e) {}
 		const sn = getPortSn(port)
 		const vp = formatVidPid(info, true)
 		if (sn) return { text: sn }
-		if (vp) return { html: 'BLU · <span class="blu-vp">' + vp + '</span>' }
-		return { text: bluKnownPorts.length > 1 ? ('设备 #' + (index + 1)) : 'BLU' }
+		if (vp) return { prefix: tag + ' · ', vp: vp }
+		return { text: bluKnownPorts.length > 1 ? ('设备 #' + (index + 1)) : tag }
 	}
 
 	function renderDeviceList() {
+		const drv = activeDriver()
+		const tag = (drv && (drv.shortName || drv.name)) || 'BLU'
 		const list = E('blu-device-list')
 		const label = E('blu-device-label')
 		if (label) {
 			const idx = bluPort ? bluKnownPorts.indexOf(bluPort) : -1
 			const lbl = shortDeviceLabel(bluPort, idx >= 0 ? idx : 0)
-			// 只有工具自拼的 html 字段才走 innerHTML, 设备自报内容一律 textContent
-			if (lbl.html != null) label.innerHTML = lbl.html
-			else label.textContent = lbl.text
+			if (lbl.vp != null) {
+				label.textContent = ''
+				label.appendChild(document.createTextNode(lbl.prefix || ''))
+				const span = document.createElement('span')
+				span.className = 'blu-vp'
+				span.textContent = lbl.vp
+				label.appendChild(span)
+			} else {
+				label.textContent = lbl.text
+			}
 			label.title = bluPort ? bluPortLabel(bluPort, idx >= 0 ? idx : 0) : '点击选择或添加设备'
 		}
 		if (!list) return
-		list.innerHTML = ''
+		list.textContent = ''
 		if (!bluKnownPorts.length) {
 			const empty = document.createElement('div')
 			empty.className = 'blu-device-empty'
@@ -1401,7 +1610,7 @@
 			const vp = formatVidPid(info, true)
 			const name = document.createElement('span')
 			name.className = 'blu-device-item-name'
-			name.textContent = sn || ('BLU' + (bluKnownPorts.length > 1 ? ' #' + (i + 1) : ''))
+			name.textContent = sn || (tag + (bluKnownPorts.length > 1 ? ' #' + (i + 1) : ''))
 			const meta = document.createElement('span')
 			meta.className = 'blu-device-item-meta'
 			meta.textContent = vp || '已授权串口'
@@ -1506,32 +1715,117 @@
 	/** 读 UI 源电压（mV 整数，对齐上位机）；无效则返回 null */
 	function readSetVoltageMv() {
 		const el = E('blu-voltage-set')
+		const vcap = driverCaps().voltage
 		if (!el) return setVoltageMv
 		const raw = String(el.value == null ? '' : el.value).trim()
-		if (!raw) return setVoltageMv
+		if (!raw) {
+			if (!vcap.supported) setVoltageMv = null
+			return setVoltageMv
+		}
 		let mv = parseInt(raw, 10)
 		if (!isFinite(mv)) return setVoltageMv
 		mv = Math.round(mv)
-		mv = Math.max(PROTO.VDD_LOW_MV, Math.min(PROTO.VDD_HIGH_MV, mv))
+		if (vcap.supported) {
+			mv = Math.max(vcap.minMv, Math.min(vcap.maxMv, mv))
+		} else {
+			mv = Math.max(0, Math.min(100000, mv))
+		}
 		setVoltageMv = mv
 		el.value = String(mv)
 		return mv
 	}
 
+	function ratePresetKeyForHz(hz) {
+		if (hz === 100000) return '100k'
+		if (hz === 10000) return '10k'
+		if (hz === 1000) return '1k'
+		if (hz === 100) return '100'
+		if (hz === 10) return '10'
+		if (hz === 1) return '1'
+		return String(Math.round(hz))
+	}
+
+	function rateOptionLabelForHz(hz) {
+		if (hz >= 1000 && hz % 1000 === 0) return String(hz / 1000) + 'K'
+		if (hz >= 1000) return (hz / 1000).toFixed(1) + 'K'
+		return String(Math.round(hz)) + 'Hz'
+	}
+
+	function buildRateOptionsForNominalHz(nominalHz) {
+		const maxHz = Math.max(1, Math.round(nominalHz || PROTO.NOMINAL_BASE_HZ || 100000))
+		const baseList = [100000, 10000, 1000, 100, 10, 1]
+		const hzList = [maxHz]
+		for (let i = 0; i < baseList.length; i++) {
+			if (baseList[i] < maxHz && hzList.indexOf(baseList[i]) < 0) {
+				hzList.push(baseList[i])
+			}
+		}
+		return hzList.map(function (hz, idx) {
+			const key = ratePresetKeyForHz(hz)
+			const base = RATE_PRESETS[key]
+			return {
+				key: key,
+				hz: hz,
+				optionText: rateOptionLabelForHz(hz),
+				label: idx === 0
+					? (base ? base.label : (rateOptionLabelForHz(hz) + ' (尽量不抽稀)'))
+					: (base ? base.label : rateOptionLabelForHz(hz)),
+			}
+		})
+	}
+
 	function getRatePreset() {
 		const el = E('blu-sample-rate')
-		const key = el ? el.value : '100k'
-		return RATE_PRESETS[key] || RATE_PRESETS['100k']
+		const maxHz = driverCaps().nominalHz
+		const key = el ? el.value : ratePresetKeyForHz(maxHz)
+		const opts = buildRateOptionsForNominalHz(maxHz)
+		for (let i = 0; i < opts.length; i++) {
+			if (opts[i].key === key) return opts[i]
+		}
+		if (RATE_PRESETS[key] && RATE_PRESETS[key].hz <= maxHz) return RATE_PRESETS[key]
+		const num = Number(key)
+		if (isFinite(num) && num >= 1 && num <= maxHz) {
+			const hz = Math.round(num)
+			return { key: String(hz), hz: hz, label: rateOptionLabelForHz(hz) }
+		}
+		return opts[0] || RATE_PRESETS['100k']
+	}
+
+	function syncRateOptionsForDriver(drv) {
+		const el = E('blu-sample-rate')
+		const caps = driverCaps(drv)
+		const opts = buildRateOptionsForNominalHz(caps.nominalHz)
+		if (el) {
+			const prev = el.value
+			el.textContent = ''
+			for (let i = 0; i < opts.length; i++) {
+				const o = document.createElement('option')
+				o.value = opts[i].key
+				o.textContent = opts[i].optionText
+				el.appendChild(o)
+			}
+			const hasPrev = opts.some(function (x) { return x.key === prev })
+			el.value = hasPrev ? prev : opts[0].key
+		}
+		const p = getRatePreset()
+		targetRateHz = p.hz
+		if (!bluSampling && rateAdj) {
+			if (typeof rateAdj.setBaseRateHz === 'function') rateAdj.setBaseRateHz(caps.nominalHz)
+			if (typeof rateAdj.setTargetRateHz === 'function') rateAdj.setTargetRateHz(targetRateHz)
+		}
 	}
 
 	function applyRatePreset() {
 		const p = getRatePreset()
 		targetRateHz = p.hz
+		if (rateAdj && typeof rateAdj.setBaseRateHz === 'function' && !(deviceStreamHz > 0)) {
+			rateAdj.setBaseRateHz(driverCaps().nominalHz)
+		}
 		rateAdj.setTargetRateHz(targetRateHz)
 		// 默认 100k；波形模式提示 RAM/磁盘预算
 		if (p.hz >= 50000 && recordMode === 'wave') {
 			const sec = estimateDurationSec(RING_CAP_MAX, p.hz)
-			bluLog('100k 波形：RAM 约可存 ' + fmtDuration(sec) +
+			bluLog(p.optionText + ' 波形：RAM 约可存 ' + fmtDuration(sec) +
 				'，超出后压缩落盘（磁盘 ' + fmtGb(storageCfg.diskGB) + '）', 'warn')
 		}
 		updateStorageHint()
@@ -1589,11 +1883,15 @@
 		bluPowered = on === true
 		const btn = E('blu-dut-power')
 		if (!btn) return
+		const canPower = driverCaps().dutPower.supported
+		btn.disabled = !canPower
 		btn.setAttribute('aria-pressed', String(bluPowered))
 		btn.innerHTML = bluPowered
 			? '<i class="bi bi-lightning-charge-fill"></i> 下电'
 			: '<i class="bi bi-lightning-charge"></i> 上电'
-		btn.title = bluPowered ? 'DUT 已上电 · 点击下电' : 'DUT 已下电 · 点击上电'
+		btn.title = canPower
+			? (bluPowered ? 'DUT 已上电 · 点击下电' : 'DUT 已下电 · 点击上电')
+			: '当前功耗仪协议不支持 DUT 上下电控制'
 	}
 
 	// 打开设备时判定 DUT 是否在供电。
@@ -1638,6 +1936,10 @@
 	}
 
 	async function toggleDutPower() {
+		if (!driverCaps().dutPower.supported) {
+			bluLog('当前功耗仪协议不支持 DUT 上下电控制', 'warn')
+			return { ok: false, code: 'unsupported_capability', message: '当前功耗仪协议不支持上下电控制' }
+		}
 		if (!bluOpen) {
 			bluLog('请先打开设备再上下电', 'warn')
 			return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
@@ -1647,11 +1949,28 @@
 
 	// 写源电压。已连接时只有设备写入成功才算「已施加」：失败保持上一次有效值，不把请求值当成事实
 	async function applyVoltageMv(mv, guard) {
+		const vcap = driverCaps().voltage
+		if (!vcap.supported) {
+			if (mv == null || !isFinite(mv)) {
+				setVoltageMv = null
+				syncVoltageInput()
+				bluLog('已清除参考电压（功率按 0V 计算）')
+				scheduleUIUpdate()
+				return { ok: true, stale: false, referenceOnly: true }
+			}
+			const refMv = Math.max(0, Math.min(100000, Math.round(mv)))
+			if (setVoltageMv !== refMv && bluSampling) captureVoltageChanges++
+			setVoltageMv = refMv
+			syncVoltageInput()
+			bluLog('参考电压已设为 ' + refMv + ' mV（仅用于计算功率与能量，不下发串口指令）')
+			scheduleUIUpdate()
+			return { ok: true, stale: false, referenceOnly: true }
+		}
 		if (mv == null || !isFinite(mv)) {
 			bluLog('请先设定源电压 mV', 'error')
 			return { ok: false, stale: false }
 		}
-		const clamped = Math.max(PROTO.VDD_LOW_MV, Math.min(PROTO.VDD_HIGH_MV, Math.round(mv)))
+		const clamped = Math.max(vcap.minMv, Math.min(vcap.maxMv, Math.round(mv)))
 		if (!bluOpen) {
 			setVoltageMv = clamped
 			syncVoltageInput()
@@ -1663,7 +1982,14 @@
 		if (g) return { ok: false, stale: false }
 		const port = bluPort
 		const gen = bluReadGen
-		const w = await bluWriteOn(port, gen, PROTO.cmdRegulatorSet(clamped), 'REGULATOR ' + clamped + ' mV')
+		const built = driverBuildFrame('setVoltage', clamped)
+		if (!built.ok || !built.bytes || !built.bytes.length) {
+			bluLog('构造设压指令失败' + (built.error ? '：' + built.error : ''), 'error')
+			syncVoltageInput()
+			scheduleUIUpdate()
+			return { ok: false, stale: false }
+		}
+		const w = await bluWriteOn(port, gen, built.bytes, 'REGULATOR ' + clamped + ' mV')
 		if (!w.ok) {
 			if (!w.stale) bluLog('设定电压失败：设备未确认写入，保持上一次有效电压', 'error')
 			syncVoltageInput()
@@ -1680,27 +2006,41 @@
 
 	// 上电：先写电压，电压写失败绝不上电；绑定发起时的端口/代次，中途换设备不再继续
 	async function doPowerOn(guard) {
-		if (!bluOpen) return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
-		const mv = readSetVoltageMv()
-		if (mv == null || !isFinite(mv) || mv < PROTO.VDD_LOW_MV) {
-			bluLog('请先设定源电压 mV（打开设备后会从设备读取）', 'error')
-			return { ok: false, code: 'voltage_unknown', message: '尚未设定源电压' }
+		const caps = driverCaps()
+		if (!caps.dutPower.supported) {
+			return { ok: false, code: 'unsupported_capability', message: '当前功耗仪协议不支持上下电控制' }
 		}
+		if (!bluOpen) return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
 		const port = bluPort
 		const gen = bluReadGen
-		const v = await applyVoltageMv(mv, guard)
-		if (!v.ok) {
-			if (v.stale) {
-				return { ok: false, code: 'disconnected', message: '写电压时连接已变化，未上电', executed: 'unknown', powered: powerPayload() }
+		if (caps.voltage.supported && caps.voltage.requiresBeforePowerOn) {
+			const mv = readSetVoltageMv()
+			if (mv == null || !isFinite(mv) || mv < caps.voltage.minMv) {
+				bluLog('请先设定源电压 mV（打开设备后会从设备读取）', 'error')
+				return { ok: false, code: 'voltage_unknown', message: '尚未设定源电压' }
 			}
-			bluLog('DUT 上电已中止：源电压写入失败', 'error')
-			return { ok: false, code: 'voltage_write_failed', message: '源电压写入失败，未上电', voltageMv: setVoltageMv, powered: powerPayload() }
+			const v = await applyVoltageMv(mv, guard)
+			if (!v.ok) {
+				if (v.stale) {
+					return { ok: false, code: 'disconnected', message: '写电压时连接已变化，未上电', executed: 'unknown', powered: powerPayload() }
+				}
+				bluLog('DUT 上电已中止：源电压写入失败', 'error')
+				return { ok: false, code: 'voltage_write_failed', message: '源电压写入失败，未上电', voltageMv: setVoltageMv, powered: powerPayload() }
+			}
 		}
 		if (guardStep(guard)) return { ok: false, code: 'aborted', message: '请求已取消，未上电', executed: false, powered: powerPayload() }
 		if (!port || bluPort !== port || bluReadGen !== gen) {
 			return { ok: false, code: 'disconnected', message: '电压写入后设备已变化，未上电', executed: false, powered: powerPayload() }
 		}
-		const w = await bluWriteOn(port, gen, PROTO.cmdDutPower(true), 'DUT 上电')
+		const built = driverBuildFrame('setDutPower', true)
+		if (!built.ok) {
+			bluLog('构造上电指令失败：' + built.error, 'error')
+			return { ok: false, code: 'power_write_failed', message: '构造上电指令失败', executed: false, powered: powerPayload() }
+		}
+		if (!built.bytes || !built.bytes.length) {
+			return { ok: false, code: 'unsupported_capability', message: '当前功耗仪协议不支持上下电控制' }
+		}
+		const w = await bluWriteOn(port, gen, built.bytes, 'DUT 上电')
 		if (!w.ok) {
 			// 连接已经变了(重连/换设备)：这次结果不属于新连接，不能改它的供电状态
 			if (w.stale) {
@@ -1717,11 +2057,23 @@
 	}
 
 	async function doPowerOff(guard) {
+		const caps = driverCaps()
+		if (!caps.dutPower.supported) {
+			return { ok: false, code: 'unsupported_capability', message: '当前功耗仪协议不支持上下电控制' }
+		}
 		if (!bluOpen) return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
 		if (guardStep(guard)) return { ok: false, code: 'aborted', message: '请求已取消，未执行', executed: false, powered: powerPayload() }
 		const port = bluPort
 		const gen = bluReadGen
-		const w = await bluWriteOn(port, gen, PROTO.cmdDutPower(false), 'DUT 下电')
+		const built = driverBuildFrame('setDutPower', false)
+		if (!built.ok) {
+			bluLog('构造下电指令失败：' + built.error, 'error')
+			return { ok: false, code: 'power_write_failed', message: '构造下电指令失败', executed: false, powered: powerPayload() }
+		}
+		if (!built.bytes || !built.bytes.length) {
+			return { ok: false, code: 'unsupported_capability', message: '当前功耗仪协议不支持上下电控制' }
+		}
+		const w = await bluWriteOn(port, gen, built.bytes, 'DUT 下电')
 		if (!w.ok) {
 			if (w.stale) {
 				return { ok: false, code: 'disconnected', message: '下电过程中连接已变化，结果未知', executed: 'unknown', powered: powerPayload() }
@@ -1788,6 +2140,8 @@
 
 	let metaCollecting = false
 	let metaCollectBuf = ''
+	let metaCollectUntil = null
+	let metaCollectResolve = null
 	// 非空时读循环把样点喂给它而不是主波形（打开设备时的 DUT 供电探测）
 	let dutProbe = null
 
@@ -1807,6 +2161,7 @@
 		clearBucketCache()
 		minimap.reset()
 		resetLongStats()
+		if (driverSession && typeof driverSession.resetStream === 'function') driverSession.resetStream()
 		parser.reset()
 		rateAdj.reset()
 		overallStatDirty = true
@@ -1837,28 +2192,38 @@
 	/** 对照 API：在丢弃窗口内让读循环吃掉残留字节，并清 parser 半帧 */
 	async function drainSampleRx(ms) {
 		dropSampleStream = true
+		if (driverSession && typeof driverSession.resetStream === 'function') driverSession.resetStream()
 		parser.reset()
 		const wait = Math.max(0, ms == null ? RX_DRAIN_MS : ms)
 		if (wait > 0) {
 			await new Promise(function (r) { setTimeout(r, wait) })
 		}
+		if (driverSession && typeof driverSession.resetStream === 'function') driverSession.resetStream()
 		parser.reset()
 	}
 
 	async function startSampling(guard) {
 		if (!bluOpen) return { ok: false, code: 'blu_not_connected', message: '功耗仪未连接' }
 		if (bluSampling) return { ok: true, changed: false, sampling: true }
-		// API：start_measuring 要求已 set_source_voltage（current_vdd，单位 mV）
-		const mv = readSetVoltageMv()
-		if (!isFinite(mv) || mv < PROTO.VDD_LOW_MV) {
-			bluLog('请先设定源电压 mV（API 要求 current_vdd）', 'error')
-			return { ok: false, code: 'voltage_unknown', message: '尚未设定源电压' }
+		const caps = driverCaps()
+		// 仅当驱动要求采样前先设源电压（如 BLU 100k 的 current_vdd）时才强制校验
+		if (caps.voltage.requiresBeforeStart) {
+			const mv = readSetVoltageMv()
+			if (mv == null || !isFinite(mv) || mv < caps.voltage.minMv) {
+				bluLog('请先设定源电压 mV（API 要求 current_vdd）', 'error')
+				return { ok: false, code: 'voltage_unknown', message: '尚未设定源电压' }
+			}
+		} else {
+			readSetVoltageMv()
 		}
-		// 对照 BLU2_MP.start_measuring：先 STOP → 排空残留 → 再 START
+		// 对照 BLU2_MP.start_measuring：先 STOP（若驱动有停止帧）→ 排空残留 → 再 START（若驱动有启动帧）
 		dropSampleStream = true
 		const port0 = bluPort
 		const gen0 = bluReadGen
-		try { await bluWriteOn(port0, gen0, PROTO.cmdAverageStop(), 'AVERAGE_STOP') } catch (e) {}
+		const preStop = driverBuildFrame('stop')
+		if (preStop.ok && preStop.bytes && preStop.bytes.length) {
+			try { await bluWriteOn(port0, gen0, preStop.bytes, 'AVERAGE_STOP') } catch (e) {}
+		}
 		await drainSampleRx(RX_DRAIN_MS)
 		if (guardStep(guard)) return { ok: false, code: 'aborted', message: '请求已取消，未开始采样', executed: false }
 		if (!port0 || bluPort !== port0 || bluReadGen !== gen0) {
@@ -1867,7 +2232,8 @@
 
 		applyRatePreset()
 		// clearAllData 会清 deviceStreamHz，基速先记下再清会话
-		const baseHz = deviceStreamHz > 1000 ? deviceStreamHz : PROTO.NOMINAL_BASE_HZ
+		const baseThreshold = Math.min(1000, caps.nominalHz * 0.1)
+		const baseHz = deviceStreamHz > baseThreshold ? deviceStreamHz : caps.nominalHz
 		clearAllData(false)
 		storageStop = false
 		if (recordMode === 'wave' && Store) {
@@ -1886,14 +2252,16 @@
 		if (!port0 || bluPort !== port0 || bluReadGen !== gen0) {
 			return { ok: false, code: 'disconnected', message: '设备已变化，未开始采样', executed: false }
 		}
-		parser.reset()
-		parser.resetStats()
+		const sess = ensureDriverSession()
+		if (sess && typeof sess.resetStream === 'function') sess.resetStream({ resetStats: true })
+		if (parser && typeof parser.reset === 'function') parser.reset()
+		if (parser && typeof parser.resetStats === 'function') parser.resetStats()
 		rawCapLen = 0
 		resyncSeen = 0
 		resyncLogTs = 0
 		lockLogged = false
 		lossLogged = false
-		converter.resetFilter()
+		if (converter && typeof converter.resetFilter === 'function') converter.resetFilter()
 		rateAdj = new PROTO.RateAdjuster(targetRateHz, baseHz)
 		// 预热：按目标输出率 × 秒数，并封顶，避免 100k×2s 丢 20 万点才出波形
 		warmupLeft = Math.max(0, Math.min(WARMUP_MAX_SAMPLES, Math.round(targetRateHz * WARMUP_SEC)))
@@ -1921,31 +2289,45 @@
 		bluSampling = true
 		updateSampleBtn()
 		startStallWatch()
-		// 先发 START，再异步要 WakeLock，避免多等一拍
-		const startW = await bluWriteOn(port0, gen0, PROTO.cmdAverageStart(), 'AVERAGE_START')
-		if (!startW.ok) {
-			if (startW.stale) {
-				// 连接已变化：新连接自己的采样状态不归这次请求清理
-				return { ok: false, code: 'disconnected', message: '开始采样过程中连接已变化，结果未知', executed: 'unknown' }
-			}
-			// 同一连接上设备没收到 START：回到未采样态，不能让界面显示正在采样
+		const startBuilt = driverBuildFrame('start', { targetRateHz: targetRateHz, recordMode: recordMode, voltageMv: setVoltageMv })
+		if (!startBuilt.ok) {
 			bluSampling = false
 			dropSampleStream = true
 			stopStallWatch()
 			updateSampleBtn()
 			releaseWakeLock()
-			bluLog('开始采样失败：START 写入失败', 'error')
+			bluLog('开始采样失败：构造启动指令出错（' + startBuilt.error + '）', 'error')
 			scheduleUIUpdate()
-			return { ok: false, code: 'capture_start_failed', message: 'START 写入失败，未开始采样' }
+			return { ok: false, code: 'capture_start_failed', message: '构造启动指令失败，未开始采样' }
 		}
-		// START 已下发后再接收样点（此前 drop 挡住 STOP 尾包与竞态）
+		if (startBuilt.bytes && startBuilt.bytes.length) {
+			// 先发 START，再异步要 WakeLock，避免多等一拍
+			const startW = await bluWriteOn(port0, gen0, startBuilt.bytes, 'AVERAGE_START')
+			if (!startW.ok) {
+				if (startW.stale) {
+					// 连接已变化：新连接自己的采样状态不归这次请求清理
+					return { ok: false, code: 'disconnected', message: '开始采样过程中连接已变化，结果未知', executed: 'unknown' }
+				}
+				// 同一连接上设备没收到 START：回到未采样态，不能让界面显示正在采样
+				bluSampling = false
+				dropSampleStream = true
+				stopStallWatch()
+				updateSampleBtn()
+				releaseWakeLock()
+				bluLog('开始采样失败：START 写入失败', 'error')
+				scheduleUIUpdate()
+				return { ok: false, code: 'capture_start_failed', message: 'START 写入失败，未开始采样' }
+			}
+		}
+		// START 已下发（或被动流直接开启）后再接收样点（此前 drop 挡住 STOP 尾包与竞态）
 		dropSampleStream = false
 		requestWakeLock() // 不 await，不挡采样
 		const warmMs = targetRateHz > 0 ? Math.round(warmupLeft / targetRateHz * 1000) : 0
 		const ramSec = estimateDurationSec(RING_CAP_MAX, targetRateHz)
 		const acqTag = (acqTrigStart !== 'off' ? ' · 等' + acqEdgeLabel(acqTrigStart) + '入库' : '') +
 			(acqTrigStop !== 'off' ? ' · 遇' + acqEdgeLabel(acqTrigStop) + '停采' : '')
-		bluLog('AVERAGE_START' +
+		const startTag = (startBuilt.bytes && startBuilt.bytes.length) ? 'AVERAGE_START' : '被动流开始采集'
+		bluLog(startTag +
 			' · 目标 ' + getRatePreset().label +
 			' · ' + (recordMode === 'long' ? '长期统计' : '波形') +
 			' · Live 滚动' +
@@ -1955,7 +2337,7 @@
 				? (' · RAM ' + fmtGb(storageCfg.ramGB) + '≈' + fmtDuration(ramSec) +
 					' · 磁盘 ' + fmtGb(storageCfg.diskGB))
 				: '') +
-			(modifiersOk ? '' : ' · 默认修正参数'))
+			(activeDriver().id === 'blu-100k' && !modifiersOk ? ' · 默认修正参数' : ''))
 		return { ok: true, changed: true, sampling: true }
 	}
 
@@ -1972,9 +2354,16 @@
 		stopStallWatch()
 		updateSampleBtn()
 		let stopW = { ok: true, stale: false }
-		try { stopW = await bluWriteOn(port0, gen0, PROTO.cmdAverageStop(), 'AVERAGE_STOP') } catch (e) { stopW = { ok: false, stale: false } }
+		const stopBuilt = driverBuildFrame('stop')
+		if (!stopBuilt.ok) {
+			stopW = { ok: false, stale: false }
+		} else if (stopBuilt.bytes && stopBuilt.bytes.length) {
+			try { stopW = await bluWriteOn(port0, gen0, stopBuilt.bytes, 'AVERAGE_STOP') } catch (e) { stopW = { ok: false, stale: false } }
+		}
 		const stopOk = stopW.ok
-		parser.reset()
+		const sess = ensureDriverSession()
+		if (sess && typeof sess.resetStream === 'function') sess.resetStream()
+		if (parser && typeof parser.reset === 'function') parser.reset()
 		releaseWakeLock()
 		bluLog(storageStop ? '已停止采样（存储限制）' : '已停止采样')
 		if (!stopOk) bluLog('STOP 写入失败：本地已停止入库，设备可能仍在采样', 'warn')
@@ -2299,56 +2688,187 @@
 		wakeLockSentinel = null
 	}
 
+	function makeConnectIo(port, gen) {
+		return {
+			isAlive: function () { return stillSameConn(gen) && bluPort === port },
+			log: bluLog,
+			sleep: function (ms) {
+				return new Promise(function (resolve) { setTimeout(resolve, Math.max(0, ms | 0)) })
+			},
+			write: async function (bytes, note) {
+				const w = await bluWriteOn(port, gen, bytes, note)
+				return w.ok
+			},
+			collectText: function (opts) {
+				opts = opts || {}
+				const until = opts.until != null ? opts.until : null
+				const timeoutMs = Math.max(50, Math.min(15000, opts.timeoutMs | 0 || 3000))
+				metaCollecting = true
+				metaCollectBuf = ''
+				metaCollectUntil = until
+				return new Promise(function (resolve) {
+					let done = false
+					const finish = function () {
+						if (done) return
+						done = true
+						clearTimeout(timer)
+						const out = metaCollectBuf
+						metaCollecting = false
+						metaCollectUntil = null
+						metaCollectResolve = null
+						metaCollectBuf = ''
+						resolve(out)
+					}
+					metaCollectResolve = finish
+					const timer = setTimeout(finish, timeoutMs)
+				})
+			},
+			probeSamples: async function (opts) {
+				opts = opts || {}
+				if (!stillSameConn(gen) || bluPort !== port || bluSampling || metaCollecting) {
+					return { samples: [], count: 0 }
+				}
+				const parseFn = typeof opts.parseChunk === 'function' ? opts.parseChunk : null
+				if (!parseFn) return { samples: [], count: 0 }
+				const durMs = Math.max(20, Math.min(3000, opts.durationMs | 0 || DUT_PROBE_MS))
+				dutProbe = { parse: parseFn, vals: [] }
+				try {
+					if (opts.startBytes && opts.startBytes.length) {
+						await bluWriteOn(port, gen, opts.startBytes, 'DUT 供电探测 START')
+					}
+					await new Promise(function (r) { setTimeout(r, durMs) })
+				} catch (e) {
+					dutProbe = null
+					return { samples: [], count: 0 }
+				}
+				if (opts.stopBytes && opts.stopBytes.length) {
+					try { await bluWriteOn(port, gen, opts.stopBytes, 'DUT 供电探测 STOP') } catch (e) {}
+				}
+				const vals = dutProbe ? dutProbe.vals : []
+				dutProbe = null
+				return { samples: vals, count: vals.length }
+			},
+		}
+	}
+
 	async function bluOpenPort() {
 		if (!bluPort || bluOpen || bluOpening) return
 		if (serialOwnsPort(bluPort)) {
 			bluLog('该口已被串口调试占用，请换一个设备或先在串口页关闭', 'error')
 			return
 		}
+		const drv = activeDriver()
+		const caps = driverCaps(drv)
+		const sopt = (drv && drv.serialOptions) || {}
 		bluOpening = true
 		bluManualClose = false
+		notifyConnectionState()
 		try {
 			try { await bluPort.close() } catch (e) {}
-			// CDC 虚拟串口：baudRate 仅为 Web Serial API 占位，无实际意义
 			await bluPort.open({
-				baudRate: 1000000,
-				dataBits: 8,
-				stopBits: 1,
-				parity: 'none',
-				bufferSize: 1024 * 1024,
-				flowControl: 'none',
+				baudRate: sopt.baudRate || 1000000,
+				dataBits: sopt.dataBits || 8,
+				stopBits: sopt.stopBits || 1,
+				parity: sopt.parity || 'none',
+				bufferSize: sopt.bufferSize || (1024 * 1024),
+				flowControl: sopt.flowControl || 'none',
 			})
 			try {
 				if (bluPort.setSignals) {
-					await bluPort.setSignals({ dataTerminalReady: true, requestToSend: true })
+					await bluPort.setSignals({
+						dataTerminalReady: sopt.dtr !== false,
+						requestToSend: sopt.rts !== false,
+					})
 				}
 			} catch (e) {}
+			const sess = resetDriverSession(true)
 			bluOpen = true
 			setStatus('已连接', true)
-			bluLog('设备已打开（USB CDC）', 'success')
+			bluLog('设备已打开（' + (drv.name || drv.id) + '）', 'success')
+			modifiers = PROTO.defaultModifiers()
 			modifiersOk = false
-			// 打开前不显示电压；识别后由 get_modifiers 回填设备 VDD
-			clearVoltageUi()
-			bluReadLoop()
-			await new Promise(function (r) { setTimeout(r, 80) })
-			// 对照 example_auto：get_modifiers →（用户设压/上电）→ start
-			await fetchAndApplyModifiers()
-			// 打开设备不改变设备侧供电；实测一下它现在到底带没带电，按钮照实显示
-			const probe = await probeDutPower()
-			if (probe) {
-				markPowered(probe.on, 'probed')
-				bluLog('DUT 供电实测：' + (probe.on ? '上电' : '下电') +
-					'（探测电流中位数 ' + fmtCurrent(probe.medianUA) + '）',
-					probe.on ? 'success' : '')
+			if (caps.voltage.supported) {
+				clearVoltageUi()
+			} else if (setVoltageMv == null && caps.voltage.defaultMv != null) {
+				setVoltageMv = Math.round(caps.voltage.defaultMv)
+				syncVoltageInput()
 			}
+			const openedPort = bluPort
+			bluReadLoop()
+			const openGen = bluReadGen
+			await new Promise(function (r) { setTimeout(r, 80) })
+			if (!stillSameConn(openGen) || bluPort !== openedPort) return
+
+			if (sess && typeof sess.onConnect === 'function') {
+				const connRes = await sess.onConnect(makeConnectIo(openedPort, openGen))
+				if (!stillSameConn(openGen) || bluPort !== openedPort) return
+				if (connRes && connRes.ok === false) {
+					bluLog('协议握手失败：' + (connRes.error || '未知错误'), 'warn')
+				} else if (connRes) {
+					if (connRes.modifiers) {
+						modifiers = connRes.modifiers
+						converter.setModifiers(modifiers)
+					}
+					modifiersOk = !!connRes.modifiersOk
+					if (connRes.deviceSn && bluPort) {
+						rememberPortSn(bluPort, connRes.deviceSn)
+						syncPortSelectUI()
+					}
+					const saved = isFinite(connRes.savedVddMv) ? Math.round(connRes.savedVddMv) : 0
+					if (drv.id === 'blu-100k') {
+						if (modifiersOk) {
+							bluLog('get_modifiers 完成' +
+								(connRes.deviceSn ? ' · SN ' + connRes.deviceSn : '') +
+								(saved ? ' · VDD ' + saved + ' mV' : '') +
+								(connRes.calibrated != null ? ' · Calibrated=' + connRes.calibrated : ''), 'success')
+						} else {
+							bluLog('get_modifiers 超时，使用默认 R/O 表', 'warn')
+						}
+					} else if (connRes.message) {
+						bluLog(String(connRes.message), 'success')
+					}
+					if (caps.voltage.supported) {
+						const el = E('blu-voltage-set')
+						if (saved >= caps.voltage.minMv && saved <= caps.voltage.maxMv) {
+							if (!el || !el.dataset.userTouched) {
+								setVoltageMv = saved
+								syncVoltageInput()
+							}
+						} else if (caps.voltage.defaultMv != null && (!el || !el.dataset.userTouched)) {
+							setVoltageMv = Math.round(caps.voltage.defaultMv)
+							syncVoltageInput()
+						} else if (!el || !el.dataset.userTouched) {
+							setVoltageMv = null
+							syncVoltageInput()
+							if (caps.voltage.requiresBeforeStart) {
+								bluLog('设备未返回 VDD，请手动设定源电压', 'warn')
+							}
+						}
+					}
+					if (caps.dutPower.supported && connRes.dutPower && typeof connRes.dutPower.on === 'boolean') {
+						markPowered(connRes.dutPower.on, 'probed')
+						bluLog('DUT 供电实测：' + (connRes.dutPower.on ? '上电' : '下电') +
+							(isFinite(connRes.dutPower.medianUA) ? '（探测电流中位数 ' + fmtCurrent(connRes.dutPower.medianUA) + '）' : ''),
+							connRes.dutPower.on ? 'success' : '')
+					}
+				}
+			} else if (caps.voltage.supported && caps.voltage.defaultMv != null) {
+				const el = E('blu-voltage-set')
+				if (!el || !el.dataset.userTouched) {
+					setVoltageMv = Math.round(caps.voltage.defaultMv)
+					syncVoltageInput()
+				}
+			}
+			syncDriverCapabilityUi()
 			scheduleUIUpdate()
 		} catch (e) {
 			bluOpen = false
-			clearVoltageUi()
+			if (caps.voltage.supported) clearVoltageUi()
 			setStatus('打开失败', false)
 			bluLog('打开失败：' + (e.message || e), 'error')
 		} finally {
 			bluOpening = false
+			notifyConnectionState()
 		}
 	}
 
@@ -2357,6 +2877,14 @@
 		// 立刻作废旧代次：在飞的电源/电压/采样操作下一次检查就停下，不会写到重连后的新设备上
 		bluReadGen++
 		if (opts.manual !== false) bluManualClose = true
+		metaCollecting = false
+		metaCollectUntil = null
+		if (metaCollectResolve) {
+			const res = metaCollectResolve
+			metaCollectResolve = null
+			try { res() } catch (e) {}
+		}
+		dutProbe = null
 		// 采样中关闭：先 AVERAGE_STOP 停采，再关串口；不改上下电、不改电压
 		if (bluSampling) {
 			try {
@@ -2368,9 +2896,15 @@
 				stopStallWatch()
 				updateSampleBtn()
 				try {
-					if (bluOpen) await bluWrite(PROTO.cmdAverageStop(), 'AVERAGE_STOP')
+					const fbStop = driverBuildFrame('stop')
+					if (bluOpen && fbStop.ok && fbStop.bytes && fbStop.bytes.length) {
+						await bluWrite(fbStop.bytes, 'AVERAGE_STOP')
+					}
 				} catch (e2) {}
-				try { parser.reset() } catch (e3) {}
+				try {
+					if (driverSession && typeof driverSession.resetStream === 'function') driverSession.resetStream()
+					parser.reset()
+				} catch (e3) {}
 				releaseWakeLock()
 			}
 		}
@@ -2387,8 +2921,8 @@
 		}
 		setStatus(opts.manual === false ? '已断开' : '已关闭', false)
 		releaseWakeLock()
-		// 关闭后清空电压显示，下次打开再从设备读取
-		clearVoltageUi()
+		// 程控稳压设备关闭后清空电压显示，下次打开再从设备读取；无稳压设备保留用户本地参考电压
+		if (driverCaps().voltage.supported) clearVoltageUi()
 		// 手动点「关闭」：不碰 DUT 上下电 UI（设备侧供电状态仍由用户控制）
 		// 意外断开：连接已失，复位上电按钮避免误显示
 		if (opts.manual === false) markPowered(null, 'unknown')
@@ -2508,8 +3042,13 @@
 	}
 
 	function rawCapStats() {
-		return {
+		const drv = activeDriver()
+		const sessStats = (driverSession && typeof driverSession.getStreamStats === 'function')
+			? driverSession.getStreamStats()
+			: {}
+		return Object.assign({
 			appVersion: window.APP_VERSION || '',
+			driverId: drv.id,
 			capturedBytes: rawCapLen,
 			lockMask: '0x' + (parser.lockMask >>> 0).toString(16),
 			learnLeft: parser.learnLeft,
@@ -2523,7 +3062,7 @@
 			modifiersOk: modifiersOk,
 			R: modifiers.R,
 			O: modifiers.O,
-		}
+		}, sessStats)
 	}
 
 	function rawCapDump() {
@@ -2550,27 +3089,32 @@
 	const DATALOSS_THRESHOLD = 500
 
 	function reportResync() {
-		if (!lockLogged && parser.learnLeft === 0) {
+		const st = (driverSession && typeof driverSession.getStreamStats === 'function')
+			? driverSession.getStreamStats()
+			: null
+		if (!st || typeof st.resyncCount !== 'number') return
+		const lockMaskNum = typeof st.lockMaskNum === 'number' ? st.lockMaskNum : (parseInt(st.lockMask, 16) || 0)
+		if (!lockLogged && st.learnLeft === 0) {
 			lockLogged = true
-			if (!parser.lockMask) {
+			if (!lockMaskNum) {
 				bluLog('样点流恒定位不足，本次不做错位重同步（设备可能在用 bit17~31）', 'warn')
-			} else if (!parser.counterOk) {
+			} else if (!st.counterOk) {
 				bluLog('样点流无滚动计数器，无法统计真实丢点数', 'warn')
 			}
 		}
 		// 对照 Nordic：丢样点超过阈值就明确报出来，否则波形看着连续、其实是抽稀过的
-		if (parser.lostSamples >= DATALOSS_THRESHOLD && !lossLogged) {
+		if (st.lostSamples >= DATALOSS_THRESHOLD && !lossLogged) {
 			lossLogged = true
-			bluLog('检测到样点丢失（至少 ' + parser.lostSamples + ' 点）：设备发得比浏览器收得快，' +
+			bluLog('检测到样点丢失（至少 ' + st.lostSamples + ' 点）：设备发得比浏览器收得快，' +
 				'波形被无声抽稀，统计与时间轴都会偏', 'error')
 		}
-		if (parser.resyncCount === resyncSeen) return
-		resyncSeen = parser.resyncCount
+		if (st.resyncCount === resyncSeen) return
+		resyncSeen = st.resyncCount
 		const now = performance.now()
 		if (now - resyncLogTs < 2000) return
 		resyncLogTs = now
-		bluLog('样点流错位已重同步 ' + resyncSeen + ' 次（丢 ' + parser.droppedBytes +
-			' 字节 · 至少丢 ' + parser.lostSamples + ' 点）：USB 掉字节', 'warn')
+		bluLog('样点流错位已重同步 ' + resyncSeen + ' 次（丢 ' + st.droppedBytes +
+			' 字节 · 至少丢 ' + st.lostSamples + ' 点）：USB 掉字节', 'warn')
 	}
 
 	function noteSampleFrame() {
@@ -2601,7 +3145,7 @@
 	}
 
 	function handleBluChunk(u8, tBatch) {
-		// 打开后 metadata 阶段：尝试当文本收集（采样中绝不走此路径）
+		// 打开后握手文本阶段：尝试当文本收集（采样中绝不走此路径）
 		if (metaCollecting && !bluSampling) {
 			try {
 				const dec = new TextDecoder('utf-8', { fatal: false })
@@ -2609,16 +3153,30 @@
 				if (metaCollectBuf.length > 65536) {
 					metaCollectBuf = metaCollectBuf.slice(-32768)
 				}
+				if (metaCollectResolve && metaCollectUntil != null) {
+					let matched = false
+					if (typeof metaCollectUntil === 'string') matched = metaCollectBuf.indexOf(metaCollectUntil) >= 0
+					else if (metaCollectUntil instanceof RegExp) matched = metaCollectUntil.test(metaCollectBuf)
+					else if (typeof metaCollectUntil === 'function') {
+						try { matched = !!metaCollectUntil(metaCollectBuf) } catch (e) { matched = false }
+					}
+					if (matched) metaCollectResolve()
+				}
 			} catch (e) {}
 			return
 		}
 
 		// DUT 供电探测：短采一段，样点只进探测缓冲，不碰主波形
 		if (dutProbe) {
-			const probed = dutProbe.parser.push(u8)
-			for (let i = 0; i < probed.length; i++) {
-				const v = probed[i].iUA
-				if (isFinite(v)) dutProbe.vals.push(v)
+			const probed = typeof dutProbe.parse === 'function'
+				? dutProbe.parse(u8)
+				: (dutProbe.parser ? dutProbe.parser.push(u8) : [])
+			if (Array.isArray(probed)) {
+				for (let i = 0; i < probed.length; i++) {
+					const s = probed[i]
+					const v = typeof s === 'number' ? s : (s && typeof s.iUA === 'number' ? s.iUA : NaN)
+					if (isFinite(v)) dutProbe.vals.push(v)
+				}
 			}
 			return
 		}
@@ -2630,21 +3188,24 @@
 		}
 
 		rawCapPush(u8)
-		const samples = parser.push(u8)
+		const sess = ensureDriverSession()
+		const samples = sess && typeof sess.pushChunk === 'function' ? sess.pushChunk(u8) : parser.push(u8)
 		reportResync()
 		if (!samples.length) return
 		noteSampleFrame()
 
 		const N = samples.length
+		const nomHz = driverCaps().nominalHz
 		// 实测原始流速
 		const now = tBatch
 		if (!rawStreamFirstTs) rawStreamFirstTs = now
 		rawStreamCount += N
 		const rawElapsed = (now - rawStreamFirstTs) / 1000
-		if (rawStreamCount >= 2000 && rawElapsed > 0.5) {
+		const minRateSamples = Math.min(2000, Math.max(10, Math.round(nomHz * 0.02)))
+		if (rawStreamCount >= minRateSamples && rawElapsed > 0.5) {
 			const hz = rawStreamCount / rawElapsed
 			deviceStreamHz = hz
-			if (!periodLocked && hz > 100) {
+			if (!periodLocked && hz > 0.5) {
 				rateAdj.setBaseRateHz(hz)
 			}
 		}
@@ -2659,7 +3220,8 @@
 			}
 		}
 
-		const baseHz = deviceStreamHz > 1000 ? deviceStreamHz : PROTO.NOMINAL_BASE_HZ
+		const baseThreshold = Math.min(1000, nomHz * 0.1)
+		const baseHz = deviceStreamHz > baseThreshold ? deviceStreamHz : nomHz
 		const dtMs = 1000 / baseHz
 		// 批末对齐到达时刻，批内等间隔回推
 		let t0 = tBatch - (N - 1) * dtMs
@@ -4369,9 +4931,10 @@
 					: '--'
 			}
 			if (elSet) {
+				const isBlu = activeDriver().id === 'blu-100k'
 				elSet.textContent = modifiers.savedVddMv
 					? (modifiers.savedVddMv + ' mV')
-					: (modifiersOk ? '--' : (bluOpen ? '默认表' : '--'))
+					: (modifiersOk ? '--' : (bluOpen && isBlu ? '默认表' : '--'))
 			}
 			if (elRate) elRate.textContent = fmtHz(sampleRateEst || (samplePeriodSec > 0 ? 1 / samplePeriodSec : 0))
 			if (elRateRaw) {
@@ -6371,6 +6934,82 @@
 		return vid === 0x15A2 && pid === 0x300A
 	}
 
+	function isDriverPortInfo(info, drv) {
+		const d = drv || activeDriver()
+		if (d && typeof d.matchPort === 'function') {
+			try { return !!d.matchPort(info || {}) } catch (e) { return false }
+		}
+		return isBluUsbInfo(info)
+	}
+
+	function syncDriverCapabilityUi() {
+		const drv = activeDriver()
+		const caps = driverCaps(drv)
+		const tag = (drv && (drv.shortName || drv.name)) || 'BLU'
+		const titleEl = typeof document !== 'undefined' ? document.querySelector('#view-blu .blu-banner-title') : null
+		if (titleEl) titleEl.textContent = tag
+		const devBtn = E('blu-device-btn')
+		if (devBtn) devBtn.title = '选择设备或添加新 ' + tag
+		const elVolt = E('blu-voltage-set')
+		if (elVolt) {
+			if (caps.voltage.supported) {
+				elVolt.min = String(caps.voltage.minMv)
+				elVolt.max = String(caps.voltage.maxMv)
+				elVolt.placeholder = '—'
+				elVolt.title = '打开设备后从设备读取 · 可改 ' + caps.voltage.minMv + '–' + caps.voltage.maxMv + ' mV · 回车/失焦写入'
+			} else {
+				elVolt.min = '0'
+				elVolt.max = '100000'
+				elVolt.placeholder = '参考'
+				elVolt.title = '当前协议无程控稳压，可填参考电压用于计算功率与能量'
+			}
+		}
+		const btnPwr = E('blu-dut-power')
+		if (btnPwr) {
+			if (caps.dutPower.supported) {
+				btnPwr.disabled = false
+				btnPwr.title = bluPowered ? 'DUT 已上电 · 点击下电' : 'DUT 已下电 · 点击上电'
+			} else {
+				btnPwr.disabled = true
+				btnPwr.title = '当前功耗仪协议不支持 DUT 上下电控制'
+			}
+		}
+		syncRateOptionsForDriver(drv)
+		renderDeviceList()
+	}
+
+	function handleActiveDriverChanged(id, drv, prevId) {
+		if (bluOpen || bluOpening) return
+		const nextDrv = drv || activeDriver()
+		const caps = driverCaps(nextDrv)
+		driverSession = null
+		driverSessionId = ''
+		if (bluPort) {
+			let info = {}
+			try { info = bluPort.getInfo ? bluPort.getInfo() : {} } catch (e) {}
+			if (!isDriverPortInfo(info, nextDrv)) {
+				bluPort = null
+			}
+		}
+		modifiers = PROTO.defaultModifiers()
+		modifiersOk = false
+		if (caps.voltage.supported) {
+			clearVoltageUi()
+		} else if (setVoltageMv == null && caps.voltage.defaultMv != null) {
+			setVoltageMv = Math.round(caps.voltage.defaultMv)
+			syncVoltageInput()
+		}
+		markPowered(null, 'unknown')
+		syncDriverCapabilityUi()
+		if (typeof SerialAdapter !== 'undefined' && SerialAdapter && typeof SerialAdapter.isSupported === 'function') {
+			refreshBluPorts({ log: false })
+		}
+		scheduleUIUpdate()
+		if (prevId && prevId !== nextDrv.id) {
+			bluLog('已切换功耗仪协议：' + (nextDrv.name || nextDrv.id))
+		}
+	}
+
 	// 只挡"串口页正开着"的口。关过但仍被记住的口是空闲的, 按归属判会让 BLU
 	// 扫不到设备, 还会误报"该口已被串口调试占用"。
 	function serialOwnsPort(port) {
@@ -6419,11 +7058,19 @@
 	/** WebUSB：已授权同 VID/PID 设备可读 serialNumber（与 pyserial 的 sn 同源） */
 	async function fetchBluUsbSerials() {
 		const out = []
+		const drv = activeDriver()
+		const filters = drv && Array.isArray(drv.usbFilters) ? drv.usbFilters : []
+		if (!filters.length) return out
 		try {
 			const devices = await SerialAdapter.getUsbDevices()
 			for (let i = 0; i < devices.length; i++) {
 				const d = devices[i]
-				if (d.vendorId === 0x15A2 && d.productId === 0x300A) {
+				const hit = filters.some(function (f) {
+					const vOk = f.usbVendorId == null || d.vendorId === f.usbVendorId
+					const pOk = f.usbProductId == null || d.productId === f.usbProductId
+					return vOk && pOk
+				})
+				if (hit) {
 					const sn = normalizeSn(d.serialNumber)
 					if (sn) out.push(sn)
 				}
@@ -6471,17 +7118,18 @@
 	}
 
 	function bluPortLabel(port, index) {
+		const drv = activeDriver()
+		const tag = (drv && (drv.shortName || drv.name)) || 'BLU'
 		let info = {}
 		try { info = port && port.getInfo ? port.getInfo() : {} } catch (e) {}
 		const sn = getPortSn(port)
-		const vp = formatVidPid(info, false)
 		const vpShort = formatVidPid(info, true)
-		// 优先 SN；否则 BLU + 规范 VID/PID
+		// 优先 SN；否则 驱动简称 + 规范 VID/PID
 		if (sn && vpShort) return sn + '（' + vpShort + '）'
 		if (sn) return sn
-		if (isBluUsbInfo(info) || vp) {
+		if (isDriverPortInfo(info, drv) || vpShort) {
 			const n = bluKnownPorts.length > 1 ? (' #' + (index + 1)) : ''
-			return 'BLU' + n + (vpShort ? ' · ' + vpShort : '')
+			return tag + n + (vpShort ? ' · ' + vpShort : '')
 		}
 		return bluKnownPorts.length > 1 ? ('设备 #' + (index + 1)) : '串口设备'
 	}
@@ -6527,13 +7175,13 @@
 		renderDeviceList()
 	}
 
-	/** 打开/刷新页面：自动检测已授权 BLU 并填入下拉框（不自动打开） */
+	/** 打开/刷新页面：自动检测已授权功耗仪并填入下拉框（不自动打开） */
 	async function refreshBluPorts(opts) {
 		opts = opts || {}
 		if (!SerialAdapter.isSupported()) {
 			const sel = E('blu-port-select')
 			if (sel) {
-				sel.innerHTML = ''
+				sel.textContent = ''
 				const opt = document.createElement('option')
 				opt.value = ''
 				opt.textContent = '当前环境不支持串口'
@@ -6541,6 +7189,9 @@
 			}
 			return
 		}
+		const drv = activeDriver()
+		const tag = (drv && (drv.shortName || drv.name)) || 'BLU'
+		const hasFilters = !!(drv && Array.isArray(drv.usbFilters) && drv.usbFilters.length > 0)
 		try {
 			const ports = await SerialAdapter.getPorts()
 			const matched = []
@@ -6551,10 +7202,10 @@
 				let info = {}
 				try { info = p.getInfo ? p.getInfo() : {} } catch (e) {}
 				if (info.transport && info.transport !== 'serial') continue
-				if (isBluUsbInfo(info)) matched.push(p)
-				else if (info.usbVendorId == null && info.usbProductId == null) unknown.push(p)
+				if (isDriverPortInfo(info, drv)) matched.push(p)
+				else if (hasFilters && info.usbVendorId == null && info.usbProductId == null) unknown.push(p)
 			}
-			// 优先严格 VID/PID；部分环境 getInfo 为空时才退回未知口（已排除串口调试占用的）
+			// 优先严格匹配当前驱动；部分环境 getInfo 为空时才退回未知口（已排除串口调试占用的）
 			bluKnownPorts = matched.length ? matched : unknown
 			const usbSns = await fetchBluUsbSerials()
 			assignSnsToPorts(bluKnownPorts, usbSns)
@@ -6564,7 +7215,7 @@
 					const labels = bluKnownPorts.map(function (p, i) { return bluPortLabel(p, i) })
 					bluLog('已检测 ' + bluKnownPorts.length + ' 个设备：' + labels.join(', ') + '（未自动打开）')
 				} else {
-					bluLog('未检测到已授权 BLU，请点「添加」授权', 'warn')
+					bluLog('未检测到已授权 ' + tag + '，请点「添加」授权', 'warn')
 				}
 			}
 		} catch (e) {
@@ -6626,9 +7277,11 @@
 				e.stopPropagation()
 				runBluOp(async function () {
 				try {
-					const port = await SerialAdapter.requestPort({
-						filters: PROTO.USB_FILTERS,
-					})
+					const drv = activeDriver()
+					const reqOpts = (drv && Array.isArray(drv.usbFilters) && drv.usbFilters.length)
+						? { filters: drv.usbFilters }
+						: {}
+					const port = await SerialAdapter.requestPort(reqOpts)
 					if (serialOwnsPort(port)) {
 						bluLog('该口已被串口调试占用，请先在串口页关闭', 'error')
 						return
@@ -6649,7 +7302,7 @@
 					}
 					renderDeviceList()
 					setDeviceMenuOpen(false)
-					bluLog('已添加并填入 BLU 设备（USB 15A2:300A）')
+					bluLog('已添加并填入 ' + (drv.name || drv.shortName || drv.id) + ' 设备')
 				} catch (err) {
 					if (err && err.name !== 'NotFoundError') bluLog('添加设备：' + (err.message || err), 'error')
 				}
@@ -6664,13 +7317,15 @@
 					if (bluOpening) return
 					if (!bluPort) await refreshBluPorts({ log: false })
 					if (!bluPort) {
-						bluLog('未检测到设备，请点「BLU」→ 添加设备', 'error')
+						const tag = (activeDriver().shortName || 'BLU')
+						bluLog('未检测到设备，请点「' + tag + '」→ 添加设备', 'error')
 						setDeviceMenuOpen(true)
 						return
 					}
 					if (bluOpen) {
 						bluOpening = true
-						try { await bluClosePort({ manual: true }) } finally { bluOpening = false }
+						notifyConnectionState()
+						try { await bluClosePort({ manual: true }) } finally { bluOpening = false; notifyConnectionState() }
 					} else {
 						await bluOpenPort()
 					}
@@ -6714,33 +7369,30 @@
 			// 打开前不显示电压，连接后由设备 VDD 回填
 			clearVoltageUi()
 			// 失焦 / 回车写入，去掉单独「设压」按钮
-			elVolt.addEventListener('change', function () {
+			const commitVolt = function () {
 				elVolt.dataset.userTouched = '1'
+				const vcap = driverCaps().voltage
 				const mv = readSetVoltageMv()
-				if (mv == null) {
+				if (mv == null && vcap.supported) {
 					bluLog('请输入源电压 mV', 'warn')
 					return
 				}
 				runBluOp(function () { return applyVoltageMv(mv) })
-			})
+			}
+			elVolt.addEventListener('change', commitVolt)
 			elVolt.addEventListener('keydown', function (e) {
 				if (e.key === 'Enter') {
 					e.preventDefault()
-					elVolt.dataset.userTouched = '1'
-					const mv = readSetVoltageMv()
-					if (mv == null) {
-						bluLog('请输入源电压 mV', 'warn')
-						return
-					}
-					runBluOp(function () { return applyVoltageMv(mv) })
+					commitVolt()
 					elVolt.blur()
 				}
 			})
 		}
 
-		// 初始连接按钮态
+		// 初始连接按钮态与当前协议能力 UI
 		setStatus('未连接', false)
 		markPowered(null, 'unknown')
+		syncDriverCapabilityUi()
 
 		const elRate = E('blu-sample-rate')
 		if (elRate) {
@@ -7264,12 +7916,77 @@
 		if (!SerialAdapter.isSupported()) {
 			bluLog('当前浏览器不支持 Web Serial（请用 Chrome / Edge）', 'error')
 		} else {
-			bluLog('BLU 100k 就绪 · USB CDC · 选设备过滤 15A2:300A · 速率以实测为准')
+			const drv = activeDriver()
+			bluLog((drv.name || 'BLU 100k') + ' 就绪 · 速率以实测为准')
 		}
 	}
 
+	const powerToolSpec = {
+		id: 'power',
+		name: '功耗分析',
+		label: '功耗分析',
+		icon: 'bi-speedometer2',
+		builtin: true,
+		feature: 'view.power',
+		viewId: 'view-blu',
+		version: '1.0.0',
+		description: '高动态电流波形采集、区间积分、FFT 频谱、续航估算与串口事件道联动',
+		isBusy: function () { return !!(bluOpen || bluOpening || bluSampling) },
+		busyReason: function () {
+			if (bluSampling) return '功耗仪正在采样'
+			if (bluOpening) return '功耗仪正在连接'
+			if (bluOpen) return '功耗仪已连接'
+			return ''
+		},
+		statusBadge: function () {
+			const drv = activeDriver()
+			const tag = (drv && (drv.shortName || drv.name)) || '功耗仪'
+			if (bluOpen) {
+				const elCur = E('blu-current')
+				const cur = elCur ? elCur.textContent.trim() : (dispInit ? fmtCurrent(dispCurrentUA) : '')
+				return {
+					active: true,
+					conn: 'open',
+					state: bluSampling ? 'sampling' : 'open',
+					text: cur && cur !== '--' ? cur : '已连接',
+					title: '功耗分析 · ' + tag + (bluSampling ? '采样中' : '已连接'),
+				}
+			}
+			if (bluOpening) {
+				return {
+					active: true,
+					state: 'opening',
+					text: '连接中',
+					title: '功耗分析 · 正在连接',
+				}
+			}
+			return null
+		},
+	}
+	window.BluPowerToolPluginSpec = powerToolSpec
+
 	// 平台画像没有功耗分析(移动端)：视图入口已隐藏，这里不绑定、不枚举串口，免得 BLE 等后端的口被当成未知 BLU 口列出来
 	if (!window.AppPlatform || window.AppPlatform.has('view.power')) {
+		if (window.PowerDriverRegistry && typeof window.PowerDriverRegistry.setHost === 'function') {
+			window.PowerDriverRegistry.setHost({
+				isBusy: function () { return !!(bluOpen || bluOpening) },
+				onActiveChange: function (id, drv, prevId) { handleActiveDriverChanged(id, drv, prevId) },
+				onUnavailable: function (id) {
+					const d = activeDriver()
+					handleActiveDriverChanged(d.id, d, id)
+				},
+			})
+		}
+		if (window.ToolPluginRegistry && typeof window.ToolPluginRegistry.register === 'function') {
+			try {
+				const existing = window.ToolPluginRegistry.get && window.ToolPluginRegistry.get('power')
+				if (!existing || existing._placeholder) {
+					window.ToolPluginRegistry.register('power', powerToolSpec)
+				}
+			} catch (e) {
+				console.warn('[blu-power] 注册内置工具插件 power 失败:', e)
+			}
+		}
 		if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind)
 		else bind()
 	}

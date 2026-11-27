@@ -9601,9 +9601,24 @@ html[data-layout='modern'] #app-topbar {
 	min-width: 0;
 }
 
-/* 功耗分析页有独立的 BLU 仪器连接栏，隐藏顶部通信串口栏以释放波形纵向空间 */
-html[data-layout='modern'] #app-shell:has(#view-blu.active) > #app-topbar {
+/* 功耗分析页与声明隐藏顶栏的自定义工具视图隐藏顶部通信串口栏以释放纵向空间 */
+html[data-layout='modern'] #app-shell:has(#view-blu.active) > #app-topbar,
+html[data-layout='modern'] #app-shell:has(.app-view.active[data-hide-topbar='true']) > #app-topbar {
 	display: none;
+}
+
+html[data-layout='modern'] .plugin-view {
+	display: none;
+	background: var(--bg-body);
+}
+
+html[data-layout='modern'] .plugin-view.active {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+	overflow: auto;
+	background: var(--bg-body);
 }
 
 html[data-layout='modern'] #app-shell > #views {
@@ -11403,6 +11418,27 @@ html[data-layout='modern'] #view-blu .blu-device-trigger {
 	height: var(--blu-control-h);
 }
 
+html[data-layout='modern'] #view-blu .mp-driver-select {
+	height: var(--blu-control-h);
+	width: auto;
+	min-width: 112px;
+	max-width: 180px;
+	padding: 0 24px 0 8px;
+	font-size: 0.75rem;
+	line-height: 1.2;
+	border-radius: var(--radius-sm);
+	border-color: var(--border-color);
+	background-color: var(--bg-surface);
+	color: var(--text-primary);
+	flex: 0 1 auto;
+}
+
+html[data-layout='modern'] #view-blu .mp-driver-select:disabled {
+	background-color: var(--bg-code);
+	color: var(--text-secondary);
+	opacity: 0.72;
+}
+
 /* 记录 / 触发芯片与弹出层 */
 html[data-layout='modern'] #view-blu .mp-pop-wrap {
 	position: relative;
@@ -12023,13 +12059,13 @@ html[data-layout='modern'] #activity-rail .rail-item i {
 	font-size: 20px;
 }
 
-/* 短标签：原文保留为无障碍名称，视觉上换成两字(不改 DOM) */
-html[data-layout='modern'] #activity-rail .rail-item[data-view] .rail-label {
+/* 短标签：内置视图原文保留为无障碍名称，视觉上换成两字(不改 DOM)；外部工具插件保留自身标签 */
+html[data-layout='modern'] #activity-rail .rail-item:is([data-view='view-serial'], [data-view='view-blu']) .rail-label {
 	font-size: 0;
 	letter-spacing: 0;
 }
 
-html[data-layout='modern'] #activity-rail .rail-item[data-view] .rail-label::after {
+html[data-layout='modern'] #activity-rail .rail-item:is([data-view='view-serial'], [data-view='view-blu']) .rail-label::after {
 	font-size: 11px;
 	line-height: 1;
 }
@@ -12040,6 +12076,39 @@ html[data-layout='modern'] #activity-rail .rail-item[data-view='view-serial'] .r
 
 html[data-layout='modern'] #activity-rail .rail-item[data-view='view-blu'] .rail-label::after {
 	content: '功耗';
+}
+
+html[data-layout='modern'] #activity-rail .rail-item[data-tool-plugin]:not([data-view='view-blu']) .rail-label {
+	max-width: 52px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+html[data-layout='modern'] #activity-rail .rail-sep {
+	width: 32px;
+	height: 1px;
+	margin: 4px auto;
+	background: var(--border-color);
+	flex-shrink: 0;
+}
+
+html[data-layout='modern'] #activity-rail .rail-plugin-btn {
+	position: relative;
+}
+
+html[data-layout='modern'] #activity-rail .rail-plugin-btn .rail-status-dot[hidden] {
+	display: none;
+}
+
+html[data-layout='modern'] #activity-rail .rail-plugin-btn[data-state='waiting'] .rail-status-dot {
+	background: #efb744;
+}
+
+html[data-layout='modern'] #activity-rail .rail-item[hidden],
+html[data-layout='modern'] #activity-rail .rail-item[data-plugin-hidden='true'],
+html[data-layout='modern'] #activity-rail .rail-item[data-plugin-hidden='1'] {
+	display: none !important;
 }
 
 html[data-layout='modern'] #activity-rail .rail-version {
@@ -13089,8 +13158,9 @@ html[data-layout='modern'] #serial-log-panes:has(.serial-log-mode:not([hidden]) 
 	margin-top: 16px;
 }
 
-/* 功耗仪已连接：左侧导航「功耗」项图标右上角的绿色对勾角标(不挪图标、不加动画) */
-.rail-item[data-view='view-blu'][data-conn='open']::after {
+/* 功耗仪及外部工具插件已连接：左侧导航项图标右上角的绿色对勾角标(不挪图标、不加动画) */
+.rail-item[data-view='view-blu'][data-conn='open']::after,
+html[data-layout='modern'] #activity-rail .rail-item[data-tool-plugin][data-conn='open']::after {
 	content: '\2713';
 	position: absolute;
 	top: 3px;
@@ -13385,12 +13455,21 @@ html[data-runtime='tauri'][data-glass='liquid'] body {
 	background: transparent;
 }
 
-html[data-runtime='tauri'][data-glass='liquid'] #views {
+html[data-runtime='tauri'][data-glass='liquid'] #views,
+html[data-runtime='tauri'][data-glass='liquid'] .plugin-view.active {
 	background: var(--bg-body);
 }
 
 html[data-runtime='tauri'][data-glass='liquid'] #activity-rail {
 	background: var(--glass-rail);
+}
+
+html[data-runtime='tauri'][data-glass='liquid'] #activity-rail .rail-sep {
+	background: rgba(28, 35, 48, 0.12);
+}
+
+html[data-runtime='tauri'][data-glass='liquid'][data-theme='dark'] #activity-rail .rail-sep {
+	background: rgba(255, 255, 255, 0.14);
 }
 
 /* 导航栏底部的分隔线原本靠 rail 实色底遮，半透明后换细线：深色底用白线、浅色底用深线 */
@@ -13601,6 +13680,7 @@ html[data-layout='modern'] #activity-rail .rail-item { flex-shrink: 0; }
 /* 小高度压缩节奏，保留所有入口。 */
 @media (max-height: 720px) {
 	html[data-layout='modern'] #activity-rail .rail-item { padding: 5px 0; gap: 2px; }
+	html[data-layout='modern'] #activity-rail .rail-sep { margin: 2px auto; }
 	html[data-layout='modern'] #activity-rail .rail-bottom { gap: 2px; }
 }
 .rail-theme-menu { min-width: 172px; padding: 6px; }
@@ -14549,6 +14629,66 @@ html[data-layout='modern'] .mdn-pop-params[hidden] {
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
+}
+
+/* 插件与协议管理中心（现代布局：分类筛选、分组标题、能力徽标、双路切换与模板下拉） */
+html[data-layout='modern'] .pm-filter-seg {
+	flex: 0 0 auto;
+}
+html[data-layout='modern'] .pm-filter-seg > button {
+	font-size: 0.76rem;
+	padding: 3px 10px;
+	white-space: nowrap;
+}
+html[data-layout='modern'] .pm-section-title {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 6px 0 2px;
+	padding: 0 2px 4px;
+	border-bottom: 1px solid var(--border-color);
+	font-size: 0.72rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	color: var(--text-secondary);
+}
+html[data-layout='modern'] .pm-section-title:first-child {
+	margin-top: 0;
+}
+html[data-layout='modern'] .pm-cap {
+	background: var(--bg-code);
+	color: var(--text-secondary);
+	font-weight: 500;
+	line-height: 1.45;
+}
+html[data-layout='modern'] .pm-item-acts > .btn {
+	white-space: nowrap;
+}
+html[data-layout='modern'] .pm-pane-js .pm-tpl-select {
+	min-width: 148px;
+	background-color: var(--bg-surface);
+	color: var(--text-primary);
+	border-color: var(--border-color);
+}
+html[data-layout='modern'][data-theme='dark'] .pm-section-title {
+	color: var(--text-secondary);
+	border-bottom-color: var(--border-color);
+}
+html[data-layout='modern'][data-theme='dark'] .pm-cap {
+	background: rgba(255, 255, 255, 0.06);
+	border-color: rgba(255, 255, 255, 0.14);
+	color: var(--text-primary);
+}
+html[data-layout='modern'][data-theme='dark'] .pm-badge-js,
+html[data-layout='modern'][data-theme='dark'] .pm-badge-warn {
+	color: #f6c453;
+}
+html[data-layout='modern'][data-theme='dark'] .pm-badge-json,
+html[data-layout='modern'][data-theme='dark'] .pm-badge-ok {
+	color: #5cd69a;
+}
+html[data-layout='modern'][data-theme='dark'] .pm-badge-danger {
+	color: #ff8a8f;
 }
 
 

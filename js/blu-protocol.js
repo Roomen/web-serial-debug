@@ -451,7 +451,8 @@
 	}
 
 	RateAdjuster.prototype.setTargetRateHz = function (hz) {
-		const tr = Math.max(1, Math.min(NOMINAL_BASE_HZ, Math.round(hz)))
+		const maxHz = Math.max(NOMINAL_BASE_HZ, this.baseRateHz || NOMINAL_BASE_HZ)
+		const tr = Math.max(1, Math.min(maxHz, Math.round(hz)))
 		this.targetRateHz = tr
 		this._stepNum = tr
 		this._stepDen = this.baseRateHz
@@ -575,6 +576,152 @@
 		return out
 	}
 
+	const USB_FILTERS = [{ usbVendorId: 0x15A2, usbProductId: 0x300A }]
+	const DUT_PROBE_MS = 250
+	const DUT_ON_THRESHOLD_UA = 0.5
+
+	function matchBluPort(info) {
+		if (!info) return false
+		return info.usbVendorId === 0x15A2 && info.usbProductId === 0x300A
+	}
+
+	function createPowerDriver() {
+		return {
+			id: 'blu-100k',
+			name: 'BLU 100k 电流表',
+			shortName: 'BLU',
+			builtin: true,
+			version: '1.0.0',
+			description: 'USB CDC (15A2:300A) 100kHz 六档自动量程电流表，支持 0.5–5V 程控供电与上下电控制',
+			usbFilters: USB_FILTERS.slice(),
+			matchPort: matchBluPort,
+			serialOptions: {
+				baudRate: 1000000,
+				dataBits: 8,
+				stopBits: 1,
+				parity: 'none',
+				bufferSize: 1024 * 1024,
+				flowControl: 'none',
+				dtr: true,
+				rts: true,
+			},
+			capabilities: {
+				nominalHz: NOMINAL_BASE_HZ,
+				voltage: {
+					supported: true,
+					minMv: VDD_LOW_MV,
+					maxMv: VDD_HIGH_MV,
+					defaultMv: null,
+					requiresBeforeStart: true,
+					requiresBeforePowerOn: true,
+				},
+				dutPower: {
+					supported: true,
+					probeOnConnect: true,
+				},
+				logicBits: 8,
+			},
+			createSession: function () {
+				let modifiers = defaultModifiers()
+				let modifiersOk = false
+				const converter = new Converter(modifiers)
+				const parser = new SampleParser(converter)
+				return {
+					onConnect: async function (io) {
+						if (!io) return { ok: true, modifiersOk: false, modifiers: modifiers, savedVddMv: 0, deviceSn: '', dutPower: null }
+						let text = ''
+						if (typeof io.collectText === 'function') {
+							const collectPromise = io.collectText({ until: 'END', timeoutMs: 3000 })
+							if (typeof io.write === 'function') {
+								await io.write(cmdMeta(), 'GET_META_DATA')
+							}
+							text = await collectPromise
+						} else if (typeof io.write === 'function') {
+							await io.write(cmdMeta(), 'GET_META_DATA')
+						}
+						if (text && text.indexOf('END') >= 0) {
+							modifiers = parseMetadata(text)
+							converter.setModifiers(modifiers)
+							modifiersOk = true
+						} else {
+							modifiers = defaultModifiers()
+							converter.setModifiers(modifiers)
+							modifiersOk = false
+						}
+
+						let dutPower = null
+						if ((!io.isAlive || io.isAlive()) && typeof io.probeSamples === 'function') {
+							const probeParser = new SampleParser(new Converter(modifiers))
+							const probed = await io.probeSamples({
+								durationMs: DUT_PROBE_MS,
+								startBytes: cmdAverageStart(),
+								stopBytes: cmdAverageStop(),
+								parseChunk: function (u8) { return probeParser.push(u8) },
+							})
+							const rawSamples = probed && Array.isArray(probed.samples) ? probed.samples : []
+							const vals = []
+							for (let i = 0; i < rawSamples.length; i++) {
+								const s = rawSamples[i]
+								const v = typeof s === 'number' ? s : (s && typeof s.iUA === 'number' ? s.iUA : NaN)
+								if (isFinite(v)) vals.push(v)
+							}
+							if (vals.length >= 200) {
+								vals.sort(function (a, b) { return a - b })
+								const med = vals[vals.length >> 1]
+								dutPower = { on: med >= DUT_ON_THRESHOLD_UA, medianUA: med, n: vals.length }
+							}
+						}
+						return {
+							ok: true,
+							modifiersOk: modifiersOk,
+							modifiers: modifiers,
+							savedVddMv: modifiers.savedVddMv || 0,
+							deviceSn: modifiers.deviceSn || '',
+							calibrated: modifiers.Calibrated,
+							dutPower: dutPower,
+						}
+					},
+					buildSetVoltage: function (mv) {
+						return cmdRegulatorSet(mv)
+					},
+					buildSetDutPower: function (on) {
+						return cmdDutPower(on)
+					},
+					buildStart: function () {
+						return cmdAverageStart()
+					},
+					buildStop: function () {
+						return cmdAverageStop()
+					},
+					pushChunk: function (u8) {
+						return parser.push(u8)
+					},
+					resetStream: function (opts) {
+						parser.reset()
+						if (opts && opts.resetStats) parser.resetStats()
+						converter.resetFilter()
+					},
+					getStreamStats: function () {
+						return {
+							lockMask: '0x' + (parser.lockMask >>> 0).toString(16),
+							lockMaskNum: parser.lockMask >>> 0,
+							learnLeft: parser.learnLeft,
+							counterOk: parser.counterOk,
+							resyncCount: parser.resyncCount,
+							droppedBytes: parser.droppedBytes,
+							badSamples: parser.badSamples,
+							lostSamples: parser.lostSamples,
+							modifiersOk: modifiersOk,
+							R: modifiers.R,
+							O: modifiers.O,
+							savedVddMv: modifiers.savedVddMv || 0,
+						}
+					},
+				}
+			},
+		}
+	}
+
 	window.BluProtocol = {
 		CMD: CMD,
 		MODE: MODE,
@@ -582,7 +729,7 @@
 		SAMPLE_BYTES: SAMPLE_BYTES,
 		VDD_LOW_MV: VDD_LOW_MV,
 		VDD_HIGH_MV: VDD_HIGH_MV,
-		USB_FILTERS: [{ usbVendorId: 0x15A2, usbProductId: 0x300A }],
+		USB_FILTERS: USB_FILTERS,
 		packBytes: packBytes,
 		cmdMeta: cmdMeta,
 		cmdAverageStart: cmdAverageStart,
@@ -597,5 +744,17 @@
 		SampleParser: SampleParser,
 		RateAdjuster: RateAdjuster,
 		FoldingBuffer: FoldingBuffer,
+		matchPort: matchBluPort,
+		createPowerDriver: createPowerDriver,
+	}
+
+	if (window.PowerDriverRegistry && typeof window.PowerDriverRegistry.register === 'function') {
+		try {
+			if (!window.PowerDriverRegistry.has || !window.PowerDriverRegistry.has('blu-100k')) {
+				window.PowerDriverRegistry.register('blu-100k', createPowerDriver())
+			}
+		} catch (e) {
+			try { console.warn('[blu-protocol] 注册内置 blu-100k 驱动失败:', e) } catch (x) {}
+		}
 	}
 })()

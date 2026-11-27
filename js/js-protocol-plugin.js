@@ -9,6 +9,9 @@
 	const MAX_CODE_BYTES = 1024 * 1024
 	const ID_RE = /^[a-z0-9][a-z0-9_-]{0,47}$/
 	const DEFAULT_RESERVED_IDS = ['sek', 'wmbus', 'gz', 'cjt188', 'sk-ultrasonic', 'hostproto', 'cellular-at']
+	const DEFAULT_RESERVED_POWER_IDS = ['blu-100k', 'blu100k']
+	const DEFAULT_RESERVED_TOOL_IDS = ['power']
+	const BAD_KEYS = ['__proto__', 'constructor', 'prototype']
 
 	function getReservedIds() {
 		const reg = root.ProtocolRegistry
@@ -18,6 +21,28 @@
 			return set
 		}
 		return new Set(DEFAULT_RESERVED_IDS)
+	}
+
+	function getReservedPowerIds() {
+		const reg = root.PowerDriverRegistry
+		const set = new Set(DEFAULT_RESERVED_POWER_IDS)
+		if (reg && Array.isArray(reg.RESERVED_IDS)) {
+			reg.RESERVED_IDS.forEach(id => set.add(id))
+		}
+		return set
+	}
+
+	function getReservedToolIds() {
+		const reg = root.ToolPluginRegistry
+		const set = new Set(DEFAULT_RESERVED_TOOL_IDS)
+		if (reg && Array.isArray(reg.RESERVED_IDS)) {
+			reg.RESERVED_IDS.forEach(id => set.add(id))
+		}
+		return set
+	}
+
+	function isValidPluginTargetId(id) {
+		return typeof id === 'string' && ID_RE.test(id) && BAD_KEYS.indexOf(id) < 0
 	}
 
 	// ===== 字节与 HEX 工具 =====
@@ -191,8 +216,98 @@
 		'})',
 	].join('\n')
 
+	const POWER_DRIVER_EXAMPLE_CODE = [
+		'// 自定义功耗仪驱动插件示例（串口 CSV 行电流表）',
+		'// 每行格式：current_uA[,voltage_mV]，例如 "1250.5,3300\\n"',
+		'registerPowerDriver(\'demo-csv-ammeter\', {',
+		'\tname: \'CSV 串口电流表示例\',',
+		'\tshortName: \'CSV 电流表\',',
+		'\tversion: \'1.0.0\',',
+		'\tdescription: \'按行读取串口输出的 uA 电流与可选 mV 电压并喂给功耗分析波形\',',
+		'\tserialOptions: { baudRate: 115200, dataBits: 8, stopBits: 1, parity: \'none\' },',
+		'\tcapabilities: {',
+		'\t\tnominalHz: 100,',
+		'\t\tvoltage: { supported: false, minMv: 0, maxMv: 0 },',
+		'\t\tdutPower: { supported: false },',
+		'\t\tlogicBits: 0,',
+		'\t},',
+		'\tcreateSession() {',
+		'\t\tlet buf = \'\'',
+		'\t\tconst dec = new TextDecoder()',
+		'\t\treturn {',
+		'\t\t\tpushChunk(chunk) {',
+		'\t\t\t\tbuf += dec.decode(chunk, { stream: true })',
+		'\t\t\t\tconst lines = buf.split(/\\r?\\n/)',
+		'\t\t\t\tbuf = lines.pop() || \'\'',
+		'\t\t\t\tconst samples = []',
+		'\t\t\t\tfor (let i = 0; i < lines.length; i++) {',
+		'\t\t\t\t\tconst line = lines[i].trim()',
+		'\t\t\t\t\tif (!line || line.startsWith(\'#\')) continue',
+		'\t\t\t\t\tconst parts = line.split(\',\')',
+		'\t\t\t\t\tconst uA = Number(parts[0])',
+		'\t\t\t\t\tif (Number.isFinite(uA)) samples.push({ iUA: uA, range: 0, logic: 0 })',
+		'\t\t\t\t}',
+		'\t\t\t\treturn samples',
+		'\t\t\t},',
+		'\t\t\tresetStream() { buf = \'\' },',
+		'\t\t}',
+		'\t},',
+		'})',
+	].join('\n')
+
+	const TOOL_PLUGIN_EXAMPLE_CODE = [
+		'// 自定义左栏工具视图插件示例（纯 DOM 安全构建，不使用 innerHTML）',
+		'registerToolPlugin(\'demo-hex-calc\', {',
+		'\tname: \'HEX 校验计算器\',',
+		'\tlabel: \'校验器\',',
+		'\ticon: \'bi-calculator\',',
+		'\tversion: \'1.0.0\',',
+		'\tdescription: \'本地计算 HEX 字节数、SUM8 与 XOR8 校验值\',',
+		'\tmount(container) {',
+		'\t\tcontainer.textContent = \'\'',
+		'\t\tconst wrap = document.createElement(\'div\')',
+		'\t\twrap.className = \'p-3 d-flex flex-column gap-2\'',
+		'\t\tconst title = document.createElement(\'h5\')',
+		'\t\ttitle.textContent = \'HEX 校验计算器\'',
+		'\t\tconst input = document.createElement(\'textarea\')',
+		'\t\tinput.className = \'form-control form-control-sm\'',
+		'\t\tinput.rows = 4',
+		'\t\tinput.placeholder = \'输入十六进制字节，例如：5A A5 01 04 50 49 4E 47\'',
+		'\t\tconst out = document.createElement(\'div\')',
+		'\t\tout.className = \'small text-muted\'',
+		'\t\tout.textContent = \'等待输入 HEX 字节…\'',
+		'\t\tfunction update() {',
+		'\t\t\tconst bytes = api.hexToBytes(input.value)',
+		'\t\t\tif (!bytes) {',
+		'\t\t\t\tout.textContent = \'格式错误：请输入偶数位十六进制字符\'',
+		'\t\t\t\treturn',
+		'\t\t\t}',
+		'\t\t\tlet sum = 0',
+		'\t\t\tlet xor = 0',
+		'\t\t\tfor (let i = 0; i < bytes.length; i++) {',
+		'\t\t\t\tsum = (sum + bytes[i]) & 0xff',
+		'\t\t\t\txor ^= bytes[i]',
+		'\t\t\t}',
+		'\t\t\tout.textContent = \'字节数: \' + bytes.length + \' · SUM8: 0x\' + sum.toString(16).toUpperCase().padStart(2, \'0\') + \' · XOR8: 0x\' + xor.toString(16).toUpperCase().padStart(2, \'0\')',
+		'\t\t}',
+		'\t\tinput.addEventListener(\'input\', update)',
+		'\t\twrap.appendChild(title)',
+		'\t\twrap.appendChild(input)',
+		'\t\twrap.appendChild(out)',
+		'\t\tcontainer.appendChild(wrap)',
+		'\t},',
+		'\tunmount() {},',
+		'})',
+	].join('\n')
+
+	const EXAMPLE_TEMPLATES = {
+		protocol: EXAMPLE_CODE,
+		powerDriver: POWER_DRIVER_EXAMPLE_CODE,
+		tool: TOOL_PLUGIN_EXAMPLE_CODE,
+	}
+
 	// ===== 内存与持久化状态 =====
-	const runtimeState = new Map() // pluginKey -> { registeredIds: string[], error: string }
+	const runtimeState = new Map() // pluginKey -> { registeredIds, registeredPowerIds, registeredToolIds, error }
 	let dirJsPlugins = [] // Array<{ pluginId, pluginKey, name, fileName, source: 'js-dir', code, hash, updatedAt }>
 	let lastScanPromise = null
 
@@ -364,14 +479,70 @@
 		return { ok: true }
 	}
 
+	function registerPowerInRegistry(id, impl) {
+		if (root.PowerDriverRegistry && typeof root.PowerDriverRegistry.register === 'function') {
+			return root.PowerDriverRegistry.register(id, impl)
+		}
+		if (typeof root.registerPowerDriver === 'function') {
+			return root.registerPowerDriver(id, impl)
+		}
+		throw new Error('功耗仪驱动注册表未加载')
+	}
+
+	function unregisterPowerFromRegistry(id) {
+		if (root.PowerDriverRegistry && typeof root.PowerDriverRegistry.unregister === 'function') {
+			return root.PowerDriverRegistry.unregister(id)
+		}
+		if (typeof root.unregisterPowerDriver === 'function') {
+			return root.unregisterPowerDriver(id)
+		}
+		return { ok: true }
+	}
+
+	function registerToolInRegistry(id, impl) {
+		if (root.ToolPluginRegistry && typeof root.ToolPluginRegistry.register === 'function') {
+			return root.ToolPluginRegistry.register(id, impl)
+		}
+		if (typeof root.registerToolPlugin === 'function') {
+			return root.registerToolPlugin(id, impl)
+		}
+		throw new Error('工具视图插件注册表未加载')
+	}
+
+	function unregisterToolFromRegistry(id) {
+		if (root.ToolPluginRegistry && typeof root.ToolPluginRegistry.unregister === 'function') {
+			return root.ToolPluginRegistry.unregister(id)
+		}
+		if (typeof root.unregisterToolPlugin === 'function') {
+			return root.unregisterToolPlugin(id)
+		}
+		return { ok: true }
+	}
+
+	function emptyRuntimeState(error) {
+		return { registeredIds: [], registeredPowerIds: [], registeredToolIds: [], error: error || '' }
+	}
+
 	function unloadPlugin(pluginKey) {
 		const st = runtimeState.get(pluginKey)
-		if (st && st.registeredIds && st.registeredIds.length) {
-			st.registeredIds.forEach(id => {
-				try { unregisterFromRegistry(id) } catch (e) { /* ignore */ }
-			})
+		if (st) {
+			if (st.registeredIds && st.registeredIds.length) {
+				st.registeredIds.forEach(id => {
+					try { unregisterFromRegistry(id) } catch (e) { /* ignore */ }
+				})
+			}
+			if (st.registeredPowerIds && st.registeredPowerIds.length) {
+				st.registeredPowerIds.forEach(id => {
+					try { unregisterPowerFromRegistry(id) } catch (e) { /* ignore */ }
+				})
+			}
+			if (st.registeredToolIds && st.registeredToolIds.length) {
+				st.registeredToolIds.forEach(id => {
+					try { unregisterToolFromRegistry(id) } catch (e) { /* ignore */ }
+				})
+			}
 		}
-		runtimeState.set(pluginKey, { registeredIds: [], error: '' })
+		runtimeState.set(pluginKey, emptyRuntimeState(''))
 	}
 
 	function executePlugin(plugin) {
@@ -391,8 +562,14 @@
 		unloadPlugin(pluginKey)
 
 		const reserved = getReservedIds()
+		const reservedPower = getReservedPowerIds()
+		const reservedTool = getReservedToolIds()
 		const collected = []
+		const collectedPower = []
+		const collectedTool = []
 		const seenIds = new Set()
+		const seenPowerIds = new Set()
+		const seenToolIds = new Set()
 
 		function collectRegister(idOrImpl, maybeImpl) {
 			let id = idOrImpl
@@ -402,7 +579,7 @@
 				id = impl.id
 			}
 			const cleanId = typeof id === 'string' ? id.trim() : ''
-			if (!cleanId || !ID_RE.test(cleanId)) {
+			if (!cleanId || !isValidPluginTargetId(cleanId)) {
 				throw new Error('插件注册的协议 ID 格式非法：' + String(id))
 			}
 			if (reserved.has(cleanId)) {
@@ -421,8 +598,88 @@
 			})
 		}
 
+		function collectPowerDriver(idOrImpl, maybeImpl) {
+			let id = idOrImpl
+			let impl = maybeImpl
+			if (idOrImpl && typeof idOrImpl === 'object' && maybeImpl === undefined) {
+				impl = idOrImpl
+				id = impl.id
+			}
+			const cleanId = typeof id === 'string' ? id.trim() : ''
+			if (!cleanId || !isValidPluginTargetId(cleanId)) {
+				throw new Error('插件注册的功耗仪驱动 ID 格式非法：' + String(id))
+			}
+			if (reservedPower.has(cleanId)) {
+				throw new Error('插件不可覆盖保留的内置功耗仪驱动 ID：' + cleanId)
+			}
+			if (!impl || typeof impl !== 'object') {
+				throw new Error('功耗仪驱动实现必须为对象：' + cleanId)
+			}
+			if (seenPowerIds.has(cleanId)) {
+				throw new Error('同一插件重复注册功耗仪驱动 ID：' + cleanId)
+			}
+			seenPowerIds.add(cleanId)
+			collectedPower.push({
+				id: cleanId,
+				impl: Object.assign({}, impl, {
+					id: cleanId,
+					name: String(impl.name || cleanId),
+					builtin: false,
+					source: plugin.source,
+					ownerPluginId: pluginKey,
+				}),
+			})
+		}
+
+		function collectToolPlugin(idOrImpl, maybeImpl) {
+			let id = idOrImpl
+			let impl = maybeImpl
+			if (idOrImpl && typeof idOrImpl === 'object' && maybeImpl === undefined) {
+				impl = idOrImpl
+				id = impl.id
+			}
+			const cleanId = typeof id === 'string' ? id.trim() : ''
+			if (!cleanId || !isValidPluginTargetId(cleanId)) {
+				throw new Error('插件注册的工具视图 ID 格式非法：' + String(id))
+			}
+			if (reservedTool.has(cleanId)) {
+				throw new Error('插件不可覆盖保留的内置工具视图 ID：' + cleanId)
+			}
+			if (!impl || typeof impl !== 'object') {
+				throw new Error('工具视图实现必须为对象：' + cleanId)
+			}
+			if (seenToolIds.has(cleanId)) {
+				throw new Error('同一插件重复注册工具视图 ID：' + cleanId)
+			}
+			seenToolIds.add(cleanId)
+			collectedTool.push({
+				id: cleanId,
+				impl: Object.assign({}, impl, {
+					id: cleanId,
+					name: String(impl.name || cleanId),
+					builtin: false,
+					source: plugin.source,
+					ownerPluginId: pluginKey,
+				}),
+			})
+		}
+
+		function collectExportItem(item) {
+			if (!item || typeof item !== 'object' || !item.id) return
+			const cleanId = String(item.id).trim()
+			if (item.kind === 'power-driver') {
+				if (!seenPowerIds.has(cleanId)) collectPowerDriver(cleanId, item)
+			} else if (item.kind === 'tool') {
+				if (!seenToolIds.has(cleanId)) collectToolPlugin(cleanId, item)
+			} else if (!item.kind || item.kind === 'protocol') {
+				if (!seenIds.has(cleanId)) collectRegister(cleanId, item)
+			}
+		}
+
 		const api = {
 			registerProtocol: collectRegister,
+			registerPowerDriver: collectPowerDriver,
+			registerToolPlugin: collectToolPlugin,
 			ParseView: root.ParseView || null,
 			Checksum: (root.JsonProtocol && root.JsonProtocol.Checksum) || null,
 			hexToBytes: hexToBytes,
@@ -431,51 +688,92 @@
 		const mod = { exports: {} }
 
 		try {
-			const runner = new Function('api', 'module', 'exports', 'registerProtocol', '"use strict";\n' + plugin.code)
-			runner(api, mod, mod.exports, collectRegister)
-			// 兼容 module.exports = { id, name, ... } 或数组导出
+			const runner = new Function(
+				'api',
+				'module',
+				'exports',
+				'registerProtocol',
+				'registerPowerDriver',
+				'registerToolPlugin',
+				'"use strict";\n' + plugin.code
+			)
+			runner(api, mod, mod.exports, collectRegister, collectPowerDriver, collectToolPlugin)
+			// 兼容 module.exports = { id, kind?, name, ... } 或数组导出
 			if (mod.exports && typeof mod.exports === 'object') {
 				if (Array.isArray(mod.exports)) {
-					mod.exports.forEach(item => {
-						if (item && typeof item === 'object' && item.id && !seenIds.has(String(item.id).trim())) {
-							collectRegister(item.id, item)
-						}
-					})
-				} else if (mod.exports.id && !seenIds.has(String(mod.exports.id).trim())) {
-					collectRegister(mod.exports.id, mod.exports)
+					mod.exports.forEach(collectExportItem)
+				} else if (mod.exports.id) {
+					collectExportItem(mod.exports)
 				}
 			}
 		} catch (err) {
 			const msg = err && err.message ? err.message : String(err)
-			runtimeState.set(pluginKey, { registeredIds: [], error: msg })
+			runtimeState.set(pluginKey, emptyRuntimeState(msg))
 			return { ok: false, error: msg }
 		}
 
-		if (!collected.length) {
-			const msg = '插件未注册任何协议（请调用 registerProtocol(id, impl) 或导出 module.exports = { id, name, ... }）'
-			runtimeState.set(pluginKey, { registeredIds: [], error: msg })
+		if (!collected.length && !collectedPower.length && !collectedTool.length) {
+			const msg = '插件未注册任何协议、功耗仪驱动或工具视图（请调用 registerProtocol / registerPowerDriver / registerToolPlugin 或通过 module.exports 导出）'
+			runtimeState.set(pluginKey, emptyRuntimeState(msg))
 			return { ok: false, error: msg }
 		}
 
 		const registeredIds = []
+		const registeredPowerIds = []
+		const registeredToolIds = []
 		try {
 			for (let i = 0; i < collected.length; i++) {
 				const item = collected[i]
 				const regOk = registerInRegistry(item.id, item.impl)
+				if (regOk && typeof regOk === 'object' && regOk.ok === false) {
+					throw new Error(regOk.error || ('注册协议失败：' + item.id))
+				}
 				if (regOk !== false) registeredIds.push(item.id)
 			}
+			for (let i = 0; i < collectedPower.length; i++) {
+				const item = collectedPower[i]
+				const regOk = registerPowerInRegistry(item.id, item.impl)
+				if (regOk && typeof regOk === 'object' && regOk.ok === false) {
+					throw new Error(regOk.error || ('注册功耗仪驱动失败：' + item.id))
+				}
+				if (regOk !== false) registeredPowerIds.push(item.id)
+			}
+			for (let i = 0; i < collectedTool.length; i++) {
+				const item = collectedTool[i]
+				const regOk = registerToolInRegistry(item.id, item.impl)
+				if (regOk && typeof regOk === 'object' && regOk.ok === false) {
+					throw new Error(regOk.error || ('注册工具视图失败：' + item.id))
+				}
+				if (regOk !== false) registeredToolIds.push(item.id)
+			}
 		} catch (err) {
-			// 回滚本批已注册项
+			// 任一项失败则原子回滚三类已注册项
 			registeredIds.forEach(id => {
 				try { unregisterFromRegistry(id) } catch (e) { /* ignore */ }
 			})
+			registeredPowerIds.forEach(id => {
+				try { unregisterPowerFromRegistry(id) } catch (e) { /* ignore */ }
+			})
+			registeredToolIds.forEach(id => {
+				try { unregisterToolFromRegistry(id) } catch (e) { /* ignore */ }
+			})
 			const msg = err && err.message ? err.message : String(err)
-			runtimeState.set(pluginKey, { registeredIds: [], error: msg })
+			runtimeState.set(pluginKey, emptyRuntimeState(msg))
 			return { ok: false, error: msg }
 		}
 
-		runtimeState.set(pluginKey, { registeredIds: registeredIds, error: '' })
-		return { ok: true, registeredIds: registeredIds }
+		runtimeState.set(pluginKey, {
+			registeredIds: registeredIds,
+			registeredPowerIds: registeredPowerIds,
+			registeredToolIds: registeredToolIds,
+			error: '',
+		})
+		return {
+			ok: true,
+			registeredIds: registeredIds,
+			registeredPowerIds: registeredPowerIds,
+			registeredToolIds: registeredToolIds,
+		}
 	}
 
 	// ===== 公开 API =====
@@ -509,7 +807,7 @@
 			const pluginKey = 'local:' + item.pluginId
 			const hash = hashCode(item.code)
 			const trusted = trustedHashes[pluginKey] === hash
-			const st = runtimeState.get(pluginKey) || { registeredIds: [], error: '' }
+			const st = runtimeState.get(pluginKey) || emptyRuntimeState('')
 			out.push({
 				pluginId: item.pluginId,
 				pluginKey: pluginKey,
@@ -519,7 +817,9 @@
 				enabled: !!(item.enabled && trusted),
 				trusted: trusted,
 				hash: hash,
-				registeredIds: st.registeredIds.slice(),
+				registeredIds: (st.registeredIds || []).slice(),
+				registeredPowerIds: (st.registeredPowerIds || []).slice(),
+				registeredToolIds: (st.registeredToolIds || []).slice(),
 				error: st.error || '',
 				code: item.code,
 				updatedAt: item.updatedAt,
@@ -530,7 +830,7 @@
 			const pluginKey = item.pluginKey
 			const trusted = trustedHashes[pluginKey] === item.hash
 			const enabled = trusted && !disabledDirs.has(pluginKey)
-			const st = runtimeState.get(pluginKey) || { registeredIds: [], error: '' }
+			const st = runtimeState.get(pluginKey) || emptyRuntimeState('')
 			out.push({
 				pluginId: item.pluginId,
 				pluginKey: pluginKey,
@@ -540,7 +840,9 @@
 				enabled: enabled,
 				trusted: trusted,
 				hash: item.hash,
-				registeredIds: st.registeredIds.slice(),
+				registeredIds: (st.registeredIds || []).slice(),
+				registeredPowerIds: (st.registeredPowerIds || []).slice(),
+				registeredToolIds: (st.registeredToolIds || []).slice(),
 				error: st.error || '',
 				code: item.code,
 				updatedAt: item.updatedAt,
@@ -548,6 +850,15 @@
 		})
 
 		return out
+	}
+
+	function getUntrustedCount() {
+		const list = listPlugins()
+		let n = 0
+		for (let i = 0; i < list.length; i++) {
+			if (list[i] && !list[i].trusted) n++
+		}
+		return n
 	}
 
 	function generatePluginId(name, fileName) {
@@ -661,7 +972,12 @@
 		}
 
 		dispatchChange()
-		return { ok: true, registeredIds: execRes.registeredIds }
+		return {
+			ok: true,
+			registeredIds: execRes.registeredIds,
+			registeredPowerIds: execRes.registeredPowerIds,
+			registeredToolIds: execRes.registeredToolIds,
+		}
 	}
 
 	function setEnabled(pluginKeyOrId, enabled) {
@@ -836,7 +1152,7 @@
 						const trusted = trustedHashes[pluginKey] === hash
 						if (!trusted) {
 							untrustedCount++
-							runtimeState.set(pluginKey, { registeredIds: [], error: '' })
+							runtimeState.set(pluginKey, emptyRuntimeState(''))
 						} else if (!disabledDirs.has(pluginKey)) {
 							const execRes = executePlugin({
 								pluginKey: pluginKey,
@@ -850,9 +1166,15 @@
 				}
 			}
 
-			const reg = root.ProtocolRegistry
-			if (reg && typeof reg.batch === 'function') reg.batch(applyScan)
-			else applyScan()
+			let runScan = applyScan
+			const batchRegistries = [root.ToolPluginRegistry, root.PowerDriverRegistry, root.ProtocolRegistry]
+			batchRegistries.forEach(function (reg) {
+				if (reg && typeof reg.batch === 'function') {
+					const prev = runScan
+					runScan = function () { return reg.batch(prev) }
+				}
+			})
+			runScan()
 
 			dispatchChange()
 			return {
@@ -923,8 +1245,10 @@
 		STORAGE_KEY: STORAGE_KEY,
 		TRUST_KEY: TRUST_KEY,
 		EXAMPLE_CODE: EXAMPLE_CODE,
+		EXAMPLE_TEMPLATES: EXAMPLE_TEMPLATES,
 		hashCode: hashCode,
 		listPlugins: listPlugins,
+		getUntrustedCount: getUntrustedCount,
 		saveLocalPlugin: saveLocalPlugin,
 		trustAndEnable: trustAndEnable,
 		setEnabled: setEnabled,

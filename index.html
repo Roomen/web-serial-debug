@@ -104,6 +104,11 @@
                     <i class="bi bi-speedometer2"></i>
                     <span class="rail-label">功耗分析</span>
                 </button>
+                <div class="rail-sep rail-divider" data-rail-anchor="plugin-manage" data-feature="protocol.manage" aria-hidden="true"></div>
+                <button class="rail-item rail-plugin-btn" id="serial-protocol-manage" type="button" data-feature="protocol.manage" title="插件与协议：切换协议、启停工具插件、管理 JSON/JS 扩展">
+                    <i class="bi bi-puzzle"></i>
+                    <span class="rail-label">插件</span>
+                </button>
             </div>
             <div class="rail-bottom">
                 <div class="dropend rail-config">
@@ -113,8 +118,6 @@
                         <span class="rail-label">配置</span>
                     </button>
                     <ul class="dropdown-menu rail-config-menu" aria-labelledby="rail-config-btn">
-                        <li><button class="dropdown-item" type="button" id="serial-protocol-manage" data-feature="protocol.manage"><i class="bi bi-sliders2-vertical"></i> 协议管理…</button></li>
-                        <li><hr class="dropdown-divider" data-feature="protocol.manage"></li>
                         <li><button class="dropdown-item" type="button" id="serial-import"><i class="bi bi-folder-plus"></i> 导入配置…</button></li>
                         <li><button class="dropdown-item" type="button" id="serial-export"><i class="bi bi-folder-symlink"></i> 导出配置</button></li>
                         <li><hr class="dropdown-divider"></li>
@@ -1815,43 +1818,55 @@
         hideTop()
     </script>
     <script>
-        // 最左侧导航栏：切换工具视图
+        // 最左侧导航栏：首屏静态视图切换兜底；完整视图管理与点击委托由 ToolPluginRegistry 接管
         (function () {
             var rail = document.getElementById('activity-rail')
             if (!rail) return
-            var items = rail.querySelectorAll('.rail-item[data-view]')
             var KEY = 'serial-debug-active-view'
-            var current = null
-            function activate(id) {
-                if (!document.getElementById(id)) return
-                document.querySelectorAll('.app-view').forEach(function (v) {
-                    v.classList.toggle('active', v.id === id)
-                })
-                items.forEach(function (it) {
-                    it.classList.toggle('active', it.dataset.view === id)
-                })
-                localStorage.setItem(KEY, id)
-                current = id
+            function isPowerHidden() {
+                try {
+                    var arr = JSON.parse(localStorage.getItem('toolPluginHiddenIds') || '[]')
+                    return Array.isArray(arr) && arr.indexOf('power') >= 0
+                } catch (e) { return false }
             }
-            // 视图入口带 data-feature 时，平台画像没开这项功能就回到通信调试(存下的视图可能来自别的平台)
-            function allowed(id) {
-                var it = Array.from(items).find(function (item) { return item.dataset.view === id })
+            function allowedStatic(id) {
+                var it = rail.querySelector('.rail-item[data-view="' + id + '"]')
                 if (!it || !document.getElementById(id)) return false
+                if (id === 'view-blu' && isPowerHidden()) return false
                 var f = it.dataset.feature
                 if (!f || !window.AppPlatform) return true
                 return f.split(/\s+/).every(function (x) { return window.AppPlatform.has(x) })
             }
-            function switchTo(id) {
-                // 旧书签 view-emk → view-blu
-                if (id === 'view-emk') id = 'view-blu'
-                if (!allowed(id)) id = 'view-serial'
-                activate(id)
+            function applyVisual(id) {
+                if (!document.getElementById(id)) return
+                document.querySelectorAll('.app-view').forEach(function (v) {
+                    v.classList.toggle('active', v.id === id)
+                })
+                rail.querySelectorAll('.rail-item[data-view]').forEach(function (it) {
+                    it.classList.toggle('active', it.dataset.view === id)
+                })
             }
-            items.forEach(function (it) {
-                it.addEventListener('click', function () { switchTo(it.dataset.view) })
+            var saved = null
+            try { saved = localStorage.getItem(KEY) } catch (e) {}
+            if (saved) {
+                var norm = saved === 'view-emk' ? 'view-blu' : saved
+                if (allowedStatic(norm)) {
+                    applyVisual(norm)
+                } else if (norm.indexOf('view-plugin-') !== 0) {
+                    applyVisual('view-serial')
+                }
+            }
+            document.addEventListener('DOMContentLoaded', function () {
+                if (window.ToolPluginRegistry && typeof window.ToolPluginRegistry.activateView === 'function') return
+                rail.addEventListener('click', function (e) {
+                    var btn = e.target && e.target.closest ? e.target.closest('.rail-item[data-view]') : null
+                    if (!btn || !btn.dataset.view) return
+                    var target = btn.dataset.view === 'view-emk' ? 'view-blu' : btn.dataset.view
+                    if (!allowedStatic(target)) target = 'view-serial'
+                    applyVisual(target)
+                    try { localStorage.setItem(KEY, target) } catch (err) {}
+                })
             })
-            var saved = localStorage.getItem(KEY)
-            if (saved) switchTo(saved)
         })()
     </script>
     <script src="js/pcp.js"></script>
@@ -1877,6 +1892,8 @@
     <script src="js/text-byte-encoder.js"></script>
     <script src="js/log-layout.js"></script>
     <script src="js/protocol-registry.js"></script>
+    <script src="js/power-driver-registry.js"></script>
+    <script src="js/tool-plugin-registry.js"></script>
     <script src="js/common.js"></script>
     <script src="js/wmbus-protocol.js"></script>
     <script src="js/wmbus-transaction.js"></script>

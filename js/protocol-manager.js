@@ -6,15 +6,21 @@
 	'use strict'
 
 	const TABS = [
-		{ id: 'installed', label: '已装协议' },
+		{ id: 'installed', label: '已装扩展' },
 		{ id: 'json', label: 'JSON 协议' },
 		{ id: 'js', label: 'JS 插件' },
+	]
+	const FILTERS = [
+		{ id: 'all', label: '全部' },
+		{ id: 'protocol', label: '通信协议' },
+		{ id: 'power', label: '功耗仪协议' },
+		{ id: 'tool', label: '左栏工具' },
 	]
 	const ARMED_TIMEOUT_MS = 5000
 	const SECURITY_WARNING = '外部 JS 插件拥有与本页面相同的全部权限（包括串口收发、读取本地存储中的密钥与配置、操作页面 DOM），请仅信任你亲自审阅过的代码；文件内容变更后需重新确认信任。'
 
 	function buildDevPrompt(kind) {
-		const mode = kind === 'json' || kind === 'js' ? kind : 'all'
+		const mode = (kind === 'json' || kind === 'js' || kind === 'power-js' || kind === 'tool-js') ? kind : 'all'
 		const jsonSpec = [
 			'## 声明式 JSON 协议（Schema v1）开发规范',
 			'适用于固定帧头、长度字段/定长、标准校验和、结构化字段解析与常规下行指令的二进制协议（免写 JS，零安全风险）。',
@@ -162,9 +168,90 @@
 			'```',
 		].join('\n')
 
+		const powerJsSpec = [
+			'## 外部 JS 功耗仪驱动开发规范',
+			'适用于把自定义串口电流表 / 功率计 / 采集卡接入「功耗分析」波形与统计视图。',
+			'',
+			'### 注册入口',
+			'调用 `registerPowerDriver(id, impl)`（或 `module.exports = { kind: "power-driver", id, ...impl }`）：',
+			'- `id`: 唯一标识（`/^[a-z0-9][a-z0-9_-]{0,47}$/`，不能占用保留内置 ID `blu-100k` / `blu100k`）',
+			'- `name`, `shortName`, `version`, `description`: 驱动展示信息',
+			'- `serialOptions`: `{ baudRate, dataBits?, stopBits?, parity?, bufferSize?, flowControl?, dtr?, rts? }`',
+			'- `usbFilters?` / `matchPort?(info)`: 可选 USB VID/PID 过滤或自定义端口匹配函数',
+			'- `capabilities`: `{ nominalHz: number, voltage?: { supported: boolean, minMv?, maxMv?, defaultMv?, requiresBeforeStart?, requiresBeforePowerOn? }, dutPower?: { supported: boolean, probeOnConnect? }, logicBits?: number }`',
+			'- `createSession(hostCtx)`: 返回 `{ onConnect?(io), buildSetVoltage?(mv), buildSetDutPower?(on), buildStart?(opts), buildStop?(), pushChunk(chunk: Uint8Array) => Array<{ iUA, range?, logic? } | number>, resetStream?(opts), getStreamStats?() }`',
+			'',
+			'### 最小可运行功耗仪驱动例程',
+			'```js',
+			'registerPowerDriver(\'demo-csv-ammeter\', {',
+			'  name: \'CSV 串口电流表\',',
+			'  shortName: \'CSV 电流表\',',
+			'  version: \'1.0.0\',',
+			'  description: \'逐行解析串口 uA 电流输出\',',
+			'  serialOptions: { baudRate: 115200, dataBits: 8, stopBits: 1, parity: \'none\' },',
+			'  capabilities: { nominalHz: 100, voltage: { supported: false }, dutPower: { supported: false }, logicBits: 0 },',
+			'  createSession() {',
+			'    let buf = \'\'',
+			'    const dec = new TextDecoder()',
+			'    return {',
+			'      pushChunk(chunk) {',
+			'        buf += dec.decode(chunk, { stream: true })',
+			'        const lines = buf.split(/\\r?\\n/)',
+			'        buf = lines.pop() || \'\'',
+			'        const out = []',
+			'        for (let i = 0; i < lines.length; i++) {',
+			'          const v = Number(lines[i].trim().split(\',\')[0])',
+			'          if (Number.isFinite(v)) out.push({ iUA: v, range: 0, logic: 0 })',
+			'        }',
+			'        return out',
+			'      },',
+			'      resetStream() { buf = \'\' },',
+			'    }',
+			'  },',
+			'})',
+			'```',
+		].join('\n')
+
+		const toolJsSpec = [
+			'## 外部 JS 左栏工具视图插件开发规范',
+			'适用于在左侧活动栏（Activity Bar）挂载独立的辅助调试工具视图（如计算器、数据分析台、专用工装界面）。',
+			'',
+			'### 注册入口',
+			'调用 `registerToolPlugin(id, impl)`（或 `module.exports = { kind: "tool", id, ...impl }`）：',
+			'- `id`: 唯一标识（`/^[a-z0-9][a-z0-9_-]{0,47}$/`，不能占用保留内置 ID `power`）',
+			'- `name`（<=48 字）、`label`（<=12 字，左栏短标签）、`icon`（合法 Bootstrap Icons 类名，如 `bi-calculator`）、`version`、`description`',
+			'- `hideTopbar?`: 布尔值，为 `true` 时在视图容器上标记 `data-hide-topbar="true"`',
+			'- `mount(container, { id, viewId })`: 首次挂载时构建 DOM（必须仅用 `document.createElement` + `textContent`，严禁拼接 `innerHTML` 或嵌套 `AppDialog.confirm`）',
+			'- `unmount({ id, viewId })`: 停用/卸载时清理定时器与事件监听',
+			'- `onActivate?({ id, viewId })` / `onDeactivate?({ id, viewId })`: 切入/切出视图时回调',
+			'- `isBusy?()` / `busyReason?()`: 运行或连接中返回 `true` 及提示文案，防止被误隐藏',
+			'- `statusBadge?()`: 可选返回 `{ conn: "open", title: "..." }` 在左栏图标显示已连接圆点',
+			'',
+			'### 最小可运行左栏工具插件例程',
+			'```js',
+			'registerToolPlugin(\'demo-hex-calc\', {',
+			'  name: \'HEX 校验计算器\',',
+			'  label: \'校验器\',',
+			'  icon: \'bi-calculator\',',
+			'  version: \'1.0.0\',',
+			'  description: \'计算 HEX 字节长度与 XOR8 校验\',',
+			'  mount(container) {',
+			'    container.textContent = \'\'',
+			'    const box = document.createElement(\'div\')',
+			'    box.className = \'p-3\'',
+			'    const h = document.createElement(\'h5\')',
+			'    h.textContent = \'HEX 校验计算器\'',
+			'    box.appendChild(h)',
+			'    container.appendChild(box)',
+			'  },',
+			'  unmount() {},',
+			'})',
+			'```',
+		].join('\n')
+
 		if (mode === 'json') {
 			return [
-				'请根据我提供的通信协议文档，生成一个可直接导入「Web Serial Debug → 协议管理 → JSON 协议」的声明式 JSON 协议文件。',
+				'请根据我提供的通信协议文档，生成一个可直接导入「Web Serial Debug → 插件与协议 → JSON 协议」的声明式 JSON 协议文件。',
 				'要求：严格遵守以下 Schema v1 规范，只输出合法 JSON（不要附加多余解释），并补齐常用指令 `presets` 以便直接支持下行下发和批量交互。',
 				'',
 				jsonSpec,
@@ -172,21 +259,45 @@
 		}
 		if (mode === 'js') {
 			return [
-				'请根据我提供的通信协议文档，编写一个可直接导入「Web Serial Debug → 协议管理 → JS 插件」的协议插件 `.js` 文件。',
+				'请根据我提供的通信协议文档，编写一个可直接导入「Web Serial Debug → 插件与协议 → JS 插件」的协议插件 `.js` 文件。',
 				'要求：严格遵守以下 `registerProtocol` 契约，不依赖外部第三方库，不使用 `section.html` / `innerHTML`，并实现 `findFrame`、`parseFrame`、`logView`、`byteMap`、`buildDownFrame` 与 `presets`。',
 				'',
 				jsSpec,
 			].join('\n')
 		}
+		if (mode === 'power-js') {
+			return [
+				'请根据我提供的功耗仪/电流表串口协议文档，编写一个可直接导入「Web Serial Debug → 插件与协议 → JS 插件」的功耗仪驱动 `.js` 文件。',
+				'要求：严格遵守以下 `registerPowerDriver` 契约，不依赖外部第三方库，声明准确的采样率与程控能力，并实现稳健的流式拆帧。',
+				'',
+				powerJsSpec,
+			].join('\n')
+		}
+		if (mode === 'tool-js') {
+			return [
+				'请根据我的需求，编写一个可直接导入「Web Serial Debug → 插件与协议 → JS 插件」的左栏工具视图 `.js` 文件。',
+				'要求：严格遵守以下 `registerToolPlugin` 契约，仅使用 `document.createElement` 与 `textContent` 构建界面（严禁 `innerHTML`），并在 `unmount` 中做好资源清理。',
+				'',
+				toolJsSpec,
+			].join('\n')
+		}
 		return [
-			'请根据我提供的通信协议文档，为「Web Serial Debug」开发对应的协议适配文件。',
-			'选型建议：若协议为固定帧头 + 长度/定长 + 标准校验和 + 常规字段，请优先输出「声明式 JSON 协议」；若包含复杂 TLV、自定义加密/状态机或动态子页，请输出「JS 协议插件」。',
+			'请根据我提供的需求或协议文档，为「Web Serial Debug」开发对应的扩展插件文件。',
+			'选型建议：固定帧头 + 标准校验的通信协议优先输出「声明式 JSON 协议」；复杂通信协议用 `registerProtocol`；自定义功耗仪用 `registerPowerDriver`；独立左栏工具用 `registerToolPlugin`（单个 JS 插件可同时注册多种能力）。',
 			'',
 			jsonSpec,
 			'',
 			'---',
 			'',
 			jsSpec,
+			'',
+			'---',
+			'',
+			powerJsSpec,
+			'',
+			'---',
+			'',
+			toolJsSpec,
 		].join('\n')
 	}
 
@@ -257,6 +368,30 @@
 		return sel ? String(sel.value || '') : ''
 	}
 
+	function isDualMode() {
+		return !!(root.SerialHub && root.SerialHub.mode === 'dual' && root.serialLanes && typeof root.serialLanes.setProtocol === 'function')
+	}
+
+	function getLaneProtocolId(sid) {
+		if (root.serialLanes && typeof root.serialLanes.protocolOf === 'function') {
+			const v = root.serialLanes.protocolOf(sid)
+			if (v) return String(v)
+		}
+		return ''
+	}
+
+	function switchProtocolForLane(sid, id) {
+		const reg = root.ProtocolRegistry
+		if (reg && typeof reg.isHidden === 'function' && reg.isHidden(id) && typeof reg.setHidden === 'function') {
+			reg.setHidden(id, false)
+		}
+		if (root.serialLanes && typeof root.serialLanes.setProtocol === 'function') {
+			root.serialLanes.setProtocol(sid, id)
+			return true
+		}
+		return false
+	}
+
 	function switchProtocol(id) {
 		const reg = root.ProtocolRegistry
 		if (reg && typeof reg.isHidden === 'function' && reg.isHidden(id) && typeof reg.setHidden === 'function') {
@@ -277,6 +412,28 @@
 			return true
 		}
 		return false
+	}
+
+	function formatSampleRate(hz) {
+		const n = Number(hz)
+		if (!Number.isFinite(n) || n <= 0) return ''
+		if (n >= 1000) {
+			const k = n / 1000
+			return (Number.isInteger(k) ? String(k) : String(Number(k.toFixed(1)))) + 'kHz'
+		}
+		return String(n) + 'Hz'
+	}
+
+	function getActivePowerDriverId() {
+		if (root.bluApi && typeof root.bluApi.getActiveDriverId === 'function') {
+			const id = root.bluApi.getActiveDriverId()
+			if (id) return String(id)
+		}
+		if (root.PowerDriverRegistry && typeof root.PowerDriverRegistry.getActiveId === 'function') {
+			const id = root.PowerDriverRegistry.getActiveId()
+			if (id) return String(id)
+		}
+		return ''
 	}
 
 	function sourceLabel(item) {
@@ -396,21 +553,52 @@
 		else if (s.tab === 'js') renderJsTab(s)
 	}
 
-	// ========== Tab 1：已装协议 ==========
+	// ========== Tab 1：已装扩展 ==========
+	function setFilter(s, filterId) {
+		const valid = FILTERS.some(function (f) { return f.id === filterId })
+		s.filter = valid ? filterId : 'all'
+		if (Array.isArray(s.filterButtons)) {
+			s.filterButtons.forEach(function (btn) {
+				const active = btn.dataset.filter === s.filter
+				btn.setAttribute('aria-pressed', active ? 'true' : 'false')
+				btn.classList.toggle('active', active)
+			})
+		}
+	}
+
 	function buildInstalledTab(s) {
 		const pane = mk('div', 'pm-pane pm-pane-installed')
 		const bar = mk('div', 'pm-toolbar')
+
+		const filterSeg = mk('div', 'ctl-seg pm-filter-seg')
+		filterSeg.setAttribute('role', 'group')
+		filterSeg.setAttribute('aria-label', '扩展分类筛选')
+		s.filterButtons = FILTERS.map(function (f) {
+			const btn = mk('button', '', f.label)
+			btn.type = 'button'
+			btn.dataset.filter = f.id
+			btn.setAttribute('aria-pressed', f.id === s.filter ? 'true' : 'false')
+			btn.classList.toggle('active', f.id === s.filter)
+			btn.addEventListener('click', function () {
+				setFilter(s, f.id)
+				renderInstalledTab(s)
+			})
+			filterSeg.appendChild(btn)
+			return btn
+		})
+
 		const search = mk('input', 'form-control form-control-sm pm-search')
 		search.type = 'text'
-		search.placeholder = '搜索协议名称、ID 或描述…'
+		search.placeholder = '搜索协议、功耗仪或工具名称、ID 或描述…'
 		search.setAttribute('autocomplete', 'off')
 		search.setAttribute('spellcheck', 'false')
-		search.setAttribute('aria-label', '搜索已装协议')
+		search.setAttribute('aria-label', '搜索已装扩展')
 		search.addEventListener('input', function () {
 			s.search = search.value
 			renderInstalledTab(s)
 		})
 		const summary = mk('div', 'pm-summary')
+		bar.appendChild(filterSeg)
 		bar.appendChild(search)
 		bar.appendChild(summary)
 		const list = mk('div', 'pm-list')
@@ -436,34 +624,29 @@
 			const plugins = jsp && typeof jsp.listPlugins === 'function' ? jsp.listPlugins() : []
 			const found = plugins.find(function (p) {
 				if (item.ownerPluginId && (p.pluginId === item.ownerPluginId || p.pluginKey === item.ownerPluginId)) return true
-				return Array.isArray(p.registeredIds) && p.registeredIds.indexOf(item.id) >= 0
+				if (Array.isArray(p.registeredIds) && p.registeredIds.indexOf(item.id) >= 0) return true
+				if (Array.isArray(p.registeredPowerIds) && p.registeredPowerIds.indexOf(item.id) >= 0) return true
+				if (Array.isArray(p.registeredToolIds) && p.registeredToolIds.indexOf(item.id) >= 0) return true
+				return false
 			})
 			if (found) selectJsPlugin(s, found)
 			switchTab(s, 'js')
 		}
 	}
 
-	function renderInstalledTab(s) {
-		if (!s || s.closed || !s.installedList) return
-		const reg = root.ProtocolRegistry
-		const all = reg && typeof reg.list === 'function' ? reg.list({ includeHidden: true }) : []
-		const enabledCount = all.filter(function (item) { return !item.hidden }).length
-		s.installedSummary.textContent = '已启用 ' + enabledCount + ' / 共 ' + all.length + ' 个'
+	function matchesKeyword(kw, fields) {
+		if (!kw) return true
+		const hay = fields.map(function (x) { return x == null ? '' : String(x) }).join(' ').toLowerCase()
+		return hay.indexOf(kw) >= 0
+	}
 
-		const kw = String(s.search || '').trim().toLowerCase()
-		const filtered = kw ? all.filter(function (item) {
-			const hay = [item.name || '', item.id || '', item.description || '', sourceLabel(item)].join(' ').toLowerCase()
-			return hay.indexOf(kw) >= 0
-		}) : all
-
-		clearChildren(s.installedList)
-		if (!filtered.length) {
-			s.installedList.appendChild(mk('div', 'pm-empty', kw ? '未找到匹配的协议' : '暂无已注册协议'))
-			return
-		}
-
+	function renderProtocolRows(s, listEl, items, reg) {
+		const dual = isDualMode()
 		const activeId = getActiveProtocolId()
-		filtered.forEach(function (item) {
+		const laneAId = dual ? getLaneProtocolId('A') : ''
+		const laneBId = dual ? getLaneProtocolId('B') : ''
+
+		items.forEach(function (item) {
 			const row = mk('div', 'pm-item' + (item.hidden ? ' is-hidden' : ''))
 			row.dataset.protocolId = item.id
 
@@ -475,10 +658,14 @@
 			if (item.version) head.appendChild(mk('span', 'pm-badge pm-badge-muted', 'v' + item.version))
 
 			const caps = item.capabilities || {}
+			const fullEntry = reg && typeof reg.get === 'function' ? reg.get(item.id) : null
+			const hasFirmware = !!(item.firmware || caps.firmware || (fullEntry && fullEntry.firmware))
 			if (caps.parse) head.appendChild(mk('span', 'pm-cap', '解析'))
 			if (caps.downlink) head.appendChild(mk('span', 'pm-cap', '下行'))
 			if (caps.presets) head.appendChild(mk('span', 'pm-cap', '预设'))
 			if (caps.customPanel) head.appendChild(mk('span', 'pm-cap', '面板'))
+			if (caps.device) head.appendChild(mk('span', 'pm-cap', '设备面板'))
+			if (hasFirmware) head.appendChild(mk('span', 'pm-cap', 'PCP 固件'))
 			main.appendChild(head)
 
 			if (item.description) {
@@ -487,7 +674,32 @@
 			row.appendChild(main)
 
 			const acts = mk('div', 'pm-item-acts')
-			if (item.id === activeId) {
+			if (dual) {
+				if (laneAId === item.id) {
+					acts.appendChild(mk('span', 'pm-badge pm-badge-active', 'A 路使用中'))
+				} else {
+					const btnA = mk('button', 'btn btn-sm btn-outline-primary', '设为 A 路')
+					btnA.type = 'button'
+					btnA.addEventListener('click', function () {
+						switchProtocolForLane('A', item.id)
+						setNotice(s, 'ok', '已将 A 路切换到协议：' + (item.name || item.id))
+						renderInstalledTab(s)
+					})
+					acts.appendChild(btnA)
+				}
+				if (laneBId === item.id) {
+					acts.appendChild(mk('span', 'pm-badge pm-badge-active', 'B 路使用中'))
+				} else {
+					const btnB = mk('button', 'btn btn-sm btn-outline-primary', '设为 B 路')
+					btnB.type = 'button'
+					btnB.addEventListener('click', function () {
+						switchProtocolForLane('B', item.id)
+						setNotice(s, 'ok', '已将 B 路切换到协议：' + (item.name || item.id))
+						renderInstalledTab(s)
+					})
+					acts.appendChild(btnB)
+				}
+			} else if (item.id === activeId) {
 				acts.appendChild(mk('span', 'pm-badge pm-badge-active', '当前使用中'))
 			} else {
 				const useBtn = mk('button', 'btn btn-sm btn-outline-primary', '设为当前')
@@ -531,8 +743,219 @@
 			acts.appendChild(swWrap)
 
 			row.appendChild(acts)
-			s.installedList.appendChild(row)
+			listEl.appendChild(row)
 		})
+	}
+
+	function renderPowerDriverRows(s, listEl, items, powerReg) {
+		const activeId = getActivePowerDriverId()
+		items.forEach(function (item) {
+			const row = mk('div', 'pm-item' + (item.hidden ? ' is-hidden' : ''))
+			row.dataset.powerDriverId = item.id
+
+			const main = mk('div', 'pm-item-main')
+			const head = mk('div', 'pm-item-head')
+			head.appendChild(mk('span', 'pm-item-name', item.name || item.shortName || item.id))
+			head.appendChild(mk('code', 'pm-id-badge', item.id))
+			head.appendChild(mk('span', 'pm-badge ' + sourceBadgeClass(item), sourceLabel(item)))
+			if (item.version) head.appendChild(mk('span', 'pm-badge pm-badge-muted', 'v' + item.version))
+
+			const caps = item.capabilities || {}
+			const rateText = formatSampleRate(caps.nominalHz)
+			if (rateText) head.appendChild(mk('span', 'pm-cap', rateText))
+			if (caps.voltage && caps.voltage.supported) head.appendChild(mk('span', 'pm-cap', '程控调压'))
+			if (caps.dutPower && caps.dutPower.supported) head.appendChild(mk('span', 'pm-cap', '上下电'))
+			if (Number(caps.logicBits) > 0) head.appendChild(mk('span', 'pm-cap', String(caps.logicBits) + '路逻辑'))
+			main.appendChild(head)
+
+			if (item.description) {
+				main.appendChild(mk('div', 'pm-item-desc', item.description))
+			}
+			row.appendChild(main)
+
+			const acts = mk('div', 'pm-item-acts')
+			if (item.id === activeId) {
+				acts.appendChild(mk('span', 'pm-badge pm-badge-active', '当前驱动'))
+			} else {
+				const useBtn = mk('button', 'btn btn-sm btn-outline-primary', '设为当前驱动')
+				useBtn.type = 'button'
+				useBtn.addEventListener('click', function () {
+					let res = null
+					if (root.bluApi && typeof root.bluApi.setActiveDriver === 'function') {
+						res = root.bluApi.setActiveDriver(item.id)
+					} else if (powerReg && typeof powerReg.setActiveId === 'function') {
+						res = powerReg.setActiveId(item.id)
+					}
+					if (res && res.ok === false) {
+						setNotice(s, 'error', res.message || res.error || '当前无法切换功耗仪驱动')
+						return
+					}
+					setNotice(s, 'ok', '已切换功耗仪驱动：' + (item.name || item.id))
+					renderInstalledTab(s)
+				})
+				acts.appendChild(useBtn)
+			}
+
+			if (!item.builtin && (item.source === 'js-local' || item.source === 'js-dir')) {
+				const editBtn = mk('button', 'btn btn-sm btn-outline-secondary', '编辑')
+				editBtn.type = 'button'
+				editBtn.addEventListener('click', function () { openCustomEditor(s, item) })
+				acts.appendChild(editBtn)
+			}
+
+			const swWrap = mk('div', 'form-check form-switch ctl-switch pm-switch')
+			const swId = 'pm-pwr-vis-' + item.id
+			const swInput = mk('input', 'form-check-input')
+			swInput.type = 'checkbox'
+			swInput.id = swId
+			swInput.checked = !item.hidden
+			const swLabel = mk('label', 'form-check-label', item.hidden ? '已隐藏' : '显示')
+			swLabel.setAttribute('for', swId)
+			swInput.addEventListener('change', function () {
+				if (!powerReg || typeof powerReg.setHidden !== 'function') return
+				const res = powerReg.setHidden(item.id, !swInput.checked)
+				if (res && res.ok === false) {
+					swInput.checked = !item.hidden
+					setNotice(s, 'error', res.message || res.error || '无法隐藏该功耗仪驱动')
+					return
+				}
+				setNotice(s, 'info', swInput.checked ? '已显示功耗仪驱动：' + (item.name || item.id) : '已隐藏功耗仪驱动：' + (item.name || item.id))
+				renderInstalledTab(s)
+			})
+			swWrap.appendChild(swInput)
+			swWrap.appendChild(swLabel)
+			acts.appendChild(swWrap)
+
+			row.appendChild(acts)
+			listEl.appendChild(row)
+		})
+	}
+
+	function renderToolPluginRows(s, listEl, items, toolReg) {
+		items.forEach(function (item) {
+			const row = mk('div', 'pm-item' + (item.hidden ? ' is-hidden' : ''))
+			row.dataset.toolPluginId = item.id
+
+			const main = mk('div', 'pm-item-main')
+			const head = mk('div', 'pm-item-head')
+			head.appendChild(mk('span', 'pm-item-name', item.name || item.id))
+			head.appendChild(mk('code', 'pm-id-badge', item.id))
+			head.appendChild(mk('span', 'pm-badge ' + sourceBadgeClass(item), sourceLabel(item)))
+			if (item.version) head.appendChild(mk('span', 'pm-badge pm-badge-muted', 'v' + item.version))
+			main.appendChild(head)
+
+			if (item.description) {
+				main.appendChild(mk('div', 'pm-item-desc', item.description))
+			}
+			row.appendChild(main)
+
+			const acts = mk('div', 'pm-item-acts')
+			const openBtn = mk('button', 'btn btn-sm btn-outline-primary', '打开视图')
+			openBtn.type = 'button'
+			openBtn.disabled = !!item.hidden
+			openBtn.addEventListener('click', function () {
+				if (!toolReg || typeof toolReg.activateView !== 'function') return
+				toolReg.activateView(item.viewId)
+				if (typeof s.closeDialog === 'function') s.closeDialog()
+			})
+			acts.appendChild(openBtn)
+
+			if (!item.builtin && (item.source === 'js-local' || item.source === 'js-dir')) {
+				const editBtn = mk('button', 'btn btn-sm btn-outline-secondary', '编辑')
+				editBtn.type = 'button'
+				editBtn.addEventListener('click', function () { openCustomEditor(s, item) })
+				acts.appendChild(editBtn)
+			}
+
+			const swWrap = mk('div', 'form-check form-switch ctl-switch pm-switch')
+			const swId = 'pm-tool-vis-' + item.id
+			const swInput = mk('input', 'form-check-input')
+			swInput.type = 'checkbox'
+			swInput.id = swId
+			swInput.checked = !item.hidden
+			const swLabel = mk('label', 'form-check-label', item.hidden ? '已隐藏' : '左栏显示')
+			swLabel.setAttribute('for', swId)
+			swInput.addEventListener('change', function () {
+				if (!toolReg || typeof toolReg.setHidden !== 'function') return
+				const res = toolReg.setHidden(item.id, !swInput.checked)
+				if (res && res.ok === false) {
+					swInput.checked = !item.hidden
+					setNotice(s, 'error', res.error || '该工具正在运行中，无法隐藏')
+					return
+				}
+				setNotice(s, 'info', swInput.checked ? '已在左栏显示工具：' + (item.name || item.id) : '已从左栏隐藏工具：' + (item.name || item.id))
+				renderInstalledTab(s)
+			})
+			swWrap.appendChild(swInput)
+			swWrap.appendChild(swLabel)
+			acts.appendChild(swWrap)
+
+			row.appendChild(acts)
+			listEl.appendChild(row)
+		})
+	}
+
+	function renderInstalledTab(s) {
+		if (!s || s.closed || !s.installedList) return
+		const reg = root.ProtocolRegistry
+		const powerReg = root.PowerDriverRegistry
+		const toolReg = root.ToolPluginRegistry
+
+		const showProto = s.filter === 'all' || s.filter === 'protocol'
+		const showPower = !!(powerReg && typeof powerReg.list === 'function') && (s.filter === 'all' || s.filter === 'power')
+		const showTool = !!(toolReg && typeof toolReg.list === 'function') && (s.filter === 'all' || s.filter === 'tool')
+
+		const protoAll = showProto && reg && typeof reg.list === 'function' ? reg.list({ includeHidden: true }) : []
+		const powerAll = showPower ? powerReg.list({ includeHidden: true }) : []
+		const toolAll = showTool ? toolReg.list({ includeHidden: true }) : []
+
+		const totalAll = protoAll.length + powerAll.length + toolAll.length
+		const enabledAll = protoAll.filter(function (x) { return !x.hidden }).length
+			+ powerAll.filter(function (x) { return !x.hidden }).length
+			+ toolAll.filter(function (x) { return !x.hidden }).length
+		s.installedSummary.textContent = '已启用 ' + enabledAll + ' / 共 ' + totalAll + ' 个'
+
+		const kw = String(s.search || '').trim().toLowerCase()
+		const protoFiltered = kw ? protoAll.filter(function (item) {
+			return matchesKeyword(kw, [item.name, item.id, item.description, sourceLabel(item)])
+		}) : protoAll
+		const powerFiltered = kw ? powerAll.filter(function (item) {
+			return matchesKeyword(kw, [item.name, item.shortName, item.id, item.description, sourceLabel(item)])
+		}) : powerAll
+		const toolFiltered = kw ? toolAll.filter(function (item) {
+			return matchesKeyword(kw, [item.name, item.label, item.id, item.description, sourceLabel(item)])
+		}) : toolAll
+
+		clearChildren(s.installedList)
+
+		const sectionsActive = (showProto ? 1 : 0) + (showPower ? 1 : 0) + (showTool ? 1 : 0)
+		const multiSection = sectionsActive > 1
+		let renderedCount = 0
+
+		if (showProto && protoFiltered.length) {
+			if (multiSection) s.installedList.appendChild(mk('div', 'pm-section-title', '通信协议'))
+			renderProtocolRows(s, s.installedList, protoFiltered, reg)
+			renderedCount += protoFiltered.length
+		}
+		if (showPower && powerFiltered.length) {
+			if (multiSection) s.installedList.appendChild(mk('div', 'pm-section-title', '功耗仪协议'))
+			renderPowerDriverRows(s, s.installedList, powerFiltered, powerReg)
+			renderedCount += powerFiltered.length
+		}
+		if (showTool && toolFiltered.length) {
+			if (multiSection) s.installedList.appendChild(mk('div', 'pm-section-title', '左栏工具'))
+			renderToolPluginRows(s, s.installedList, toolFiltered, toolReg)
+			renderedCount += toolFiltered.length
+		}
+
+		if (!renderedCount) {
+			const emptyLabel = kw ? '未找到匹配的扩展项' : (
+				s.filter === 'power' ? '暂无已注册功耗仪协议'
+					: s.filter === 'tool' ? '暂无已注册左栏工具'
+						: '暂无已注册协议或插件'
+			)
+			s.installedList.appendChild(mk('div', 'pm-empty', emptyLabel))
+		}
 	}
 
 	// ========== Tab 2：JSON 协议 ==========
@@ -1022,19 +1445,61 @@
 
 		// 工具条
 		const bar = mk('div', 'pm-toolbar')
+		const jsTplSelect = mk('select', 'form-select form-select-sm pm-tpl-select')
+		jsTplSelect.setAttribute('aria-label', '选择 JS 插件示例模板')
+		;[
+			{ value: 'protocol', label: '通信协议示例' },
+			{ value: 'powerDriver', label: '功耗仪驱动示例' },
+			{ value: 'tool', label: '左栏工具视图示例' },
+		].forEach(function (tpl) {
+			const opt = mk('option', '', tpl.label)
+			opt.value = tpl.value
+			jsTplSelect.appendChild(opt)
+		})
+		jsTplSelect.value = s.jsTemplateKind || 'protocol'
+		jsTplSelect.addEventListener('change', function () {
+			s.jsTemplateKind = jsTplSelect.value || 'protocol'
+		})
+
 		const newBtn = mk('button', 'btn btn-sm btn-outline-primary', '新建示例插件')
 		newBtn.type = 'button'
 		newBtn.addEventListener('click', function () {
 			const jsp = root.JsProtocolPlugin
+			const tplKind = jsTplSelect.value || s.jsTemplateKind || 'protocol'
+			const templates = (jsp && jsp.EXAMPLE_TEMPLATES) || {}
+			const metaMap = {
+				protocol: {
+					name: '示例 JS 插件',
+					fileName: 'example-plugin.js',
+					fallback: 'registerProtocol(\'example-js\', {\n\tname: \'示例 JS 协议\',\n\tfindFrame() { return null },\n\tparseFrame() { return null },\n})\n',
+				},
+				powerDriver: {
+					name: '示例功耗仪驱动',
+					fileName: 'example-power-driver.js',
+					fallback: 'registerPowerDriver(\'demo-csv-ammeter\', {\n\tname: \'CSV 串口电流表示例\',\n\tserialOptions: { baudRate: 115200 },\n\tcapabilities: { nominalHz: 100 },\n\tcreateSession() { return { pushChunk() { return [] } } },\n})\n',
+				},
+				tool: {
+					name: '示例左栏工具',
+					fileName: 'example-tool-plugin.js',
+					fallback: 'registerToolPlugin(\'demo-tool\', {\n\tname: \'示例左栏工具\',\n\tlabel: \'示例\',\n\ticon: \'bi-puzzle\',\n\tmount(container) { container.textContent = \'示例工具视图\' },\n})\n',
+				},
+			}
+			const meta = metaMap[tplKind] || metaMap.protocol
+			let code = ''
+			if (typeof templates[tplKind] === 'string' && templates[tplKind]) {
+				code = templates[tplKind]
+			} else if (tplKind === 'protocol' && jsp && typeof jsp.EXAMPLE_CODE === 'string' && jsp.EXAMPLE_CODE) {
+				code = jsp.EXAMPLE_CODE
+			} else {
+				code = meta.fallback
+			}
 			s.jsEditingNew = true
 			s.jsSelectedKey = null
 			s.jsSelectedSource = 'js-local'
 			s.jsSelectedId = ''
-			s.jsName = '示例 JS 插件'
-			s.jsFileName = 'example-plugin.js'
-			s.jsCode = (jsp && typeof jsp.EXAMPLE_CODE === 'string' && jsp.EXAMPLE_CODE)
-				? jsp.EXAMPLE_CODE
-				: 'registerProtocol(\'example-js\', {\n\tname: \'示例 JS 协议\',\n\tfindFrame() { return null },\n\tparseFrame() { return null },\n})\n'
+			s.jsName = meta.name
+			s.jsFileName = meta.fileName
+			s.jsCode = code
 			s.jsNameInput.value = s.jsName
 			s.jsFileNameInput.value = s.jsFileName
 			s.jsCodeEditor.value = s.jsCode
@@ -1079,6 +1544,7 @@
 		importBtn.addEventListener('click', function () { importInput.click() })
 
 		bar.appendChild(newBtn)
+		bar.appendChild(jsTplSelect)
 		bar.appendChild(importBtn)
 		bar.appendChild(importInput)
 		pane.appendChild(bar)
@@ -1226,8 +1692,18 @@
 				} else if (!p.trusted) {
 					head.appendChild(mk('span', 'pm-badge pm-badge-warn', '⚠ 待确认安全风险'))
 				} else if (p.enabled) {
-					const ids = Array.isArray(p.registeredIds) && p.registeredIds.length ? p.registeredIds.join(', ') : '无注册协议'
-					head.appendChild(mk('span', 'pm-badge pm-badge-ok', '已信任 · 已注册: ' + ids))
+					const protoIds = Array.isArray(p.registeredIds) ? p.registeredIds : []
+					const powerIds = Array.isArray(p.registeredPowerIds) ? p.registeredPowerIds : []
+					const toolIds = Array.isArray(p.registeredToolIds) ? p.registeredToolIds : []
+					const hasAny = protoIds.length || powerIds.length || toolIds.length
+					if (!hasAny) {
+						head.appendChild(mk('span', 'pm-badge pm-badge-ok', '已信任 · 无注册项'))
+					} else {
+						head.appendChild(mk('span', 'pm-badge pm-badge-ok', '已信任 · 已启用'))
+						if (protoIds.length) head.appendChild(mk('span', 'pm-cap', '协议: ' + protoIds.join(', ')))
+						if (powerIds.length) head.appendChild(mk('span', 'pm-cap', '功耗仪: ' + powerIds.join(', ')))
+						if (toolIds.length) head.appendChild(mk('span', 'pm-cap', '工具: ' + toolIds.join(', ')))
+					}
 				} else {
 					head.appendChild(mk('span', 'pm-badge pm-badge-muted', '已信任 · 已停用'))
 				}
@@ -1351,8 +1827,12 @@
 						const res = jsp.trustAndEnable(p.pluginKey, confirmedHash)
 						s.jsTrustConfirmKey = null
 						if (res && res.ok) {
-							const ids = Array.isArray(res.registeredIds) && res.registeredIds.length ? '（已注册：' + res.registeredIds.join(', ') + '）' : ''
-							setNotice(s, 'ok', '已信任并启用插件「' + (p.name || p.fileName) + '」' + ids)
+							const parts = []
+							if (Array.isArray(res.registeredIds) && res.registeredIds.length) parts.push('协议: ' + res.registeredIds.join(', '))
+							if (Array.isArray(res.registeredPowerIds) && res.registeredPowerIds.length) parts.push('功耗仪: ' + res.registeredPowerIds.join(', '))
+							if (Array.isArray(res.registeredToolIds) && res.registeredToolIds.length) parts.push('工具: ' + res.registeredToolIds.join(', '))
+							const summary = parts.length ? '（已注册：' + parts.join('；') + '）' : ''
+							setNotice(s, 'ok', '已信任并启用插件「' + (p.name || p.fileName) + '」' + summary)
 						} else {
 							setNotice(s, 'error', (res && res.error) || '启用插件失败')
 						}
@@ -1403,8 +1883,10 @@
 		promptWrap.appendChild(promptLabel)
 		;[
 			{ kind: 'json', label: 'JSON 协议', title: '复制声明式 JSON 协议开发提示词（贴给 AI + 协议文档即可生成）' },
-			{ kind: 'js', label: 'JS 插件', title: '复制 JS 协议插件开发提示词（贴给 AI + 协议文档即可生成）' },
-			{ kind: 'all', label: '完整规范', title: '复制包含选型指南、JSON Schema 与 JS 插件契约的完整提示词' },
+			{ kind: 'js', label: '通信协议提示词', title: '复制通信协议 JS 插件开发提示词（贴给 AI + 协议文档即可生成）' },
+			{ kind: 'power-js', label: '功耗仪驱动提示词', title: '复制功耗仪驱动 JS 插件开发提示词（registerPowerDriver）' },
+			{ kind: 'tool-js', label: '工具插件提示词', title: '复制左栏工具视图 JS 插件开发提示词（registerToolPlugin）' },
+			{ kind: 'all', label: '完整规范', title: '复制包含选型指南、JSON Schema 与全能力 JS 插件契约的完整提示词' },
 		].forEach(function (item) {
 			const b = mk('button', 'btn btn-sm btn-outline-secondary pm-prompt-btn')
 			b.type = 'button'
@@ -1419,7 +1901,7 @@
 				copyText(text).then(function (ok) {
 					if (s.closed) return
 					if (ok) {
-						setNotice(s, 'ok', '已复制「' + item.label + '开发提示词」（' + text.length + ' 字），可直接粘贴给 AI 并附上协议文档生成适配插件')
+						setNotice(s, 'ok', '已复制「' + item.label + '」（' + text.length + ' 字），可直接粘贴给 AI 并附上需求或协议文档')
 					} else {
 						setNotice(s, 'error', '复制失败：当前环境不允许访问剪贴板')
 					}
@@ -1450,11 +1932,16 @@
 		switchTab(s, s.tab)
 	}
 
-	function open(initialTab) {
+	function open(initialTab, opts) {
 		if (!canManage()) return false
+		const o = opts && typeof opts === 'object' ? opts : {}
 		const validTab = TABS.some(function (t) { return t.id === initialTab }) ? initialTab : 'installed'
+		const hasFilterOpt = typeof o.filter === 'string' && FILTERS.some(function (f) { return f.id === o.filter })
+		const validFilter = hasFilterOpt ? o.filter : 'all'
 		if (session && !session.closed) {
+			if (hasFilterOpt) setFilter(session, validFilter)
 			if (initialTab) switchTab(session, validTab)
+			else if (hasFilterOpt) renderActiveTab(session)
 			return true
 		}
 		if (!root.AppDialog || typeof root.AppDialog.panel !== 'function') return false
@@ -1462,7 +1949,10 @@
 		const doc = getDoc()
 		const s = {
 			tab: validTab,
+			filter: validFilter,
+			filterButtons: [],
 			closed: false,
+			closeDialog: null,
 			search: '',
 			notice: null,
 			tabButtons: [],
@@ -1478,6 +1968,7 @@
 			jsSelectedSource: 'js-local',
 			jsSelectedId: '',
 			jsEditingNew: false,
+			jsTemplateKind: 'protocol',
 			jsName: '',
 			jsFileName: '',
 			jsCode: '',
@@ -1496,20 +1987,28 @@
 		if (doc && typeof doc.addEventListener === 'function') {
 			doc.addEventListener('serial-protocol-registry-change', onExternalChange)
 			doc.addEventListener('serial-protocol-plugins-change', onExternalChange)
+			doc.addEventListener('serial-power-driver-registry-change', onExternalChange)
+			doc.addEventListener('serial-tool-plugin-registry-change', onExternalChange)
 		}
 
 		Promise.resolve(root.AppDialog.panel({
-			title: '协议管理',
+			title: '插件与协议',
 			wide: true,
 			closeText: '关闭',
-			build: function (body) { buildPanel(body, s) },
+			build: function (body, ctrl) {
+				s.closeDialog = ctrl && typeof ctrl.close === 'function' ? ctrl.close : null
+				buildPanel(body, s)
+			},
 		})).then(function () {
 			s.closed = true
+			s.closeDialog = null
 			clearJsonDeleteArm(s)
 			clearJsDeleteArm(s)
 			if (doc && typeof doc.removeEventListener === 'function') {
 				doc.removeEventListener('serial-protocol-registry-change', onExternalChange)
 				doc.removeEventListener('serial-protocol-plugins-change', onExternalChange)
+				doc.removeEventListener('serial-power-driver-registry-change', onExternalChange)
+				doc.removeEventListener('serial-tool-plugin-registry-change', onExternalChange)
 			}
 			if (session === s) session = null
 		})
@@ -1526,9 +2025,9 @@
 		const doc = getDoc()
 		if (!doc || boundDoc === doc) return
 		boundDoc = doc
-		;['serial-protocol-manage', 'serial-protocol-manage-inline'].forEach(function (id) {
+		;['serial-protocol-manage', 'rail-plugin-manage', 'serial-protocol-manage-inline'].forEach(function (id) {
 			const btn = doc.getElementById ? doc.getElementById(id) : null
-			if (!btn || btn.dataset && btn.dataset.pmBound === '1') return
+			if (!btn || (btn.dataset && btn.dataset.pmBound === '1')) return
 			if (btn.dataset) btn.dataset.pmBound = '1'
 			btn.addEventListener('click', function () { open('installed') })
 		})

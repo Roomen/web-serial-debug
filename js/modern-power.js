@@ -152,6 +152,47 @@
 		if (stor && ui.rec.btn.title !== stor.title) ui.rec.btn.title = stor.title
 	}
 
+	function syncDriverSelect() {
+		const sel = (ui && ui.driverSelect) || E('blu-driver-select')
+		if (!sel) return
+		const reg = window.PowerDriverRegistry
+		const api = window.bluApi
+		const list = (reg && typeof reg.list === 'function')
+			? reg.list({ includeHidden: false })
+			: (api && typeof api.listDrivers === 'function' ? api.listDrivers({ includeHidden: false }) : [])
+		const activeId = (reg && typeof reg.getActiveId === 'function')
+			? reg.getActiveId()
+			: (api && typeof api.getActiveDriverId === 'function' ? api.getActiveDriverId() : 'blu-100k')
+		const desired = list.length
+			? list.map(function (d) { return [d.id, d.name || d.shortName || d.id] })
+			: [['blu-100k', 'BLU 100k 电流表']]
+		const current = Array.prototype.map.call(sel.options || [], function (o) {
+			return [o.value, o.textContent]
+		})
+		let same = desired.length === current.length
+		if (same) {
+			for (let i = 0; i < desired.length; i++) {
+				if (desired[i][0] !== current[i][0] || desired[i][1] !== current[i][1]) {
+					same = false
+					break
+				}
+			}
+		}
+		if (!same) {
+			sel.textContent = ''
+			desired.forEach(function (pair) {
+				const opt = document.createElement('option')
+				opt.value = pair[0]
+				opt.textContent = pair[1]
+				sel.appendChild(opt)
+			})
+		}
+		if (activeId && sel.value !== activeId) {
+			sel.value = activeId
+		}
+		sel.disabled = !!(api && typeof api.isBusyForUpdate === 'function' && api.isBusyForUpdate())
+	}
+
 	function buildToolbar(bar) {
 		const tb = mk('div', 'mp-toolbar')
 		tb.id = 'mp-toolbar'
@@ -161,6 +202,25 @@
 
 		const gDev = group('设备', 'mp-g-dev')
 		tb.append(gDev, sep())
+		const drvSel = mk('select', 'form-select form-select-sm mp-driver-select')
+		drvSel.id = 'blu-driver-select'
+		drvSel.setAttribute('aria-label', '功耗仪协议')
+		drvSel.title = '功耗仪通信协议（可在插件与协议管理中扩展）'
+		drvSel.addEventListener('change', function () {
+			const api = window.bluApi
+			const nextId = drvSel.value
+			if (!api || typeof api.setActiveDriver !== 'function') {
+				syncDriverSelect()
+				return
+			}
+			const r = api.setActiveDriver(nextId)
+			if (!r || !r.ok) {
+				const msg = (r && r.message) || '切换功耗仪协议失败'
+				if (typeof api.log === 'function') api.log(msg, 'warn')
+				syncDriverSelect()
+			}
+		})
+		gDev.append(drvSel)
 		park(E('blu-device-menu'), gDev)
 		park(E('blu-port-select'), gDev)
 		park(E('blu-open'), gDev)
@@ -211,7 +271,7 @@
 
 		// 弹出层里的下拉改值、触发组状态变化时同步芯片文字
 		tb.addEventListener('change', syncChips)
-		return { rec: rec, trig: trig, pops: [rec, trig] }
+		return { rec: rec, trig: trig, pops: [rec, trig], driverSelect: drvSel }
 	}
 
 	// ---------- 主区 ----------
@@ -476,13 +536,14 @@
 		const side = buildAside(view, aside)
 
 		ui = {
-			rec: tb.rec, trig: tb.trig, pops: tb.pops,
+			rec: tb.rec, trig: tb.trig, pops: tb.pops, driverSelect: tb.driverSelect,
 			aside: aside, tabs: side.tabs, pages: side.pages, anHead: side.anHead,
 			collapsed: side.collapsed, cmdEmpty: side.cmdEmpty, tab: 'measure',
 		}
 
 		observe(E('blu-analysis-toggle'), { attributes: true, attributeFilter: ['aria-expanded'] }, syncCollapsed)
 		observe(E('blu-acq-trig-group'), { attributes: true, attributeFilter: ['class', 'title'] }, syncChips)
+		observe(E('blu-open'), { attributes: true, attributeFilter: ['class', 'disabled'] }, syncDriverSelect)
 		// blu-power.js 改值不派发 change(导入、切模式、读配置)：借读数的原有刷新节拍顺带核对芯片文字
 		observe(E('blu-count'), { childList: true, characterData: true, subtree: true }, syncChips)
 		observe(view, { attributes: true, attributeFilter: ['class'] }, function () {
@@ -490,6 +551,8 @@
 			const t = TABS.find(function (x) { return x.id === ui.tab })
 			if (t && t.an) redrawAnalysis(t.an)
 		})
+		onDoc('serial-power-driver-registry-change', syncDriverSelect)
+		onDoc('blu-connection-state-change', syncDriverSelect)
 		onDoc('pointerdown', function (e) {
 			if (!ui) return
 			ui.pops.forEach(function (p) {
@@ -506,6 +569,7 @@
 
 		syncCollapsed()
 		syncChips()
+		syncDriverSelect()
 		selectTab(initialTab(), false)
 	}
 
