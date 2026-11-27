@@ -175,6 +175,7 @@
 	// 打开某一路的设备下拉(连接栏设备键，选口与设备管理都在这里)；没有连接栏时退回该路的「选择串口」键。
 	// 兜底刻意复用芯片的「没选过口才自动打开」语义，不要换成 serialLanes.requestPort(它固定 openAfterSelect: true)
 	function openLaneMenu(sid) {
+		if (!inSerial()) gotoView('view-serial')
 		const b = doc.querySelector('#mdn-connbar .mdn-conn[data-sid="' + sid + '"] > .mdn-conn-btn')
 		if (b) {
 			if (b.getAttribute('aria-expanded') !== 'true') b.click()
@@ -238,7 +239,10 @@
 		'clear-log': function () { if (inSerial()) click($('serial-clear')) },
 		'auto-scroll': function () { if (inSerial()) click($('serial-auto-scroll')) },
 		'view-serial': function () { gotoView('view-serial') },
-		'view-firmware': function () { gotoView('view-fw-pack') },
+		'view-firmware': function () {
+			if (root.DevicePanel && typeof root.DevicePanel.showFirmware === 'function') root.DevicePanel.showFirmware()
+			else if (root.Workbench) root.Workbench.open('firmware')
+		},
 		'view-power': function () { gotoView('view-blu') },
 		'command-palette': function () { if (root.serialCommandPalette) root.serialCommandPalette.toggle() },
 		'toggle-right-pane': function () {
@@ -339,13 +343,13 @@
 	if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', tick)
 	else tick()
 
-	// ---------- macOS 一体化标题栏：左侧导航栏与顶栏的空白处拖动窗口，双击按系统设置缩放 / 最小化 ----------
-	const INTERACTIVE = 'button, a, input, select, textarea, label, summary, [role="button"], [role="tab"], [role="menu"], [role="dialog"], [role="listbox"], [contenteditable=""], [contenteditable="true"], .dropdown-menu, .mdn-pop, .mdn-conn, .mdn-zoom'
+	// ---------- macOS 一体化标题栏：左侧导航栏、顶栏与功耗工具条空白处拖动窗口，双击按系统设置缩放 / 最小化 ----------
+	const INTERACTIVE = 'button, a, input, select, textarea, label, summary, [role="button"], [role="tab"], [role="menu"], [role="dialog"], [role="listbox"], [contenteditable=""], [contenteditable="true"], .dropdown-menu, .mdn-pop, .mdn-conn, .mdn-zoom, .blu-device-pop, .mp-pop'
 	if (P.os === 'macos' && win) {
 		doc.addEventListener('mousedown', function (e) {
 			if (e.button !== 0 || e.defaultPrevented) return
 			const t = e.target
-			if (!t || !t.closest || !t.closest('#activity-rail, #app-topbar') || t.closest(INTERACTIVE)) return
+			if (!t || !t.closest || !t.closest('#activity-rail, #app-topbar, .blu-connect-bar') || t.closest(INTERACTIVE)) return
 			if (e.detail === 2) T.core.invoke('titlebar_double_click').catch(function () {})
 			else if (e.detail === 1) win.startDragging().catch(function () {})
 		})

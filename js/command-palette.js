@@ -336,22 +336,16 @@
 				if (window.DevicePanel && typeof window.DevicePanel.show === 'function') window.DevicePanel.show()
 			}
 		})
+		const hasFwPack = !window.AppPlatform || window.AppPlatform.has('view.firmware-pack')
 		list.push({
 			group: '视图',
-			title: '切换到固件升级',
+			title: hasFwPack ? '切换到固件（打包 / 升级）' : '切换到固件升级',
 			feature: 'panel.firmware',
-			alias: 'gujian shengji firmware upgrade ota view',
+			alias: 'gujian shengji dabao firmware pack upgrade ota view',
 			run: function () {
 				if (window.DevicePanel && typeof window.DevicePanel.showFirmware === 'function') window.DevicePanel.showFirmware()
 				else if (window.Workbench) window.Workbench.open('firmware')
 			}
-		})
-		list.push({
-			group: '视图',
-			title: '切换到固件打包',
-			feature: 'view.firmware-pack',
-			alias: 'gujian dabao firmware pack view',
-			run: function () { clickSel('.rail-item[data-view="view-fw-pack"]') }
 		})
 		list.push({
 			group: '视图',

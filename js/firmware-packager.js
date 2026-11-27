@@ -235,13 +235,14 @@
 		if (sizeEl) sizeEl.textContent = '--'
 	}
 
-	function loadFile(file, nameEl, sizeEl, bufferHolder, fileNameHolder, zoneEl, infoEl) {
+	function loadFile(file, nameEl, sizeEl, bufferHolder, fileNameHolder, zoneEl, infoEl, fileInput) {
 		if (!file) return
 		nameEl.textContent = file.name
 		const reader = new FileReader()
 		reader.onload = function () {
 			bufferHolder.val = new Uint8Array(reader.result)
 			fileNameHolder.val = file.name
+			if (fileInput) fileInput.value = ''
 			showFileInfo(zoneEl, infoEl, nameEl, sizeEl, reader.result.byteLength)
 			emit({ type: 'file', which: bufferHolder === oldFw ? 'old' : (bufferHolder === newFw ? 'new' : 'blank'), name: file.name, size: reader.result.byteLength, data: bufferHolder.val })
 			log('已载入 ' + file.name + ' (' + fmtSize(reader.result.byteLength) + ')', 'info')
@@ -253,29 +254,40 @@
 		function preventDefaults(e) { e.preventDefault(); e.stopPropagation() }
 
 		var dropJustHappened = false
+		var dragDepth = 0
+
+		function setDragOver(on) {
+			if (zoneEl) zoneEl.classList.toggle('drag-over', on)
+			if (infoEl) infoEl.classList.toggle('drag-over', on)
+			if (dropCard) dropCard.classList.toggle('drag-over', on)
+		}
 
 		;['dragenter', 'dragover', 'dragleave', 'drop'].forEach(function (evt) {
 			dropCard.addEventListener(evt, preventDefaults, false)
 		})
 
-		;['dragenter', 'dragover'].forEach(function (evt) {
-			dropCard.addEventListener(evt, function () {
-				zoneEl.classList.add('drag-over')
-			}, false)
-		})
+		dropCard.addEventListener('dragenter', function () {
+			dragDepth++
+			setDragOver(true)
+		}, false)
 
-		;['dragleave', 'drop'].forEach(function (evt) {
-			dropCard.addEventListener(evt, function () {
-				zoneEl.classList.remove('drag-over')
-			}, false)
-		})
+		dropCard.addEventListener('dragover', function () {
+			setDragOver(true)
+		}, false)
+
+		dropCard.addEventListener('dragleave', function () {
+			dragDepth = Math.max(0, dragDepth - 1)
+			if (dragDepth === 0) setDragOver(false)
+		}, false)
 
 		dropCard.addEventListener('drop', function (e) {
+			dragDepth = 0
+			setDragOver(false)
 			dropJustHappened = true
 			setTimeout(function () { dropJustHappened = false }, 100)
-			const files = e.dataTransfer.files
-			if (files.length > 0) {
-				loadFile(files[0], nameEl, sizeEl, bufferHolder, fileNameHolder, zoneEl, infoEl)
+			const files = e.dataTransfer && e.dataTransfer.files
+			if (files && files.length > 0) {
+				loadFile(files[0], nameEl, sizeEl, bufferHolder, fileNameHolder, zoneEl, infoEl, fileInput)
 			}
 		}, false)
 
@@ -312,13 +324,13 @@
 	})
 
 	el.oldFile.addEventListener('change', function () {
-		loadFile(this.files[0], el.oldName, el.oldSize, oldFw, oldFwName, el.oldZone, el.oldInfo)
+		loadFile(this.files[0], el.oldName, el.oldSize, oldFw, oldFwName, el.oldZone, el.oldInfo, el.oldFile)
 	})
 	el.newFile.addEventListener('change', function () {
-		loadFile(this.files[0], el.newName, el.newSize, newFw, newFwName, el.newZone, el.newInfo)
+		loadFile(this.files[0], el.newName, el.newSize, newFw, newFwName, el.newZone, el.newInfo, el.newFile)
 	})
 	el.blankFile.addEventListener('change', function () {
-		loadFile(this.files[0], el.blankName, null, blank, blankNameVal, null, null)
+		loadFile(this.files[0], el.blankName, null, blank, blankNameVal, null, null, el.blankFile)
 	})
 
 	el.genCompress.addEventListener('change', function () {

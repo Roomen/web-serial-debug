@@ -3892,6 +3892,14 @@ hr {
   background: var(--success-light);
   border: 1.5px solid var(--success);
   border-radius: var(--radius-md);
+  transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.fw-upgrade-file.drag-over {
+  border-style: dashed;
+  border-color: var(--accent);
+  background: var(--accent-light);
+  box-shadow: 0 0 0 4px var(--accent-light);
 }
 
 .fw-upgrade-file-icon {
@@ -4081,6 +4089,14 @@ hr {
   background: var(--success-light);
   border: 1.5px solid var(--success);
   border-radius: var(--radius-md);
+  transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.fw-file-info.drag-over {
+  border-style: dashed;
+  border-color: var(--accent);
+  background: var(--accent-light);
+  box-shadow: 0 0 0 4px var(--accent-light);
 }
 
 .fw-file-icon {
@@ -4216,7 +4232,7 @@ hr {
 }
 
 /* 勾了差分包但还没选旧固件 */
-#view-fw-pack:has(#fp-old-info.d-none):has(#fp-gen-diff:checked) .fw-diff-hint {
+.mdn-fw:has(#fp-old-info.d-none):has(#fp-gen-diff:checked) .fw-diff-hint {
   display: flex;
 }
 
@@ -9585,6 +9601,11 @@ html[data-layout='modern'] #app-topbar {
 	min-width: 0;
 }
 
+/* 功耗分析页有独立的 BLU 仪器连接栏，隐藏顶部通信串口栏以释放波形纵向空间 */
+html[data-layout='modern'] #app-shell:has(#view-blu.active) > #app-topbar {
+	display: none;
+}
+
 html[data-layout='modern'] #app-shell > #views {
 	grid-column: 2;
 	grid-row: 2;
@@ -9691,90 +9712,6 @@ html[data-layout='modern'] .wb-inspector-actions .btn {
 
 html[data-layout='modern'] .wb-inspector-actions .btn:disabled {
 	opacity: 0.45;
-}
-
-/* ---------- 固件打包页 + 固件升级 ---------- */
-html[data-layout='modern'] #view-fw-pack.active {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
-	grid-template-rows: auto minmax(0, 1fr);
-}
-
-html[data-layout='modern'] #view-fw-pack > .view-bar {
-	grid-column: 1 / -1;
-	grid-row: 1;
-}
-
-html[data-layout='modern'] #view-fw-pack > .fw-pack-wrapper {
-	grid-column: 1;
-	grid-row: 2;
-	height: auto;
-}
-
-html[data-layout='modern'] #fw-pack-upgrade {
-	grid-column: 2;
-	grid-row: 2;
-	display: flex;
-	flex-direction: column;
-	min-width: 0;
-	min-height: 0;
-	padding: 16px 16px 20px;
-	border-left: 1px solid var(--border-color);
-	background: var(--mdn-subtle);
-	overflow: hidden;
-}
-
-html[data-layout='modern'] .fw-pack-upgrade-head {
-	flex: 0 0 auto;
-	display: flex;
-	align-items: baseline;
-	gap: 8px;
-	margin-bottom: 10px;
-	color: var(--text-primary);
-	font-size: 0.9rem;
-	font-weight: 600;
-}
-
-html[data-layout='modern'] .fw-pack-upgrade-head i {
-	color: var(--accent);
-}
-
-html[data-layout='modern'] .fw-pack-upgrade-head .view-bar-sub {
-	font-weight: 400;
-}
-
-/* 面板不在 .tab-content 里，不受标签页显隐类影响，始终显示 */
-html[data-layout='modern'] #fw-pack-upgrade > #nav-firmware {
-	display: flex !important;
-	flex: 1 1 0;
-	min-height: 0;
-	overflow: auto;
-}
-
-/* 窄：打包在上、升级在下，整页纵向滚动 */
-@media (max-width: 1100px) {
-	html[data-layout='modern'] #view-fw-pack.active {
-		display: flex;
-		flex-direction: column;
-		overflow: auto;
-	}
-
-	html[data-layout='modern'] #view-fw-pack > .fw-pack-wrapper {
-		flex: 0 0 auto;
-		overflow: visible;
-	}
-
-	html[data-layout='modern'] #fw-pack-upgrade {
-		flex: 0 0 auto;
-		border-left: 0;
-		border-top: 1px solid var(--border-color);
-		overflow: visible;
-	}
-
-	html[data-layout='modern'] #fw-pack-upgrade > #nav-firmware {
-		flex: 0 0 auto;
-		overflow: visible;
-	}
 }
 
 @media (max-width: 768px) {
@@ -10723,9 +10660,8 @@ html[data-layout='modern'] .mdn-tl-head.mdn-tl-single .mdn-tl-b {
 	}
 }
 
-/* ===== 现代布局 v2 · 固件页 ===== */
-/* 固件页重建成四步流水线（js/modern-firmware.js 搬原节点进新结构）：下面的规则都以 :has(> #mdn-fw) 限定，
-   没挂上流水线时仍是上面 v1 的两栏。打包页原容器与 v1 的升级宿主在流水线挂上后整体隐藏，其中的控件都已搬走 */
+/* ===== 现代布局 v2 · 固件流水线（挂在通信调试子视图 #firmware-panel） ===== */
+/* js/modern-firmware.js 把打包与升级的原控件一次性搬进新结构，桌面展示四步流水线，移动端仅展示升级与校验两步 */
 html[data-layout='modern'] .mdn-fw {
 	--mdn-fw-ok: #167a3d;
 	--mdn-fw-bad: #b42318;
@@ -10748,17 +10684,6 @@ html[data-layout='modern'][data-theme='dark'] .mdn-fw {
 	--mdn-cell-active: #6ea8ff;
 	--mdn-cell-done: #e5e7eb;
 	--mdn-cell-retry: #f0a060;
-}
-
-html[data-layout='modern'] #view-fw-pack.active:has(> #mdn-fw) {
-	display: flex;
-	flex-direction: column;
-	overflow: hidden;
-}
-
-html[data-layout='modern'] #view-fw-pack:has(> #mdn-fw) > .fw-pack-wrapper,
-html[data-layout='modern'] #view-fw-pack:has(> #mdn-fw) > #fw-pack-upgrade {
-	display: none;
 }
 
 html[data-layout='modern'] .mdn-fw {
@@ -10919,7 +10844,7 @@ html[data-layout='modern'] .mdn-fw-card[data-step='4'] {
 	flex: 0.9 1 240px;
 }
 
-html[data-layout='modern'] .dp-fw > .mdn-fw--upgrade {
+html[data-layout='modern'] .dp-fw > .mdn-fw {
 	padding: 12px 16px 20px;
 }
 
@@ -12111,10 +12036,6 @@ html[data-layout='modern'] #activity-rail .rail-item[data-view] .rail-label::aft
 
 html[data-layout='modern'] #activity-rail .rail-item[data-view='view-serial'] .rail-label::after {
 	content: '串口';
-}
-
-html[data-layout='modern'] #activity-rail .rail-item[data-view='view-fw-pack'] .rail-label::after {
-	content: '固件';
 }
 
 html[data-layout='modern'] #activity-rail .rail-item[data-view='view-blu'] .rail-label::after {
@@ -13429,7 +13350,7 @@ html[data-runtime='tauri'] :is(input, textarea, select, [contenteditable='true']
 	user-select: text;
 }
 
-html[data-runtime='tauri'] :is(#activity-rail, #app-topbar) :is(img, a) {
+html[data-runtime='tauri'] :is(#activity-rail, #app-topbar, .blu-connect-bar) :is(img, a) {
 	-webkit-user-drag: none;
 }
 

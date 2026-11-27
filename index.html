@@ -100,10 +100,6 @@
                     <i class="bi bi-terminal"></i>
                     <span class="rail-label">通信调试</span>
                 </button>
-                <button class="rail-item" data-view="view-fw-pack" data-feature="view.firmware-pack" title="固件打包">
-                    <i class="bi bi-box-seam"></i>
-                    <span class="rail-label">固件打包</span>
-                </button>
                 <button class="rail-item" data-view="view-blu" data-feature="view.power" title="功耗分析">
                     <i class="bi bi-speedometer2"></i>
                     <span class="rail-label">功耗分析</span>
@@ -1094,20 +1090,22 @@
                                         <div class="fw-upgrade-card">
                                             <h6 class="pane-section-title"><i class="bi bi-file-earmark-binary"></i> 固件文件</h6>
                                             <input type="file" id="fw-file" class="d-none" accept=".bin,.hex,.fw">
-                                            <div class="fw-upgrade-dropzone" id="fw-drop-zone">
-                                                <div class="fw-upgrade-dropzone-inner">
-                                                    <i class="bi bi-cloud-upload fw-upgrade-drop-icon"></i>
-                                                    <div class="fw-upgrade-drop-text">拖拽固件文件到此处</div>
-                                                    <div class="fw-upgrade-drop-hint">或 <button class="fw-drop-browse" id="fw-select">点击浏览</button></div>
+                                            <div class="fw-upgrade-drop-host" id="fw-drop-host">
+                                                <div class="fw-upgrade-dropzone" id="fw-drop-zone">
+                                                    <div class="fw-upgrade-dropzone-inner">
+                                                        <i class="bi bi-cloud-upload fw-upgrade-drop-icon"></i>
+                                                        <div class="fw-upgrade-drop-text">拖拽固件文件到此处</div>
+                                                        <div class="fw-upgrade-drop-hint">或 <button class="fw-drop-browse" id="fw-select">点击浏览</button></div>
+                                                    </div>
                                                 </div>
-                                            </div>
-                                            <div class="fw-upgrade-file d-none" id="fw-file-card">
-                                                <i class="bi bi-file-earmark-binary fw-upgrade-file-icon"></i>
-                                                <div class="fw-upgrade-file-detail">
-                                                    <span id="fw-file-name" class="fw-upgrade-file-name">未选择固件文件</span>
-                                                    <span class="fw-upgrade-file-size" id="fw-file-size">--</span>
+                                                <div class="fw-upgrade-file d-none" id="fw-file-card" title="可拖拽新固件文件到此处直接替换">
+                                                    <i class="bi bi-file-earmark-binary fw-upgrade-file-icon"></i>
+                                                    <div class="fw-upgrade-file-detail">
+                                                        <span id="fw-file-name" class="fw-upgrade-file-name">未选择固件文件</span>
+                                                        <span class="fw-upgrade-file-size" id="fw-file-size">--</span>
+                                                    </div>
+                                                    <button class="fw-upgrade-file-clear" id="fw-file-clear" title="清除"><i class="bi bi-x-circle"></i></button>
                                                 </div>
-                                                <button class="fw-upgrade-file-clear" id="fw-file-clear" title="清除"><i class="bi bi-x-circle"></i></button>
                                             </div>
                                             <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
                                                 <div class="input-group input-group-sm" style="width: auto;">
@@ -1117,7 +1115,7 @@
                                                 </div>
                                                 <button class="btn btn-sm btn-outline-secondary" id="fw-parse">解析固件</button>
                                                 <button class="btn btn-sm btn-outline-secondary" id="fw-diagnose">诊断固件</button>
-                                                <div class="form-check form-switch ctl-switch" title="关闭后不解析固件包头，直接整文件升级，版本号需手动填写">
+                                                <div class="form-check form-switch ctl-switch" title="每次加载新固件默认自动读取固件信息；读不到时自动退档为整文件模式，也可手动切换">
                                                     <input class="form-check-input" type="checkbox" id="fw-parse-info" checked>
                                                     <label class="form-check-label" for="fw-parse-info">读取固件信息</label>
                                                 </div>
@@ -1160,8 +1158,8 @@
                     <!--最右侧停靠图标栏：每个已注册面板一个按钮-->
                     <div id="wb-dock-bar" role="toolbar" aria-label="工具面板" aria-orientation="vertical"></div>
                 </div>
-                <!--固件升级子视图：与设备面板同级，由 js/device-panel.js 控制切换，js/modern-firmware.js 挂入升级与校验卡片-->
-                <section class="dp dp-fw" id="firmware-panel" data-feature="panel.firmware" aria-label="固件升级" hidden></section>
+                <!--固件子视图：与设备面板同级，由 js/device-panel.js 控制切换，js/modern-firmware.js 挂入打包（桌面）与升级校验流水线-->
+                <section class="dp dp-fw" id="firmware-panel" data-feature="panel.firmware" aria-label="固件" hidden></section>
                 <!--底部状态栏：连接时长 / 收发字节 / 后台任务-->
                 <div id="serial-statusbar" role="status" aria-live="off"></div>
             </div>
@@ -1682,107 +1680,89 @@
                 </div>
             </div>
 
-            <!--固件打包视图（独立工具，与串口无关）-->
-            <div id="view-fw-pack" class="app-view">
-                <!--顶栏：与通信调试的连接条同高同样式；生成动作放右侧-->
-                <div class="view-bar">
-                    <div class="view-bar-title">
-                        <i class="bi bi-box-seam"></i>
-                        <span>固件打包</span>
-                        <span class="view-bar-sub">原始包 · 压缩包 · 双向差分包</span>
+            <!--固件打包控件源（隐藏，启动时由 js/modern-firmware.js 搬入通信调试的固件子视图 #firmware-panel）-->
+            <div id="fw-pack-source" hidden aria-hidden="true">
+                <div class="form-check form-switch ctl-switch fw-zip-switch" title="生成的所有文件打成一个 ZIP 下载">
+                    <input class="form-check-input" type="checkbox" id="fp-gen-zip" checked>
+                    <label class="form-check-label" for="fp-gen-zip">打包为 ZIP</label>
+                </div>
+                <button type="button" class="btn btn-sm btn-primary fw-start-btn" id="fp-start">
+                    <i class="bi bi-play-fill"></i> 开始生成
+                </button>
+                <div class="fw-drop-card fw-drop-optional" id="fp-drop-old" title="可拖拽新文件到此处直接替换">
+                    <div class="fw-drop-card-header">
+                        <span class="fw-drop-badge optional">可选</span><span class="fw-drop-type">旧固件（差分用）</span>
                     </div>
-                    <div class="view-bar-actions">
-                        <div class="form-check form-switch ctl-switch fw-zip-switch" title="生成的所有文件打成一个 ZIP 下载">
-                            <input class="form-check-input" type="checkbox" id="fp-gen-zip" checked>
-                            <label class="form-check-label" for="fp-gen-zip">打包为 ZIP</label>
+                    <input type="file" id="fp-old-file" class="d-none" accept=".bin">
+                    <div class="fw-drop-zone" id="fp-old-zone">
+                        <i class="bi bi-cloud-upload fw-drop-zone-icon"></i>
+                        <div class="fw-drop-zone-text">拖拽文件到此处</div>
+                        <div class="fw-drop-zone-hint">或 <button class="fw-drop-browse" id="fp-old-select">点击浏览</button></div>
+                    </div>
+                    <div class="fw-file-info d-none" id="fp-old-info">
+                        <div class="fw-file-icon"><i class="bi bi-file-earmark-binary"></i></div>
+                        <div class="fw-file-detail">
+                            <span class="fw-file-name" id="fp-old-name">--</span>
+                            <span class="fw-file-size" id="fp-old-size">--</span>
                         </div>
-                        <button type="button" class="btn btn-sm btn-primary fw-start-btn" id="fp-start">
-                            <i class="bi bi-play-fill"></i> 开始生成
-                        </button>
+                        <button class="fw-file-clear" id="fp-old-clear" title="清除文件"><i class="bi bi-x-circle"></i></button>
                     </div>
                 </div>
-                <div class="tool-view-inner fw-pack-wrapper">
-                    <div class="fw-drop-grid">
-                        <div class="fw-drop-card fw-drop-optional" id="fp-drop-old">
-                            <div class="fw-drop-card-header">
-                                <span class="fw-drop-badge optional">可选</span><span class="fw-drop-type">旧固件（差分用）</span>
-                            </div>
-                            <input type="file" id="fp-old-file" class="d-none" accept=".bin">
-                            <div class="fw-drop-zone" id="fp-old-zone">
-                                <i class="bi bi-cloud-upload fw-drop-zone-icon"></i>
-                                <div class="fw-drop-zone-text">拖拽文件到此处</div>
-                                <div class="fw-drop-zone-hint">或 <button class="fw-drop-browse" id="fp-old-select">点击浏览</button></div>
-                            </div>
-                            <div class="fw-file-info d-none" id="fp-old-info">
-                                <div class="fw-file-icon"><i class="bi bi-file-earmark-binary"></i></div>
-                                <div class="fw-file-detail">
-                                    <span class="fw-file-name" id="fp-old-name">--</span>
-                                    <span class="fw-file-size" id="fp-old-size">--</span>
-                                </div>
-                                <button class="fw-file-clear" id="fp-old-clear" title="清除文件"><i class="bi bi-x-circle"></i></button>
-                            </div>
-                        </div>
-                        <div class="fw-drop-card fw-drop-required" id="fp-drop-new">
-                            <div class="fw-drop-card-header">
-                                <span class="fw-drop-badge">必需</span><span class="fw-drop-type">新固件</span>
-                            </div>
-                            <input type="file" id="fp-new-file" class="d-none" accept=".bin">
-                            <div class="fw-drop-zone" id="fp-new-zone">
-                                <i class="bi bi-cloud-upload fw-drop-zone-icon"></i>
-                                <div class="fw-drop-zone-text">拖拽文件到此处</div>
-                                <div class="fw-drop-zone-hint">或 <button class="fw-drop-browse" id="fp-new-select">点击浏览</button></div>
-                            </div>
-                            <div class="fw-file-info d-none" id="fp-new-info">
-                                <div class="fw-file-icon"><i class="bi bi-file-earmark-binary"></i></div>
-                                <div class="fw-file-detail">
-                                    <span class="fw-file-name" id="fp-new-name">--</span>
-                                    <span class="fw-file-size" id="fp-new-size">--</span>
-                                </div>
-                                <button class="fw-file-clear" id="fp-new-clear" title="清除文件"><i class="bi bi-x-circle"></i></button>
-                            </div>
-                        </div>
+                <div class="fw-drop-card fw-drop-required" id="fp-drop-new" title="可拖拽新文件到此处直接替换">
+                    <div class="fw-drop-card-header">
+                        <span class="fw-drop-badge">必需</span><span class="fw-drop-type">新固件</span>
                     </div>
-                    <div class="fw-config-card">
-                        <div class="fw-config-grid">
-                            <div class="fw-config-item fw-config-wide">
-                                <label class="fw-config-label"><i class="bi bi-pencil"></i> 自定义信息（UserDefine）</label>
-                                <input type="text" class="form-control form-control-sm fw-input" id="fp-user-define" maxlength="48" placeholder="最长48字节，如设备SN号、备注信息等">
-                            </div>
-                            <div class="fw-config-item">
-                                <label class="fw-config-label"><i class="bi bi-gear"></i> 输出包类型</label>
-                                <div class="fw-output-types">
-                                    <label class="ctl-chip">
-                                        <input type="checkbox" id="fp-gen-origin">
-                                        <span><i class="bi bi-file-earmark"></i> 原始包</span>
-                                    </label>
-                                    <label class="ctl-chip">
-                                        <input type="checkbox" id="fp-gen-compress" checked>
-                                        <span><i class="bi bi-file-zip"></i> 压缩包</span>
-                                    </label>
-                                    <label class="ctl-chip">
-                                        <input type="checkbox" id="fp-gen-diff" checked>
-                                        <span><i class="bi bi-arrow-left-right"></i> 差分包</span>
-                                    </label>
-                                </div>
-                                <p class="fw-diff-hint"><i class="bi bi-info-circle"></i> 差分包需要旧固件，未选择时会跳过</p>
-                            </div>
-                            <div class="fw-config-item" id="fp-blank-row">
-                                <label class="fw-config-label"><i class="bi bi-file-earmark-code"></i> BLANK.bin 参考文件</label>
-                                <div class="fw-blank-row">
-                                    <input type="file" id="fp-blank-file" class="d-none" accept=".bin">
-                                    <span class="fw-blank-name" id="fp-blank-name">内置 BLANK.BIN (32 B)</span>
-                                    <button class="btn btn-sm btn-outline-secondary" id="fp-blank-select"><i class="bi bi-arrow-repeat"></i> 更换</button>
-                                </div>
-                            </div>
-                        </div>
+                    <input type="file" id="fp-new-file" class="d-none" accept=".bin">
+                    <div class="fw-drop-zone" id="fp-new-zone">
+                        <i class="bi bi-cloud-upload fw-drop-zone-icon"></i>
+                        <div class="fw-drop-zone-text">拖拽文件到此处</div>
+                        <div class="fw-drop-zone-hint">或 <button class="fw-drop-browse" id="fp-new-select">点击浏览</button></div>
                     </div>
-                    <div class="fw-log-card">
-                        <div class="fw-log-header">
-                            <span><i class="bi bi-terminal"></i> 生成日志</span>
-                            <button class="fw-log-clear" id="fp-log-clear"><i class="bi bi-trash"></i> 清空</button>
+                    <div class="fw-file-info d-none" id="fp-new-info">
+                        <div class="fw-file-icon"><i class="bi bi-file-earmark-binary"></i></div>
+                        <div class="fw-file-detail">
+                            <span class="fw-file-name" id="fp-new-name">--</span>
+                            <span class="fw-file-size" id="fp-new-size">--</span>
                         </div>
-                        <pre id="fp-log" class="fw-log-body"></pre>
+                        <button class="fw-file-clear" id="fp-new-clear" title="清除文件"><i class="bi bi-x-circle"></i></button>
                     </div>
+                </div>
+                <div class="fw-config-item fw-config-wide">
+                    <label class="fw-config-label"><i class="bi bi-pencil"></i> 自定义信息（UserDefine）</label>
+                    <input type="text" class="form-control form-control-sm fw-input" id="fp-user-define" maxlength="48" placeholder="最长48字节，如设备SN号、备注信息等">
+                </div>
+                <div class="fw-config-item">
+                    <label class="fw-config-label"><i class="bi bi-gear"></i> 输出包类型</label>
+                    <div class="fw-output-types">
+                        <label class="ctl-chip">
+                            <input type="checkbox" id="fp-gen-origin">
+                            <span><i class="bi bi-file-earmark"></i> 原始包</span>
+                        </label>
+                        <label class="ctl-chip">
+                            <input type="checkbox" id="fp-gen-compress" checked>
+                            <span><i class="bi bi-file-zip"></i> 压缩包</span>
+                        </label>
+                        <label class="ctl-chip">
+                            <input type="checkbox" id="fp-gen-diff" checked>
+                            <span><i class="bi bi-arrow-left-right"></i> 差分包</span>
+                        </label>
+                    </div>
+                    <p class="fw-diff-hint"><i class="bi bi-info-circle"></i> 差分包需要旧固件，未选择时会跳过</p>
+                </div>
+                <div class="fw-config-item" id="fp-blank-row">
+                    <label class="fw-config-label"><i class="bi bi-file-earmark-code"></i> BLANK.bin 参考文件</label>
+                    <div class="fw-blank-row">
+                        <input type="file" id="fp-blank-file" class="d-none" accept=".bin">
+                        <span class="fw-blank-name" id="fp-blank-name">内置 BLANK.BIN (32 B)</span>
+                        <button class="btn btn-sm btn-outline-secondary" id="fp-blank-select"><i class="bi bi-arrow-repeat"></i> 更换</button>
+                    </div>
+                </div>
+                <div class="fw-log-card">
+                    <div class="fw-log-header">
+                        <span><i class="bi bi-terminal"></i> 生成日志</span>
+                        <button class="fw-log-clear" id="fp-log-clear"><i class="bi bi-trash"></i> 清空</button>
+                    </div>
+                    <pre id="fp-log" class="fw-log-body"></pre>
                 </div>
             </div>
         </div>
