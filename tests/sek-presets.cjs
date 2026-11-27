@@ -16,6 +16,7 @@ function load(rel) {
 
 load('js/protocol-schema.js')
 load('js/protocol-crypto.js')
+load('js/parse-view.js')
 load('js/protocol.js')
 load('js/protocol-presets.js')
 
@@ -272,5 +273,78 @@ assert.strictEqual(sandbox.window.ProtocolDownlink.encodeFieldValue('ascii', '',
 	assert.strictEqual(sent.length, 0, '不允许空的预设留空点下发绝不能误发上一条指令')
 	assert.ok(errs.some(m => m.includes('请先生成HEX再下发')))
 }
+
+// 6. Tag40 蜂窝搜网参数查询与锁定配置编解码、校验与上行解析
+const { skBuildDownFrame, skParseFrame, skCrc16, skLogView, ParseView } = sandbox.window
+const cellularSettings = codec.filterPresets(presets, '0x01', 'Tag40').flatMap(group => group.filtered)
+assert.strictEqual(cellularSettings.length, 3)
+
+const examples = [
+	{ input: '00101', bytes: [48, 48, 49, 48, 49, 0], decoded: '00101', auto: '自动选网' },
+	{ input: '3， 8 20', bytes: [3, 8, 20, 0, 0, 0, 0, 0], decoded: 'B3, B8, B20', auto: '全频段自动搜网' },
+	{ input: '262143', bytes: [255, 255, 3, 0], decoded: '262143', auto: '自动选频' },
+]
+for (const [index, preset] of cellularSettings.entries()) {
+	const { input, bytes, decoded, auto } = examples[index]
+	const id = index + 1
+	const setting = JSON.parse(JSON.stringify(preset.tlv))
+	for (const [text, expected, label] of [[input, bytes, decoded], ['  ', Array(bytes.length).fill(0), auto]]) {
+		setting[0].items[0].value = codec.cellularLockToBytes(preset.param.field, text).bytes
+		const parsedSetting = skParseFrame(skBuildDownFrame({ frameSeq: id, funcCode: preset.func, tlv: setting }))
+		assert.equal(parsedSetting.ok, true)
+		assert.equal(parsedSetting.tlv.length, 1)
+		assert.equal(parsedSetting.tlv[0].tag, 40)
+		assert.equal(parsedSetting.tlv[0].items.length, 1)
+		assert.equal(parsedSetting.tlv[0].items[0].id, id)
+		assert.deepEqual(Array.from(parsedSetting.tlv[0].items[0].raw), expected)
+		assert.equal(parsedSetting.tlv[0].items[0].decoded, label)
+	}
+}
+assert.deepEqual(Array.from(codec.cellularLockToBytes('operator', '001001').bytes), [48, 48, 49, 48, 48, 49])
+assert.deepEqual(Array.from(codec.cellularLockToBytes('earfcn', '1').bytes), [1, 0, 0, 0])
+for (const [field, invalid] of [
+	['operator', ['1234', '1234567', '12a45', '１２３４５']],
+	['bands', [',', '3,,8', '0', '256', '-1', '3.5', '1 2 3 4 5 6 7 8 9']],
+	['earfcn', ['0', '262144', '-1', '1.5', '1e3']],
+]) {
+	for (const input of invalid) assert.ok(codec.cellularLockToBytes(field, input).error, `${field}: ${input}`)
+}
+
+const cellularQuery = codec.filterPresets(presets, '0x03', 'Tag40')[0].filtered[0]
+const query = skParseFrame(skBuildDownFrame({ frameSeq: 1, funcCode: cellularQuery.func, tlv: cellularQuery.tlv }))
+assert.equal(query.ok, true)
+assert.equal(query.tlv[0].tag, 10)
+assert.equal(query.tlv[0].items[0].id, 40)
+assert.equal(query.tlv[0].items[0].name, '蜂窝搜网参数')
+assert.equal(query.tlv[0].items[0].raw.length, 0)
+
+const specifiedIds = [40, 4, 40, 6, ...Array(28).fill(0xff)]
+const specificQuery = skParseFrame(skBuildDownFrame({ frameSeq: 1, funcCode: 0x03,
+	tlv: [{ tag: 10, items: [{ id: 0, value: specifiedIds }] }] }))
+assert.equal(specificQuery.tlv[0].items[0].decoded, '蜂窝搜网参数/ID4 蜂窝搜网参数/ID6')
+
+function cellularReply(func, payload) {
+	const block = [40, payload.length, 0, ...payload]
+	const header = [0xa9, 0x9a, 1, 0, 2, 1, 0x10, ...Array(13).fill(0), func, 0]
+	const frame = [...header, block.length + 2, 0, block.length, 0, ...block]
+	const crc = skCrc16(Uint8Array.from(frame))
+	return skParseFrame(Uint8Array.from([...frame, crc & 255, crc >> 8, 0x16]))
+}
+const reply = cellularReply(0x83, [
+	1, ...Array(6).fill(0), 2, ...examples[1].bytes, 3, ...Array(4).fill(0),
+	4, ...examples[0].bytes, 5, 8, 6, 0x45, 0x23, 0x01, 0,
+])
+assert.equal(reply.ok, true)
+assert.equal(reply.tlv[0].name, '蜂窝搜网参数')
+assert.deepEqual(Array.from(reply.tlv[0].items, item => item.decoded),
+	['自动选网', 'B3, B8, B20', '自动选频', '00101', 'B8', '74565'])
+assert.match(ParseView.render(skLogView(reply)), /当前驻网频点[^]*74565/)
+const unknown = cellularReply(0x83, [4, ...Array(6).fill(0), 5, 0, 6, ...Array(4).fill(0)])
+assert.deepEqual(Array.from(unknown.tlv[0].items, item => item.decoded), ['未知', '未知或未驻网', '未知'])
+const ack = cellularReply(0x81, [2, 1, 3, 4])
+assert.deepEqual(Array.from(ack.tlv[0].items, item => item.resultCode), [1, 4])
+const truncated = cellularReply(0x83, [2, 3, 8, 6])
+assert.equal(truncated.tlv[0].items.length, 1)
+assert.equal(truncated.tlv[0].items[0].partial, true)
 
 console.log('sek-presets.cjs: all assertions passed')
