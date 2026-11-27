@@ -22,6 +22,7 @@
 		calibVerifyDelayMs: 3000,
 		calibVerifyTimeoutMs: 5000,
 		baseDegreeTimeoutMs: 5000,
+		paramAutoReadMs: 2500,
 		freezePageTimeoutMs: 5000,
 		otaStepGapMs: 300,
 		otaHandshakeMs: 3000,
@@ -192,22 +193,157 @@
 		return buf
 	}
 
-	function describePort(port, index) {
-		if (!port) return '未选择串口'
+	const EDITABLE_BASE_KEYS = [
+		'voltageAlarmV',
+		'sampleIntervalMin',
+		'baseDegree',
+		'meterPulseEq',
+		'calibPulseEq',
+		'commPulseEq',
+		'calibEnable',
+		'calibDirection',
+		'tempCompCoef',
+		'tempCompBaseC',
+	]
+
+	function getPortMeta(port, index, opts) {
+		if (!port) {
+			return {
+				title: '选择设备',
+				sub: '',
+				buttonLabel: '选择设备',
+				wireless: false,
+				transport: '',
+				excluded: false,
+				portName: '',
+				alias: '',
+				productName: '',
+			}
+		}
+		opts = opts || {}
 		let info = {}
 		try { info = port.getInfo ? (port.getInfo() || {}) : {} } catch (e) {}
-		if (info.path) return String(info.path)
-		if (info.name) return String(info.name)
-		if (info.friendlyName) return String(info.friendlyName)
-		if (info.displayName) return String(info.displayName)
-		const vid = info.usbVendorId != null ? info.usbVendorId.toString(16).toUpperCase().padStart(4, '0') : ''
-		const pid = info.usbProductId != null ? info.usbProductId.toString(16).toUpperCase().padStart(4, '0') : ''
-		const sn = info.serialNumber || info.usbSerialNumber || ''
-		const transport = info.transport ? ('[' + String(info.transport).toUpperCase() + '] ') : ''
-		if (sn && vid && pid) return transport + sn + ' (' + vid + ':' + pid + ')'
-		if (sn) return transport + sn
-		if (vid && pid) return transport + 'USB ' + vid + ':' + pid + (index != null ? (' #' + (index + 1)) : '')
-		return transport + '串口设备' + (index != null ? (' #' + (index + 1)) : '')
+		const lanes = opts.serialLanes !== undefined ? opts.serialLanes : root.serialLanes
+		const ms = opts.modernShell !== undefined ? opts.modernShell : root.ModernShell
+		let m = null
+		if (lanes && typeof lanes.portMeta === 'function') {
+			try { m = lanes.portMeta(port) || null } catch (e) {}
+		}
+		const excluded = (m && typeof m.excluded === 'boolean')
+			? m.excluded
+			: (info.usbVendorId === 0x15a2 && info.usbProductId === 0x300a)
+
+		const transport = String((m && m.transport) || info.transport || '').trim()
+		const wireless = transport === 'ble' || transport === 'bt-classic'
+		let displayAlias = ''
+		if (typeof port.getDisplayAlias === 'function') {
+			try { displayAlias = port.getDisplayAlias() || '' } catch (e) {}
+		}
+		const alias = String(displayAlias || info.alias || (m && m.alias) || '').trim()
+		const productName = String(
+			(m && m.productName) ||
+			info.productName ||
+			info.usbProductName ||
+			info.friendlyName ||
+			info.displayName ||
+			info.name ||
+			''
+		).trim()
+		const portName = String(
+			(m && m.portName) ||
+			(info.path ? String(info.path).split(/[\\/]/).pop() : '')
+		).trim()
+		const vid = (m && m.vid)
+			? String(m.vid).toUpperCase()
+			: (info.usbVendorId != null ? info.usbVendorId.toString(16).toUpperCase().padStart(4, '0') : '')
+		const pid = (m && m.pid)
+			? String(m.pid).toUpperCase()
+			: (info.usbProductId != null ? info.usbProductId.toString(16).toUpperCase().padStart(4, '0') : '')
+		const sn = String((m && m.sn) || info.serialNumber || info.usbSerialNumber || '').trim()
+		const bleAddress = String((m && m.bleAddress) || info.bleAddress || '').trim()
+		const bleSaved = !!((m && m.bleSaved) || info.bleSaved)
+		const manufacturerName = String(info.manufacturerName || '').trim()
+
+		let title = ''
+		let sub = ''
+		if (m && ms && typeof ms.portRowTitle === 'function' && typeof ms.portRowSub === 'function') {
+			const merged = Object.assign({}, m, {
+				alias: alias || m.alias || null,
+				productName: m.productName || productName || null,
+				portName: m.portName || portName || '',
+				transport: transport,
+				bleSaved: bleSaved,
+				bleAddress: bleAddress,
+			})
+			title = String(ms.portRowTitle(merged) || '').trim()
+			sub = String(ms.portRowSub(merged) || '').trim()
+			if (!sub && transport === 'ble') {
+				sub = [
+					bleSaved ? '已保存 BLE' : 'BLE 透传',
+					(alias && productName && alias !== productName) ? productName.replace(/\s*·\s*BLE$/, '') : '',
+					bleAddress,
+				].filter(Boolean).join(' · ')
+			} else if (!sub && transport === 'bt-classic') {
+				sub = [
+					'经典蓝牙 SPP',
+					(alias && productName && alias !== productName) ? productName.replace(/\s*·\s*SPP$/, '') : '',
+				].filter(Boolean).join(' · ')
+			}
+		} else {
+			if (alias) {
+				title = alias
+			} else if (productName) {
+				title = productName
+			} else if (portName) {
+				title = portName
+			} else if (wireless) {
+				title = transport === 'ble' ? 'BLE 透传设备' : '蓝牙 SPP 设备'
+			} else if (vid && pid) {
+				title = 'USB 串口 ' + vid + ':' + pid
+			} else {
+				title = '串口设备' + (index != null ? (' #' + (index + 1)) : '')
+			}
+
+			if (transport === 'ble') {
+				sub = [
+					bleSaved ? '已保存 BLE' : 'BLE 透传',
+					(alias && productName && alias !== productName) ? productName.replace(/\s*·\s*BLE$/, '') : '',
+					bleAddress,
+				].filter(Boolean).join(' · ')
+			} else if (transport === 'bt-classic') {
+				sub = [
+					'经典蓝牙 SPP',
+					(alias && productName && alias !== productName) ? productName.replace(/\s*·\s*SPP$/, '') : '',
+				].filter(Boolean).join(' · ')
+			} else {
+				sub = [
+					(portName && title !== portName) ? portName : '',
+					(manufacturerName && title.indexOf(manufacturerName) < 0) ? manufacturerName : '',
+					(vid && pid) ? (vid + ':' + pid) : '',
+					sn ? ('SN ' + sn) : '',
+				].filter(Boolean).join(' · ')
+			}
+		}
+
+		const buttonLabel = title + (portName && title !== portName && !wireless ? (' (' + portName + ')') : '')
+		return {
+			title: title,
+			sub: sub,
+			buttonLabel: buttonLabel,
+			wireless: wireless,
+			transport: transport,
+			excluded: excluded,
+			portName: portName,
+			alias: alias,
+			productName: productName,
+			bleAddress: bleAddress,
+			bleSaved: bleSaved,
+		}
+	}
+
+	function describePort(port, index, opts) {
+		if (!port) return '选择设备'
+		return getPortMeta(port, index, opts).buttonLabel
 	}
 
 	function isWirelessPort(port) {
@@ -442,6 +578,10 @@
 		const getRegistry = function () { return deps.toolPluginRegistry !== undefined ? deps.toolPluginRegistry : root.ToolPluginRegistry }
 		const getPlatform = function () { return deps.appPlatform !== undefined ? deps.appPlatform : root.AppPlatform }
 		const getDialog = function () { return deps.appDialog !== undefined ? deps.appDialog : root.AppDialog }
+		const getSerialLanes = function () { return deps.serialLanes !== undefined ? deps.serialLanes : root.serialLanes }
+		const getModernShell = function () { return deps.modernShell !== undefined ? deps.modernShell : root.ModernShell }
+		const portMetaDeps = function () { return { serialLanes: getSerialLanes(), modernShell: getModernShell() } }
+		const portMetaOf = function (port, index) { return getPortMeta(port, index, portMetaDeps()) }
 		const getStorage = function () {
 			if (deps.storage !== undefined) return deps.storage
 			try { return root.localStorage || null } catch (e) { return null }
@@ -492,6 +632,42 @@
 		let activeSaveRun = null
 		const sentDevInfoSeqs = new Set()
 		const pendingBaseParamReadSeqs = new Set()
+		const dirtyBaseKeys = new Set()
+		let autoReadingBaseForWrite = false
+		const paramWaiters = new Set()
+
+		function notifyParamWaiters() {
+			if (!paramWaiters.size) return
+			Array.from(paramWaiters).forEach(function (check) {
+				try { check() } catch (e) {}
+			})
+		}
+
+		function waitForParamCondition(predicate, timeoutMs) {
+			if (predicate()) return Promise.resolve(true)
+			return new Promise(function (resolve) {
+				let done = false
+				let tid = null
+				function finish(matched) {
+					if (done) return
+					done = true
+					if (tid != null) {
+						cancelTimeout(tid)
+						tid = null
+					}
+					paramWaiters.delete(check)
+					resolve(matched)
+				}
+				function check() {
+					if (predicate()) finish(true)
+				}
+				paramWaiters.add(check)
+				tid = schedTimeout(function () {
+					tid = null
+					finish(!!predicate())
+				}, Math.max(0, Number(timeoutMs) || 0))
+			})
+		}
 
 		const state = {
 			baudRate: 9600,
@@ -587,6 +763,10 @@
 				baseUidHex: '',
 				detectedLayout: 'v27-40',
 				layoutMode: 'auto',
+				dirtyKeys: [],
+				writingBase: false,
+				writeStatus: '',
+				writeTone: '',
 				meter: null,
 				alarm: null,
 				baseDegreeStatus: '',
@@ -803,6 +983,9 @@
 			state.params.baseUidHex = ''
 			state.params.base.onlyAddrHex = ''
 			state.params.detectedLayout = 'v27-40'
+			state.params.writeStatus = ''
+			state.params.writeTone = ''
+			notifyParamWaiters()
 			emit('params')
 		}
 
@@ -886,11 +1069,20 @@
 				return []
 			}
 			try {
-				const list = (typeof adapter.canEnumerate === 'function' && adapter.canEnumerate() && typeof adapter.listPorts === 'function')
+				const rawList = (typeof adapter.canEnumerate === 'function' && adapter.canEnumerate() && typeof adapter.listPorts === 'function')
 					? await adapter.listPorts()
 					: await adapter.getPorts()
 				if (seq !== portEnumSeq || destroyed) return []
-				knownPorts = Array.isArray(list) ? list.slice() : []
+				const listArr = Array.isArray(rawList) ? rawList.slice() : []
+				const lanes = getSerialLanes()
+				if (lanes && typeof lanes.resolvePorts === 'function' && listArr.length) {
+					try { await lanes.resolvePorts(listArr) } catch (e) {}
+				}
+				if (seq !== portEnumSeq || destroyed) return []
+				knownPorts = listArr.filter(function (p) {
+					if (!p) return false
+					return !portMetaOf(p).excluded
+				})
 				if (currentPort && knownPorts.indexOf(currentPort) < 0 && !isOpen && !isOpening && !isClosing && !closeFailed) {
 					currentPort = null
 				}
@@ -903,11 +1095,16 @@
 					}
 				}
 				const mapped = knownPorts.map(function (p, i) {
+					const meta = portMetaOf(p, i)
 					return {
 						port: p,
-						label: describePort(p, i),
+						label: meta.buttonLabel,
+						title: meta.title,
+						sub: meta.sub,
+						buttonLabel: meta.buttonLabel,
+						transport: meta.transport,
 						busyReason: checkPortConflict(p),
-						wireless: isWirelessPort(p),
+						wireless: meta.wireless,
 						selected: p === currentPort,
 					}
 				})
@@ -922,7 +1119,7 @@
 
 		function selectPort(port) {
 			if (isOpen || isOpening || isClosing || closeFailed) {
-				addLog('SYS', '请先断开当前串口后再切换设备')
+				addLog('SYS', '请先断开当前设备后再切换设备')
 				return false
 			}
 			const conflict = checkPortConflict(port)
@@ -939,19 +1136,34 @@
 			return true
 		}
 
-		async function requestPort() {
+		async function requestPort(sourceId, opts) {
 			if (destroyed || isOpen || isOpening || isClosing || closeFailed) {
-				addLog('SYS', '请先断开当前串口后再授权或切换设备')
+				addLog('SYS', '请先断开当前设备后再授权或切换设备')
 				return null
 			}
+			const wantSource = sourceId || 'serial'
+			const plat = getPlatform()
+			const connSvc = plat && typeof plat.service === 'function' ? plat.service('connection-source') : null
 			const adapter = getAdapter()
-			if (!adapter || !adapter.isSupported || !adapter.isSupported()) {
-				addLog('ERR', '当前环境不支持串口访问')
+			if (wantSource === 'serial' && (!connSvc || typeof connSvc.requestPort !== 'function')) {
+				if (!adapter || !adapter.isSupported || !adapter.isSupported()) {
+					addLog('ERR', '当前环境不支持串口访问')
+					return null
+				}
+			} else if (wantSource !== 'serial' && (!connSvc || typeof connSvc.requestPort !== 'function')) {
+				addLog('ERR', '当前环境不支持该无线设备来源: ' + wantSource)
 				return null
 			}
 			const reqGen = connGen
+			let selection = null
 			try {
-				const port = await adapter.requestPort()
+				if (connSvc && typeof connSvc.requestPort === 'function') {
+					selection = await connSvc.requestPort(wantSource)
+				} else {
+					const picked = await adapter.requestPort()
+					selection = picked ? { port: picked } : null
+				}
+				const port = selection && selection.port ? selection.port : null
 				if (!port || destroyed || isOpen || isOpening || isClosing || closeFailed || connGen !== reqGen) {
 					return null
 				}
@@ -963,11 +1175,24 @@
 				}
 				if (!selectPort(port)) return null
 				await refreshPorts()
+				if ((wantSource && wantSource !== 'serial') || (opts && opts.openAfterSelect)) {
+					await openPort({ port: port, baudRate: state.baudRate, parity: state.parity })
+				}
 				return port
 			} catch (e) {
 				if (e && e.name === 'NotFoundError') return null
-				addLog('ERR', '授权串口失败: ' + (e && e.message ? e.message : e))
+				addLog('ERR', '选择设备失败: ' + (e && e.message ? e.message : e))
 				return null
+			} finally {
+				if (
+					selection &&
+					typeof selection.discard === 'function' &&
+					currentPort !== selection.port &&
+					heldPort !== selection.port &&
+					openingPort !== selection.port
+				) {
+					try { await selection.discard() } catch (e) {}
+				}
 			}
 		}
 
@@ -1087,7 +1312,7 @@
 					closeFailed = false
 					heldPort = target
 					isOpen = true
-					addLog('SYS', '已连接 ' + describePort(target) + (isWirelessPort(target) ? '' : (' · ' + openOpts.baudRate + ' 8' + openOpts.parity[0].toUpperCase() + '1')))
+					addLog('SYS', '已连接 ' + describePort(target, null, portMetaDeps()) + (isWirelessPort(target) ? '' : (' · ' + openOpts.baudRate + ' 8' + openOpts.parity[0].toUpperCase() + '1')))
 					notifyStatusBadge()
 					startReadLoop(target, gen)
 					return { ok: true }
@@ -1428,7 +1653,14 @@
 			} else if (p.cmd === CMD.PARAM_READ && ok) {
 				applyParamRead(d, p.seq)
 			} else if (p.cmd === CMD.PARAM_WRITE) {
+				state.params.writeStatus = ok ? '基础参数写入成功 ✓' : ('写入失败: ' + statusLabel)
+				state.params.writeTone = ok ? 'ok' : 'danger'
+				if (ok) {
+					dirtyBaseKeys.clear()
+					state.params.dirtyKeys = []
+				}
 				addLog(ok ? 'SYS' : 'ERR', ok ? '基础参数写入成功 (0x43)' : ('基础参数写入失败: ' + statusLabel))
+				emit('params')
 			} else if (p.cmd === CMD.DAILY_FREEZE) {
 				handleDailyFreezeAck(ok, d, statusLabel)
 			} else if (p.cmd === CMD.LOG_READ && ok) {
@@ -1526,6 +1758,7 @@
 			if (d.wdtResetCount != null) state.device.wdtResetCount = d.wdtResetCount
 			if (d.totalRunTimeSec != null) state.device.totalRunTimeSec = d.totalRunTimeSec
 			if (d.activeRunTimeSec != null) state.device.activeRunTimeSec = d.activeRunTimeSec
+			notifyParamWaiters()
 			emit('device')
 		}
 
@@ -2197,6 +2430,14 @@
 		}
 
 		// ---- 参数 (0x42 / 0x43)、日冻结 (0x37)、设备日志 (0x44) ----
+		function updateBaseParamField(key, val) {
+			if (EDITABLE_BASE_KEYS.indexOf(key) < 0) return false
+			state.params.base[key] = val
+			dirtyBaseKeys.add(key)
+			state.params.dirtyKeys = Array.from(dirtyBaseKeys)
+			return true
+		}
+
 		function applyParamRead(d, seq) {
 			if (d.paramType === 0 && d.base) {
 				const b = d.base
@@ -2209,21 +2450,47 @@
 					emit('device')
 				}
 				if (d.layout) state.params.detectedLayout = d.layout
-				state.params.base = Object.assign({}, state.params.base, {
+				const keepUserEdits = autoReadingBaseForWrite
+				if (!keepUserEdits) {
+					dirtyBaseKeys.clear()
+					state.params.dirtyKeys = []
+				}
+				const nextBase = Object.assign({}, state.params.base, {
 					onlyAddrHex: uidHex || state.params.base.onlyAddrHex,
-					voltageAlarmV: b.voltageAlarmV != null ? numVal(b.voltageAlarmV, 3.1) : state.params.base.voltageAlarmV,
-					sampleIntervalMin: b.sampleIntervalMin != null ? numVal(b.sampleIntervalMin, 60) : state.params.base.sampleIntervalMin,
-					baseDegree: b.baseDegree != null ? String(b.baseDegree) : state.params.base.baseDegree,
 					initFlag: b.initFlag != null ? numVal(b.initFlag, 0x55) : state.params.base.initFlag,
-					meterPulseEq: b.meterPulseEq != null ? numVal(b.meterPulseEq, 17085) : state.params.base.meterPulseEq,
-					calibPulseEq: b.calibPulseEq != null ? numVal(b.calibPulseEq, 1000) : state.params.base.calibPulseEq,
-					commPulseEq: b.commPulseEq != null ? numVal(b.commPulseEq, 60000) : state.params.base.commPulseEq,
-					calibEnable: b.calibEnable != null ? Number(!!b.calibEnable) : state.params.base.calibEnable,
-					calibDirection: b.calibDirection != null ? Number(!!b.calibDirection) : state.params.base.calibDirection,
-					tempCompCoef: b.tempCompCoef != null ? numVal(b.tempCompCoef, 10000) : state.params.base.tempCompCoef,
-					tempCompBaseC: b.tempCompBaseC != null ? numVal(b.tempCompBaseC, 20.0) : state.params.base.tempCompBaseC,
 					crcHex: b.crcHex || '--',
 				})
+				if (!keepUserEdits || !dirtyBaseKeys.has('voltageAlarmV')) {
+					if (b.voltageAlarmV != null) nextBase.voltageAlarmV = numVal(b.voltageAlarmV, 3.1)
+				}
+				if (!keepUserEdits || !dirtyBaseKeys.has('sampleIntervalMin')) {
+					if (b.sampleIntervalMin != null) nextBase.sampleIntervalMin = numVal(b.sampleIntervalMin, 60)
+				}
+				if (!keepUserEdits || !dirtyBaseKeys.has('baseDegree')) {
+					if (b.baseDegree != null) nextBase.baseDegree = String(b.baseDegree)
+				}
+				if (!keepUserEdits || !dirtyBaseKeys.has('meterPulseEq')) {
+					if (b.meterPulseEq != null) nextBase.meterPulseEq = numVal(b.meterPulseEq, 17085)
+				}
+				if (!keepUserEdits || !dirtyBaseKeys.has('calibPulseEq')) {
+					if (b.calibPulseEq != null) nextBase.calibPulseEq = numVal(b.calibPulseEq, 1000)
+				}
+				if (!keepUserEdits || !dirtyBaseKeys.has('commPulseEq')) {
+					if (b.commPulseEq != null) nextBase.commPulseEq = numVal(b.commPulseEq, 60000)
+				}
+				if (!keepUserEdits || !dirtyBaseKeys.has('calibEnable')) {
+					if (b.calibEnable != null) nextBase.calibEnable = Number(!!b.calibEnable)
+				}
+				if (!keepUserEdits || !dirtyBaseKeys.has('calibDirection')) {
+					if (b.calibDirection != null) nextBase.calibDirection = Number(!!b.calibDirection)
+				}
+				if (!keepUserEdits || !dirtyBaseKeys.has('tempCompCoef')) {
+					if (b.tempCompCoef != null) nextBase.tempCompCoef = numVal(b.tempCompCoef, 10000)
+				}
+				if (!keepUserEdits || !dirtyBaseKeys.has('tempCompBaseC')) {
+					if (b.tempCompBaseC != null) nextBase.tempCompBaseC = numVal(b.tempCompBaseC, 20.0)
+				}
+				state.params.base = nextBase
 				if (matchedReq && isValidUidHex7(uidHex) && (!state.device.onlyAddrHex || uidHex === state.device.onlyAddrHex)) {
 					state.params.baseLoaded = true
 					state.params.baseConnGen = connGen
@@ -2245,6 +2512,7 @@
 					state.calib.meterPulseEq = numVal(b.meterPulseEq, state.calib.meterPulseEq)
 				}
 				addLog('SYS', '已读取基础参数 (layout=' + state.params.detectedLayout + (matchedReq ? '' : '，被动帧未建立写入快照') + ')')
+				notifyParamWaiters()
 			} else if (d.paramType === 1 && d.meter) {
 				state.params.meter = d.meter
 				addLog('SYS', '已读取计量结构体 (0x42 type=1)')
@@ -2265,7 +2533,8 @@
 			return writeBytes(proto.builders.paramRead(paramType, buildOpts({ seq: seq })), '0x42 读取' + (labels[paramType] || ('类型' + paramType)))
 		}
 
-		function sendParamWriteBase(baseObj, layoutOverride) {
+		function sendParamWriteBaseInternal(baseObj, layoutOverride, opts) {
+			opts = opts || {}
 			const proto = getProto()
 			const authCode = getEffectiveAuthCode()
 			if (authCode == null) {
@@ -2277,16 +2546,19 @@
 				: (state.params.layoutMode !== 'auto' ? state.params.layoutMode : (state.params.detectedLayout || 'v27-40'))
 			const payload = Object.assign({}, state.params.base, baseObj || {})
 			if (layout === 'v27-40' || layout === 'legacy-48') {
-				if (!isBaseParamsSnapshotValid()) {
+				const resolvedUid = opts.safeUid || (isBaseParamsSnapshotValid()
+					? state.params.baseUidHex
+					: (opts.allowVerifiedDeviceUid && state.device.deviceConnGen === connGen && isValidUidHex7(state.device.onlyAddrHex) ? state.device.onlyAddrHex : ''))
+				if (!isValidUidHex7(resolvedUid)) {
 					dialogAlert('请先点击「读取基础参数 (0x42)」获取当前水表的基础参数快照后，再修改写入（防止覆盖设备唯一码与未读字段）。', '请先读取基础参数')
 					return Promise.resolve({ ok: false, error: '未读取当前表基础参数' })
 				}
 				if (baseObj && baseObj.onlyAddrHex != null && String(baseObj.onlyAddrHex).trim() !== '' &&
-					String(baseObj.onlyAddrHex).trim().toUpperCase() !== state.params.baseUidHex) {
+					String(baseObj.onlyAddrHex).trim().toUpperCase() !== resolvedUid) {
 					dialogAlert('为保护水表身份，0x43 基础参数写入禁止覆盖设备唯一码。', '禁止覆盖唯一码')
 					return Promise.resolve({ ok: false, error: '禁止修改水表设备唯一码 (onlyAddr)' })
 				}
-				payload.onlyAddrHex = state.params.baseUidHex
+				payload.onlyAddrHex = resolvedUid
 			}
 			const degParsed = parseUint64Input(payload.baseDegree != null ? payload.baseDegree : '0')
 			if (!degParsed.ok) {
@@ -2296,6 +2568,145 @@
 			payload.baseDegree = degParsed.value
 			const frame = proto.builders.paramWriteBase(payload, authCode, buildOpts({ layout: layout }))
 			return writeBytes(frame, '0x43 写入基础参数 (' + layout + ')')
+		}
+
+		function sendParamWriteBase(baseObj, layoutOverride) {
+			return sendParamWriteBaseInternal(baseObj, layoutOverride, { allowVerifiedDeviceUid: false })
+		}
+
+		async function writeBaseParamsInteractive(baseObj, layoutOverride) {
+			if (state.params.writingBase) {
+				return { ok: false, error: '正在写入基础参数' }
+			}
+			if (!isOpen) {
+				await dialogAlert('请先连接水表设备后再写入基础参数。', '未连接设备')
+				return { ok: false, error: '串口未连接' }
+			}
+			const requestedUid = (baseObj && baseObj.onlyAddrHex != null) ? String(baseObj.onlyAddrHex).trim().toUpperCase() : ''
+			if (requestedUid) {
+				const knownUid = state.params.baseUidHex || (state.device.deviceConnGen === connGen ? state.device.onlyAddrHex : '')
+				if (knownUid && requestedUid !== knownUid) {
+					await dialogAlert('为保护水表身份，0x43 基础参数写入禁止覆盖设备唯一码。', '禁止覆盖唯一码')
+					return { ok: false, error: '禁止修改水表设备唯一码 (onlyAddr)' }
+				}
+			}
+
+			const overrideFields = {}
+			dirtyBaseKeys.forEach(function (k) {
+				if (EDITABLE_BASE_KEYS.indexOf(k) >= 0) {
+					overrideFields[k] = state.params.base[k]
+				}
+			})
+			if (baseObj && typeof baseObj === 'object') {
+				EDITABLE_BASE_KEYS.forEach(function (k) {
+					if (Object.prototype.hasOwnProperty.call(baseObj, k) && baseObj[k] !== undefined) {
+						overrideFields[k] = baseObj[k]
+						dirtyBaseKeys.add(k)
+					}
+				})
+				state.params.dirtyKeys = Array.from(dirtyBaseKeys)
+			}
+			const checkDegree = Object.prototype.hasOwnProperty.call(overrideFields, 'baseDegree')
+				? overrideFields.baseDegree
+				: state.params.base.baseDegree
+			const degParsed = parseUint64Input(checkDegree != null ? checkDegree : '0')
+			if (!degParsed.ok) {
+				await dialogAlert('底度值超出 uint64 范围 (0 ~ 18446744073709551615) 或格式无效。', '参数无效')
+				return { ok: false, error: '底度超出 uint64 范围' }
+			}
+			Object.assign(state.params.base, overrideFields)
+
+			const runGen = connGen
+			state.params.writingBase = true
+			emit('params')
+			try {
+				if (getEffectiveAuthCode() == null) {
+					state.params.writeStatus = '正在自动读取设备身份与快照...'
+					state.params.writeTone = 'info'
+					emit('params')
+					await sendDevInfo()
+					if (!isOpen || connGen !== runGen || destroyed) {
+						return { ok: false, error: '串口已断开' }
+					}
+					if (getEffectiveAuthCode() == null) {
+						await waitForParamCondition(function () {
+							return !isOpen || connGen !== runGen || destroyed || getEffectiveAuthCode() != null
+						}, otaDelay(timings.paramAutoReadMs || 2500))
+					}
+					if (!isOpen || connGen !== runGen || destroyed) {
+						return { ok: false, error: '串口已断开' }
+					}
+					if (getEffectiveAuthCode() == null) {
+						state.params.writeStatus = '写入失败: 缺少认证码'
+						state.params.writeTone = 'danger'
+						await dialogAlert('未能从水表获取认证码 (0x33 无应答)，请检查连接或在顶栏手动输入认证码。', '缺少认证码')
+						return { ok: false, error: '缺少认证码' }
+					}
+				}
+
+				let layout = (layoutOverride && layoutOverride !== 'auto')
+					? layoutOverride
+					: (state.params.layoutMode !== 'auto' ? state.params.layoutMode : (state.params.detectedLayout || 'v27-40'))
+				if ((layout === 'v27-40' || layout === 'legacy-48') && !isBaseParamsSnapshotValid()) {
+					state.params.writeStatus = '正在自动读取设备身份与快照...'
+					state.params.writeTone = 'info'
+					emit('params')
+					autoReadingBaseForWrite = true
+					try {
+						await sendParamRead(0)
+						if (!isOpen || connGen !== runGen || destroyed) {
+							return { ok: false, error: '串口已断开' }
+						}
+						if (!isBaseParamsSnapshotValid()) {
+							await waitForParamCondition(function () {
+								return !isOpen || connGen !== runGen || destroyed || isBaseParamsSnapshotValid()
+							}, otaDelay(timings.paramAutoReadMs || 2500))
+						}
+					} finally {
+						autoReadingBaseForWrite = false
+					}
+					if (!isOpen || connGen !== runGen || destroyed) {
+						return { ok: false, error: '串口已断开' }
+					}
+					Object.assign(state.params.base, overrideFields)
+					layout = (layoutOverride && layoutOverride !== 'auto')
+						? layoutOverride
+						: (state.params.layoutMode !== 'auto' ? state.params.layoutMode : (state.params.detectedLayout || 'v27-40'))
+				}
+
+				let safeUid = ''
+				if (layout === 'v27-40' || layout === 'legacy-48') {
+					safeUid = isBaseParamsSnapshotValid()
+						? state.params.baseUidHex
+						: (state.device.deviceConnGen === connGen && isValidUidHex7(state.device.onlyAddrHex) ? state.device.onlyAddrHex : '')
+					if (!isValidUidHex7(safeUid)) {
+						state.params.writeStatus = '写入失败: 未获取到设备唯一码'
+						state.params.writeTone = 'danger'
+						await dialogAlert('未能读取到当前水表的 7 字节设备唯一码 (0x42/0x33 无应答)，为防止覆盖设备唯一码已取消写入。', '未获取到设备唯一码')
+						return { ok: false, error: '未读取当前表基础参数' }
+					}
+					if (requestedUid && requestedUid !== safeUid) {
+						state.params.writeStatus = '写入失败: 禁止修改唯一码'
+						state.params.writeTone = 'danger'
+						await dialogAlert('为保护水表身份，0x43 基础参数写入禁止覆盖设备唯一码。', '禁止覆盖唯一码')
+						return { ok: false, error: '禁止修改水表设备唯一码 (onlyAddr)' }
+					}
+				}
+
+				state.params.writeStatus = '正在写入基础参数 (0x43)...'
+				state.params.writeTone = 'info'
+				emit('params')
+				const res = await sendParamWriteBaseInternal(overrideFields, layout, { safeUid: safeUid, allowVerifiedDeviceUid: true })
+				if (!res.ok) {
+					state.params.writeStatus = '写入失败: ' + (res.error || '发送失败')
+					state.params.writeTone = 'danger'
+				}
+				return res
+			} finally {
+				autoReadingBaseForWrite = false
+				state.params.writingBase = false
+				emit('params')
+			}
 		}
 
 		function sendDailyFreezePage(startIndex) {
@@ -3464,7 +3875,7 @@
 				: fallbackBuildCalibBindFileName(userNumber, now)
 			const batch = fileName.split('_')[0] || 'N'
 			const parityCode = state.parity === 'even' ? 'E' : (state.parity === 'odd' ? 'O' : 'N')
-			const portLabel = describePort(currentPort)
+			const portLabel = describePort(currentPort, null, portMetaDeps())
 			const payload = {
 				date: now,
 				savedAt: now,
@@ -3611,6 +4022,7 @@
 		function destroy() {
 			destroyed = true
 			portEnumSeq++
+			notifyParamWaiters()
 			unbindAdapterEvents()
 			clearAllWorkflowTimers()
 			if (isOpen || isOpening || closeFailed) {
@@ -3631,6 +4043,7 @@
 			clearLogs: clearLogs,
 			// 端口与连接
 			getCurrentPort: function () { return currentPort },
+			getPortMeta: portMetaOf,
 			isOpen: function () { return isOpen },
 			isOpening: function () { return isOpening },
 			isClosing: function () { return isClosing },
@@ -3676,8 +4089,10 @@
 			saveAnchorConfigToStorage: saveAnchorConfigToStorage,
 			importAnchorConfigObject: importAnchorConfigObject,
 			// 参数 / 日冻结 / 日志
+			updateBaseParamField: updateBaseParamField,
 			sendParamRead: sendParamRead,
 			sendParamWriteBase: sendParamWriteBase,
+			writeBaseParamsInteractive: writeBaseParamsInteractive,
 			sendDailyFreezePage: sendDailyFreezePage,
 			startDailyFreezeAll: startDailyFreezeAll,
 			buildFreezeCsv: buildFreezeCsv,
@@ -4186,6 +4601,7 @@
 
 		const getDoc = function () { return (deps && deps.document) || (typeof document !== 'undefined' ? document : null) }
 		const getProto = function () { return (deps && deps.protocol) || root.Ac6dProtocol }
+		const getAdapter = function () { return (deps && deps.serialAdapter !== undefined) ? deps.serialAdapter : root.SerialAdapter }
 		const getPlatform = function () { return (deps && deps.appPlatform !== undefined) ? deps.appPlatform : root.AppPlatform }
 		const getDialog = function () { return (deps && deps.appDialog !== undefined) ? deps.appDialog : root.AppDialog }
 
@@ -4232,7 +4648,13 @@
 			gPort.appendChild(ui.statusDot)
 
 			const portWrap = el('div', 'ac6d-pop-wrap')
-			ui.portBtn = mkBtn('选择串口', '', 'bi-usb-symbol', function (e) {
+			ui.portBtn = el('button', 'ac6d-btn')
+			ui.portBtn.type = 'button'
+			ui.portBtnIcon = iconEl('bi-usb-symbol')
+			ui.portBtnText = el('span', '', '选择设备')
+			ui.portBtn.appendChild(ui.portBtnIcon)
+			ui.portBtn.appendChild(ui.portBtnText)
+			ui.portBtn.addEventListener('click', function (e) {
 				e.stopPropagation()
 				if (ctrl.isOpen() || ctrl.isOpening() || ctrl.isClosing() || ctrl.isCloseFailed()) return
 				const wantOpen = ui.portPop.hidden
@@ -4244,22 +4666,21 @@
 					})
 				}
 			})
-			ui.portBtnText = ui.portBtn.querySelector('span')
 			portWrap.appendChild(ui.portBtn)
 
 			ui.portPop = el('div', 'ac6d-pop')
 			ui.portPop.hidden = true
 			const popHead = el('div', 'ac6d-pop-head')
-			popHead.appendChild(el('span', '', '可用串口设备'))
+			popHead.appendChild(el('span', '', '选择通信设备（串口 / BLE）'))
 			popHead.appendChild(mkBtn('刷新', 'ac6d-btn-sm', 'bi-arrow-clockwise', function () { ctrl.refreshPorts() }))
 			ui.portPop.appendChild(popHead)
 			ui.portList = el('div', 'ac6d-port-list')
 			ui.portPop.appendChild(ui.portList)
 			const popFoot = el('div', 'ac6d-pop-foot')
 			popFoot.appendChild(el('span', 'ac6d-muted', '自动避开通信调试/功耗分析占用'))
-			ui.authPortBtn = mkBtn('授权新端口', 'ac6d-btn-sm ac6d-btn-primary', 'bi-plus-lg', function () {
+			ui.authPortBtn = mkBtn('选择串口…', 'ac6d-btn-sm ac6d-btn-primary', 'bi-plus-lg', function () {
 				closePopovers()
-				ctrl.requestPort()
+				ctrl.requestPort('serial')
 			})
 			popFoot.appendChild(ui.authPortBtn)
 			ui.portPop.appendChild(popFoot)
@@ -4909,6 +5330,8 @@
 			const baseActions = el('div', 'ac6d-row')
 			ui.layoutBadge = el('span', 'ac6d-badge', '检测布局: V2.7 40B')
 			baseActions.appendChild(ui.layoutBadge)
+			ui.baseWriteStatusBadge = el('span', 'ac6d-badge', '可编辑并写入')
+			baseActions.appendChild(ui.baseWriteStatusBadge)
 			ui.layoutSel = el('select', 'ac6d-select')
 			;[
 				{ v: 'auto', t: '自动跟随设备 (V2.7 40B / 旧版 48B)' },
@@ -4927,19 +5350,39 @@
 			baseActions.appendChild(ui.layoutSel)
 			baseActions.appendChild(mkBtn('读取基础参数', 'ac6d-btn-primary', 'bi-download', function () { ctrl.sendParamRead(0) }))
 			ui.paramWriteBaseBtn = mkBtn('写入基础参数 (0x43)', 'ac6d-btn-success', 'bi-upload', function () {
-				const b = collectBaseParamInputs()
-				ctrl.sendParamWriteBase(b)
+				const all = collectBaseParamInputs()
+				if (!ctrl.isBaseParamsSnapshotValid() && ctrl.state.params.dirtyKeys && ctrl.state.params.dirtyKeys.length) {
+					const dirtyOnly = {}
+					ctrl.state.params.dirtyKeys.forEach(function (k) {
+						if (Object.prototype.hasOwnProperty.call(all, k)) dirtyOnly[k] = all[k]
+					})
+					ctrl.writeBaseParamsInteractive(dirtyOnly)
+					return
+				}
+				ctrl.writeBaseParamsInteractive(all)
 			})
 			baseActions.appendChild(ui.paramWriteBaseBtn)
 			baseHead.appendChild(baseActions)
 			baseCard.appendChild(baseHead)
 
+			const infoBar = el('div', 'ac6d-base-info-bar')
+			ui.baseInfoBar = infoBar
+			function mkInfoItem(label) {
+				const item = el('span', 'ac6d-base-info-item')
+				item.appendChild(el('span', 'ac6d-base-info-k', label))
+				const val = el('span', 'ac6d-base-info-v', '未读取')
+				item.appendChild(val)
+				infoBar.appendChild(item)
+				return val
+			}
+			ui.baseInfoUid = mkInfoItem('设备唯一号 onlyAddr:')
+			ui.baseInfoInitFlag = mkInfoItem('初始化标志:')
+			ui.baseInfoCrc = mkInfoItem('结构体 CRC:')
+			baseCard.appendChild(infoBar)
+
 			const fg = el('div', 'ac6d-field-grid')
 			ui.baseInputs = {}
 			;[
-				{ k: 'onlyAddrHex', label: '设备唯一号 onlyAddr (只读)', ro: true },
-				{ k: 'initFlag', label: '初始化标志 (只读)', ro: true },
-				{ k: 'crcHex', label: '结构体 CRC (只读)', ro: true },
 				{ k: 'voltageAlarmV', label: '电压报警阈值 (V)', type: 'number', step: '0.01' },
 				{ k: 'sampleIntervalMin', label: '采集间隔 (min)', type: 'number' },
 				{ k: 'baseDegree', label: '底度值 (脉冲数)', type: 'text' },
@@ -4965,8 +5408,25 @@
 					inp = el('input', 'ac6d-input ac6d-input-mono')
 					inp.type = f.type || 'text'
 					if (f.step) inp.step = f.step
-					if (f.ro) inp.readOnly = true
 				}
+				const onFieldEdit = function () {
+					const raw = inp.value
+					const s = String(raw == null ? '' : raw).trim()
+					let parsed
+					if (f.k === 'baseDegree') {
+						parsed = s
+					} else if (f.kind === 'select') {
+						parsed = Number(s) || 0
+					} else if (s === '') {
+						parsed = ''
+					} else {
+						const n = Number(s)
+						parsed = Number.isFinite(n) ? n : s
+					}
+					ctrl.updateBaseParamField(f.k, parsed)
+				}
+				inp.addEventListener('input', onFieldEdit)
+				inp.addEventListener('change', onFieldEdit)
 				ui.baseInputs[f.k] = inp
 				box.appendChild(inp)
 				fg.appendChild(box)
@@ -5088,18 +5548,23 @@
 
 		function collectBaseParamInputs() {
 			const i = ui.baseInputs
+			const numOr = function (inp, fallback) {
+				const s = inp && inp.value != null ? String(inp.value).trim() : ''
+				if (s === '') return fallback
+				const n = Number(s)
+				return Number.isFinite(n) ? n : fallback
+			}
 			return {
-				onlyAddrHex: i.onlyAddrHex.value.trim(),
-				voltageAlarmV: Number(i.voltageAlarmV.value) || 0,
-				sampleIntervalMin: Number(i.sampleIntervalMin.value) || 60,
-				baseDegree: i.baseDegree.value.trim() || '0',
-				meterPulseEq: Number(i.meterPulseEq.value) || 17085,
-				calibPulseEq: Number(i.calibPulseEq.value) || 1000,
-				commPulseEq: Number(i.commPulseEq.value) || 60000,
-				calibEnable: Number(i.calibEnable.value) || 0,
-				calibDirection: Number(i.calibDirection.value) || 0,
-				tempCompCoef: Number(i.tempCompCoef.value) || 10000,
-				tempCompBaseC: Number(i.tempCompBaseC.value) || 20.0,
+				voltageAlarmV: numOr(i.voltageAlarmV, 0),
+				sampleIntervalMin: numOr(i.sampleIntervalMin, 60),
+				baseDegree: (i.baseDegree && i.baseDegree.value != null ? String(i.baseDegree.value).trim() : '') || '0',
+				meterPulseEq: numOr(i.meterPulseEq, 17085),
+				calibPulseEq: numOr(i.calibPulseEq, 1000),
+				commPulseEq: numOr(i.commPulseEq, 60000),
+				calibEnable: numOr(i.calibEnable, 0),
+				calibDirection: numOr(i.calibDirection, 0),
+				tempCompCoef: numOr(i.tempCompCoef, 10000),
+				tempCompBaseC: numOr(i.tempCompBaseC, 20.0),
 			}
 		}
 
@@ -5401,30 +5866,83 @@
 		function renderPorts(list) {
 			if (!ui.portList) return
 			clearNode(ui.portList)
-			if (!list || !list.length) {
-				ui.portList.appendChild(el('div', 'ac6d-muted', '暂无已授权/在位串口，请点击下方「授权新端口」'))
+			const plat = getPlatform()
+			const connSvc = plat && typeof plat.service === 'function' ? plat.service('connection-source') : null
+			const sources = (connSvc && typeof connSvc.availableSources === 'function')
+				? (connSvc.availableSources() || [])
+				: []
+			const adapter = getAdapter()
+			const enumerable = !!(adapter && typeof adapter.canEnumerate === 'function' && adapter.canEnumerate())
+			if (ui.authPortBtn) ui.authPortBtn.hidden = enumerable
+
+			const hasPorts = !!(list && list.length)
+			if (!hasPorts && !sources.length) {
+				ui.portList.appendChild(el('div', 'ac6d-muted', enumerable ? '暂无在位串口或已保存蓝牙设备，请插入设备后点击刷新' : '暂无已授权串口，请点击下方「选择串口…」'))
 				return
 			}
-			list.forEach(function (item) {
-				const btn = el('button', 'ac6d-port-item')
-				btn.type = 'button'
-				btn.disabled = !!item.busyReason
-				btn.dataset.selected = String(!!item.selected)
-				const left = el('div', '')
-				left.appendChild(el('div', '', item.label))
-				if (item.wireless) left.appendChild(el('div', 'ac6d-port-meta', '无线透传通道（自动隐藏波特率）'))
-				btn.appendChild(left)
-				if (item.busyReason) {
-					btn.appendChild(el('span', 'ac6d-port-busy', item.busyReason))
-				}
-				btn.addEventListener('click', function () {
-					if (ctrl.selectPort(item.port)) {
-						closePopovers()
-						renderConnection()
+			if (hasPorts) {
+				list.forEach(function (item) {
+					const btn = el('button', 'ac6d-port-item')
+					btn.type = 'button'
+					btn.disabled = !!item.busyReason
+					btn.dataset.selected = String(!!item.selected)
+					const main = el('div', 'ac6d-port-main')
+					const icWrap = el('span', 'ac6d-port-icon')
+					icWrap.appendChild(iconEl(item.wireless ? 'bi-bluetooth' : 'bi-usb-symbol'))
+					main.appendChild(icWrap)
+					const textCol = el('div', 'ac6d-port-text')
+					textCol.appendChild(el('div', 'ac6d-port-title', item.title || item.label))
+					if (item.sub) textCol.appendChild(el('div', 'ac6d-port-meta', item.sub))
+					main.appendChild(textCol)
+					btn.appendChild(main)
+					if (item.busyReason) {
+						btn.appendChild(el('span', 'ac6d-port-busy', item.busyReason))
+					} else if (item.selected && ctrl.isOpen()) {
+						const tag = el('span', 'ac6d-port-tag', '已连接')
+						tag.dataset.tone = 'ok'
+						btn.appendChild(tag)
+					} else if (item.selected) {
+						const tag = el('span', 'ac6d-port-tag', '当前设备')
+						tag.dataset.tone = 'info'
+						btn.appendChild(tag)
 					}
+					btn.addEventListener('click', function () {
+						if (ctrl.selectPort(item.port)) {
+							closePopovers()
+							renderConnection()
+							if (!ctrl.isOpen() && !ctrl.isOpening()) {
+								ctrl.openPort({ port: item.port, baudRate: ctrl.state.baudRate, parity: ctrl.state.parity })
+							}
+						}
+					})
+					ui.portList.appendChild(btn)
 				})
-				ui.portList.appendChild(btn)
-			})
+			}
+			if (sources.length) {
+				if (hasPorts) ui.portList.appendChild(el('div', 'ac6d-port-sep'))
+				const busy = ctrl.isOpen() || ctrl.isOpening() || ctrl.isClosing() || ctrl.isCloseFailed()
+				sources.forEach(function (src) {
+					const sBtn = el('button', 'ac6d-port-item ac6d-port-source')
+					sBtn.type = 'button'
+					sBtn.disabled = busy
+					const main = el('div', 'ac6d-port-main')
+					const icWrap = el('span', 'ac6d-port-icon')
+					icWrap.appendChild(iconEl('bi-bluetooth'))
+					main.appendChild(icWrap)
+					const textCol = el('div', 'ac6d-port-text')
+					const titleText = src.label === 'BLE' ? '扫描连接 BLE 蓝牙设备…' : ('连接' + src.label + '…')
+					textCol.appendChild(el('div', 'ac6d-port-title', titleText))
+					textCol.appendChild(el('div', 'ac6d-port-meta', '打开蓝牙设备扫描与特征选择窗口'))
+					main.appendChild(textCol)
+					sBtn.appendChild(main)
+					sBtn.appendChild(el('span', 'ac6d-port-tag', '选择'))
+					sBtn.addEventListener('click', function () {
+						closePopovers()
+						ctrl.requestPort(src.id)
+					})
+					ui.portList.appendChild(sBtn)
+				})
+			}
 		}
 
 		function renderConnection() {
@@ -5434,13 +5952,20 @@
 			const closing = ctrl.isClosing()
 			const closeFailedState = ctrl.isCloseFailed()
 			const busy = open || opening || closing || closeFailedState
-			if (ui.statusDot) ui.statusDot.dataset.state = open ? 'open' : (opening ? 'opening' : 'closed')
-			if (ui.portBtnText) ui.portBtnText.textContent = port ? describePort(port) : '选择串口'
+			const meta = port ? ctrl.getPortMeta(port) : null
+			const adapter = getAdapter()
+			const enumerable = !!(adapter && typeof adapter.canEnumerate === 'function' && adapter.canEnumerate())
+			if (ui.statusDot) ui.statusDot.dataset.state = open ? 'open' : (opening ? 'opening' : (closeFailedState ? 'error' : 'closed'))
+			if (ui.portBtnText) ui.portBtnText.textContent = meta ? meta.buttonLabel : '选择设备'
+			if (ui.portBtnIcon) ui.portBtnIcon.className = 'bi ' + (meta && meta.wireless ? 'bi-bluetooth' : 'bi-usb-symbol')
 			if (ui.portBtn) ui.portBtn.disabled = busy
-			if (ui.authPortBtn) ui.authPortBtn.disabled = busy
+			if (ui.authPortBtn) {
+				ui.authPortBtn.disabled = busy
+				ui.authPortBtn.hidden = enumerable
+			}
 			if (busy && ui.portPop) ui.portPop.hidden = true
 			if (ui.serialOptsWrap) {
-				ui.serialOptsWrap.hidden = isWirelessPort(port)
+				ui.serialOptsWrap.hidden = !!(meta && meta.wireless)
 			}
 			if (ui.baudSel) ui.baudSel.disabled = busy
 			if (ui.paritySel) ui.paritySel.disabled = busy
@@ -5672,27 +6197,38 @@
 
 		function renderParams() {
 			const p = ctrl.state.params
+			const d = ctrl.state.device
 			const doc = getDoc()
 			const activeEl = doc ? doc.activeElement : null
 			if (ui.layoutBadge) {
 				const labels = { 'v27-40': 'V2.7 40B', 'legacy-48': '旧版 48B', 'legacy-24': '旧版 24B' }
 				ui.layoutBadge.textContent = '检测布局: ' + (labels[p.detectedLayout] || p.detectedLayout)
 			}
+			if (ui.baseWriteStatusBadge) {
+				ui.baseWriteStatusBadge.textContent = p.writeStatus || '可编辑并写入'
+				ui.baseWriteStatusBadge.dataset.tone = p.writeTone || ''
+			}
 			if (ui.paramWriteBaseBtn) {
-				const effLayout = p.layoutMode !== 'auto' ? p.layoutMode : (p.detectedLayout || 'v27-40')
-				const needsSnapshot = effLayout === 'v27-40' || effLayout === 'legacy-48'
-				ui.paramWriteBaseBtn.disabled = needsSnapshot && !ctrl.isBaseParamsSnapshotValid()
+				ui.paramWriteBaseBtn.disabled = !!p.writingBase
+			}
+			if (ui.baseInfoUid) {
+				const uidText = p.base.onlyAddrHex || (d && d.onlyAddrHex) || ''
+				ui.baseInfoUid.textContent = uidText || '未读取'
+			}
+			if (ui.baseInfoInitFlag) {
+				ui.baseInfoInitFlag.textContent = p.baseLoaded
+					? ('0x' + ((Number(p.base.initFlag) || 0) & 0xff).toString(16).toUpperCase().padStart(2, '0'))
+					: '未读取'
+			}
+			if (ui.baseInfoCrc) {
+				ui.baseInfoCrc.textContent = (p.baseLoaded && p.base.crcHex && p.base.crcHex !== '--') ? p.base.crcHex : '未读取'
 			}
 			if (ui.baseInputs) {
 				const b = p.base
 				Object.keys(ui.baseInputs).forEach(function (k) {
 					const inp = ui.baseInputs[k]
 					if (activeEl === inp) return
-					if (k === 'initFlag') {
-						inp.value = '0x' + ((Number(b.initFlag) || 0) & 0xff).toString(16).toUpperCase().padStart(2, '0')
-					} else {
-						inp.value = b[k] != null ? String(b[k]) : ''
-					}
+					inp.value = b[k] != null ? String(b[k]) : ''
 				})
 			}
 			renderKvCard(ui.meterKv, p.meter, '点击「读取计量结构体」获取数据')
@@ -5857,7 +6393,7 @@
 			container.appendChild(buildLogDrawer())
 
 			unsubChange = ctrl.onChange(function (topic, payload) {
-				if (topic === 'ports') renderPorts(payload)
+				if (topic === 'ports') { renderPorts(payload); renderConnection() }
 				else if (topic === 'connection') { renderConnection(); renderParams() }
 				else if (topic === 'device') { renderDevice(); renderParams() }
 				else if (topic === 'flow') renderFlow()
@@ -5987,6 +6523,7 @@
 		controller: defaultWorkbench.controller,
 		spec: pluginSpec,
 		helpers: {
+			getPortMeta: getPortMeta,
 			encodeCalib176Bytes: encodeCalib176Bytes,
 			parseHexStr: parseHexStr,
 			parseUint32Hex: parseUint32Hex,

@@ -1722,14 +1722,14 @@ async function runTests() {
 			document: fakeDoc,
 		})
 		wb.mount(host)
-		const portBtn = findBtnByText(host, '选择串口')
-		const authBtn = findBtnByText(host, '授权新端口')
+		const portBtn = findBtnByText(host, '选择设备')
+		const authBtn = findBtnByText(host, '选择串口…')
 		assert.ok(portBtn && authBtn)
 		assert.equal(portBtn.disabled, false)
 		assert.equal(authBtn.disabled, false)
 		await wb.controller.openPort({ port: pUi.port })
 		assert.equal(portBtn.disabled, true, '连接后必须禁用端口选择按钮')
-		assert.equal(authBtn.disabled, true, '连接后必须禁用授权新端口按钮')
+		assert.equal(authBtn.disabled, true, '连接后必须禁用串口授权按钮')
 		wb.unmount()
 	})
 
@@ -2044,6 +2044,365 @@ async function runTests() {
 		assert.equal(ctrl.state.ota.lastResult.onlyAddrHex, 'BB000011223344')
 		assert.equal(ctrl.state.ota.lastResult.uidMismatch, false)
 		ctrl.destroy()
+	})
+
+	// ---- 测试 18 (Issue #3): 串口与 BLE 友好名称展示、BLU 端口排除与无线 connection-source 自动连接 ----
+	await test('Issue #3: 串口/BLE 名称与副标题展示、别名优先、排除 BLU 端口及无线选口自动连接', async function () {
+		const clock = createFakeClock()
+		const proto = createMockProtocol()
+		const pSerial = createMockPort({
+			path: '/dev/cu.usbserial-1410',
+			productName: 'CP2102 USB to UART Bridge',
+			usbVendorId: 0x10c4,
+			usbProductId: 0xea60,
+		})
+		const pBleRaw = createMockPort({
+			path: '',
+			transport: 'ble',
+			productName: 'WM-AC6D-01 · BLE',
+			bleAddress: 'AA:BB:CC:11:22:33',
+			bleSaved: true,
+		})
+		const pBleAliased = createMockPort({
+			path: '',
+			transport: 'ble',
+			productName: 'WM-AC6D-01 · BLE',
+			bleAddress: 'AA:BB:CC:11:22:33',
+			bleSaved: true,
+		})
+		pBleAliased.port.getDisplayAlias = function () { return '测试水表1' }
+
+		const pBlu = createMockPort({
+			path: '/dev/cu.usbmodem-BLU',
+			productName: 'Power Analyzer',
+			usbVendorId: 0x15a2,
+			usbProductId: 0x300a,
+		})
+		const pPickedBle = createMockPort({
+			path: '',
+			transport: 'ble',
+			productName: 'WM-AC6D-02 · BLE',
+			bleAddress: '11:22:33:44:55:66',
+			bleSaved: false,
+		})
+		const pBusyBle = createMockPort({
+			path: '',
+			transport: 'ble',
+			productName: 'WM-BUSY · BLE',
+			bleAddress: '99:88:77:66:55:44',
+		})
+
+		let discardCount = 0
+		let reqSourceCalled = null
+		let nextPicked = pPickedBle.port
+		const connSvc = {
+			availableSources: function () {
+				return [{ id: 'computer-ble', label: 'BLE' }, { id: 'classic', label: '经典蓝牙 SPP' }]
+			},
+			requestPort: async function (sourceId) {
+				reqSourceCalled = sourceId
+				return {
+					port: nextPicked,
+					discard: async function () { discardCount++ },
+				}
+			},
+		}
+		const appPlatform = {
+			service: function (name) {
+				if (name === 'connection-source') return connSvc
+				return null
+			},
+		}
+
+		// 1) 验证 getPortMeta 对串口、无别名 BLE、带别名 BLE 与 BLU 端口的处理
+		const serialMeta = WorkbenchMod.helpers.getPortMeta(pSerial.port, 0)
+		assert.equal(serialMeta.title, 'CP2102 USB to UART Bridge')
+		assert.equal(serialMeta.sub, 'cu.usbserial-1410 · 10C4:EA60')
+		assert.equal(serialMeta.buttonLabel, 'CP2102 USB to UART Bridge (cu.usbserial-1410)')
+		assert.equal(serialMeta.excluded, false)
+
+		const bleMeta = WorkbenchMod.helpers.getPortMeta(pBleRaw.port, 1)
+		assert.equal(bleMeta.title, 'WM-AC6D-01 · BLE')
+		assert.equal(bleMeta.sub, '已保存 BLE · AA:BB:CC:11:22:33')
+		assert.equal(bleMeta.wireless, true)
+		assert.doesNotMatch(bleMeta.title, /串口设备/)
+
+		const bleAliasMeta = WorkbenchMod.helpers.getPortMeta(pBleAliased.port, 2)
+		assert.equal(bleAliasMeta.title, '测试水表1')
+		assert.equal(bleAliasMeta.sub, '已保存 BLE · WM-AC6D-01 · AA:BB:CC:11:22:33')
+
+		const bluMeta = WorkbenchMod.helpers.getPortMeta(pBlu.port, 3)
+		assert.equal(bluMeta.excluded, true)
+
+		// 2) 验证 refreshPorts 过滤 BLU 端口，requestPort('computer-ble') 自动打开连接，冲突时调 discard
+		const allPorts = [pSerial.port, pBleRaw.port, pBleAliased.port, pBlu.port]
+		const adapter = createMockSerialAdapter(allPorts)
+		const ctrl = WorkbenchMod.createController({
+			protocol: proto,
+			serialAdapter: adapter,
+			serialHub: { busyOwnerOfPort: function (p) { return p === pBusyBle.port ? { id: 'S' } : null } },
+			appPlatform: appPlatform,
+			appDialog: { alert: function () { return Promise.resolve() } },
+			now: clock.now,
+			setTimeout: clock.setTimeout,
+			clearTimeout: clock.clearTimeout,
+			setInterval: clock.setInterval,
+			clearInterval: clock.clearInterval,
+		})
+
+		const listed = await ctrl.refreshPorts()
+		assert.equal(listed.length, 3, 'BLU 端口 15A2:300A 必须被排除')
+		assert.equal(listed[0].title, 'CP2102 USB to UART Bridge')
+		assert.equal(listed[0].sub, 'cu.usbserial-1410 · 10C4:EA60')
+		assert.equal(listed[1].title, 'WM-AC6D-01 · BLE')
+		assert.equal(listed[2].title, '测试水表1')
+
+		// 冲突的 BLE 端口返回 null 且必须触发 selection.discard()
+		nextPicked = pBusyBle.port
+		const conflictRes = await ctrl.requestPort('computer-ble')
+		assert.equal(conflictRes, null)
+		assert.equal(reqSourceCalled, 'computer-ble')
+		assert.equal(discardCount, 1, '冲突被拒时必须调用 selection.discard() 释放 BLE 句柄')
+		assert.equal(ctrl.isOpen(), false)
+
+		// 正常选择 BLE 端口 -> 自动连接且不触发 discard
+		nextPicked = pPickedBle.port
+		allPorts.push(pPickedBle.port)
+		const picked = await ctrl.requestPort('computer-ble')
+		assert.equal(picked, pPickedBle.port)
+		assert.equal(ctrl.getCurrentPort(), pPickedBle.port)
+		assert.equal(ctrl.isOpen(), true, '无线 BLE 选口确认后必须自动连接')
+		assert.equal(discardCount, 1)
+		await ctrl.closePort({ manual: true })
+		ctrl.destroy()
+
+		// 3) UI 下拉渲染验证：包含 BLE 扫描入口、显示串口/BLE 标题和副标题、enumerable 下隐藏选择串口按钮
+		function mkNode(tag) {
+			const listeners = {}
+			return {
+				tagName: String(tag).toUpperCase(),
+				className: '', textContent: '', value: '', title: '', type: '',
+				hidden: false, disabled: false, checked: false, readOnly: false,
+				dataset: {}, style: {}, childNodes: [], parentNode: null,
+				get firstChild() { return this.childNodes[0] || null },
+				classList: { toggle: function () {} },
+				setAttribute: function () {},
+				addEventListener: function (ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn) },
+				removeEventListener: function () {},
+				dispatchEvent: function (ev) { (listeners[ev.type || ev] || []).forEach(function (fn) { fn(ev) }) },
+				contains: function () { return false },
+				querySelector: function (sel) {
+					if (sel === 'span') return this.childNodes.find(function (c) { return c.tagName === 'SPAN' }) || null
+					return null
+				},
+				appendChild: function (c) { c.parentNode = this; this.childNodes.push(c); return c },
+				removeChild: function (c) {
+					const i = this.childNodes.indexOf(c)
+					if (i >= 0) this.childNodes.splice(i, 1)
+					c.parentNode = null
+					return c
+				},
+			}
+		}
+		function collectText(node, out) {
+			out = out || []
+			if (node.textContent) out.push(node.textContent)
+			node.childNodes.forEach(function (c) { collectText(c, out) })
+			return out
+		}
+		const fakeDoc = { activeElement: null, createElement: mkNode, addEventListener: function () {}, removeEventListener: function () {} }
+		const host = mkNode('div')
+		const wb = WorkbenchMod.createWorkbench({
+			protocol: proto,
+			serialAdapter: createMockSerialAdapter([pSerial.port, pBleRaw.port, pBlu.port]),
+			appPlatform: appPlatform,
+			document: fakeDoc,
+		})
+		wb.mount(host)
+		await wb.controller.refreshPorts()
+		const allTexts = collectText(host)
+		assert.ok(allTexts.includes('CP2102 USB to UART Bridge'), '下拉应展示串口产品名')
+		assert.ok(allTexts.includes('cu.usbserial-1410 · 10C4:EA60'), '下拉应展示串口副标题')
+		assert.ok(allTexts.includes('WM-AC6D-01 · BLE'), '下拉应展示 BLE 设备名')
+		assert.ok(allTexts.includes('扫描连接 BLE 蓝牙设备…'), '下拉应展示 BLE 无线扫描入口')
+		assert.ok(allTexts.includes('连接经典蓝牙 SPP…'), '下拉应展示经典蓝牙 SPP 入口')
+		wb.unmount()
+	})
+
+	// ---- 测试 19 (Issue #4): 基础参数编辑双向绑定、按钮不禁用与冷连接自动读取 0x33 + 0x42(0) 后写入 0x43 ----
+	await test('Issue #4: 基础参数双向绑定抗重渲、按钮可点击与冷连接一键自动读 0x33/0x42 后写 0x43', async function () {
+		const clock = createFakeClock()
+		const proto = createMockProtocol()
+		const mockPort = createMockPort({ path: 'COM50' })
+		const alerts = []
+
+		function mkNode(tag) {
+			const listeners = {}
+			return {
+				tagName: String(tag).toUpperCase(),
+				className: '', textContent: '', value: '', title: '', type: '',
+				hidden: false, disabled: false, checked: false, readOnly: false,
+				dataset: {}, style: {}, childNodes: [], parentNode: null,
+				get firstChild() { return this.childNodes[0] || null },
+				classList: { toggle: function () {} },
+				setAttribute: function () {},
+				addEventListener: function (ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn) },
+				removeEventListener: function () {},
+				dispatchEvent: function (ev) {
+					const name = typeof ev === 'string' ? ev : ev.type
+					;(listeners[name] || []).slice().forEach(function (fn) { fn(typeof ev === 'string' ? { type: ev, stopPropagation: function () {} } : ev) })
+				},
+				contains: function () { return false },
+				querySelector: function (sel) {
+					if (sel === 'span') return this.childNodes.find(function (c) { return c.tagName === 'SPAN' }) || null
+					return null
+				},
+				appendChild: function (c) { c.parentNode = this; this.childNodes.push(c); return c },
+				removeChild: function (c) {
+					const i = this.childNodes.indexOf(c)
+					if (i >= 0) this.childNodes.splice(i, 1)
+					c.parentNode = null
+					return c
+				},
+			}
+		}
+		function findAll(node, pred, out) {
+			out = out || []
+			if (pred(node)) out.push(node)
+			node.childNodes.forEach(function (c) { findAll(c, pred, out) })
+			return out
+		}
+
+		const fakeDoc = { activeElement: null, createElement: mkNode, addEventListener: function () {}, removeEventListener: function () {} }
+		const host = mkNode('div')
+		const wb = WorkbenchMod.createWorkbench({
+			protocol: proto,
+			serialAdapter: createMockSerialAdapter([mockPort.port]),
+			appDialog: { alert: function (m) { alerts.push(m); return Promise.resolve() } },
+			document: fakeDoc,
+			now: clock.now,
+			setTimeout: clock.setTimeout,
+			clearTimeout: clock.clearTimeout,
+			setInterval: clock.setInterval,
+			clearInterval: clock.clearInterval,
+		})
+		wb.mount(host)
+
+		// 1) 挂载即验证：写入基础参数按钮绝不被初始禁用
+		const writeBtn = findAll(host, function (n) {
+			return n.tagName === 'BUTTON' && n.childNodes.some(function (c) { return c.textContent === '写入基础参数 (0x43)' })
+		})[0]
+		assert.ok(writeBtn)
+		assert.equal(writeBtn.disabled, false, '挂载时「写入基础参数 (0x43)」必须可点击')
+
+		// 2) 验证基础参数卡片内的 .ac6d-field-grid 的 10 个基础参数控件均非 readOnly，且修改后立即同步至 state 并抗 layoutSel 切换重渲
+		const fieldGrid = findAll(host, function (n) {
+			return n.className === 'ac6d-field-grid' && n.parentNode && n.parentNode.childNodes.some(function (c) { return c.className === 'ac6d-base-info-bar' })
+		})[0]
+		assert.ok(fieldGrid)
+		assert.equal(fieldGrid.childNodes.length, 10, '基础参数编辑网格应仅含 10 个可编辑配置项')
+		const fieldMap = {}
+		fieldGrid.childNodes.forEach(function (box) {
+			const lbl = box.childNodes[0].textContent
+			const ctrlEl = box.childNodes[1]
+			assert.equal(ctrlEl.readOnly, false, lbl + ' 不应为只读')
+			fieldMap[lbl] = ctrlEl
+		})
+
+		fieldMap['采集间隔 (min)'].value = '15'
+		fieldMap['采集间隔 (min)'].dispatchEvent('input')
+		fieldMap['电压报警阈值 (V)'].value = '3.25'
+		fieldMap['电压报警阈值 (V)'].dispatchEvent('input')
+		fieldMap['底度值 (脉冲数)'].value = '123456'
+		fieldMap['底度值 (脉冲数)'].dispatchEvent('input')
+
+		assert.equal(wb.controller.state.params.base.sampleIntervalMin, 15)
+		assert.equal(wb.controller.state.params.base.voltageAlarmV, 3.25)
+		assert.equal(wb.controller.state.params.base.baseDegree, '123456')
+
+		// 切换布局下拉触发 renderParams() -> 用户修改必须完整保留不被冲回默认值！
+		const layoutSel = findAll(host, function (n) {
+			return n.tagName === 'SELECT' && n.childNodes.some(function (o) { return o.value === 'v27-40' })
+		})[0]
+		assert.ok(layoutSel)
+		layoutSel.value = 'legacy-48'
+		layoutSel.dispatchEvent('change')
+		assert.equal(fieldMap['采集间隔 (min)'].value, '15', 'renderParams 不得覆盖用户修改的采集间隔')
+		assert.equal(fieldMap['电压报警阈值 (V)'].value, '3.25', 'renderParams 不得覆盖用户修改的电压阈值')
+		assert.equal(fieldMap['底度值 (脉冲数)'].value, '123456', 'renderParams 不得覆盖用户修改的底度值')
+		layoutSel.value = 'auto'
+		layoutSel.dispatchEvent('change')
+
+		// 3) 冷连接后直接点击「写入基础参数 (0x43)」：自动先发 0x33 -> 再发 0x42(0) -> 保留用户编辑并保留水表真实 onlyAddrHex 和未修改字段 -> 发送 0x43！
+		await wb.controller.openPort({ port: mockPort.port })
+		assert.equal(wb.controller.getEffectiveAuthCode(), null)
+		assert.equal(wb.controller.isBaseParamsSnapshotValid(), false)
+
+		writeBtn.dispatchEvent('click')
+		await clock.flushMicrotasks()
+
+		// 应自动发出 0x33
+		assert.equal(proto.sentRecords.length, 1)
+		assert.equal(proto.sentRecords[0].tag, proto.CMD.DEV_INFO)
+		mockPort.getSink().data(proto.encodeMockEventFrame({
+			kind: 'ac6d',
+			parsed: {
+				cmd: proto.CMD.DEV_INFO,
+				seq: proto.sentRecords[0].opts.seq,
+				typeOrStatus: proto.STATUS.OK,
+				detail: { onlyAddrHex: '01020378563412', firmwareVersion: 'V2.7.1', mode: 1 },
+			},
+		}))
+		await clock.flushMicrotasks()
+
+		// 收到 0x33 后应自动发出 0x42(0)
+		assert.equal(proto.sentRecords.length, 2)
+		assert.equal(proto.sentRecords[1].tag, proto.CMD.PARAM_READ)
+		assert.equal(proto.sentRecords[1].opts.paramType, 0)
+		mockPort.getSink().data(proto.encodeMockEventFrame({
+			kind: 'ac6d',
+			parsed: {
+				cmd: proto.CMD.PARAM_READ,
+				seq: proto.sentRecords[1].opts.seq,
+				typeOrStatus: proto.STATUS.OK,
+				detail: {
+					paramType: 0,
+					layout: 'v27-40',
+					base: {
+						onlyAddrHex: '01020378563412',
+						voltageAlarmV: 3.1,
+						sampleIntervalMin: 60,
+						baseDegree: '100',
+						meterPulseEq: 25000,
+						initFlag: 0x55,
+						crcHex: '0xABCD',
+					},
+				},
+			},
+		}))
+		await clock.flushMicrotasks()
+
+		// 收到 0x42(0) 后应自动发出 0x43，且保留用户的 3 个修改 + 水表真实 onlyAddrHex + 水表原有的 meterPulseEq=25000
+		assert.equal(proto.sentRecords.length, 3)
+		const writeRec = proto.sentRecords[2]
+		assert.equal(writeRec.tag, proto.CMD.PARAM_WRITE)
+		assert.equal(writeRec.opts.baseObj.onlyAddrHex, '01020378563412')
+		assert.equal(writeRec.opts.baseObj.sampleIntervalMin, 15)
+		assert.equal(writeRec.opts.baseObj.voltageAlarmV, 3.25)
+		assert.equal(writeRec.opts.baseObj.baseDegree, 123456n)
+		assert.equal(writeRec.opts.baseObj.meterPulseEq, 25000)
+
+		// 收到 0x43 OK 应答 -> 状态更新为成功且 dirtyKeys 清空
+		mockPort.getSink().data(proto.encodeMockEventFrame({
+			kind: 'ac6d',
+			parsed: { cmd: proto.CMD.PARAM_WRITE, seq: writeRec.opts.seq, typeOrStatus: proto.STATUS.OK, detail: {} },
+		}))
+		await clock.flushMicrotasks()
+		assert.equal(wb.controller.state.params.writeStatus, '基础参数写入成功 ✓')
+		assert.equal(wb.controller.state.params.writeTone, 'ok')
+		assert.equal(wb.controller.state.params.dirtyKeys.length, 0)
+		assert.equal(alerts.length, 0)
+		wb.unmount()
 	})
 
 	console.log('\nALL ' + passed + ' TESTS PASSED.')
