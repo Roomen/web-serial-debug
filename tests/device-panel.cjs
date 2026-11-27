@@ -439,10 +439,14 @@ test('sek: 组与查询 ID 从 SK_TAGS 派生，合成帧取值与格式化', ()
 	assert.deepEqual(q.mag, { tag: 34, query: 34 })
 	assert.deepEqual(q.lora, { tag: 35, query: 35 })
 	assert.deepEqual(q.auth, { tag: 38, query: 22 })
+	assert.deepEqual(q.cellular, { tag: 40, query: 40 })
 	assert.deepEqual(q.leak, { tag: 64, query: 19 })
-	assert.equal(dev.groups.length, 15, '5 个状态组 + 10 个可查询参数组')
-	assert.equal(dev.categories.length, 11, '按协议 Tag 划分为 11 个参数分类')
-	assert.deepEqual(dev.categories.map((c) => c.id), ['tag3', 'tag30', 'tag32', 'tag33', 'tag34', 'tag35', 'tag36', 'tag37', 'tag38', 'tag39', 'tag64'], '参数分类直接按协议 Tag 升序排列')
+	assert.equal(dev.groups.length, 16, '5 个状态组 + 11 个可查询参数组')
+	assert.equal(dev.categories.length, 12, '按协议 Tag 划分为 12 个参数分类')
+	assert.deepEqual(dev.categories.map((c) => c.id), ['tag3', 'tag30', 'tag32', 'tag33', 'tag34', 'tag35', 'tag36', 'tag37', 'tag38', 'tag39', 'tag40', 'tag64'], '参数分类直接按协议 Tag 升序排列')
+	const tag40Cat = dev.categories.find((c) => c.id === 'tag40')
+	assert.equal(tag40Cat.title, 'Tag 40 · 蜂窝搜网参数')
+	assert.deepEqual(tag40Cat.keys, ['40:1', '40:2', '40:3', '40:4', '40:5', '40:6', '40:7'], 'tag40 应按 ID 升序包含可写项与只读诊断项')
 	dev.categories.forEach((cat) => {
 		const tagNum = Number(cat.id.replace(/^tag/, ''))
 		assert.ok(cat.title.startsWith('Tag ' + tagNum), '分类标题应带 Tag 编号: ' + cat.title)
@@ -455,14 +459,16 @@ test('sek: 组与查询 ID 从 SK_TAGS 派生，合成帧取值与格式化', ()
 		assert.deepEqual(ids, sorted, '分类 ' + cat.id + ' 内字段按 ID 升序排列')
 	})
 	const allCatKeys = dev.categories.flatMap((c) => c.keys)
-	assert.equal(allCatKeys.length, 141, '覆盖全部 141 个 0x01 参数预设')
-	assert.equal(new Set(allCatKeys).size, 141, '各分类之间无重复字段')
+	assert.equal(allCatKeys.length, 148, '覆盖全部 144 个 0x01 参数预设 + Tag40 的 4 个只读项')
+	assert.equal(new Set(allCatKeys).size, 148, '各分类之间无重复字段')
 	assert.equal(dev.status.find((w) => w.key === '2:12').optional, true, '阀门卡片标为 optional')
 	assert.equal(dev.status.find((w) => w.key === '2:9').optional, false, '核心卡片默认非 optional')
 	assert.equal(dev.fieldMap['1:0'].name, W.SK_TAGS['1'].find((d) => d.id === 0).name, '名称来自 SK_TAGS')
 	assert.equal(M.readable(dev, '39:3'), false, '没有查询的 Tag 标成读不到')
 	assert.equal(M.readable(dev, '34:2'), true, 'Tag34 接入 mag 查询组')
 	assert.equal(M.readable(dev, '30:8'), true, 'Tag30 接入 ultra 查询组')
+	assert.equal(M.readable(dev, '40:1'), true, 'Tag40 可写项接入 cellular 查询组')
+	assert.equal(M.readable(dev, '40:7'), true, 'Tag40 只读诊断项接入 cellular 查询组')
 	assert.equal(M.readable(dev, '64:1'), true, 'Tag64 接入 leak 查询组')
 	const f = sekUp(W, 0x83, [
 		[2, [[9, [0x87, 0xD6, 0x12, 0]], [29, [3]], [10, [0x69, 1]], [12, [1]]]],
@@ -1341,6 +1347,63 @@ test('sek write: 按预设编码与解析往返（含 bcd/hexbytes/Tag34），�
 	const legacy = win.skParseFrame(sekUp(win, 0x81, [[11, [[1, [1]]]]]), {})
 	assert.equal(dev.matchWriteReply(dev.fieldMap['39:3'], legacy), 'ok')
 	assert.equal(M.writeResult('ok', null).state, 'unconfirmed')
+
+	// Tag40 蜂窝搜网参数：40:1..3 可写且允许留空清除锁定，40:4..7 只读，extract/format/parseInput/buildWrite 回读一致
+	for (const k of ['40:1', '40:2', '40:3']) {
+		assert.ok(dev.fieldMap[k].write, k + ' 应可写')
+		assert.equal(dev.fieldMap[k].group, 'cellular')
+		assert.equal(M.allowsEmpty(dev, dev.fieldMap[k]), true, k + ' 允许留空清除锁定')
+	}
+	for (const k of ['40:4', '40:5', '40:6', '40:7']) {
+		assert.equal(dev.fieldMap[k].write, null, k + ' 应为只读')
+		assert.equal(dev.fieldMap[k].group, 'cellular')
+	}
+	assert.equal(roundTrip('40:1', '46000', null, [0x34, 0x36, 0x30, 0x30, 0x30, 0x00]), '46000')
+	assert.equal(roundTrip('40:1', '', null, [0, 0, 0, 0, 0, 0]), '')
+	assert.equal(roundTrip('40:2', '3， 8 20', null, [3, 8, 20, 0, 0, 0, 0, 0]), '3, 8, 20')
+	assert.equal(roundTrip('40:2', '', null, [0, 0, 0, 0, 0, 0, 0, 0]), '')
+	assert.equal(roundTrip('40:3', '74565', null, [0x45, 0x23, 0x01, 0x00]), '74565')
+	assert.equal(roundTrip('40:3', '', null, [0, 0, 0, 0]), '')
+	assert.equal(M.formatValue(dev, '40:1', '46000'), '46000')
+	assert.equal(M.formatValue(dev, '40:1', ''), '自动选网')
+	assert.equal(M.formatValue(dev, '40:2', '3, 8, 20'), 'B3, B8, B20')
+	assert.equal(M.formatValue(dev, '40:2', ''), '全频段自动搜网')
+	assert.equal(M.formatValue(dev, '40:3', '74565'), '74565')
+	assert.equal(M.formatValue(dev, '40:3', ''), '自动选频')
+	assert.throws(() => M.inputValue(dev, dev.fieldMap['40:1'], '1234'), /转换/)
+	assert.throws(() => M.inputValue(dev, dev.fieldMap['40:1'], '46a00'), /转换/)
+	assert.throws(() => M.inputValue(dev, dev.fieldMap['40:2'], '0'), /转换/)
+	assert.throws(() => M.inputValue(dev, dev.fieldMap['40:2'], '1 2 3 4 5 6 7 8 9'), /转换/)
+	assert.throws(() => M.inputValue(dev, dev.fieldMap['40:3'], '0'), /转换/)
+	assert.throws(() => M.inputValue(dev, dev.fieldMap['40:3'], '262144'), /转换/)
+
+	const tag40Frame = sekUp(win, 0x83, [[40, [
+		[1, [0x34, 0x36, 0x30, 0x30, 0x30, 0x00]],
+		[2, [3, 8, 20, 0, 0, 0, 0, 0]],
+		[3, [0, 0, 0, 0]],
+		[4, [0x34, 0x36, 0x30, 0x30, 0x30, 0x00]],
+		[5, [8]],
+		[6, [0x45, 0x23, 0x01, 0x00]],
+		[7, [1, 1, 125, 0, (-11 & 0xff), 23]],
+	]]])
+	const tag40Parsed = win.skParseFrame(tag40Frame, {})
+	assert.equal(dev.matchReply(dev.groups.find((g) => g.id === 'cellular'), tag40Parsed, tag40Frame), true)
+	const tag40Vals = dev.extract(tag40Parsed, tag40Frame)
+	assert.deepEqual(Object.assign({}, tag40Vals), {
+		'40:1': '46000',
+		'40:2': '3, 8, 20',
+		'40:3': '',
+		'40:4': '46000',
+		'40:5': 'B8',
+		'40:6': '74565',
+		'40:7': '锁频:锁频生效中 PDP:仅IPv4 耗时:12.5s RSRQ:-11dB TxPower:23dBm',
+	})
+	assert.equal(M.formatValue(dev, '40:7', tag40Vals['40:7']), '锁频:锁频生效中 PDP:仅IPv4 耗时:12.5s RSRQ:-11dB TxPower:23dBm')
+	const cellularReq = dev.buildRequest(dev.groups.find((g) => g.id === 'cellular'), {})
+	const cellularReqParsed = win.skParseFrame(Array.from(cellularReq), {})
+	assert.equal(cellularReqParsed.ok, true)
+	assert.equal(cellularReqParsed.tlv[0].tag, 10)
+	assert.equal(cellularReqParsed.tlv[0].items[0].id, 40)
 })
 
 test('status panel: optional metric（阀门卡片）未上报相关 ID 时隐藏，主字段或任一 sub 有读数即显示', () => {
@@ -1551,6 +1614,34 @@ test('write panel: APN 等允许写空字段可通过「置空」草稿并写空
 	freqInput.events.input()
 	assert.equal(Object.prototype.hasOwnProperty.call(lane.drafts, '3:9'), false)
 	assert.equal(freqCommit.disabled, true)
+
+	// 7. Tag40 锁定频段（40:2）在面板中点击「置空」预览为「全频段自动搜网」，写入全0并回读 confirmed
+	fake.state.writes.splice(0)
+	fake.rx('S', sekUp(win, 0x83, [[40, [[2, [3, 8, 20, 0, 0, 0, 0, 0]]]]]))
+	assert.equal(M.reading(lane, '40:2').raw, '3, 8, 20')
+	const bandRow = walk(panel._testRow(context(), '40:2'))
+	const bandClear = bandRow.filter(n => n.name === 'button').find(n => n.textContent === '置空')
+	const bandCommit = bandRow.filter(n => n.name === 'button').find(n => n.textContent === '写入')
+	const bandPreview = bandRow.find(n => n.className && n.className.includes('dp-write-preview'))
+	assert.ok(bandClear, '40:2 应渲染置空按钮')
+	assert.equal(bandClear.disabled, false)
+	bandClear.events.click()
+	assert.equal(lane.drafts['40:2'], '')
+	assert.equal(bandPreview.textContent, '预览：全频段自动搜网')
+	assert.equal(bandCommit.disabled, false)
+	const bandJob = panel._testWrite(context(), ['40:2'])
+	await flush()
+	assert.equal(fake.state.writes.length, 1)
+	const bandSent = win.skParseFrame(fake.state.writes[0].bytes, {})
+	assert.equal(bandSent.tlv[0].tag, 40)
+	assert.equal(bandSent.tlv[0].items[0].id, 2)
+	assert.deepEqual(bandSent.tlv[0].items[0].raw, new Array(8).fill(0))
+	fake.rx('S', sekUp(win, 0x81, [[40, [[2, [1]]]]]))
+	await flush()
+	fake.rx('S', sekUp(win, 0x83, [[40, [[2, new Array(8).fill(0)]]]]))
+	await bandJob
+	assert.equal(lane.writes['40:2'].state, 'confirmed')
+	assert.equal(Object.prototype.hasOwnProperty.call(lane.drafts, '40:2'), false)
 	pump.stop()
 })
 

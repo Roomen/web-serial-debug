@@ -16,7 +16,7 @@
 	const GROUP_TAGS = [
 		['base', 1], ['core', 2], ['alarm', 4], ['uplink', 92], ['run', 91],
 		['param', 3], ['valve', 36], ['ble', 37],
-		['ultra', 30], ['cam', 32], ['bus', 33], ['mag', 34], ['lora', 35], ['auth', 38], ['leak', 64],
+		['ultra', 30], ['cam', 32], ['bus', 33], ['mag', 34], ['lora', 35], ['auth', 38], ['cellular', 40], ['leak', 64],
 	]
 	const STATUS_GROUPS = ['base', 'core', 'alarm', 'uplink', 'run']
 
@@ -137,7 +137,7 @@
 			if (!item || !preset.param || preset.func !== '0x01') return
 			const name = key(block.tag, item.id)
 			const param = name === '3:5' ? { type: 'uint16le', label: '16 位告警位域（十进制）' } : preset.param
-			if (!presetCodec.settingRange(param) && !['multi', 'ascii', 'largeFlow', 'bcd', 'hexbytes'].includes(param.type)) return
+			if (!presetCodec.settingRange(param) && !['multi', 'ascii', 'largeFlow', 'bcd', 'hexbytes', 'cellularLock'].includes(param.type)) return
 			SETTINGS[name] = { tag: block.tag, id: item.id, param: param }
 			const tagKey = String(block.tag)
 			if (!PRESET_BY_TAG[tagKey]) PRESET_BY_TAG[tagKey] = []
@@ -149,6 +149,7 @@
 		const range = presetCodec.settingRange(param)
 		if (range) return Object.assign({ step: 1, hint: param.label, options: param.options, confirm: DANGER[k] }, range, LIMITS[k])
 		if (param.type === 'ascii') return { maxLen: param.fillLen || param.length, pattern: '[ -~]*', allowEmpty: true, hint: param.placeholder || param.label, confirm: DANGER[k] }
+		if (param.type === 'cellularLock') return { maxLen: 48, allowEmpty: true, hint: param.placeholder || param.label, confirm: DANGER[k] }
 		if (param.type === 'bcd') {
 			const len = param.fillLen || param.length
 			return { maxLen: len ? len * 2 : 64, pattern: '[0-9]+', hint: param.placeholder || (param.label + (len ? '（最多 ' + (len * 2) + ' 位数字）' : '')), confirm: DANGER[k] }
@@ -211,10 +212,11 @@
 	STATUS_KEYS.forEach(function (p) { addField(p[0], p[1]) })
 	SECRET_FIELDS.forEach(function (pair) { addField(pair[0], pair[1]) })
 	// 参数分类直接按协议 Tag 划分（不再二次人为拆分子分类），Tag 与 ID 均按协议编号升序排列
+	const EXTRA_CAT_IDS = { '40': [4, 5, 6, 7] }
 	const usedInCat = Object.create(null)
 	const categories = []
 	Object.keys(PRESET_BY_TAG).map(Number).sort(function (a, b) { return a - b }).forEach(function (tag) {
-		const ids = PRESET_BY_TAG[String(tag)].slice().sort(function (a, b) { return a - b })
+		const ids = PRESET_BY_TAG[String(tag)].concat(EXTRA_CAT_IDS[String(tag)] || []).sort(function (a, b) { return a - b })
 		const keys = []
 		ids.forEach(function (id) {
 			const k = addField(tag, id)
@@ -272,6 +274,29 @@
 
 	function settingRaw(param, raw, base) {
 		if (param.type === 'ascii') return String.fromCharCode.apply(null, raw).replace(/\x00+$/, '')
+		if (param.type === 'cellularLock') {
+			if (param.field === 'operator') {
+				if (raw.length !== 6) return undefined
+				let s = ''
+				for (let i = 0; i < raw.length; i++) {
+					if (raw[i] === 0) break
+					s += String.fromCharCode(raw[i])
+				}
+				return s
+			}
+			if (param.field === 'bands') {
+				if (raw.length !== 8) return undefined
+				const list = []
+				for (let i = 0; i < raw.length; i++) if (raw[i]) list.push(raw[i] & 0xff)
+				return list.join(', ')
+			}
+			if (param.field === 'earfcn') {
+				if (raw.length !== 4) return undefined
+				const v = ((raw[0] | (raw[1] << 8) | (raw[2] << 16) | (raw[3] << 24)) >>> 0)
+				return v ? String(v) : ''
+			}
+			return undefined
+		}
 		if (param.type === 'bcd') {
 			const len = param.fillLen || param.length
 			if (!raw.length || (len != null && raw.length !== len)) return undefined
@@ -318,6 +343,11 @@
 	function parseInput(field, text) {
 		const param = SETTINGS[field.key].param
 		if (param.type === 'ascii') return text
+		if (param.type === 'cellularLock') {
+			const res = presetCodec.cellularLockToBytes(param.field, text)
+			if (res.error) return undefined
+			return settingRaw(param, res.bytes)
+		}
 		if (param.type === 'bcd') {
 			const s = String(text).trim()
 			const len = param.fillLen || param.length
@@ -360,6 +390,10 @@
 			const result = presetCodec.largeFlowM3ToBytes(value, base)
 			if (result.error) throw new Error(result.error)
 			if (presetCodec.unitsToM3(result.units, result.baseCode) !== value) throw new Error('底度不能按当前基准精确表示')
+			bytes = result.bytes
+		} else if (setting.param.type === 'cellularLock') {
+			const result = presetCodec.cellularLockToBytes(setting.param.field, value)
+			if (result.error) throw new Error(result.error)
 			bytes = result.bytes
 		} else bytes = presetCodec.settingBytes(setting.param, value)
 		return buildDown({ funcCode: '0x01', tlv: [{ tag: setting.tag, items: [{ id: setting.id, value: bytes }] }] })
@@ -420,6 +454,11 @@
 
 	function format(k, raw, get) {
 		const param = FIELD_SETTING[k]
+		if (param && param.type === 'cellularLock' && typeof raw === 'string') {
+			if (param.field === 'operator') return raw || '自动选网'
+			if (param.field === 'bands') return raw ? raw.split(/\s*,\s*/).filter(Boolean).map(function (b) { return 'B' + b }).join(', ') : '全频段自动搜网'
+			if (param.field === 'earfcn') return raw || '自动选频'
+		}
 		if (param && param.type === 'largeFlow' && typeof raw === 'string') return raw + ' m³'
 		if (param && param.type === 'hexbytes' && typeof raw === 'string') {
 			if (k === '3:20') {

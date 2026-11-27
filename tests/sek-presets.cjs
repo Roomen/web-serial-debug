@@ -311,6 +311,7 @@ for (const [field, invalid] of [
 }
 
 const cellularQuery = codec.filterPresets(presets, '0x03', 'Tag40')[0].filtered[0]
+assert.ok(cellularQuery.desc.includes('搜网状态与诊断信息'))
 const query = skParseFrame(skBuildDownFrame({ frameSeq: 1, funcCode: cellularQuery.func, tlv: cellularQuery.tlv }))
 assert.equal(query.ok, true)
 assert.equal(query.tlv[0].tag, 10)
@@ -318,10 +319,10 @@ assert.equal(query.tlv[0].items[0].id, 40)
 assert.equal(query.tlv[0].items[0].name, '蜂窝搜网参数')
 assert.equal(query.tlv[0].items[0].raw.length, 0)
 
-const specifiedIds = [40, 4, 40, 6, ...Array(28).fill(0xff)]
+const specifiedIds = [40, 4, 40, 6, 40, 7, ...Array(26).fill(0xff)]
 const specificQuery = skParseFrame(skBuildDownFrame({ frameSeq: 1, funcCode: 0x03,
 	tlv: [{ tag: 10, items: [{ id: 0, value: specifiedIds }] }] }))
-assert.equal(specificQuery.tlv[0].items[0].decoded, '蜂窝搜网参数/ID4 蜂窝搜网参数/ID6')
+assert.equal(specificQuery.tlv[0].items[0].decoded, '蜂窝搜网参数/ID4 蜂窝搜网参数/ID6 蜂窝搜网参数/ID7')
 
 function cellularReply(func, payload) {
 	const block = [40, payload.length, 0, ...payload]
@@ -333,12 +334,34 @@ function cellularReply(func, payload) {
 const reply = cellularReply(0x83, [
 	1, ...Array(6).fill(0), 2, ...examples[1].bytes, 3, ...Array(4).fill(0),
 	4, ...examples[0].bytes, 5, 8, 6, 0x45, 0x23, 0x01, 0,
+	7, 1, 1, 125, 0, (-11 & 0xff), 23,
 ])
 assert.equal(reply.ok, true)
 assert.equal(reply.tlv[0].name, '蜂窝搜网参数')
-assert.deepEqual(Array.from(reply.tlv[0].items, item => item.decoded),
-	['自动选网', 'B3, B8, B20', '自动选频', '00101', 'B8', '74565'])
-assert.match(ParseView.render(skLogView(reply)), /当前驻网频点[^]*74565/)
+assert.deepEqual(Array.from(reply.tlv[0].items, item => item.decoded), [
+	'自动选网', 'B3, B8, B20', '自动选频', '00101', 'B8', '74565',
+	'锁频:锁频生效中 PDP:仅IPv4 耗时:12.5s RSRQ:-11dB TxPower:23dBm',
+])
+const replyView = ParseView.render(skLogView(reply))
+assert.match(replyView, /当前驻网频点[^]*74565/)
+assert.match(replyView, /搜网状态与诊断信息[^]*锁频:锁频生效中 PDP:仅IPv4 耗时:12\.5s RSRQ:-11dB TxPower:23dBm/)
+
+// Tag40-ID7 各枚举值、负值 TxPower/RSRQ、0x7F 未知值、小端耗时与越界枚举兜底
+const diagCases = [
+	[[0, 0, 0, 0, 0x7f, 0x7f], '锁频:未锁频 PDP:未知 耗时:0.0s RSRQ:未知 TxPower:未知'],
+	[[1, 2, 0x04, 0x01, (-15 & 0xff), (-5 & 0xff)], '锁频:锁频生效中 PDP:仅IPv6 耗时:26.0s RSRQ:-15dB TxPower:-5dBm'],
+	[[2, 3, 0xff, 0xff, 0, 0x7f], '锁频:锁频失败已自动回退 PDP:IPv4/IPv6双栈 耗时:6553.5s RSRQ:0dB TxPower:未知'],
+	[[9, 7, 1, 0, 0x7f, (-128 & 0xff)], '锁频:未知(9) PDP:未知(7) 耗时:0.1s RSRQ:未知 TxPower:-128dBm'],
+]
+for (const [bytes, expected] of diagCases) {
+	const r = cellularReply(0x83, [7, ...bytes])
+	assert.equal(r.ok, true)
+	assert.equal(r.tlv[0].items.length, 1)
+	assert.equal(r.tlv[0].items[0].id, 7)
+	assert.equal(r.tlv[0].items[0].name, '搜网状态与诊断信息')
+	assert.equal(r.tlv[0].items[0].decoded, expected)
+}
+
 const unknown = cellularReply(0x83, [4, ...Array(6).fill(0), 5, 0, 6, ...Array(4).fill(0)])
 assert.deepEqual(Array.from(unknown.tlv[0].items, item => item.decoded), ['未知', '未知或未驻网', '未知'])
 const ack = cellularReply(0x81, [2, 1, 3, 4])
@@ -346,5 +369,10 @@ assert.deepEqual(Array.from(ack.tlv[0].items, item => item.resultCode), [1, 4])
 const truncated = cellularReply(0x83, [2, 3, 8, 6])
 assert.equal(truncated.tlv[0].items.length, 1)
 assert.equal(truncated.tlv[0].items[0].partial, true)
+const truncatedDiag = cellularReply(0x83, [7, 1, 2, 3, 4])
+assert.equal(truncatedDiag.tlv[0].items.length, 1)
+assert.equal(truncatedDiag.tlv[0].items[0].id, 7)
+assert.equal(truncatedDiag.tlv[0].items[0].partial, true)
+assert.equal(truncatedDiag.tlv[0].items[0].decoded, '01020304 (不完整)')
 
 console.log('sek-presets.cjs: all assertions passed')
