@@ -14033,6 +14033,15 @@ html[data-layout='modern'] .mdn-pop-params[hidden] {
 	background: rgba(var(--bs-warning-rgb, 255, 193, 7), 0.22);
 	color: var(--bs-warning-text-emphasis, #997404);
 }
+.connection-badge-meter {
+	background: rgba(25, 135, 84, 0.14);
+	color: #198754;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.connection-badge-meter-zero {
+	background: rgba(127, 127, 127, 0.14);
+	color: var(--text-secondary);
+}
 .connection-device-meta {
 	display: flex;
 	align-items: center;

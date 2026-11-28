@@ -320,3 +320,177 @@ test('saved BLE devices persist across instances, expose direct ports, avoid GAP
  assert.equal(winC.s.savedDevices().length,128)
  await winA.s.release();await winB.s.release();await winC.s.release()
 })
+
+test('0xFF SK manufacturer data golden vectors, malformed payload rejection, and platform formats',()=>{
+ const golden=[
+  {
+   meterId:[0x49,0x84,0x00,0x21,0x22,0x63,0x09,0x00,0x00,0x00],
+   b64:'E0eWHYcK6B571A',
+   bcd:'00000009632221008449',
+   meterNo:'09632221008449',
+   meterNo14:'09632221008449',
+   zero:false,
+  },
+  {
+   meterId:[0x01,0x46,0x26,0x02,0x02,0x83,0x00,0x00,0x00,0x00],
+   b64:'W4WwPqfq4R571A',
+   bcd:'00000000830202264601',
+   meterNo:'830202264601',
+   meterNo14:'00830202264601',
+   zero:false,
+  },
+  {
+   meterId:[0x98,0x76,0x54,0x32,0x10,0x98,0x76,0x54,0x32,0x20],
+   b64:'wrXCDrXxl0pJ9A',
+   bcd:'20325476981032547698',
+   meterNo:'20325476981032547698',
+   meterNo14:'20325476981032547698',
+   zero:false,
+  },
+  {
+   meterId:[0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00],
+   b64:'WsOWPKVp4R571A',
+   bcd:'00000000000000000000',
+   meterNo:'00000000000000000000',
+   meterNo14:'00000000000000',
+   zero:true,
+  },
+ ]
+ assert.equal(B.SK_COMPANY_ID,0x4b53)
+ for(const g of golden){
+  assert.equal(B.encodeMeterIdAdv(g.meterId),g.b64)
+  const dec=B.decodeMeterIdAdv(g.b64)
+  assert.ok(dec)
+  assert.deepEqual([...dec.meterId],g.meterId)
+  assert.equal(dec.meterIdBcd,g.bcd)
+  assert.equal(dec.meterNo,g.meterNo)
+  assert.equal(dec.meterNo14,g.meterNo14)
+  assert.equal(dec.meterZero,g.zero)
+
+  // Tauri / bluest / WinRT / Android split companyId = 0x4B53 + 14B data
+  const asciiBytes=[...Buffer.from(g.b64,'ascii')]
+  assert.equal(B.parseManufacturerMeter({companyId:0x4b53,data:asciiBytes}).meterIdBcd,g.bcd)
+  assert.equal(B.parseManufacturerMeter({companyId:0x534b,data:Uint8Array.from(asciiBytes)}).meterIdBcd,g.bcd)
+  // CoreBluetooth raw NSData [0x53, 0x4B, ...14B]
+  assert.equal(B.parseManufacturerMeter(Uint8Array.from([0x53,0x4b,...asciiBytes])).meterIdBcd,g.bcd)
+  // Vendor-prefixed 0xFF [vendorLo, vendorHi, 0x53, 0x4B, ...14B]
+  assert.equal(B.parseManufacturerMeter({companyId:0x0102,data:[0x53,0x4b,...asciiBytes]}).meterIdBcd,g.bcd)
+  assert.equal(B.parseManufacturerMeter(Uint8Array.from([0x01,0x02,0x53,0x4b,...asciiBytes])).meterIdBcd,g.bcd)
+  // Web Bluetooth manufacturerData Map<number, DataView>
+  const rawBuf=new Uint8Array([0xff,...asciiBytes,0xff])
+  const wbMap=new Map([[0x4b53,new DataView(rawBuf.buffer,1,14)]])
+  assert.equal(B.parseManufacturerMeter(wbMap).meterIdBcd,g.bcd)
+ }
+
+ // Strict rejection: non-zero low 4 bits in 14th char, URL-safe chars, padding, truncation, trailing bytes
+ for(const bad of [
+  'E0eWHYcK6B571B',
+  'E0eWHYcK6B571C',
+  'E0eWHYcK6B571P',
+  'E0eWHYcK6B571-',
+  'E0eWHYcK6B571_',
+  'E0eWHYcK6B57==',
+  'E0eWHYcK6B57 0',
+  'E0eWHYcK6B57\x00A',
+  'short',
+  '',
+  'E0eWHYcK6B571',
+  'E0eWHYcK6B571AA',
+  'E0eWHYcK6B571A==',
+ ]){
+  assert.equal(B.decodeMeterIdAdv(bad),null,`must reject ${JSON.stringify(bad)}`)
+  assert.equal(B.parseManufacturerMeter({companyId:0x4b53,data:[...Buffer.from(bad,'latin1')]}),null)
+ }
+ // Non-BCD nibbles (0xA..0xF) in decoded 10-byte meterId must be rejected as dirty data
+ const nonBcdEncoded=B.encodeMeterIdAdv([0xab,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00])
+ assert.equal(nonBcdEncoded.length,14)
+ assert.equal(B.decodeMeterIdAdv(nonBcdEncoded),null)
+ // Unrelated companyId without SK prefix must be ignored
+ assert.equal(B.parseManufacturerMeter({companyId:0x004c,data:[...Buffer.from('E0eWHYcK6B571A','ascii')]}),null)
+ assert.equal(B.parseManufacturerMeter(Uint8Array.from([0x52,0x53,...Buffer.from('E0eWHYcK6B571A','ascii')])),null)
+})
+
+test('M95 UID advertisement + 0xFF scan response coexists with legacy SKxxxxx devices and persists meterNo',async()=>{
+ const store=new Map()
+ const storage={getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v)}
+ const ffe0='0000ffe0-0000-1000-8000-00805f9b34fb'
+ const ffe1='0000ffe1-0000-1000-8000-00805f9b34fb'
+ const ffe2='0000ffe2-0000-1000-8000-00805f9b34fb'
+ const m95Chars=[{id:0,service:ffe0,characteristic:ffe1,props:16},{id:1,service:ffe0,characteristic:ffe2,props:8|4}]
+ let scanCh,scanDone
+ const svc=B.create({
+  createStreamPort:A.createStreamPort,Channel:class{},toBytes:b=>Uint8Array.from(b),blocked:()=>false,storage,
+  invoke:async(cmd,p)=>{
+   if(cmd==='ble_release_owned')return 1
+   if(cmd==='ble_scan'){scanCh=p.onDevice;scanCh.onmessage({type:'started'});await new Promise(r=>{scanDone=r})}
+   if(cmd==='ble_scan_stop'){if(scanDone)scanDone()}
+   if(cmd==='ble_open')return{handle:12,characteristics:m95Chars}
+   if(cmd==='ble_start'||cmd==='ble_close')return
+  },
+ })
+ const job=svc.scan();await flush()
+ // 1. M95 primary ADV_IND arrives first (UID hash name, no 0xFF yet), followed by SCAN_RSP with 0xFF, then another ADV_IND without 0xFF
+ const pidM95='"uuid-m95-1"'
+ scanCh.onmessage({type:'device',device:{deviceId:'ble-m95',persistentId:pidM95,name:'4CE331A5',services:[ffe0],rssi:-52}})
+ scanCh.onmessage({type:'device',device:{deviceId:'ble-m95',persistentId:pidM95,name:'4CE331A5',services:[ffe0],rssi:-51,manufacturerData:{companyId:0x4b53,data:[...Buffer.from('E0eWHYcK6B571A','ascii')]}}})
+ scanCh.onmessage({type:'device',device:{deviceId:'ble-m95',persistentId:pidM95,name:'4CE331A5',services:[ffe0],rssi:-50}})
+ // 2. Legacy SK08449 device (no 0xFF manufacturerData)
+ scanCh.onmessage({type:'device',device:{deviceId:'ble-legacy',persistentId:'"uuid-legacy-1"',name:'SK08449',services:[ffe0],rssi:-60}})
+
+ const all=svc.devices()
+ assert.equal(all.length,2)
+ const m95=all.find(d=>d.deviceId==='ble-m95')
+ assert.equal(m95.name,'4CE331A5')
+ assert.equal(m95.meterNo,'09632221008449')
+ assert.equal(m95.meterIdBcd,'00000009632221008449')
+ // Search matches 14-digit meterNo, 20-digit BCD, tail digits, UID Local Name, and legacy SK08449
+ assert.deepEqual(B.visibleDevices(all,'09632221008449').map(d=>d.deviceId),['ble-m95'])
+ assert.deepEqual(B.visibleDevices(all,'00000009632221008449').map(d=>d.deviceId),['ble-m95'])
+ assert.deepEqual(B.visibleDevices(all,'4ce331a5').map(d=>d.deviceId),['ble-m95'])
+ assert.deepEqual(B.visibleDevices(all,'SK08449').map(d=>d.deviceId),['ble-legacy'])
+ assert.deepEqual(B.visibleDevices(all,'08449').map(d=>d.deviceId),['ble-m95','ble-legacy'])
+ // Devices with decoded 0xFF meter numbers always rank ahead of stronger/newer generic BLE devices
+ const rankedList=[
+  {deviceId:'generic-strong',name:'AirPods',services:[],rssi:-30,seen:9999},
+  {deviceId:'sk-zero',name:'E23C62B5',meterNo:'00000000000000000000',meterIdBcd:'00000000000000000000',meterZero:true,services:[ffe0],rssi:-40,seen:500},
+  {deviceId:'m95-weak',name:'4CE331A5',meterNo:'09632221008449',meterIdBcd:'00000009632221008449',meterZero:false,services:[ffe0],rssi:-85,seen:100},
+  {deviceId:'m95-mid',name:'9E13621B',meterNo:'830202264601',meterIdBcd:'00000000830202264601',meterZero:false,services:[ffe0],rssi:-70,seen:200},
+ ]
+ assert.deepEqual(B.visibleDevices(rankedList,'','','signal').map(d=>d.deviceId),['m95-mid','m95-weak','sk-zero','generic-strong'])
+ assert.deepEqual(B.visibleDevices(rankedList,'','','recent').map(d=>d.deviceId),['m95-mid','m95-weak','sk-zero','generic-strong'])
+ assert.deepEqual(B.visibleDevices(rankedList,'','','name').map(d=>d.deviceId),['m95-weak','m95-mid','sk-zero','generic-strong'])
+
+ // Updating meter ID via SEK/CJ188 refreshes 0xFF ADD without changing MCU UID broadcastName
+ const defMap=B.defaultMapping(m95Chars)
+ const profile=B.mapping(m95Chars,defMap.txId,defMap.rxId,defMap.response)
+ svc.saveDevice(m95,{profile})
+ assert.equal(svc.savedDevice(pidM95).meterNo,'09632221008449')
+ assert.equal(svc.savedDevice(pidM95).broadcastName,'4CE331A5')
+ scanCh.onmessage({type:'device',device:{deviceId:'ble-m95',persistentId:pidM95,name:'4CE331A5',services:[ffe0],rssi:-49,manufacturerData:{companyId:0x4b53,data:[...Buffer.from('W4WwPqfq4R571A','ascii')]}}})
+ const refreshed=svc.devices().find(d=>d.deviceId==='ble-m95')
+ assert.equal(refreshed.meterNo,'830202264601')
+ assert.equal(refreshed.nameChanged,false)
+
+ await svc.stopScan();await job
+ // Port metadata surfaces both meter number and Bluetooth UID name; legacy device keeps original label
+ const m95Port=svc.ports().find(p=>p.getInfo().blePersistentId===pidM95)
+ assert.equal(m95Port.getInfo().productName,'830202264601 (4CE331A5) · BLE')
+ assert.equal(m95Port.getInfo().bleMeterNo,'830202264601')
+ // Reconnect updates persisted meterNo to 830202264601; then resetting meter to all-zero clears stale saved meterNo
+ await m95Port.open({});await m95Port.close()
+ assert.equal(svc.savedDevice(pidM95).meterNo,'830202264601')
+ const job2=svc.scan();await flush()
+ scanCh.onmessage({type:'device',device:{deviceId:'ble-m95',persistentId:pidM95,name:'4CE331A5',services:[ffe0],rssi:-48,manufacturerData:{companyId:0x4b53,data:[...Buffer.from('WsOWPKVp4R571A','ascii')]}}})
+ await svc.stopScan();await job2
+ assert.equal(B.visibleDevices(svc.devices(),'830202264601').length,0,'resetting meter to all-zero must not match stale savedMeterNo')
+ assert.equal(m95Port.getInfo().productName,'4CE331A5 · BLE')
+ assert.equal(m95Port.getInfo().bleMeterNo,'')
+ await m95Port.open({});await m95Port.close()
+ assert.equal(svc.savedDevice(pidM95).meterNo,'')
+
+ const legRec=await svc.inspect(all.find(d=>d.deviceId==='ble-legacy'))
+ const legChoice=svc.createPort(legRec,profile,defMap.txId,defMap.rxId)
+ assert.equal(legChoice.port.getInfo().productName,'SK08449 · BLE')
+ await legChoice.discard()
+ await svc.release()
+})

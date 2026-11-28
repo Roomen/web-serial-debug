@@ -91,7 +91,11 @@
 		const out = []
 		if (m.transport === 'ble') {
 			if (m.bleSaved) out.push('已保存 BLE')
-			if (m.alias && m.defaultName) out.push(m.defaultName.replace(/\s*·\s*BLE$/, ''))
+			const defClean = m.alias && m.defaultName ? m.defaultName.replace(/\s*·\s*BLE$/, '') : ''
+			if (m.bleMeterNo && !String(portRowTitle(m)).includes(m.bleMeterNo) && !defClean.includes(m.bleMeterNo)) {
+				out.push('表号 ' + m.bleMeterNo)
+			}
+			if (defClean) out.push(defClean)
 			if (m.bleAddress) out.push(m.bleAddress)
 			return out.join(' · ')
 		}

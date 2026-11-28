@@ -117,6 +117,13 @@ const sys = { dir: '', text: '10:00:01.000 ! 未选择串口设备', hex: '' }
 	assert.equal(M.portRowTitle({ vid: '1a86', pid: '7523' }), 'USB 串口设备')
 	assert.equal(M.portRowTitle({}), '串口设备')
 	assert.equal(M.portRowSub({}), '')
+	// BLE 行：无别名时主标题含表号与蓝牙名，次行不重复表号；有别名时次行展示原表号与蓝牙名
+	const bleNoAlias = { transport: 'ble', bleSaved: true, productName: '09632221008449 (4CE331A5) · BLE', defaultName: '09632221008449 (4CE331A5) · BLE', bleMeterNo: '09632221008449', bleAddress: 'AA:BB:CC:DD:EE:01' }
+	assert.equal(M.portRowTitle(bleNoAlias), '09632221008449 (4CE331A5) · BLE')
+	assert.equal(M.portRowSub(bleNoAlias), '已保存 BLE · AA:BB:CC:DD:EE:01')
+	const bleAliased = Object.assign({}, bleNoAlias, { alias: '1号测试表' })
+	assert.equal(M.portRowTitle(bleAliased), '1号测试表')
+	assert.equal(M.portRowSub(bleAliased), '已保存 BLE · 09632221008449 (4CE331A5) · AA:BB:CC:DD:EE:01')
 
 	assert.equal(JSON.stringify(M.portRowState({})), JSON.stringify({ tag: '', kind: 'idle', disabled: false }))
 	assert.equal(M.portRowState({ current: true }).kind, 'current')

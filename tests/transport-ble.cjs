@@ -259,5 +259,56 @@ async function readSome(port) {
 		await port.close()
 	}
 
+	// ---- HM-BT4531MS (M95)：FFE0 下 FFE2 写 + FFE1 通知双特征优先匹配，不误写只通知特征 FFE1 ----
+	{
+		const rx = fakeChar({ notify: true })
+		const tx = fakeChar({ writeWithoutResponse: true, write: true })
+		const dev = makeDevice('d-m95', { [String(0xffe0)]: { [String(0xffe1)]: rx, [String(0xffe2)]: tx } })
+		const port = A.createStreamPort(B.createBleUartDriver(dev))
+		await port.open({})
+		assert.equal(rx.notifying, true)
+		assert.equal(tx.notifying, false)
+		rx.push([0xa9, 0x9a])
+		assert.deepEqual(await readSome(port), [0xa9, 0x9a])
+		const w = port.writable.getWriter()
+		await w.write(new Uint8Array([0x01, 0x02, 0x03]))
+		w.releaseLock()
+		assert.deepEqual(tx.writes, [[0x01, 0x02, 0x03]])
+		assert.deepEqual(rx.writes, [])
+		await port.close()
+	}
+
+	// ---- 旧 CC254x 变体：FFE0 下含只读 FFE2（WebIDL 原型 getter，Object.keys 为空）+ 可读写通知 FFE1 时，跳过不可写 FFE2 回退到单特征 FFE1 ----
+	{
+		class WebIdlCharProps {
+			constructor(flags) { this._f = flags }
+			get broadcast() { return false }
+			get read() { return !!this._f.read }
+			get writeWithoutResponse() { return !!this._f.writeWithoutResponse }
+			get write() { return !!this._f.write }
+			get notify() { return !!this._f.notify }
+			get indicate() { return !!this._f.indicate }
+		}
+		// 显式置不可枚举，与真实 Chromium BluetoothCharacteristicProperties 原型 getter 一致
+		const makeWebIdlProps = (flags) => {
+			const p = Object.create(WebIdlCharProps.prototype)
+			Object.defineProperty(p, '_f', { value: flags, enumerable: false })
+			assert.equal(Object.keys(p).length, 0)
+			return p
+		}
+		const ffe1 = fakeChar(makeWebIdlProps({ writeWithoutResponse: true, notify: true }))
+		const readOnlyFfe2 = fakeChar(makeWebIdlProps({ read: true }))
+		const dev = makeDevice('d-cc254x-ro-ffe2', { [String(0xffe0)]: { [String(0xffe1)]: ffe1, [String(0xffe2)]: readOnlyFfe2 } })
+		const port = A.createStreamPort(B.createBleUartDriver(dev))
+		await port.open({})
+		assert.equal(ffe1.notifying, true)
+		const w = port.writable.getWriter()
+		await w.write(new Uint8Array([0x55, 0xaa]))
+		w.releaseLock()
+		assert.deepEqual(ffe1.writes, [[0x55, 0xaa]])
+		assert.deepEqual(readOnlyFfe2.writes, [])
+		await port.close()
+	}
+
 	console.log('transport-ble: ok')
 })().catch((e) => { console.error(e); process.exit(1) })

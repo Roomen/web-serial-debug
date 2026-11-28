@@ -7,7 +7,164 @@
 	const SAVED_KEY = 'bleSavedDevices'
 	const FFE1_UUID = '0000ffe1-0000-1000-8000-00805f9b34fb'
 	const FFE2_UUID = '0000ffe2-0000-1000-8000-00805f9b34fb'
+	// HM-BT4531MS `TTM:PID-SK` + `TTM:ADD-<14B>` in 0xFF Scan Response Manufacturer Specific Data:
+	// PID "SK" = [0x53, 0x4B] -> little-endian companyId 0x4B53 (CoreBluetooth bluest & WinRT),
+	// followed by 14-char unpadded standard Base64 of (10-byte LSB-first BCD meterId XOR METER_MASK).
+	const SK_COMPANY_ID = 0x4b53
+	const SK_COMPANY_ID_BE = 0x534b
+	const METER_ID_SIZE = 10
+	const METER_B64_LEN = 14
+	const METER_MASK = [0x5a, 0xc3, 0x96, 0x3c, 0xa5, 0x69, 0xe1, 0x1e, 0x7b, 0xd4]
+	const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 	const fail = message => new Error(message)
+
+	function b64Val(code) {
+		if (code >= 65 && code <= 90) return code - 65 // A-Z
+		if (code >= 97 && code <= 122) return 26 + (code - 97) // a-z
+		if (code >= 48 && code <= 57) return 52 + (code - 48) // 0-9
+		if (code === 43) return 62 // +
+		if (code === 47) return 63 // /
+		return -1
+	}
+
+	function encodeMeterIdAdv(meterId) {
+		if (!meterId || meterId.length !== METER_ID_SIZE) return null
+		const obf = new Uint8Array(METER_ID_SIZE)
+		for (let i = 0; i < METER_ID_SIZE; i++) {
+			const b = meterId[i]
+			if (!Number.isInteger(b) || b < 0 || b > 0xff) return null
+			obf[i] = (b ^ METER_MASK[i]) & 0xff
+		}
+		let out = ''
+		for (let i = 0; i < 9; i += 3) {
+			const triple = (obf[i] << 16) | (obf[i + 1] << 8) | obf[i + 2]
+			out += B64_ALPHABET[(triple >> 18) & 0x3f]
+			out += B64_ALPHABET[(triple >> 12) & 0x3f]
+			out += B64_ALPHABET[(triple >> 6) & 0x3f]
+			out += B64_ALPHABET[triple & 0x3f]
+		}
+		out += B64_ALPHABET[(obf[9] >> 2) & 0x3f]
+		out += B64_ALPHABET[(obf[9] & 0x03) << 4]
+		return out
+	}
+
+	function decodeMeterIdAdv(encoded) {
+		let codes = null
+		if (typeof encoded === 'string') {
+			if (encoded.length !== METER_B64_LEN) return null
+			codes = new Uint8Array(METER_B64_LEN)
+			for (let i = 0; i < METER_B64_LEN; i++) {
+				const c = encoded.charCodeAt(i)
+				if (c > 0x7f) return null
+				codes[i] = c
+			}
+		} else if (encoded instanceof Uint8Array || Array.isArray(encoded)) {
+			if (encoded.length !== METER_B64_LEN) return null
+			codes = Uint8Array.from(encoded)
+		} else if (ArrayBuffer.isView(encoded)) {
+			if (encoded.byteLength !== METER_B64_LEN) return null
+			codes = new Uint8Array(encoded.buffer, encoded.byteOffset, encoded.byteLength)
+		} else {
+			return null
+		}
+		const obf = new Uint8Array(METER_ID_SIZE)
+		let outIdx = 0
+		for (let i = 0; i < 12; i += 4) {
+			const v0 = b64Val(codes[i]), v1 = b64Val(codes[i + 1]), v2 = b64Val(codes[i + 2]), v3 = b64Val(codes[i + 3])
+			if (v0 < 0 || v1 < 0 || v2 < 0 || v3 < 0) return null
+			const triple = (v0 << 18) | (v1 << 12) | (v2 << 6) | v3
+			obf[outIdx++] = (triple >> 16) & 0xff
+			obf[outIdx++] = (triple >> 8) & 0xff
+			obf[outIdx++] = triple & 0xff
+		}
+		const v12 = b64Val(codes[12]), v13 = b64Val(codes[13])
+		// Low 4 bits of the 14th Base64 char are unused padding bits for a 10-byte input and must be 0.
+		if (v12 < 0 || v13 < 0 || (v13 & 0x0f) !== 0) return null
+		obf[9] = ((v12 << 2) | (v13 >> 4)) & 0xff
+
+		const meterId = new Uint8Array(METER_ID_SIZE)
+		for (let i = 0; i < METER_ID_SIZE; i++) meterId[i] = (obf[i] ^ METER_MASK[i]) & 0xff
+
+		// Convert LSB-first BCD (meterId[9] high nibble .. meterId[0] low nibble) and reject non-BCD nibbles.
+		let meterIdBcd = ''
+		for (let i = METER_ID_SIZE - 1; i >= 0; i--) {
+			const b = meterId[i]
+			const hi = (b >> 4) & 0x0f, lo = b & 0x0f
+			if (hi > 9 || lo > 9) return null
+			meterIdBcd += String(hi) + String(lo)
+		}
+		const meterZero = /^0+$/.test(meterIdBcd)
+		// Strip leading 0x00 padding bytes (2 digits per byte) so 7-byte meters keep 14 digits (e.g. 09632221008449)
+		// and 6-byte meters keep 12 digits (e.g. 830202264601), while 10-byte meters keep all 20 digits.
+		const meterNo = meterZero ? meterIdBcd : meterIdBcd.replace(/^(?:00)+/, '')
+		const meterNo14 = meterIdBcd.slice(0, 6) === '000000' ? meterIdBcd.slice(6) : meterIdBcd
+		return { meterId, meterIdBcd, meterNo, meterNo14, meterZero }
+	}
+
+	function toRawBytes(input) {
+		if (!input) return null
+		if (input instanceof Uint8Array) return input
+		if (input instanceof ArrayBuffer) return new Uint8Array(input)
+		if (ArrayBuffer.isView(input)) return new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
+		if (Array.isArray(input)) {
+			for (let i = 0; i < input.length; i++) {
+				if (!Number.isInteger(input[i]) || input[i] < 0 || input[i] > 0xff) return null
+			}
+			return Uint8Array.from(input)
+		}
+		if (typeof input === 'string') {
+			const out = new Uint8Array(input.length)
+			for (let i = 0; i < input.length; i++) {
+				const c = input.charCodeAt(i)
+				if (c > 0x7f) return null
+				out[i] = c
+			}
+			return out
+		}
+		return null
+	}
+
+	// Parse 0xFF Manufacturer Specific Data across platform representations:
+	// - Tauri / bluest / Android / Web Bluetooth entry: { companyId: 0x4B53, data: <14B> }
+	// - Raw CoreBluetooth NSData / byte slice: [0x53, 0x4B, ...14B]
+	// - Web Bluetooth manufacturerData Map<number, DataView>
+	// - Module variants that prepend a 2-byte chip vendor ID before "SK" + 14B: data = [0x53, 0x4B, ...14B]
+	function parseManufacturerMeter(mfg) {
+		if (!mfg) return null
+		if (typeof Map !== 'undefined' && mfg instanceof Map) {
+			if (mfg.has(SK_COMPANY_ID)) return decodeMeterIdAdv(toRawBytes(mfg.get(SK_COMPANY_ID)))
+			if (mfg.has(SK_COMPANY_ID_BE)) return decodeMeterIdAdv(toRawBytes(mfg.get(SK_COMPANY_ID_BE)))
+			for (const [, v] of mfg) {
+				const bytes = toRawBytes(v)
+				if (bytes && bytes.length === 2 + METER_B64_LEN && bytes[0] === 0x53 && bytes[1] === 0x4b) {
+					const hit = decodeMeterIdAdv(bytes.subarray(2))
+					if (hit) return hit
+				}
+			}
+			return null
+		}
+		const rawDirect = toRawBytes(mfg)
+		if (rawDirect) {
+			if (rawDirect.length === 2 + METER_B64_LEN && rawDirect[0] === 0x53 && rawDirect[1] === 0x4b) {
+				return decodeMeterIdAdv(rawDirect.subarray(2))
+			}
+			if (rawDirect.length === 4 + METER_B64_LEN && rawDirect[2] === 0x53 && rawDirect[3] === 0x4b) {
+				return decodeMeterIdAdv(rawDirect.subarray(4))
+			}
+			return null
+		}
+		if (typeof mfg === 'object' && Number.isInteger(mfg.companyId)) {
+			const data = toRawBytes(mfg.data)
+			if (!data) return null
+			if (mfg.companyId === SK_COMPANY_ID || mfg.companyId === SK_COMPANY_ID_BE) {
+				return decodeMeterIdAdv(data)
+			}
+			if (data.length === 2 + METER_B64_LEN && data[0] === 0x53 && data[1] === 0x4b) {
+				return decodeMeterIdAdv(data.subarray(2))
+			}
+		}
+		return null
+	}
 	const uuid = value => {
 		const s = String(value || '').trim().toLowerCase()
 		return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s) ? s : null
@@ -20,7 +177,13 @@
 	function filterDevices(devices, name, service) {
 		const query = String(name || '').trim().toLowerCase(), u = service ? uuid(service) : null
 		if (service && !u) throw fail('广播服务筛选须为完整 128-bit UUID')
-		return devices.filter(d => (!query || d.name.toLowerCase().includes(query)) && (!u || d.services.includes(u)))
+		return devices.filter(d => {
+			if (query) {
+				const matched = [d.name, d.meterNo, d.meterIdBcd].some(v => String(v || '').toLowerCase().includes(query))
+				if (!matched) return false
+			}
+			return !u || d.services.includes(u)
+		})
 	}
 	// Quick filters use advertisement metadata only; partial UUIDs are intentional here.
 	function visibleDevices(devices, query = '', minimum = '', sort = 'signal', opts = null) {
@@ -32,13 +195,19 @@
 		return devices.filter(d => {
 			if (staleMs > 0 && Number.isFinite(d.seen) && (now - d.seen) > staleMs) return false
 			if (q) {
-				const haystack = [d.name, d.alias, d.savedName, d.address, ...(d.services || []), ...(d.services || []).map(shortUuid)]
+				const savedMeterForSearch = d.meterIdBcd ? '' : d.savedMeterNo
+				const haystack = [d.name, d.alias, d.savedName, d.address, d.meterNo, d.meterIdBcd, savedMeterForSearch, ...(d.services || []), ...(d.services || []).map(shortUuid)]
 				if (!haystack.some(v => String(v || '').toLowerCase().includes(q))) return false
 			}
 			if (threshold !== null && !(Number.isFinite(d.rssi) && d.rssi >= threshold)) return false
 			return true
 		}).sort((a, b) => {
-			const byName = String(a.alias || a.name).localeCompare(String(b.alias || b.name))
+			// Rank devices with decoded 0xFF SK meter numbers at the very top (valid meterNo > all-zero SK meter > other BLE devices).
+			const meterRank = d => (d.meterNo && !d.meterZero && !/^0+$/.test(d.meterNo)) ? 2 : (d.meterIdBcd ? 1 : 0)
+			const byMeter = meterRank(b) - meterRank(a)
+			if (byMeter) return byMeter
+			const labelOf = d => String(d.alias || (!d.meterZero && d.meterNo) || d.name)
+			const byName = labelOf(a).localeCompare(labelOf(b))
 			return (sort === 'name' ? byName : sort === 'recent' ? b.seen - a.seen : (b.rssi ?? -Infinity) - (a.rssi ?? -Infinity)) || byName || a.deviceId.localeCompare(b.deviceId)
 		})
 	}
@@ -99,6 +268,10 @@
 		const storage = deps.storage !== undefined ? deps.storage : null
 		const boundPorts = () => new Set(deps.boundPorts ? deps.boundPorts() : [])
 
+		function sanitizeMeterNo(raw) {
+			const s = typeof raw === 'string' ? raw.trim() : ''
+			return /^\d{1,20}$/.test(s) && !/^0+$/.test(s) ? s : ''
+		}
 		function parseSavedList(raw) {
 			const out = new Map()
 			if (!raw) return out
@@ -112,6 +285,7 @@
 						address: typeof item.address === 'string' && item.address ? item.address : null,
 						alias: typeof item.alias === 'string' ? item.alias.trim().slice(0, 32) : '',
 						broadcastName: typeof item.broadcastName === 'string' ? item.broadcastName.trim().slice(0, 128) : '',
+						meterNo: sanitizeMeterNo(item.meterNo),
 						profile: isValidProfile(item.profile) ? JSON.parse(JSON.stringify(item.profile)) : null,
 						updatedAt: Number.isFinite(item.updatedAt) ? item.updatedAt : 0,
 					})
@@ -163,9 +337,11 @@
 			const saved = d.persistentId ? savedMap.get(d.persistentId) : null
 			const alias = pref.alias || (saved && saved.alias) || ''
 			const savedName = (saved && saved.broadcastName) || ''
+			const savedMeterNo = (saved && saved.meterNo) || ''
+			const meterNo = d.meterNo || (d.meterZero ? '' : savedMeterNo) || ''
 			const savedProfile = pref.profile || (saved && saved.profile) || null
 			const nameChanged = !!(saved && savedName && d.name && d.name !== '未命名 BLE 设备' && d.name !== savedName)
-			return { ...d, ...pref, alias, savedName, savedProfile, isSaved: !!saved, nameChanged }
+			return { ...d, ...pref, alias, savedName, savedMeterNo, meterNo, savedProfile, isSaved: !!saved, nameChanged }
 		}
 		function prunePorts() {
 			const bound = boundPorts()
@@ -252,12 +428,19 @@
 			const port = deps.createStreamPort({
 				getInfo() {
 					const s = savedMap.get(pid) || {}
+					const scanned = findScannedByPersistentId(pid)
+					const meterNo = scanned && scanned.meterIdBcd
+						? (scanned.meterZero ? '' : sanitizeMeterNo(scanned.meterNo))
+						: (s.meterNo || '')
+					const bname = s.broadcastName || 'BLE 设备'
+					const label = meterNo ? `${meterNo} (${bname})` : bname
 					return {
 						transport: 'ble',
-						productName: (s.broadcastName || 'BLE 设备') + ' · BLE',
+						productName: label + ' · BLE',
 						bleSaved: true,
 						blePersistentId: pid,
 						bleAddress: s.address || '',
+						bleMeterNo: meterNo,
 					}
 				},
 				async open(options, sink) {
@@ -285,14 +468,25 @@
 								// Only compare real advertisement names observed in this session; never substitute OS/GAP device names.
 								const scanned = findScannedByPersistentId(pid)
 								const advertisedName = scanned && scanned.name && scanned.name !== '未命名 BLE 设备' ? scanned.name : ''
+								const hasScannedMeter = !!(scanned && scanned.meterIdBcd)
+								const observedMeter = hasScannedMeter ? (scanned.meterZero ? '' : sanitizeMeterNo(scanned.meterNo)) : null
 								if (s.broadcastName && advertisedName && advertisedName !== s.broadcastName && deps.confirmNameChange) {
-									const ok = await deps.confirmNameChange({ alias: s.alias, savedName: s.broadcastName, currentName: advertisedName, address: s.address })
+									const ok = await deps.confirmNameChange({ alias: s.alias, savedName: s.broadcastName, currentName: advertisedName, address: s.address, meterNo: hasScannedMeter ? observedMeter : (s.meterNo || '') })
 									check(token)
 									if (abort.aborted) throw fail('BLE 连接已取消')
 									if (!ok) throw fail('已取消连接：设备广播名已变化')
 									mutateSaved(() => {
 										const cur = savedMap.get(pid)
-										if (cur) { cur.broadcastName = advertisedName; cur.updatedAt = Date.now() }
+										if (cur) {
+											cur.broadcastName = advertisedName
+											if (hasScannedMeter) cur.meterNo = observedMeter
+											cur.updatedAt = Date.now()
+										}
+									})
+								} else if (hasScannedMeter && observedMeter !== (s.meterNo || '')) {
+									mutateSaved(() => {
+										const cur = savedMap.get(pid)
+										if (cur) { cur.meterNo = observedMeter; cur.updatedAt = Date.now() }
 									})
 								}
 								ids = match(live.chars, s.profile)
@@ -379,7 +573,12 @@
 			}
 			let live = record, first = true, initialIds = { tx: txId, rx: rxId }, closed = false, opening = null
 			const port = deps.createStreamPort({
-				getInfo() { return { transport: 'ble', productName: device.name + ' · BLE', blePersistentId: device.persistentId || '', bleAddress: device.address || '' } },
+				getInfo() {
+					const meterNo = sanitizeMeterNo(!device.meterZero ? device.meterNo : '')
+					const bname = device.name || 'BLE 设备'
+					const label = meterNo ? `${meterNo} (${bname})` : bname
+					return { transport: 'ble', productName: label + ' · BLE', blePersistentId: device.persistentId || '', bleAddress: device.address || '', bleMeterNo: meterNo }
+				},
 				async open(options, sink) {
 					const abort = { aborted: false, record: first ? live : null }
 					opening = abort
@@ -484,7 +683,11 @@
 					if (!evictOldestScanned() || devices.size >= MAX_DEVICES) return
 				}
 				const seq = old && old.seq ? old.seq : ++deviceSeq
-				const next = { ...old, ...d, seq, name: d.name || old && old.name || '未命名 BLE 设备',
+				const parsedMeter = parseManufacturerMeter(d.manufacturerData)
+				const meterFields = parsedMeter
+					? { meterNo: parsedMeter.meterNo, meterIdBcd: parsedMeter.meterIdBcd, meterZero: parsedMeter.meterZero, manufacturerData: d.manufacturerData }
+					: (old && old.meterIdBcd ? { meterNo: old.meterNo, meterIdBcd: old.meterIdBcd, meterZero: old.meterZero, manufacturerData: old.manufacturerData } : {})
+				const next = { ...old, ...d, ...meterFields, seq, name: d.name || old && old.name || '未命名 BLE 设备',
 					services: Array.from(new Set([...(old && old.services || []), ...(d.services || [])])).slice(0, 64), seen: Date.now() }
 				devices.set(d.deviceId, next); onDevice(mergeDevice(next))
 			}
@@ -521,11 +724,15 @@
 			return mutateSaved(() => {
 				const prev = savedMap.get(pid) || {}
 				const broadcastName = (data.broadcastName || (device.name && device.name !== '未命名 BLE 设备' ? device.name : '') || prev.broadcastName || '').trim().slice(0, 128)
+				const meterNo = data.meterNo !== undefined
+					? sanitizeMeterNo(data.meterNo)
+					: (device.meterIdBcd ? (device.meterZero ? '' : sanitizeMeterNo(device.meterNo)) : sanitizeMeterNo(prev.meterNo))
 				const next = {
 					persistentId: pid,
 					address: device.address || prev.address || null,
 					alias: trimmedAlias !== undefined ? trimmedAlias : (prev.alias || ''),
 					broadcastName,
+					meterNo,
 					profile: data.profile !== undefined ? (data.profile ? JSON.parse(JSON.stringify(data.profile)) : null) : (prev.profile || null),
 					updatedAt: Date.now(),
 				}
@@ -577,7 +784,7 @@
 			isBusyForUpdate: () => !!(initializing || scanning || busy || pending || releasing || releaseFailed),
 		}
 	}
-	const api = { STALE_MS, create, uuid, shortUuid, filterDevices, visibleDevices, selector, mapping, match, defaultMapping }
+	const api = { STALE_MS, SK_COMPANY_ID, METER_MASK, encodeMeterIdAdv, decodeMeterIdAdv, parseManufacturerMeter, create, uuid, shortUuid, filterDevices, visibleDevices, selector, mapping, match, defaultMapping }
 	root.NativeBle = api
 	if (typeof module !== 'undefined' && module.exports) module.exports = api
 })(typeof window !== 'undefined' ? window : globalThis)

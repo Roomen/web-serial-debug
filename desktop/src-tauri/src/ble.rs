@@ -33,6 +33,12 @@ pub struct Profile {
 	rx: Selector,
 	response: bool,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManufacturerDataView {
+	pub company_id: u16,
+	pub data: Vec<u8>,
+}
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceView {
@@ -42,6 +48,28 @@ pub struct DeviceView {
 	name: String,
 	services: Vec<String>,
 	rssi: Option<i16>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	manufacturer_data: Option<ManufacturerDataView>,
+}
+
+// HM-BT4531MS `TTM:PID-SK` puts ASCII "SK" ([0x53, 0x4B]) at the start of 0xFF Scan Response
+// Manufacturer Specific Data. Both bluest's CoreBluetooth (`u16::from_le_bytes(val[0..2])`) and
+// Windows WinRT (`CompanyId()`) split those two bytes as little-endian u16 = 0x4B53.
+const SK_COMPANY_ID: u16 = u16::from_le_bytes(*b"SK");
+const MAX_MANUFACTURER_DATA_LEN: usize = 255;
+
+fn merge_manufacturer_data(slot: &mut Option<ManufacturerDataView>, incoming: Option<bluest::ManufacturerData>) {
+	let Some(mfg) = incoming else { return };
+	let next = ManufacturerDataView {
+		company_id: mfg.company_id,
+		data: mfg.data.into_iter().take(MAX_MANUFACTURER_DATA_LEN).collect(),
+	};
+	// Keep a previously observed SK Scan Response when a later primary ADV_IND carries a generic vendor ID,
+	// while always refreshing if a newer SK Scan Response arrives (e.g. after meter ID update).
+	if slot.as_ref().is_some_and(|prev| prev.company_id == SK_COMPANY_ID) && next.company_id != SK_COMPANY_ID {
+		return;
+	}
+	*slot = Some(next);
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -333,11 +361,20 @@ pub async fn ble_scan(webview: tauri::Webview, state: State<'_, BleState>, owner
 							};
 							let persistent_id = encode_persistent_id(&key).unwrap_or_default();
 							let address = extract_mac_address(&key.to_string());
-							let record = found.entry(device_id.clone()).or_insert_with(|| (String::new(), std::collections::BTreeSet::new(), None));
+							let record = found.entry(device_id.clone()).or_insert_with(|| (String::new(), std::collections::BTreeSet::new(), None, None));
 							if let Some(name) = adv.adv_data.local_name.filter(|s| !s.is_empty()) { record.0 = name.chars().take(128).collect(); }
 							for uuid in adv.adv_data.services { if record.1.len() < 64 { record.1.insert(uuid); } }
 							record.2 = adv.rssi;
-							let view = DeviceView { device_id, persistent_id, address, name: record.0.clone(), services: record.1.iter().map(|s| s.to_string()).collect(), rssi: record.2 };
+							merge_manufacturer_data(&mut record.3, adv.adv_data.manufacturer_data);
+							let view = DeviceView {
+								device_id,
+								persistent_id,
+								address,
+								name: record.0.clone(),
+								services: record.1.iter().map(|s| s.to_string()).collect(),
+								rssi: record.2,
+								manufacturer_data: record.3.clone(),
+							};
 							drop(r);
 							if on_device.send(serde_json::json!({ "type": "device", "device": view })).is_err() { break; }
 						}
@@ -920,5 +957,55 @@ mod tests {
 		assert_eq!(extract_mac_address("550e8400-e29b-41d4-a716-446655440000"), None);
 		assert_eq!(extract_mac_address("invalid"), None);
 		assert!(decode_persistent_id("not-json").is_err());
+	}
+	#[test]
+	fn manufacturer_data_merges_scan_response_and_preserves_sk_payload_across_adv_ind() {
+		assert_eq!(SK_COMPANY_ID, 0x4B53);
+		let mut slot = None;
+		// Primary ADV_IND without 0xFF leaves slot empty.
+		merge_manufacturer_data(&mut slot, None);
+		assert_eq!(slot, None);
+		// Generic vendor 0xFF can populate an empty slot, then SK Scan Response replaces it.
+		merge_manufacturer_data(
+			&mut slot,
+			Some(bluest::ManufacturerData {
+				company_id: 0x004C,
+				data: vec![1, 2, 3],
+			}),
+		);
+		assert_eq!(slot.as_ref().unwrap().company_id, 0x004C);
+		merge_manufacturer_data(
+			&mut slot,
+			Some(bluest::ManufacturerData {
+				company_id: SK_COMPANY_ID,
+				data: b"E0eWHYcK6B571A".to_vec(),
+			}),
+		);
+		assert_eq!(
+			slot,
+			Some(ManufacturerDataView {
+				company_id: 0x4B53,
+				data: b"E0eWHYcK6B571A".to_vec(),
+			})
+		);
+		// Subsequent ADV_IND (None or generic vendor) must not erase the decoded SK meter payload.
+		merge_manufacturer_data(&mut slot, None);
+		merge_manufacturer_data(
+			&mut slot,
+			Some(bluest::ManufacturerData {
+				company_id: 0x004C,
+				data: vec![9, 9],
+			}),
+		);
+		assert_eq!(slot.as_ref().unwrap().data, b"E0eWHYcK6B571A");
+		// Writing a new meter ID updates 0xFF SK Scan Response in place and bounds payload length.
+		merge_manufacturer_data(
+			&mut slot,
+			Some(bluest::ManufacturerData {
+				company_id: SK_COMPANY_ID,
+				data: vec![b'A'; 300],
+			}),
+		);
+		assert_eq!(slot.as_ref().unwrap().data.len(), MAX_MANUFACTURER_DATA_LEN);
 	}
 }

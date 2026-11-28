@@ -7310,6 +7310,7 @@
 			bleSaved: !!info.bleSaved,
 			blePersistentId: info.blePersistentId || '',
 			bleAddress: info.bleAddress || '',
+			bleMeterNo: info.bleMeterNo || '',
 			persistent: ident.keys.length > 0 || !!(port.isPersistentAlias && port.isPersistentAlias()),
 			excluded: isExcludedSerialPort(port),
 		}

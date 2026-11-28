@@ -307,7 +307,7 @@ window.SK_TAGS = {
 		{ id: 15, name: '表端截止用水读数', type: 'BYTE[8]', desc: '单位L 实时流量大于该值表端自动关阀' }
 	],
 	'37': [
-		{ id: 0, name: '蓝牙表名称', type: 'char[16]', desc: 'ASCII 不足补0' },
+		{ id: 0, name: '蓝牙表名称', type: 'char[16]', desc: 'ASCII 不足补0（M95等新固件为只读8位UID广播名）' },
 		{ id: 1, name: '蓝牙表广播功能', type: 'BYTE[1]', desc: '0关闭 1开启' },
 		{ id: 2, name: '蓝牙检索功能', type: 'BYTE[1]', desc: '0默认检索指定ID 其他预留' },
 		{ id: 3, name: '蓝牙检索MAC地址', type: 'BYTE[6]', desc: '作为主机时检索的蓝牙MAC' },

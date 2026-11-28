@@ -89,7 +89,7 @@
 					const staleMs = (root.NativeBle && root.NativeBle.STALE_MS) || 15000
 					const filters = el('div', null, content, 'connection-filters')
 					const query = input(filters, '筛选')
-					query.placeholder = '名称、别名、地址或 UUID…'
+					query.placeholder = '表号、蓝牙名、别名、地址或 UUID…'
 					const minimum = input(filters, '最低信号 (-dBm)')
 					minimum.type = 'number'; minimum.min = '1'; minimum.max = '127'; minimum.step = '1'
 					minimum.placeholder = '如 70（≥ -70）'
@@ -118,8 +118,9 @@
 					function showNameAlert(device, forceMapping) {
 						pendingNameConfirm = { device, forceMapping }
 						nameAlert.replaceChildren()
-						const label = device.alias ? `「${device.alias}」` : '该已保存设备'
-						el('div', `检测到${label}的广播名已变化：原名「${device.savedName}」→ 当前「${device.name}」，是否继续连接并更新广播名？`, nameAlert, 'connection-name-alert-text')
+						const label = device.alias ? `「${device.alias}」` : (!device.meterZero && device.meterNo ? `（表号 ${device.meterNo}）` : '该已保存设备')
+						const meterSuffix = !device.meterZero && device.meterNo && device.alias ? `（表号 ${device.meterNo}）` : ''
+						el('div', `检测到${label}的广播名已变化：原名「${device.savedName}」→ 当前「${device.name}」${meterSuffix}，是否继续连接并更新广播名？`, nameAlert, 'connection-name-alert-text')
 						const btns = el('div', null, nameAlert, 'connection-name-alert-actions')
 						const ok = el('button', '继续连接并更新', btns, 'btn btn-sm btn-warning'); ok.type = 'button'
 						ok.onclick = () => run(async () => {
@@ -133,15 +134,26 @@
 					}
 					function renderRow(row, d, now) {
 						const age = formatAge(now - (d.seen || now))
-						const sig = JSON.stringify([d.alias || '', d.name || '', !!d.isSaved, !!d.nameChanged, d.savedName || '', d.rssi ?? null, age, d.seq || 0, d.address || '', d.services || []])
+						const hasValidMeter = !!(d.meterNo && !d.meterZero && !/^0+$/.test(d.meterNo))
+						const sig = JSON.stringify([d.alias || '', d.name || '', d.meterNo || '', d.meterIdBcd || '', !!d.meterZero, !!d.isSaved, !!d.nameChanged, d.savedName || '', d.rssi ?? null, age, d.seq || 0, d.address || '', d.services || []])
 						if (row._sig === sig) return
 						row._sig = sig
 						row.replaceChildren()
 						const head = el('div', null, row, 'connection-device-head')
 						const titleWrap = el('div', null, head, 'connection-device-title-wrap')
-						el('span', d.alias || d.name, titleWrap, 'connection-device-title')
+						const primaryTitle = d.alias || (hasValidMeter ? d.meterNo : d.name)
+						el('span', primaryTitle, titleWrap, 'connection-device-title')
 						if (d.isSaved) el('span', '已保存', titleWrap, 'connection-badge connection-badge-saved')
-						if (d.alias && d.name && d.alias !== d.name) el('span', d.name, titleWrap, 'connection-device-orig')
+						if (hasValidMeter) {
+							const mb = el('span', d.alias ? ('表号 ' + d.meterNo) : '表号', titleWrap, 'connection-badge connection-badge-meter')
+							if (d.meterIdBcd) mb.title = '完整 20 位 BCD 表号：' + d.meterIdBcd
+						} else if (d.meterZero) {
+							const zb = el('span', '表号全0', titleWrap, 'connection-badge connection-badge-meter-zero')
+							if (d.meterIdBcd) zb.title = '完整 20 位 BCD 表号：' + d.meterIdBcd
+						}
+						if (primaryTitle !== d.name && d.name) {
+							el('span', hasValidMeter ? ('蓝牙名 ' + d.name) : d.name, titleWrap, 'connection-device-orig')
+						}
 						if (d.nameChanged) el('span', '原名：' + d.savedName, titleWrap, 'connection-badge connection-badge-warn')
 						const meta = el('div', null, head, 'connection-device-meta')
 						const rssi = el('span', d.rssi == null ? '信号未知' : d.rssi + ' dBm', meta, 'connection-device-rssi')
@@ -281,7 +293,9 @@
 					stopTick()
 					content.replaceChildren()
 					const header = el('div', null, content, 'connection-mapping-head')
-					el('h3', record.device.name + ' · 收发映射', header)
+					const hasMeter = !!(record.device.meterNo && !record.device.meterZero && !/^0+$/.test(record.device.meterNo))
+					const mappingTitle = hasMeter ? (record.device.meterNo + '（蓝牙名 ' + record.device.name + '）') : record.device.name
+					el('h3', mappingTitle + ' · 收发映射', header)
 					if (record.device.address) el('span', record.device.address, header, 'connection-device-addr')
 					const hasPersistent = !!record.device.persistentId
 					const pref = nativeBle.preference(record.device.deviceId)

@@ -176,3 +176,46 @@ test('saved device quick-connects on double-click and prompts inline when broadc
  assert.equal(h.ble.savedDevice(pid).broadcastName,'Meter-New')
  await reconnected.discard();await h.ble.release()
 })
+test('M95 0xFF meter number and UID name render clearly alongside all-zero and legacy SKxxxxx devices',async()=>{
+ const ffe0='0000ffe0-0000-1000-8000-00805f9b34fb'
+ const ffe1='0000ffe1-0000-1000-8000-00805f9b34fb'
+ const ffe2='0000ffe2-0000-1000-8000-00805f9b34fb'
+ const ffeChars=[{id:0,service:ffe0,characteristic:ffe1,props:16},{id:1,service:ffe0,characteristic:ffe2,props:8}]
+ const h=setup({
+  persist:true,
+  chars:ffeChars,
+  devices:[
+   {deviceId:'m95',persistentId:'"m95-1"',name:'4CE331A5',services:[ffe0],rssi:-45,manufacturerData:{companyId:0x4b53,data:[...Buffer.from('E0eWHYcK6B571A','ascii')]}},
+   {deviceId:'zero',persistentId:'"m95-0"',name:'E23C62B5',services:[ffe0],rssi:-55,manufacturerData:{companyId:0x4b53,data:[...Buffer.from('WsOWPKVp4R571A','ascii')]}},
+   {deviceId:'old',persistentId:'"sk-old"',name:'SK08449',services:[ffe0],rssi:-65},
+  ],
+ })
+ const pending=h.source.requestPort('computer-ble');await flush()
+ const rows=()=>h.all().filter(e=>e.className==='connection-device')
+ assert.equal(rows().length,3)
+ // Row 0 (strongest RSSI): M95 shows meter number, badge, and original UID Local Name
+ assert.ok(rows()[0].textContent.includes('09632221008449'))
+ assert.ok(rows()[0].textContent.includes('表号'))
+ assert.ok(rows()[0].textContent.includes('蓝牙名 4CE331A5'))
+ // Row 1: all-zero meter shows UID Local Name + 表号全0
+ assert.ok(rows()[1].textContent.includes('E23C62B5'))
+ assert.ok(rows()[1].textContent.includes('表号全0'))
+ // Row 2: legacy SK08449 remains intact
+ assert.ok(rows()[2].textContent.includes('SK08449'))
+
+ // Filter by full 14-digit meter number, 20-digit BCD, UID name, and legacy SK name
+ const q=h.field('筛选')
+ q.value='09632221008449';q.oninput();assert.equal(rows().length,1);assert.ok(rows()[0].textContent.includes('4CE331A5'))
+ q.value='00000009632221008449';q.oninput();assert.equal(rows().length,1)
+ q.value='SK08449';q.oninput();assert.equal(rows().length,1);assert.ok(rows()[0].textContent.includes('SK08449'))
+ q.value='09632221008449';q.oninput()
+ await rows()[0].ondblclick();await flush()
+ const heading=h.all().find(e=>e.tagName==='h3')
+ assert.ok(heading.textContent.includes('09632221008449（蓝牙名 4CE331A5）'))
+ assert.equal(h.field('TX · 电脑 → 设备').value,'1')
+ assert.equal(h.field('RX · 设备 → 电脑').value,'0')
+ await h.click('确认映射并开始透传')
+ const chosen=await pending
+ assert.equal(chosen.port.getInfo().productName,'09632221008449 (4CE331A5) · BLE')
+ await chosen.discard();await h.ble.release()
+})

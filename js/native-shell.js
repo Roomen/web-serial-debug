@@ -50,10 +50,11 @@
 			storage: root.localStorage,
 			confirmNameChange: async info => {
 				if (!root.AppDialog || typeof root.AppDialog.confirm !== 'function') return true
-				const label = info.alias ? `「${info.alias}」` : '该设备'
+				const label = info.alias ? `「${info.alias}」` : (info.meterNo ? `（表号 ${info.meterNo}）` : '该设备')
+				const meterLine = info.meterNo ? `\n广播表号：${info.meterNo}` : ''
 				const addr = info.address ? `\n设备地址：${info.address}` : ''
 				return root.AppDialog.confirm(
-					`检测到已保存的 BLE 设备${label}广播名发生变化：\n原广播名：${info.savedName}\n当前广播名：${info.currentName}${addr}\n\n是否继续连接并更新已保存的广播名？`,
+					`检测到已保存的 BLE 设备${label}广播名发生变化：\n原广播名：${info.savedName}\n当前广播名：${info.currentName}${meterLine}${addr}\n\n是否继续连接并更新已保存的广播名？`,
 					{ title: 'BLE 广播名已变化', okText: '继续连接', cancelText: '取消' }
 				)
 			},

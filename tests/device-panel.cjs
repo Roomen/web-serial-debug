@@ -1319,6 +1319,13 @@ test('sek write: 按预设编码与解析往返（含 bcd/hexbytes/Tag34），�
 	assert.equal(freq, '07 66 88')
 	assert.equal(M.formatValue(dev, '35:1', freq), '07 66 88')
 	roundTrip('37:3', '00:1a:2b:3c:4d:5e', null, [0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e])
+	// M95 Tag37-ID0 返回 8 位大写 Hex 广播名 + 8 字节 0x00 填充，写入返回 RESULT_CMD_ERR(2) 识别为 rejected
+	const btNameUp = win.skParseFrame(sekUp(win, 0x83, [[37, [[0, [0x34, 0x43, 0x45, 0x33, 0x33, 0x31, 0x41, 0x35, 0, 0, 0, 0, 0, 0, 0, 0]], [1, [1]]]]]), {})
+	assert.equal(dev.extract(btNameUp)['37:0'], '4CE331A5')
+	assert.equal(dev.extract(btNameUp)['37:1'], 1)
+	assert.ok(dev.fieldMap['37:0'].note)
+	const btReadOnlyAck = win.skParseFrame(sekUp(win, 0x81, [[37, [[0, [2]]]]]), {})
+	assert.equal(dev.matchWriteReply(dev.fieldMap['37:0'], btReadOnlyAck), 'rejected')
 	roundTrip('3:44', '0800 1200', null, [0x08, 0x00, 0x12, 0x00, 0, 0, 0, 0, 0, 0, 0, 0])
 	roundTrip('35:3', '00 01', null, [0x00, 0x01])
 	const rtc = roundTrip('3:20', '20260102030405', null, [0x20, 0x26, 0x01, 0x02, 0x03, 0x04, 0x05])

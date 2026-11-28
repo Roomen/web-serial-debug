@@ -7,9 +7,12 @@
 ;(function (root) {
 	'use strict'
 
-	// 常见透传模块的 UUID 档位，按顺序尝试；write 与 notify 可以是同一个特征(HM-10 / CC254x)
+	// 常见透传模块的 UUID 档位，按顺序尝试；M95 (HM-BT4531MS) 为 FFE0 下 FFE2 写 + FFE1 通知，HM-10 / CC254x 为 FFE1 读写同一特征。
+	// 平台限制：Web Bluetooth 的 requestDevice 由浏览器原生弹窗渲染，不向页面暴露扫描响应 0xFF Manufacturer Data
+	// （watchAdvertisements 仍属实验特性且默认关闭），故网页端仅显示广播 Local Name；0xFF 表号解码展示由桌面客户端原生 BLE 承载。
 	const BLE_UART_PROFILES = [
 		{ id: 'nus', name: 'Nordic UART', service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e', write: '6e400002-b5a3-f393-e0a9-e50e24dcca9e', notify: '6e400003-b5a3-f393-e0a9-e50e24dcca9e' },
+		{ id: 'ffe0-hmbt', name: 'HM-BT4531 / FFE0 双特征', service: 0xffe0, write: 0xffe2, notify: 0xffe1 },
 		{ id: 'ffe0', name: 'HM-10 / CC254x', service: 0xffe0, write: 0xffe1, notify: 0xffe1 },
 	]
 
@@ -46,14 +49,33 @@
 			onGone = null
 		}
 
+		function hasWriteProp(ch) {
+			const pr = ch && ch.properties
+			if (!pr || typeof pr !== 'object') return true
+			if (pr.write || pr.writeWithoutResponse) return true
+			if (typeof pr.write === 'boolean' || typeof pr.writeWithoutResponse === 'boolean' || typeof pr.read === 'boolean' || typeof pr.notify === 'boolean' || typeof pr.indicate === 'boolean') return false
+			return true
+		}
+
+		function hasNotifyProp(ch) {
+			const pr = ch && ch.properties
+			if (!pr || typeof pr !== 'object') return true
+			if (pr.notify || pr.indicate) return true
+			if (typeof pr.notify === 'boolean' || typeof pr.indicate === 'boolean' || typeof pr.read === 'boolean' || typeof pr.write === 'boolean' || typeof pr.writeWithoutResponse === 'boolean') return false
+			return true
+		}
+
 		async function findProfile(srv) {
 			for (let i = 0; i < profiles.length; i++) {
 				const p = profiles[i]
-				let svc = null
-				try { svc = await srv.getPrimaryService(p.service) } catch (e) { continue }
-				const tx = await svc.getCharacteristic(p.write)
-				const rx = p.notify === p.write ? tx : await svc.getCharacteristic(p.notify)
-				return { tx, rx }
+				try {
+					const svc = await srv.getPrimaryService(p.service)
+					const tx = await svc.getCharacteristic(p.write)
+					const rx = p.notify === p.write ? tx : await svc.getCharacteristic(p.notify)
+					if (!hasWriteProp(tx)) continue
+					if (p.notify !== p.write && !hasNotifyProp(rx)) continue
+					return { tx, rx }
+				} catch (e) { continue }
 			}
 			throw makeError('NotFoundError', '设备上没有可识别的蓝牙透传服务')
 		}
