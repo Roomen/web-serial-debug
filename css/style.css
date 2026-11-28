@@ -14134,7 +14134,11 @@ html[data-layout='modern'] .mdn-pop-params[hidden] {
 	.connection-filters { grid-template-columns: minmax(0, 1fr); gap: 8px; }
 }
 
-/* ===== eSIM 管理面板 (Tag=66) ===== */
+/* ===== eSIM 管理面板 (Tag=66 V2.32) ===== */
+.sk-esim-head-row .ctl-seg button {
+	padding: 2px 8px;
+	font-size: 0.72rem;
+}
 .sk-esim-eid-box {
 	display: flex;
 	align-items: center;
@@ -14171,6 +14175,11 @@ html[data-layout='modern'] .mdn-pop-params[hidden] {
 	font-weight: 600;
 	margin-bottom: 6px;
 }
+.sk-esim-runtime-flags {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
 .sk-esim-redact-switch {
 	font-size: 0.74rem;
 	font-weight: 500;
@@ -14188,11 +14197,16 @@ html[data-layout='modern'] .mdn-pop-params[hidden] {
 .sk-esim-badge.is-ok { background: rgba(25, 135, 84, 0.16); color: #198754; }
 .sk-esim-badge.is-warn { background: rgba(255, 193, 7, 0.2); color: #b58100; }
 .sk-esim-badge.is-bad { background: rgba(220, 53, 69, 0.16); color: #dc3545; }
-.sk-esim-status-grid {
+.sk-esim-status-grid,
+.sk-esim-ntf-grid {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 	gap: 4px 10px;
 	font-size: 0.78rem;
+}
+.sk-esim-ntf-iccid-cell {
+	grid-column: 1 / -1;
+	word-break: break-all;
 }
 .sk-esim-err-hint {
 	margin-top: 6px;
@@ -14214,13 +14228,22 @@ html[data-layout='modern'] .mdn-pop-params[hidden] {
 }
 .sk-esim-profile-row {
 	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 6px 8px;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+}
+.sk-esim-profile-row.is-masked {
+	border-style: dashed;
+	background: var(--bg-subtle, rgba(128, 128, 128, 0.04));
+}
+.sk-esim-profile-main {
+	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
 	flex-wrap: wrap;
-	padding: 6px 8px;
-	border: 1px solid var(--border-color);
-	border-radius: 6px;
 }
 .sk-esim-profile-meta {
 	min-width: 0;
@@ -14248,10 +14271,30 @@ html[data-layout='modern'] .mdn-pop-params[hidden] {
 .sk-esim-tag.is-ok { background: rgba(25, 135, 84, 0.16); color: #198754; }
 .sk-esim-tag.is-warn { background: rgba(255, 193, 7, 0.2); color: #b58100; }
 .sk-esim-tag.is-info { background: rgba(13, 110, 253, 0.16); color: #0d6efd; }
+.sk-esim-tag.is-carrier { background: rgba(13, 202, 240, 0.16); color: #087990; }
+.sk-esim-tag.is-lock { background: rgba(220, 53, 69, 0.14); color: #dc3545; }
+.sk-esim-tag.is-hidden { background: rgba(111, 66, 193, 0.16); color: #6f42c1; }
+.sk-esim-tag.is-ntf { background: rgba(253, 126, 20, 0.16); color: #b55400; }
 .sk-esim-profile-acts {
 	display: flex;
 	gap: 4px;
 	flex-shrink: 0;
+}
+.sk-esim-policy-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	padding-top: 5px;
+	border-top: 1px dashed var(--border-color);
+	font-size: 0.72rem;
+}
+.sk-esim-policy-chk {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin: 0;
+	color: var(--text-secondary);
 }
 .sk-esim-notice {
 	font-size: 0.76rem;

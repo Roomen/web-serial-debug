@@ -601,14 +601,17 @@ window.SK_TAGS = {
 		{ id: 34, name: '无磁传感器参数', type: 'NULL', desc: '响应返回tag34' },
 		{ id: 35, name: 'Lora参数', type: 'NULL', desc: '响应返回tag35' },
 		{ id: 40, name: '蜂窝搜网参数', type: 'NULL', desc: '响应返回tag40' },
-		{ id: 66, name: 'eSIM信息', type: 'NULL', desc: '响应返回tag66 (ID0/ID1/ID4)' }
+		{ id: 66, name: 'eSIM信息', type: 'NULL', desc: '响应返回tag66 (ID0/ID1/ID2/ID3)' }
 	],
 	'66': [
 		{ id: 0, name: 'EID', type: 'BYTE[16]', desc: '32位数字BCD 高位在前 全0x00表示未就绪', dec: { t: 'esimEid' } },
-		{ id: 1, name: 'Profile列表', type: 'BYTE[1+22*n]', desc: '数量n(1B,0-8)+n*(20B ASCII ICCID+2B状态位域LE: bit0启禁用 bit2-1类型0运营1预置2测试3保留 bit3禁禁PPR bit4禁删PPR bit5回退卡)', dec: { t: 'esimProfiles' } },
-		{ id: 2, name: 'Profile下载触发', type: 'BYTE[n]', desc: 'mode(1B:0内网1外部代理2MCU-HTTPS)+acLen(1B)+AC(ASCII,脱敏)+ccLen(1B)+CC(ASCII,脱敏)', dec: { t: 'esimDownload' } },
-		{ id: 3, name: 'Profile管理', type: 'BYTE[21]', desc: 'op(1B:1启用2禁用3删除)+20B ASCII ICCID', dec: { t: 'esimManage' } },
-		{ id: 4, name: 'eSIM操作状态', type: 'BYTE[12]', desc: 'state(1B)+lastOp(1B)+failStage(1B)+moduleErrCode(2B LE)+时间(7B BCD YYYYMMDDhhmmss, 空闲全0)', dec: { t: 'esimStatus' } }
+		{ id: 1, name: 'Profile列表', type: 'BYTE[1+22*n]', desc: '数量n(1B,0-8)+n*(20B ASCII ICCID+2B状态位域LE: bit0启禁用 bit2-1类型0运营1预置2测试3保留 bit3有待发通知 bit8禁删 bit9禁停 bit10客户隐藏 bit11保底种子卡)', dec: { t: 'esimProfiles' } },
+		{ id: 2, name: '事务与缓存状态', type: 'BYTE[14]', desc: 'state(1B)+runtimeFlags(1B:bit0刷新中 bit1缓存就绪 bit2续传保活)+lastOp(1B)+failStage(1B)+moduleErrCode(2B LE)+opTime(7B BCD)+cacheAgeSec(1B)', dec: { t: 'esimStatus' } },
+		{ id: 3, name: '待发通知摘要', type: 'BYTE[14]', desc: 'totalCount(1B,0xFF未读)+deleteCount(1B)+otherCount(1B)+headEvent(1B:0无1安装2启用3禁用4删除)+headIccidBcd(10B压缩BCD)', dec: { t: 'esimNtfSummary' } },
+		{ id: 4, name: 'Profile下载触发', type: 'BYTE[n]', desc: 'mode(1B:0内网1近端XFER代理2预留)+acLen(1B)+AC(ASCII,脱敏)+ccLen(1B)+CC(ASCII,脱敏)', dec: { t: 'esimDownload' } },
+		{ id: 5, name: '单卡管理触发', type: 'BYTE[21]', desc: 'op(1B:1启用切卡2禁用3删除)+20B ASCII ICCID', dec: { t: 'esimManage' } },
+		{ id: 6, name: '通知队列操作触发', type: 'BYTE[1]', desc: 'op(1B:1同步待发通知2强清本地死通知)', dec: { t: 'esimNtfManage' } },
+		{ id: 7, name: '卡管控策略配置', type: 'BYTE[22]', desc: 'op(1B:0设置1清空全部)+20B ASCII ICCID+policyMask(1B:bit0禁删 bit1禁停 bit2客户隐藏 bit3保底)', dec: { t: 'esimPolicy' } }
 	],
 	'11': [
 		{ id: 0, name: '信息收到处理中', type: 'BYTE', desc: '结果码0' },

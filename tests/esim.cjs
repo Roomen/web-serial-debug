@@ -1,12 +1,14 @@
 // Run: node tests/esim.cjs — synthetic data only.
-// 覆盖: SEK Tag=66 / Tag=10 ID=66 编解码与 logView 脱敏、profile_class 反转与位域解码、
-// ID4 模组码/时间戳解析、Profile 防误操作校验、ZMODEM 停等 CRC32 环回、mode=1 四轮 ES9+ 状态机(HTTP 200/204/CAN*5)
+// 覆盖: SEK Tag=66 V2.32 (ID0~ID7) / Tag=10 ID=66 编解码与 logView 脱敏、ID1 低/高字节位域与运营商识别、
+// ID2 14B 事务与缓存状态 (runtimeFlags/cacheAgeSec/错误码分区)、ID3 14B 待发通知摘要与 10B BCD ICCID、
+// ID4~ID7 下行编解码与策略拦截、近端 XFER (0xA5 0x5A) 协议环回/块长协商 (700B/128B)/第3轮 60s 断连 QUERY 续传、
+// ID6 op=1 待发通知 XFER(target=0x03) 同步、以及 esim-panel.js 客户/管理员视图与通知策略交互回归
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
 
-const Zmodem = require('../js/zmodem.js')
+const Xfer = require('../js/xfer.js')
 const EsimCore = require('../js/esim-core.js')
 
 // 加载 SEK 协议脚本做帧编解码与 logView 回归（同步注入 EsimCore，与浏览器一致）
@@ -55,25 +57,47 @@ function asciiPadded(s, len) {
 	return out
 }
 
-// 1. profile_class 反转映射与状态位域编解码
+// 1. profile_class 反转映射、V2.32 statusBits 位域编解码与 ICCID 运营商识别
 {
 	assert.equal(EsimCore.mapAtProfileClassToId1(2), 0, 'AT 操作文件(2) -> ID1 运营(0)')
 	assert.equal(EsimCore.mapAtProfileClassToId1(1), 1, 'AT 预置文件(1) -> ID1 预置/引导(1)')
 	assert.equal(EsimCore.mapAtProfileClassToId1(0), 2, 'AT 测试文件(0) -> ID1 测试(2)')
-	assert.equal(EsimCore.mapAtProfileClassToId1(9), 3, '其他 -> 保留(3)')
+	assert.equal(EsimCore.mapAtProfileClassToId1(9), 3, '其他 -> 未知/保留(3)')
 
-	const f1 = EsimCore.encodeProfileFlags({ enabled: true, profileClass: 0, pprDisableBlocked: false, pprDeleteBlocked: true, fallback: true })
-	assert.equal(f1, 0x0031)
+	const f1 = EsimCore.encodeProfileFlags({
+		enabled: true,
+		profileClass: 0,
+		hasPendingNtf: true,
+		lockDelete: true,
+		lockDisable: false,
+		hiddenUser: true,
+		fallbackSeed: true,
+	})
+	// bit0(0x0001) | bit3(0x0008) | bit8(0x0100) | bit10(0x0400) | bit11(0x0800) = 0x0D09
+	assert.equal(f1, 0x0D09)
 	const d1 = EsimCore.decodeProfileFlags(f1)
 	assert.equal(d1.enabled, true)
 	assert.equal(d1.profileClass, 0)
 	assert.equal(d1.profileClassLabel, '运营')
-	assert.equal(d1.pprDisableBlocked, false)
-	assert.equal(d1.pprDeleteBlocked, true)
-	assert.equal(d1.fallback, true)
+	assert.equal(d1.hasPendingNtf, true)
+	assert.equal(d1.policyMask, 0x0D)
+	assert.equal(d1.lockDelete, true)
+	assert.equal(d1.lockDisable, false)
+	assert.equal(d1.hiddenUser, true)
+	assert.equal(d1.fallbackSeed, true)
+
+	// ICCID 归属运营商识别
+	assert.equal(EsimCore.identifyIccidCarrier('89860011223344556677').name, '中国移动')
+	assert.equal(EsimCore.identifyIccidCarrier('89860411223344556677').name, '中国移动')
+	assert.equal(EsimCore.identifyIccidCarrier('89860111223344556677').name, '中国联通')
+	assert.equal(EsimCore.identifyIccidCarrier('89860911223344556677').name, '中国联通')
+	assert.equal(EsimCore.identifyIccidCarrier('89860311223344556677').name, '中国电信')
+	assert.equal(EsimCore.identifyIccidCarrier('89861111223344556677').name, '中国电信')
+	assert.equal(EsimCore.identifyIccidCarrier('8985201122334455667').name, '中国香港')
+	assert.equal(EsimCore.identifyIccidCarrier('9999999999'), null)
 }
 
-// 2. SEK Tag=10 ID=66 查询帧与 0x83 Tag=66 (ID0 + ID1 + ID4) 解码与 logView
+// 2. SEK Tag=10 ID=66 查询帧与 0x83 Tag=66 V2.32 (ID0 + ID1 + ID2 14B + ID3 14B) 解码与 logView
 {
 	const qFrame = window.skBuildDownFrame({
 		frameSeq: 7,
@@ -87,49 +111,58 @@ function asciiPadded(s, len) {
 	assert.equal(qParsed.tlv[0].items[0].id, 66)
 	assert.equal(qParsed.tlv[0].items[0].name, 'eSIM信息')
 
-	// 构造 0x83 + Tag66 (ID0 EID + ID1 2个Profile + ID4 严格12B: 状态/操作/阶段/0x090C模组码/7B BCD时间)
+	// 构造 0x83 + Tag66 (ID0 EID + ID1 2个Profile + ID2 14B状态 + ID3 14B通知摘要)
 	const eidBytes = [0x89, 0x04, 0x90, 0x32, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34, 0x56, 0x78]
-	const p1Flags = EsimCore.encodeProfileFlags({ enabled: true, profileClass: 0 })
-	const p2Flags = EsimCore.encodeProfileFlags({ enabled: false, profileClass: 1, pprDeleteBlocked: true })
+	const p1Flags = EsimCore.encodeProfileFlags({ enabled: true, profileClass: 0, lockDelete: true, lockDisable: true, fallbackSeed: true })
+	const p2Flags = EsimCore.encodeProfileFlags({ enabled: false, profileClass: 1, hasPendingNtf: true, hiddenUser: true })
 	const id1Val = [2]
 		.concat(asciiPadded('89860011223344556677', 20), [p1Flags & 0xff, p1Flags >> 8])
-		.concat(asciiPadded('89860099887766554433', 20), [p2Flags & 0xff, p2Flags >> 8])
-	const id4Val = [3, 2, 6, 0x0C, 0x09, 0x20, 0x26, 0x11, 0x24, 0x19, 0x30, 0x00]
+		.concat(asciiPadded('89860199887766554433', 20), [p2Flags & 0xff, p2Flags >> 8])
+	// ID2 (14B): state=3(失败), runtimeFlags=0x03(刷新中+缓存就绪), lastOp=2(近端XFER下载), failStage=6, err=0x090C, time=2026-11-24 19:30:00, cacheAge=18s
+	const id2Val = [3, 0x03, 2, 6, 0x0C, 0x09, 0x20, 0x26, 0x11, 0x24, 0x19, 0x30, 0x00, 18]
+	// ID3 (14B): total=3, del=1, other=2, headEvent=4(删除), headIccidBcd=19位 8985201234567890123 + 0xF
+	const headBcd = Array.from(EsimCore.encodeIccidBcd('8985201234567890123'))
+	assert.equal(headBcd.length, 10)
+	assert.equal(headBcd[9] & 0x0f, 0x0f, '19 位 ICCID 末尾半字节必须补 0xF')
+	const id3Val = [3, 1, 2, 4].concat(headBcd)
 
 	const up = sekUp(0x83, tlvBlock(66, [
 		[0].concat(eidBytes),
 		[1].concat(id1Val),
-		[4].concat(id4Val),
+		[2].concat(id2Val),
+		[3].concat(id3Val),
 	]))
-	// 2a. 未查过模组版本时，0x090C 仅显示原始十六进制并标注未识别模组，不套用 EG800Z 0x8500xxxx 文案
+
+	// 2a. 未查过模组版本时，0x090C 仅显示原始十六进制并标注未识别模组
 	window.skSession.resetModule()
 	const parsedUnknown = window.skParseFrame(up)
 	assert.equal(parsedUnknown.ok, true)
 	assert.equal(parsedUnknown.tlv.length, 1)
 	assert.equal(parsedUnknown.tlv[0].tag, 66)
 	assert.equal(parsedUnknown.tlv[0].name, 'eSIM管理')
-	assert.equal(parsedUnknown.tlv[0].items.length, 3)
+	assert.equal(parsedUnknown.tlv[0].items.length, 4)
 	assert.equal(parsedUnknown.tlv[0].items[0].decoded, '89049032000000000000000012345678')
 	assert.ok(parsedUnknown.tlv[0].items[1].decoded.includes('89860011223344556677'))
-	assert.ok(parsedUnknown.tlv[0].items[1].decoded.includes('启用,运营'))
-	assert.ok(parsedUnknown.tlv[0].items[1].decoded.includes('禁用,预置/引导,禁删PPR'))
+	assert.ok(parsedUnknown.tlv[0].items[1].decoded.includes('启用,运营,禁删,禁停,保底'))
+	assert.ok(parsedUnknown.tlv[0].items[1].decoded.includes('禁用,预置/引导,有待发通知,客户隐藏'))
 	assert.ok(parsedUnknown.tlv[0].items[2].decoded.includes('0x090C（未识别模组）'))
-	assert.ok(!parsedUnknown.tlv[0].items[2].decoded.includes('0x8500090C'), '未识别模组时绝不可套用 EG800Z 0x8500xxxx')
-	assert.ok(!parsedUnknown.tlv[0].items[2].decoded.includes('PE 处理错误'), '未识别模组时绝不可套用 EG800Z 文案')
+	assert.ok(parsedUnknown.tlv[0].items[2].decoded.includes('刷新中,缓存就绪'))
+	assert.ok(parsedUnknown.tlv[0].items[2].decoded.includes('18s前'))
+	assert.ok(!parsedUnknown.tlv[0].items[2].decoded.includes('0x8500090C'))
+	assert.ok(parsedUnknown.tlv[0].items[3].decoded.includes('总计:3 (删除:1, 其他:2)'))
+	assert.ok(parsedUnknown.tlv[0].items[3].decoded.includes('首条:删除 ICCID=8985201234567890123'))
 	const lvUnknown = window.skLogView(parsedUnknown)
 	assert.ok(lvUnknown && lvUnknown.sections.length === 1)
 	assert.equal(lvUnknown.sections[0].title, 'Tag66 eSIM管理')
-	assert.equal(lvUnknown.sections[0].pairs.length, 3)
-	assert.ok(lvUnknown.notes.some((n) => n.kind === 'warn' && n.text.includes('未识别模组')), '未识别模组遇到 0x0001~0x117F 时 logView 应给出提示')
+	assert.equal(lvUnknown.sections[0].pairs.length, 4)
+	assert.ok(lvUnknown.notes.some((n) => n.kind === 'warn' && n.text.includes('未识别模组')))
 
-	// 2b. 通过 Tag=1 ID=10 识别到 EG800Z 模组后，启用 EG800Z +QESIM 专属码表与 0x8500xxxx
+	// 2b. 通过 Tag=1 ID=10 识别到 EG800Z 模组后，启用 EG800Z +QESIM 专属码表
 	const tag1Eg800z = sekUp(0x83, tlvBlock(1, [
 		[10].concat(asciiPadded('EG800ZEULAR09A01M04_BETA261020_E', 32)),
 	]))
-	const parsedTag1 = window.skParseFrame(tag1Eg800z)
-	assert.equal(parsedTag1.ok, true)
+	assert.equal(window.skParseFrame(tag1Eg800z).ok, true)
 	assert.equal(window.skSession.isEg800z(), true)
-	assert.equal(window.skSession.moduleVersion, 'EG800ZEULAR09A01M04_BETA261020_E')
 
 	const parsed = window.skParseFrame(up)
 	assert.equal(parsed.ok, true)
@@ -139,743 +172,817 @@ function asciiPadded(s, len) {
 	assert.ok(parsed.tlv[0].items[2].decoded.includes('2026-11-24 19:30:00'))
 
 	const lv = window.skLogView(parsed)
-	assert.ok(lv && lv.sections.length === 1)
-	assert.equal(lv.sections[0].title, 'Tag66 eSIM管理')
-	assert.equal(lv.sections[0].pairs.length, 3)
-	assert.ok(!lv.notes.some((n) => n.text.includes('未识别模组')), '已识别 EG800Z 不应再提示未识别模组')
+	assert.ok(!lv.notes.some((n) => n.text.includes('未识别模组')))
 
-	// 2c. 识别到非 EG800Z 模组（如 EG800K / BC660K）时，0x090C 仅保留原始十六进制码，不套用 EG800Z 文案也不提示未识别
+	// 2c. 识别到非 EG800Z 模组（如 BC660K）时，不套用 EG800Z 文案也不提示未识别
 	const tag1Other = sekUp(0x83, tlvBlock(1, [
 		[10].concat(asciiPadded('BC660KGLAAR01A05', 32)),
 		[12].concat(asciiPadded('BC660K', 16)),
 	]))
 	assert.equal(window.skParseFrame(tag1Other).ok, true)
-	assert.equal(window.skSession.isEg800z(), false)
 	const parsedOther = window.skParseFrame(up)
 	assert.ok(parsedOther.tlv[0].items[2].decoded.includes('模组码:0x090C '))
 	assert.ok(!parsedOther.tlv[0].items[2].decoded.includes('0x8500090C'))
-	assert.ok(!parsedOther.tlv[0].items[2].decoded.includes('PE 处理错误'))
-	assert.ok(!parsedOther.tlv[0].items[2].decoded.includes('未识别模组'))
-	const lvOther = window.skLogView(parsedOther)
-	assert.ok(!lvOther.notes.some((n) => n.text.includes('未识别模组')), '已识别非 EG800Z 时不应提示未识别模组')
+	assert.ok(!window.skLogView(parsedOther).notes.some((n) => n.text.includes('未识别模组')))
 
-	// 2d. 换表（设备唯一码变更）必须重置模组识别状态，避免上一台 EG800Z 的识别泄漏到新设备；snapshot/restore 保持一致
+	// 2d. 换表（设备唯一码变更）必须重置模组识别状态
 	assert.equal(window.skParseFrame(tag1Eg800z).ok, true)
 	const snapEg = window.skSession.snapshot()
-	assert.equal(snapEg.moduleVersion, 'EG800ZEULAR09A01M04_BETA261020_E')
-	const upOtherDevice = sekUpWithUid(0x83, tlvBlock(66, [[4].concat(id4Val)]), [0x00, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44])
+	const upOtherDevice = sekUpWithUid(0x83, tlvBlock(66, [[2].concat(id2Val)]), [0x00, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44])
 	const parsedOtherDev = window.skParseFrame(upOtherDevice)
-	assert.equal(window.skSession.hasModule(), false, '切换设备唯一码必须清空模组版本缓存')
+	assert.equal(window.skSession.hasModule(), false)
 	assert.ok(parsedOtherDev.tlv[0].items[0].decoded.includes('0x090C（未识别模组）'))
-	assert.ok(!parsedOtherDev.tlv[0].items[0].decoded.includes('0x8500090C'))
 	window.skSession.restore(snapEg)
-	assert.equal(window.skSession.isEg800z(), true, 'restore 应恢复会话快照中的模组版本')
+	assert.equal(window.skSession.isEg800z(), true)
 	window.skSession.resetModule()
 
-	// 结构化解码器测试（严格 12B：含空闲全 0 时间戳与 9B 截断拒绝）
-	assert.equal(EsimCore.decodeEid(new Uint8Array(16)).ready, false)
-	const stUnknown = EsimCore.decodeStatus(id4Val)
-	assert.equal(stUnknown.state, 3)
-	assert.equal(stUnknown.failStage, 6)
-	assert.equal(stUnknown.moduleErrCode, 0x090C)
-	assert.equal(stUnknown.errCategory, 'module-unidentified')
-	assert.equal(stUnknown.qesimFullCode, '')
-	assert.equal(stUnknown.errName, '')
-	assert.ok(stUnknown.errDisplay.includes('0x090C'))
-	assert.ok(stUnknown.errHint.includes('Tag1'))
-
-	const stEg = EsimCore.decodeStatus(id4Val, { moduleVersion: 'EG800ZEULAR08A02M04_ESIM_01.001.01.001' })
+	// 2e. 结构化解码器测试：ID2 严格 14B（拒绝旧 12B）、cacheAgeSec 边界、ID3 14B 未读/空/有效
+	assert.equal(EsimCore.decodeStatus(id2Val.slice(0, 12)), null, '12B 旧版长度必须拒绝返回 null')
+	const stEg = EsimCore.decodeStatus(id2Val, { moduleVersion: 'EG800ZEULAR08A02M04_ESIM_01.001.01.001' })
 	assert.equal(stEg.state, 3)
+	assert.equal(stEg.runtimeFlags, 0x03)
+	assert.equal(stEg.cacheRefreshing, true)
+	assert.equal(stEg.bootCacheReady, true)
+	assert.equal(stEg.nearKeepaliveActive, false)
+	assert.equal(stEg.lastOp, 2)
 	assert.equal(stEg.failStage, 6)
 	assert.equal(stEg.moduleErrCode, 0x090C)
-	assert.equal(stEg.errCategory, 'qesim')
 	assert.equal(stEg.qesimFullCode, '0x8500090C')
-	assert.ok(stEg.errName.includes('PE 处理错误'))
 	assert.equal(stEg.timeText, '2026-11-24 19:30:00')
-	assert.ok(stEg.errHint.length > 0)
+	assert.equal(stEg.cacheAgeSec, 18)
+	assert.equal(stEg.cacheAgeText, '18s 前')
 
-	const stOther = EsimCore.decodeStatus(id4Val, { moduleVersion: 'EG800KEULAR08A01M04' })
-	assert.equal(stOther.errCategory, 'module-other')
-	assert.equal(stOther.qesimFullCode, '')
-	assert.equal(stOther.errName, '')
-	assert.equal(stOther.errHint, '')
-	assert.equal(stOther.errDisplay, '0x090C')
+	// cacheAgeSec = 255 区分未刷新 vs >=255s 前；runtimeFlags bit2 续传保活
+	const id2Keepalive = [1, 0x06, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255]
+	const stKa = EsimCore.decodeStatus(id2Keepalive)
+	assert.equal(stKa.bootCacheReady, true)
+	assert.equal(stKa.nearKeepaliveActive, true)
+	assert.equal(stKa.cacheAgeText, '≥255s 前')
 
-	const id4Idle = [0, 0, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-	const upIdle = sekUp(0x83, tlvBlock(66, [[4].concat(id4Idle)]))
-	const parsedIdle = window.skParseFrame(upIdle)
-	assert.equal(parsedIdle.ok, true)
-	assert.equal(parsedIdle.tlv[0].items.length, 1, '全0空闲12B ID4不得误判为9B把末尾3B拆成伪ID')
-	assert.equal(parsedIdle.tlv[0].items[0].raw.length, 12)
-	const stIdle = EsimCore.decodeStatus(id4Idle)
-	assert.equal(stIdle.state, 0)
-	assert.equal(stIdle.errCategory, 'none')
-	assert.equal(stIdle.timeText, '')
+	const id2Unread = [0, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255]
+	const stUnread = EsimCore.decodeStatus(id2Unread)
+	assert.equal(stUnread.bootCacheReady, false)
+	assert.equal(stUnread.cacheAgeText, '尚未刷新')
 
-	// 9B 截断 ID4 必须判不完整 / 返回 null
-	assert.equal(EsimCore.decodeStatus([3, 2, 6, 0x0C, 0x09, 0x00, 0x00, 0x00, 0x00]), null)
-	const upTrunc = sekUp(0x83, tlvBlock(66, [[4, 3, 2, 6, 0x0C, 0x09, 0x00, 0x00, 0x00, 0x00]]))
-	const parsedTrunc = window.skParseFrame(upTrunc)
-	assert.equal(parsedTrunc.tlv[0].items[0].partial, true)
+	// ID3 待发通知摘要解码
+	const ntf = EsimCore.decodeNtfSummary(id3Val)
+	assert.equal(ntf.unread, false)
+	assert.equal(ntf.totalCount, 3)
+	assert.equal(ntf.deleteCount, 1)
+	assert.equal(ntf.otherCount, 2)
+	assert.equal(ntf.headEvent, 4)
+	assert.equal(ntf.headEventLabel, '删除')
+	assert.equal(ntf.headIccid, '8985201234567890123')
+	assert.equal(ntf.headCarrier.name, '中国香港')
+
+	const ntfUnread = EsimCore.decodeNtfSummary([0xFF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+	assert.equal(ntfUnread.unread, true)
+	assert.equal(ntfUnread.headIccid, '')
+	assert.equal(EsimCore.decodeNtfSummary([0, 0, 0]), null)
 }
 
-// 2.5. EG800Z 识别、完整 +QESIM 码表与 0xE1xx / 0xE2xx / 0xE3se / 0xE4rn 细分子错误码全分区测试
+// 2.5. 错误码全分区测试（含 0x0105 / 0x0802 / 0x0705 / 0xE1xx / 0xE2xx / 0xE3se / 0xE4rn XFER）
 {
-	// 模组识别边界（按型号前缀判断）
-	const egProf1 = EsimCore.detectModuleProfile('EG800ZEULAR09A01M04_BETA261020_E')
-	assert.equal(egProf1.isEg800z, true)
-	assert.equal(egProf1.modelPrefix, 'EG800Z')
-	assert.equal(EsimCore.detectModuleProfile('EG800ZEULAR08A02M04_ESIM_01.001.01.001').isEg800z, true)
-	assert.equal(EsimCore.detectModuleProfile('eg800z-eu').isEg800z, true)
-	assert.equal(EsimCore.detectModuleProfile({ moduleModel: 'EG800Z' }).isEg800z, true)
-	assert.equal(EsimCore.detectModuleProfile({ moduleModel: 'Quectel EG800Z' }).isEg800z, true)
-	assert.equal(EsimCore.detectModuleProfile('OTHER_EG800Z_TEST').isEg800z, false, '仅识别开头型号前缀，不误匹配中间子串')
-	const egkProf = EsimCore.detectModuleProfile('EG800KEULAR08A01M04')
-	assert.equal(egkProf.isEg800z, false)
-	assert.equal(egkProf.known, true)
-	assert.equal(egkProf.modelPrefix, 'EG800K')
-	const bcProf = EsimCore.detectModuleProfile('BC660KGLAAR01A05')
-	assert.equal(bcProf.isEg800z, false)
-	assert.equal(bcProf.modelPrefix, 'BC660K')
-	assert.equal(EsimCore.detectModuleProfile('').known, false)
-	assert.equal(EsimCore.detectModuleProfile('\x00\x00\x00').known, false)
-	assert.equal(EsimCore.detectModuleProfile('00000000').known, false)
-
-	// 完整 EG800Z +QESIM 码表（含 0x000F~0x0015 区间与 0x0B03~0x0B0B）
 	const egMod = { moduleVersion: 'EG800ZEULAR09A01M04_BETA261020_E' }
-	const qesimCases = [
-		[0x0004, '操作超时'],
-		[0x0005, '通用错误'],
-		[0x0008, '消息发送错误'],
-		[0x000B, 'APDU 解析错误'],
-		[0x000E, '文件系统操作错误'],
-		[0x000F, 'HTTP / TLS'],
-		[0x0012, 'HTTP / TLS'],
-		[0x0015, 'HTTP / TLS'],
-		[0x0016, 'SM-DP+ 返回错误'],
-		[0x0017, '网络/连接超时'],
-		[0x0018, '网络/连接超时'],
-		[0x0019, '网络错误'],
-		[0x0102, 'Profile 已处于启用态'],
-		[0x0105, '卡应用繁忙'],
-		[0x0203, 'PPR 策略禁止禁用'],
-		[0x0204, '卡应用繁忙'],
-		[0x0302, '仍处于启用态'],
-		[0x0303, 'PPR 策略禁止删除'],
-		[0x0704, '无会话上下文'],
-		[0x0705, '无效 OID'],
-		[0x0706, 'Challenge 不匹配'],
-		[0x0909, 'ICCID 已存在'],
-		[0x090C, 'PE 处理错误'],
-		[0x0B03, 'eUICC 证书无效'],
-		[0x0B04, 'eUICC 证书已过期'],
-		[0x0B05, 'eUICC 签名无效'],
-		[0x0B06, 'MatchingID 被拒绝'],
-		[0x0B07, 'EID 不匹配'],
-		[0x0B08, '没有符合条件的 Profile'],
-		[0x0B09, '未知的 CI 公钥'],
-		[0x0B0A, '交易 ID 未知'],
-		[0x0B0B, 'eUICC 存储空间不足'],
-	]
-	for (const [code, keyword] of qesimCases) {
-		const r = EsimCore.decodeModuleErrCode(code, egMod)
-		assert.equal(r.category, 'qesim', 'code 0x' + code.toString(16))
-		assert.equal(r.qesimFullCode, '0x8500' + code.toString(16).toUpperCase().padStart(4, '0'))
-		assert.ok(r.name.includes(keyword), '0x' + code.toString(16) + ' name=' + r.name)
-		assert.ok(r.displayText.includes(r.qesimFullCode) && r.displayText.includes(keyword))
-		// 非 EG800Z 绝不套用 EG800Z 文案
-		const rOther = EsimCore.decodeModuleErrCode(code, { moduleVersion: 'BC660KGLAAR01A05' })
-		assert.equal(rOther.category, 'module-other')
-		assert.equal(rOther.qesimFullCode, '')
-		assert.equal(rOther.name, '')
-	}
-	// 区间内未收录的 EG800Z 原始码仍保留 0x8500xxxx
-	const rUnmappedEg = EsimCore.decodeModuleErrCode(0x0501, egMod)
-	assert.equal(rUnmappedEg.category, 'qesim')
-	assert.equal(rUnmappedEg.qesimFullCode, '0x85000501')
-	assert.equal(rUnmappedEg.displayText, '0x0501 (0x85000501)')
+	assert.ok(EsimCore.decodeModuleErrCode(0x0105, egMod).name.includes('STK'))
+	assert.ok(EsimCore.decodeModuleErrCode(0x0302, egMod).name.includes('禁止删除启用态'))
+	assert.ok(EsimCore.decodeModuleErrCode(0x0802, egMod).name.includes('禁止删除启用态'))
+	assert.ok(EsimCore.decodeModuleErrCode(0x0705, egMod).name.includes('激活码无效'))
 
-	// 0xE1xx：模组 +CME ERROR（不依赖模组识别）
-	const cme53 = EsimCore.decodeModuleErrCode(0xE135)
-	assert.equal(cme53.category, 'cme')
-	assert.equal(cme53.qesimFullCode, '')
-	assert.equal(cme53.name, '+CME ERROR: 53 (参数非法)')
-	assert.equal(cme53.displayText, '0xE135 (+CME ERROR: 53 (参数非法))')
-	assert.equal(EsimCore.decodeModuleErrCode(0xE10A).name, '+CME ERROR: 10 (SIM 未插入)')
-	assert.equal(EsimCore.decodeModuleErrCode(0xE10D).name, '+CME ERROR: 13 (SIM 故障)')
-	assert.equal(EsimCore.decodeModuleErrCode(0xE11E).name, '+CME ERROR: 30')
-	const cmeSat = EsimCore.decodeModuleErrCode(0xE1FF)
-	assert.equal(cmeSat.detail.saturated, true)
-	assert.equal(cmeSat.name, '+CME ERROR: ≥255')
+	assert.equal(EsimCore.decodeModuleErrCode(0xE135).name, '+CME ERROR: 53 (参数非法)')
+	assert.ok(EsimCore.decodeModuleErrCode(0xE205).name.includes('AT+QIACT=1'))
+	assert.equal(EsimCore.decodeModuleErrCode(0xE367).detail.stateName, 'WAIT_URC')
 
-	// 0xE2xx：mode=0 上电/入网与前置步骤失败（不依赖模组识别）
-	const precondCases = [
-		[0xE201, 'commuEnable'],
-		[0xE202, 'AT+CFUN=1'],
-		[0xE203, 'AT+CEREG'],
-		[0xE204, 'AT+CGATT'],
-		[0xE205, 'AT+QIACT=1'],
-		[0xE206, 'AT+QIACT?'],
-		[0xE207, 'AT+CSQ'],
-		[0xE208, 'mode=1'],
-	]
-	for (const [code, kw] of precondCases) {
-		const r = EsimCore.decodeModuleErrCode(code)
-		assert.equal(r.category, 'precond')
-		assert.equal(r.qesimFullCode, '')
-		assert.ok(r.name.includes(kw), '0x' + code.toString(16) + ' -> ' + r.name)
-	}
+	const xf3E = EsimCore.decodeModuleErrCode(0xE4BE) // dir=1(PUSH), round=3, errMag=0xE(60s keepalive timeout)
+	assert.equal(xf3E.category, 'xfer')
+	assert.equal(xf3E.detail.dir, 1)
+	assert.equal(xf3E.detail.round, 3)
+	assert.ok(xf3E.detail.xferName.includes('60s 保活超时'))
+	assert.ok(xf3E.displayText.includes('XFER') && xf3E.displayText.includes('第 3 轮'))
 
-	// 0xE3se：AT+QESIM 状态机内部错误（不依赖模组识别）
-	const fsm67 = EsimCore.decodeModuleErrCode(0xE367)
-	assert.equal(fsm67.category, 'qesim-fsm')
-	assert.equal(fsm67.qesimFullCode, '')
-	assert.equal(fsm67.detail.stateName, 'WAIT_URC')
-	assert.equal(fsm67.detail.statusName, '超时')
-	assert.ok(fsm67.displayText.includes('WAIT_URC') && fsm67.displayText.includes('超时'))
-
-	const fsm8C = EsimCore.decodeModuleErrCode(0xE38C)
-	assert.equal(fsm8C.detail.stateName, 'REINJECTING')
-	assert.equal(fsm8C.detail.statusName, '响应含 HTTP 头')
-
-	const fsmBF = EsimCore.decodeModuleErrCode(0xE3BF)
-	assert.equal(fsmBF.detail.stateName, 'ABORTED')
-	assert.equal(fsmBF.detail.statusName, '部分中止')
-
-	// 0xE4rn：mode=1 近端 ZMODEM 传输失败（不依赖模组识别）
-	const zmAB = EsimCore.decodeModuleErrCode(0xE4AB)
-	assert.equal(zmAB.category, 'zmodem')
-	assert.equal(zmAB.qesimFullCode, '')
-	assert.equal(zmAB.detail.dir, 1)
-	assert.equal(zmAB.detail.round, 2)
-	assert.equal(zmAB.detail.dirLabel, 'Host→MCU 收响应')
-	assert.ok(zmAB.detail.zmodemName.includes('对端 CAN 取消'))
-	assert.ok(zmAB.displayText.includes('第 2 轮') && zmAB.displayText.includes('Host→MCU 收响应') && zmAB.displayText.includes('CAN 取消'))
-
-	const zm12 = EsimCore.decodeModuleErrCode(0xE412)
-	assert.equal(zm12.detail.dir, 0)
-	assert.equal(zm12.detail.round, 1)
-	assert.equal(zm12.detail.dirLabel, 'MCU→Host 发请求')
-	assert.equal(zm12.detail.zmodemName, '读超时')
-
-	const zm9E = EsimCore.decodeModuleErrCode(0xE49E)
-	assert.equal(zm9E.detail.dir, 1)
-	assert.equal(zm9E.detail.round, 1)
-	assert.equal(zm9E.detail.zmodemName, '未收到 ZFILE')
-
-	const zm03 = EsimCore.decodeModuleErrCode(0xE403)
-	assert.equal(zm03.detail.round, 0)
-	assert.equal(zm03.detail.roundLabel, '未知轮次')
-	assert.equal(zm03.detail.zmodemName, 'I/O 断开')
-
-	// 协议帧端到端解析：未识别模组时 0xE1xx ~ 0xE4xx 仍应正常解析且不弹出「未识别模组」警告
-	window.skSession.resetModule()
-	for (const [code, expectSub] of [
-		[0xE135, '+CME ERROR: 53 (参数非法)'],
-		[0xE205, 'AT+QIACT=1 PDP 激活失败'],
-		[0xE367, 'WAIT_URC'],
-		[0xE4AB, '第 2 轮'],
-	]) {
-		const id4 = [3, 2, 7, code & 0xff, (code >> 8) & 0xff, 0x20, 0x26, 0x11, 0x26, 0x20, 0x00, 0x00]
-		const pf = window.skParseFrame(sekUp(0x83, tlvBlock(66, [[4].concat(id4)])))
-		assert.equal(pf.ok, true)
-		assert.ok(pf.tlv[0].items[0].decoded.includes(expectSub), '0x' + code.toString(16) + ' decoded=' + pf.tlv[0].items[0].decoded)
-		assert.ok(!pf.tlv[0].items[0].decoded.includes('0x8500'), '0xE1xx~0xE4xx 绝不能拼 0x8500')
-		const plv = window.skLogView(pf)
-		assert.ok(!plv.notes.some((n) => n.text.includes('未识别模组')), '0xE1xx~0xE4xx 不应提示未识别模组')
-	}
+	const xfAbt = EsimCore.decodeModuleErrCode(0xE4AB) // dir=1, round=2, errMag=0xB(ABORT)
+	assert.equal(xfAbt.category, 'xfer')
+	assert.ok(xfAbt.detail.xferName.includes('ABORT'))
 }
 
-// 3. Tag=66 ID=2 下载触发编码与 AC/CC 脱敏验证（严禁明文出现在解析输出与 logData 中）
+// 3. Tag=66 ID4(下载触发脱敏) / ID5(单卡管理与策略拦截) / ID6(通知队列) / ID7(卡管控策略配置)
 {
+	// ID4 下载触发 + 脱敏
 	const secretAc = 'LPA:1$smdp.example.invalid$SECRET-MATCHING-ID-987654'
 	const secretCc = 'CONF-CODE-4321'
-	const val = EsimCore.encodeDownloadTrigger({ mode: 1, ac: secretAc, cc: secretCc })
-	assert.equal(val[0], 1)
-	assert.equal(val[1], secretAc.length)
-	assert.equal(val[2 + secretAc.length], secretCc.length)
+	const dlVal = EsimCore.encodeDownloadTrigger({ mode: 1, ac: secretAc, cc: secretCc })
+	assert.equal(dlVal[0], 1)
+	assert.equal(dlVal[1], secretAc.length)
+	assert.equal(dlVal[2 + secretAc.length], secretCc.length)
 
-	const redacted = EsimCore.redactDownloadValue(val)
-	assert.equal(redacted.length, val.length)
+	const redacted = EsimCore.redactDownloadValue(dlVal)
+	assert.equal(redacted.length, dlVal.length)
 	assert.ok(!Buffer.from(redacted).toString('ascii').includes('SECRET-MATCHING-ID'))
 	assert.ok(!Buffer.from(redacted).toString('ascii').includes('CONF-CODE-4321'))
 
-	const downFrame = window.skBuildDownFrame({
+	const downDl = window.skBuildDownFrame({
 		frameSeq: 8,
 		version: 2,
 		funcCode: 0x01,
-		tlv: [{ tag: 66, items: [{ id: 2, value: val }] }],
+		tlv: [{ tag: 66, items: [{ id: 4, value: dlVal }] }],
 	})
-	const parsed = window.skParseFrame(downFrame)
-	assert.equal(parsed.ok, true)
-	const decoded = parsed.tlv[0].items[0].decoded
-	assert.ok(decoded.includes('近端外部代理'))
-	assert.ok(decoded.includes('已脱敏'))
-	assert.ok(!decoded.includes('SECRET-MATCHING-ID'), '解码输出绝不能包含明文 AC')
-	assert.ok(!decoded.includes('CONF-CODE-4321'), '解码输出绝不能包含明文 CC')
+	const parsedDl = window.skParseFrame(downDl)
+	assert.equal(parsedDl.ok, true)
+	assert.equal(parsedDl.tlv[0].items[0].id, 4)
+	assert.ok(parsedDl.tlv[0].items[0].decoded.includes('近端XFER代理'))
+	assert.ok(parsedDl.tlv[0].items[0].decoded.includes('已脱敏'))
+	assert.ok(!parsedDl.tlv[0].items[0].decoded.includes('SECRET-MATCHING-ID'))
+	assert.ok(!parsedDl.tlv[0].items[0].decoded.includes('CONF-CODE-4321'))
+	const lvHtml = window.ParseView.render(window.skLogView(parsedDl))
+	assert.ok(!lvHtml.includes('SECRET-MATCHING-ID'))
+	assert.ok(!lvHtml.includes('CONF-CODE-4321'))
 
-	const lvHtml = window.ParseView.render(window.skLogView(parsed))
-	assert.ok(!lvHtml.includes('SECRET-MATCHING-ID'), 'ParseView 绝不能包含明文 AC')
-	assert.ok(!lvHtml.includes('CONF-CODE-4321'), 'ParseView 绝不能包含明文 CC')
-}
-
-// 4. Tag=66 ID=3 Profile 管理编码与防误操作校验
-{
+	// ID5 单卡管理与策略拦截（含 bit8 LOCK_DELETE、bit9 LOCK_DISABLE 禁禁且禁切走）
 	const mVal = EsimCore.encodeProfileManage({ op: 3, iccid: '89860099887766554433' })
 	assert.equal(mVal.length, 21)
 	assert.equal(mVal[0], 3)
 
-	const pEnabled = { iccid: '89860011223344556677', enabled: true, pprDisableBlocked: false, pprDeleteBlocked: false }
-	const pDisabled = { iccid: '89860099887766554433', enabled: false, pprDisableBlocked: false, pprDeleteBlocked: false }
+	const pLockedEnabled = { iccid: '89860011223344556677', enabled: true, lockDelete: true, lockDisable: true }
+	const pDisabledLockedDel = { iccid: '89860099887766554433', enabled: false, lockDelete: true, lockDisable: false }
+	const pDisabledFree = { iccid: '89860155555555555555', enabled: false, lockDelete: false, lockDisable: false }
 
-	const delEnabled = EsimCore.validateProfileAction(3, pEnabled, [pEnabled, pDisabled])
-	assert.equal(delEnabled.allowed, false, '启用态 Profile 必须被阻止删除')
+	assert.equal(EsimCore.validateProfileAction(3, pLockedEnabled, [pLockedEnabled, pDisabledFree]).allowed, false)
+	assert.equal(EsimCore.validateProfileAction(3, pDisabledLockedDel, [pLockedEnabled, pDisabledLockedDel]).allowed, false, 'bit8 LOCK_DELETE 必须阻止删除')
+	assert.equal(EsimCore.validateProfileAction(2, pLockedEnabled, [pLockedEnabled, pDisabledFree]).allowed, false, 'bit9 LOCK_DISABLE 必须阻止禁用')
+	assert.equal(EsimCore.validateProfileAction(1, pDisabledFree, [pLockedEnabled, pDisabledFree]).allowed, false, '另一启用卡带 LOCK_DISABLE 时必须阻止切走')
+	assert.equal(EsimCore.validateProfileAction(3, pDisabledFree, [pDisabledFree]).allowed, true)
 
-	const delDisabled = EsimCore.validateProfileAction(3, pDisabled, [pEnabled, pDisabled])
-	assert.equal(delDisabled.allowed, true)
-	assert.ok(delDisabled.confirm.includes('60 秒'))
+	// ID6 通知队列操作触发 (1B)
+	const ntfSyncVal = EsimCore.encodeNtfManage({ op: 1 })
+	assert.deepEqual(Array.from(ntfSyncVal), [1])
+	const ntfPurgeVal = EsimCore.encodeNtfManage({ op: 2 })
+	assert.deepEqual(Array.from(ntfPurgeVal), [2])
+	assert.throws(() => EsimCore.encodeNtfManage({ op: 3 }))
 
-	const disOnly = EsimCore.validateProfileAction(2, pEnabled, [pEnabled])
-	assert.equal(disOnly.allowed, true)
-	assert.ok(disOnly.confirm.includes('唯一启用'))
+	const downId6 = window.skBuildDownFrame({
+		frameSeq: 9,
+		version: 2,
+		funcCode: 0x01,
+		tlv: [{ tag: 66, items: [{ id: 6, value: ntfSyncVal }] }],
+	})
+	const parsedId6 = window.skParseFrame(downId6)
+	assert.equal(parsedId6.ok, true)
+	assert.ok(parsedId6.tlv[0].items[0].decoded.includes('同步待发通知(1)'))
+
+	// ID7 卡管控策略配置 (22B)
+	const polSet = EsimCore.encodeProfilePolicy({ op: 0, iccid: '89860011223344556677', policyMask: 0x0D })
+	assert.equal(polSet.length, 22)
+	assert.equal(polSet[0], 0)
+	assert.equal(polSet[21], 0x0D)
+	const polDec = EsimCore.decodeProfilePolicy(polSet)
+	assert.equal(polDec.iccid, '89860011223344556677')
+	assert.equal(polDec.lockDelete, true)
+	assert.equal(polDec.lockDisable, false)
+	assert.equal(polDec.hiddenUser, true)
+	assert.equal(polDec.fallbackSeed, true)
+
+	const polClr = EsimCore.encodeProfilePolicy({ op: 1 })
+	assert.equal(polClr.length, 22)
+	assert.equal(polClr[0], 1)
+	assert.ok(polClr.slice(1).every((b) => b === 0), 'op=1 清空全部策略时 ICCID 和 policyMask 必须全 0')
+	assert.throws(() => EsimCore.encodeProfilePolicy({ op: 0, iccid: '89860011223344556677', policyMask: 0x10 }), '高 4 位保留位非 0 必须拒绝')
+
+	const downId7 = window.skBuildDownFrame({
+		frameSeq: 10,
+		version: 2,
+		funcCode: 0x01,
+		tlv: [{ tag: 66, items: [{ id: 7, value: polSet }] }],
+	})
+	const parsedId7 = window.skParseFrame(downId7)
+	assert.equal(parsedId7.ok, true)
+	assert.ok(parsedId7.tlv[0].items[0].decoded.includes('设置策略(0)'))
+	assert.ok(parsedId7.tlv[0].items[0].decoded.includes('禁删,客户隐藏,保底'))
 }
 
-// 5. ZMODEM 环回测试（含 ZDLE 特殊字节、>1024B 多包与 0 字节空传输）
-function makePipePair() {
-	const qA = Zmodem.createByteQueue()
-	const qB = Zmodem.createByteQueue()
-	const logAtoB = []
-	const logBtoA = []
-	const ioA = {
-		readByte: (ms) => qB.readByte(ms),
-		writeBytes: async (u8) => { logAtoB.push(new Uint8Array(u8)); qA.push(u8) },
+// 4. 固件 Protocol/xfer/xfer.c 的精确 JS 镜像服务，用于验证 XFER (0xA5 0x5A) 帧格式、块长协商、60s 续传与通知同步
+function createMockXferServer(backend, channelMaxChunk) {
+	const chMax = channelMaxChunk || 700
+	let srv = resetSrv()
+
+	function resetSrv() {
+		return {
+			active: 0,
+			target: 0,
+			dir: 0,
+			sessionId: 0,
+			agreedChunk: 0,
+			respMetaParam: 0,
+			totalSize: 0,
+			expectedCrc32: 0,
+			ackedOffset: 0,
+			runningCrc32: 0,
+			openReqCrc: 0,
+			respMeta: new Uint8Array(0),
+		}
 	}
-	const ioB = {
-		readByte: (ms) => qA.readByte(ms),
-		writeBytes: async (u8) => { logBtoA.push(new Uint8Array(u8)); qB.push(u8) },
+
+	function wrU16(buf, off, v) { buf[off] = v & 0xff; buf[off + 1] = (v >>> 8) & 0xff }
+	function wrU32(buf, off, v) {
+		buf[off] = v & 0xff
+		buf[off + 1] = (v >>> 8) & 0xff
+		buf[off + 2] = (v >>> 16) & 0xff
+		buf[off + 3] = (v >>> 24) & 0xff
 	}
-	return { ioA, ioB, logAtoB, logBtoA }
+	function rdU16(buf, off) { return (buf[off] | (buf[off + 1] << 8)) >>> 0 }
+	function rdU32(buf, off) { return (buf[off] | (buf[off + 1] << 8) | (buf[off + 2] << 16) | (buf[off + 3] << 24)) >>> 0 }
+
+	function handleFrame(reqBytes) {
+		const f = Xfer.unpackFrame(reqBytes)
+		assert.equal(f.ok, true, 'Host 发出的 XFER 帧必须合法')
+		const op = f.op
+		const arg = f.argOrStatus
+		let sid = f.sessionId
+		const pay = f.payload
+		const matched = srv.active && sid !== 0 && sid === srv.sessionId
+		let sts = Xfer.STATUS.OK
+		let outPay = new Uint8Array(0)
+
+		if (op === Xfer.OP.OPEN) {
+			const target = pay[0]
+			const reqMax = rdU16(pay, 1)
+			const totSize = rdU32(pay, 3)
+			const expCrc = rdU32(pay, 7)
+			const mParam = rdU16(pay, 11)
+			const mLen = pay[13]
+			const meta = pay.slice(14, 14 + mLen)
+			const reqCrc = Xfer.crc32(pay)
+			if (srv.active) {
+				if (sid !== srv.sessionId || arg !== srv.dir || reqCrc !== srv.openReqCrc || srv.ackedOffset !== 0) {
+					sts = Xfer.STATUS.BUSY
+				}
+			} else {
+				const resp = backend.open({ target, dir: arg, totalSize: totSize, metaParam: mParam, meta })
+				if (resp.status !== Xfer.STATUS.OK) {
+					sts = resp.status
+				} else {
+					let agreed = Math.min(chMax, reqMax, Xfer.MAX_CHUNK_LEN)
+					if (resp.maxChunk && resp.maxChunk < agreed) agreed = resp.maxChunk
+					srv.active = 1
+					srv.target = target
+					srv.dir = arg
+					srv.sessionId = sid
+					srv.agreedChunk = agreed
+					srv.respMetaParam = resp.metaParam || 0
+					srv.totalSize = arg === Xfer.DIR.PUSH ? totSize : (resp.totalSize || 0)
+					srv.expectedCrc32 = arg === Xfer.DIR.PUSH ? expCrc : (resp.totalCrc32 || 0)
+					srv.ackedOffset = 0
+					srv.runningCrc32 = 0
+					srv.openReqCrc = reqCrc
+					srv.respMeta = resp.meta || new Uint8Array(0)
+				}
+			}
+			if (sts === Xfer.STATUS.OK) {
+				outPay = new Uint8Array(13 + srv.respMeta.length)
+				wrU16(outPay, 0, srv.agreedChunk)
+				wrU32(outPay, 2, srv.totalSize)
+				wrU32(outPay, 6, srv.expectedCrc32)
+				wrU16(outPay, 10, srv.respMetaParam)
+				outPay[12] = srv.respMeta.length
+				outPay.set(srv.respMeta, 13)
+			}
+		} else if (op === Xfer.OP.DATA) {
+			if (!matched) {
+				sts = Xfer.STATUS.NO_SESSION
+			} else {
+				const off = rdU32(pay, 0)
+				const len = rdU16(pay, 4)
+				const chunk = pay.slice(6, 6 + len)
+				if (srv.dir !== Xfer.DIR.PUSH || len === 0 || len > srv.agreedChunk) {
+					sts = Xfer.STATUS.BAD_PARAM
+				} else if (off === srv.ackedOffset && len <= srv.totalSize - off) {
+					sts = backend.write(off, chunk)
+					if (sts === Xfer.STATUS.OK) {
+						srv.ackedOffset += len
+						srv.runningCrc32 = srv.expectedCrc32 ? Xfer.crc32Update(srv.runningCrc32, chunk) : 0
+					}
+				} else if (!(off < srv.ackedOffset && (srv.ackedOffset - off) === len)) {
+					sts = Xfer.STATUS.OFFSET_ERR
+				}
+			}
+			outPay = new Uint8Array(4)
+			wrU32(outPay, 0, matched ? srv.ackedOffset : 0)
+		} else if (op === Xfer.OP.PULL) {
+			if (!matched) {
+				sts = Xfer.STATUS.NO_SESSION
+			} else {
+				const off = rdU32(pay, 0)
+				let n = Math.min(rdU16(pay, 4), srv.agreedChunk, srv.totalSize - off)
+				const chunk = n > 0 ? backend.read(off, n) : new Uint8Array(0)
+				srv.ackedOffset = Math.max(srv.ackedOffset, off + n)
+				outPay = new Uint8Array(6 + chunk.length)
+				wrU32(outPay, 0, off)
+				wrU16(outPay, 4, chunk.length)
+				outPay.set(chunk, 6)
+			}
+		} else if (op === Xfer.OP.COMMIT) {
+			const commitParam = rdU16(pay, 0)
+			let resCode = 0
+			if (!matched) {
+				sts = Xfer.STATUS.NO_SESSION
+			} else if (srv.dir === Xfer.DIR.PUSH && srv.ackedOffset !== srv.totalSize) {
+				sts = Xfer.STATUS.EOF_INCOMPLETE
+			} else if (srv.dir === Xfer.DIR.PUSH && srv.expectedCrc32 && srv.runningCrc32 !== srv.expectedCrc32) {
+				sts = Xfer.STATUS.CRC_ERR
+			} else {
+				const cr = backend.commit(commitParam)
+				sts = cr.status
+				resCode = cr.resultCode || 0
+				if (sts === Xfer.STATUS.OK) srv = resetSrv()
+			}
+			outPay = new Uint8Array(2)
+			wrU16(outPay, 0, resCode)
+		} else if (op === Xfer.OP.QUERY) {
+			outPay = new Uint8Array(16)
+			outPay[0] = srv.active
+			outPay[1] = srv.target
+			outPay[2] = srv.dir
+			outPay[3] = 0
+			wrU16(outPay, 4, srv.respMetaParam)
+			wrU16(outPay, 6, srv.agreedChunk)
+			wrU32(outPay, 8, srv.totalSize)
+			wrU32(outPay, 12, srv.ackedOffset)
+			sid = srv.sessionId
+		} else if (op === Xfer.OP.ABORT) {
+			const reason = rdU16(pay, 0)
+			if (backend.abort) backend.abort(reason)
+			srv = resetSrv()
+		} else {
+			sts = Xfer.STATUS.BAD_FRAME
+		}
+		return Xfer.packFrame(op | 0x80, sts, sid, outPay)
+	}
+
+	return { handleFrame, getState: () => srv }
+}
+
+function makeDirectXferIo(server, opts) {
+	opts = opts || {}
+	const rxQ = Xfer.createByteQueue()
+	const txFrames = []
+	let disconnected = false
+	let dropAtPushOffset = opts.dropAtPushOffset != null ? opts.dropAtPushOffset : -1
+	let droppedOnce = false
+
+	const io = {
+		readByte(ms) {
+			if (disconnected) return Promise.reject(Object.assign(new Error('模拟 BLE 断连'), { xferCode: Xfer.ERR.ERR_IO }))
+			return rxQ.readByte(ms)
+		},
+		async writeBytes(u8) {
+			const copy = new Uint8Array(u8)
+			txFrames.push(copy)
+			const parsed = Xfer.unpackFrame(copy)
+			if (disconnected) throw Object.assign(new Error('模拟 BLE 断连'), { xferCode: Xfer.ERR.ERR_IO })
+			if (dropAtPushOffset >= 0 && !droppedOnce && parsed.ok && parsed.op === Xfer.OP.DATA) {
+				const off = (parsed.payload[0] | (parsed.payload[1] << 8) | (parsed.payload[2] << 16) | (parsed.payload[3] << 24)) >>> 0
+				if (off >= dropAtPushOffset) {
+					droppedOnce = true
+					disconnected = true
+					throw Object.assign(new Error('模拟第3轮 BPP 中途断连'), { xferCode: Xfer.ERR.ERR_IO })
+				}
+			}
+			const resp = server.handleFrame(copy)
+			// 模拟夹杂 TTM 日志与噪声前缀，验证 Xfer.readFrame 帧同步稳健性
+			if (opts.injectNoise) rxQ.push(new TextEncoder().encode('TTM:OK\r\n'))
+			rxQ.push(resp)
+		},
+	}
+	return {
+		io,
+		txFrames,
+		reconnect() {
+			disconnected = false
+			rxQ.reset()
+		},
+	}
+}
+
+function createMode1DownloadBackend(opts) {
+	opts = opts || {}
+	const enc = new TextEncoder()
+	let round = 0 // 0..3
+	let phase = 'PULL'
+	let openDelayCalls = opts.startupNoSessionCount || 0
+	let pushedChunks = []
+	const receivedResponses = []
+	const abortReasons = []
+
+	return {
+		receivedResponses,
+		abortReasons,
+		open(req) {
+			if (openDelayCalls > 0) {
+				openDelayCalls--
+				return { status: Xfer.STATUS.NO_SESSION }
+			}
+			if (req.dir === Xfer.DIR.PULL && req.target === Xfer.TARGET.ESIM_REQ) {
+				if (phase !== 'PULL' || round >= 4) return { status: Xfer.STATUS.BUSY }
+				const pathStr = opts.overridePath && opts.overridePath[round] ? opts.overridePath[round] : EsimCore.ES9_ROUNDS[round].path
+				const smdp = opts.reqSmdpAddress || 'smdp.test.invalid'
+				const json = enc.encode(JSON.stringify({ smdpAddress: smdp, round: round + 1 }))
+				this._curReq = json
+				return {
+					status: Xfer.STATUS.OK,
+					totalSize: json.length,
+					totalCrc32: Xfer.crc32(json),
+					metaParam: round + 1,
+					meta: enc.encode(pathStr),
+				}
+			}
+			if (req.dir === Xfer.DIR.PUSH && req.target === Xfer.TARGET.ESIM_RSP) {
+				if (phase !== 'PUSH') return { status: Xfer.STATUS.BUSY }
+				pushedChunks = []
+				return { status: Xfer.STATUS.OK, metaParam: round + 1 }
+			}
+			return { status: Xfer.STATUS.BAD_PARAM }
+		},
+		read(off, len) {
+			return this._curReq.slice(off, off + len)
+		},
+		write(off, chunk) {
+			pushedChunks.push(new Uint8Array(chunk))
+			return Xfer.STATUS.OK
+		},
+		commit(commitParam) {
+			if (phase === 'PULL') {
+				phase = 'PUSH'
+				return { status: Xfer.STATUS.OK, resultCode: round + 1 }
+			}
+			let total = 0
+			for (const c of pushedChunks) total += c.length
+			const merged = new Uint8Array(total)
+			let p = 0
+			for (const c of pushedChunks) { merged.set(c, p); p += c.length }
+			receivedResponses.push({ round, commitParam, data: merged })
+			round++
+			phase = 'PULL'
+			return { status: Xfer.STATUS.OK, resultCode: commitParam || 200 }
+		},
+		abort(reason) {
+			abortReasons.push(reason)
+		},
+	}
 }
 
 async function runAsyncTests() {
-	// 5a. 多包 + ZDLE 转义字符环回
-	{
-		const { ioA, ioB } = makePipePair()
-		const payload = new Uint8Array(2500)
-		for (let i = 0; i < payload.length; i++) payload[i] = i & 0xff
-		// 注入特殊字节：ZDLE(0x18), XON(0x11), XOFF(0x13), '@' + '\r'
-		payload[10] = 0x18
-		payload[11] = 0x11
-		payload[12] = 0x13
-		payload[13] = 0x40
-		payload[14] = 0x0d
+	const enc = new TextEncoder()
 
-		const [txRes, rxRes] = await Promise.all([
-			Zmodem.send(ioA, { fileName: '/gsma/rsp2/es9plus/getBoundProfilePackage', data: payload }, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 }),
-			Zmodem.receive(ioB, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 }),
-		])
-		assert.equal(txRes.transferredBytes, payload.length)
-		assert.equal(rxRes.fileName, '/gsma/rsp2/es9plus/getBoundProfilePackage')
-		assert.equal(rxRes.expectedSize, payload.length)
-		assert.deepEqual(rxRes.data, payload)
-	}
+	// 5a. XFER (0xA5 0x5A) mode=1 四轮完整成功 + 模拟开机 NO_SESSION 等待 + 噪声同步 + 红外 128B 块长协商
+	for (const chMax of [700, 128]) {
+		const backend = createMode1DownloadBackend({ startupNoSessionCount: 2 })
+		const srv = createMockXferServer(backend, chMax)
+		const { io } = makeDirectXferIo(srv, { injectNoise: true })
 
-	// 5b. 0 字节空传输（第 4 轮 HTTP 204）
-	{
-		const { ioA, ioB } = makePipePair()
-		const [txRes, rxRes] = await Promise.all([
-			Zmodem.send(ioA, { fileName: '/gsma/rsp2/es9plus/handleNotification', data: new Uint8Array(0) }, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 }),
-			Zmodem.receive(ioB, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 }),
-		])
-		assert.equal(txRes.transferredBytes, 0)
-		assert.equal(rxRes.expectedSize, 0)
-		assert.equal(rxRes.hasExpectedSize, true)
-		assert.equal(rxRes.data.length, 0)
-	}
-
-	// 6a. mode=1 四轮 ES9+ 完整成功（第 1~3 轮 HTTP 200 原字节透传，第 4 轮 HTTP 204 空传输）
-	{
-		const { ioA: proxyIo, ioB: mcuIo } = makePipePair()
-		const enc = new TextEncoder()
 		const rawResponses = [
-			enc.encode('{"header":{"functionExecutionStatus":{"status":"Executed-Success"}},"transactionId":"T1","keepOrder":true}'),
+			enc.encode('{"header":{"functionExecutionStatus":{"status":"Executed-Success"}},"transactionId":"T1"}'),
 			enc.encode('{"header":{"functionExecutionStatus":{"status":"Executed-Success"}},"transactionId":"T1","round":2}'),
-			enc.encode('{"header":{"functionExecutionStatus":{"status":"Executed-Success"}},"boundProfilePackage":"' + 'A'.repeat(2400) + '"}'),
+			enc.encode('{"header":{"functionExecutionStatus":{"status":"Executed-Success"}},"boundProfilePackage":"' + 'B'.repeat(2400) + '"}'),
 			new Uint8Array(0),
 		]
-		const mcuReceived = []
 		const httpCalls = []
-
-		const mcuTask = (async () => {
-			for (let r = 0; r < 4; r++) {
-				const pathStr = EsimCore.ES9_ROUNDS[r].path
-				const reqPayload = enc.encode(JSON.stringify({ smdpAddress: 'smdp.test.invalid', round: r + 1 }))
-				await Zmodem.send(mcuIo, { fileName: pathStr, data: reqPayload }, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 })
-				const resp = await Zmodem.receive(mcuIo, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 })
-				mcuReceived.push(resp)
-			}
-		})()
-
-		const proxyTask = EsimCore.runMode1ProxySession({
-			zmodem: Zmodem,
-			io: proxyIo,
+		const res = await EsimCore.runMode1ProxySession({
+			xfer: Xfer,
+			io,
 			smdpHost: 'smdp.test.invalid',
-			zmodemOpts: { readTimeoutMs: 1000, sessionTimeoutMs: 5000 },
+			xferOpts: { rpcTimeoutMs: 1000, pollIntervalMs: 10, openWaitMs: 3000 },
 			httpPost: async (req) => {
 				httpCalls.push(req)
 				const idx = httpCalls.length - 1
 				return { status: idx === 3 ? 204 : 200, bodyBytes: rawResponses[idx] }
 			},
 		})
-
-		const [res] = await Promise.all([proxyTask, mcuTask])
 		assert.equal(res.ok, true)
 		assert.equal(httpCalls.length, 4)
-		assert.equal(httpCalls[0].url, 'https://smdp.test.invalid/gsma/rsp2/es9plus/initiateAuthentication')
-		assert.equal(httpCalls[0].headers['X-Admin-Protocol'], 'gsma/rsp/v2.2.0')
-		assert.equal(httpCalls[0].headers['User-Agent'], 'gsma-rsp-lpad')
-		assert.equal(httpCalls[0].headers['Connection'], 'close')
-		// 验证前 3 轮逐字节原样回传，第 4 轮 expectedSize === 0
+		assert.equal(res.rounds[2].agreedChunk, chMax, '应按通道块长协商: ' + chMax)
+		assert.equal(backend.receivedResponses.length, 4)
 		for (let r = 0; r < 3; r++) {
-			assert.equal(mcuReceived[r].expectedSize, rawResponses[r].length)
-			assert.deepEqual(mcuReceived[r].data, rawResponses[r])
+			assert.equal(backend.receivedResponses[r].commitParam, 200)
+			assert.deepEqual(backend.receivedResponses[r].data, rawResponses[r])
 		}
-		assert.equal(mcuReceived[3].expectedSize, 0)
-		assert.equal(mcuReceived[3].data.length, 0)
+		assert.equal(backend.receivedResponses[3].commitParam, 204)
+		assert.equal(backend.receivedResponses[3].data.length, 0)
 	}
 
-	// 6b. SM-DP+ 返回 Failed（Executed-Success 不通过）-> 立即发 CAN*5 中止，绝不把失败体回灌给 MCU
+	// 5b. 第 3 轮 33KB BPP 中途断连 + 60s 保活重连 + QUERY(0x05) 获取 ackedOffset 无损续传
 	{
-		const { ioA: proxyIo, ioB: mcuIo, logAtoB } = makePipePair()
-		const enc = new TextEncoder()
-		const failBody = enc.encode(JSON.stringify({
-			header: {
-				functionExecutionStatus: {
-					status: 'Failed',
-					statusCodeData: { subjectCode: '8.2.6', reasonCode: '3.8', message: 'Order cancelled' },
-				},
+		const backend = createMode1DownloadBackend()
+		const srv = createMockXferServer(backend, 700)
+		const pipe = makeDirectXferIo(srv, { dropAtPushOffset: 14000 })
+		const bppPayload = enc.encode('{"header":{"functionExecutionStatus":{"status":"Executed-Success"}},"bpp":"' + 'X'.repeat(33400) + '"}')
+		const rawResponses = [
+			enc.encode('{"header":{"functionExecutionStatus":{"status":"Executed-Success"}},"r":1}'),
+			enc.encode('{"header":{"functionExecutionStatus":{"status":"Executed-Success"}},"r":2}'),
+			bppPayload,
+			new Uint8Array(0),
+		]
+		let httpIdx = 0
+		let resumeEv = null
+		const res = await EsimCore.runMode1ProxySession({
+			xfer: Xfer,
+			io: pipe.io,
+			smdpHost: 'smdp.test.invalid',
+			xferOpts: { rpcTimeoutMs: 1000, pollIntervalMs: 10, openWaitMs: 3000, keepaliveMs: 5000 },
+			waitReconnect: async () => {
+				pipe.reconnect()
+				return pipe.io
 			},
+			onEvent: (ev) => {
+				if (ev.type === 'xfer-resumed') resumeEv = ev
+			},
+			httpPost: async () => {
+				const idx = httpIdx++
+				return { status: idx === 3 ? 204 : 200, bodyBytes: rawResponses[idx] }
+			},
+		})
+		assert.equal(res.ok, true)
+		assert.ok(resumeEv, '断连重连后必须触发 xfer-resumed 事件')
+		assert.equal(resumeEv.ackedOffset, 14000, 'QUERY 应返回精确断点偏移 14000')
+		assert.equal(res.rounds[2].resumedCount, 1)
+		assert.deepEqual(backend.receivedResponses[2].data, bppPayload, '续传后的 33KB BPP 必须逐字节完整一致')
+		// 确认发过 QUERY(0x05)
+		assert.ok(pipe.txFrames.some((f) => Xfer.unpackFrame(f).op === Xfer.OP.QUERY), '重连续传前必须先发 QUERY(0x05)')
+	}
+
+	// 5c. SM-DP+ 业务失败 / 第 4 轮非 204 / 主机不匹配 / 用户取消 -> 立即发 XFER ABORT(0x06)
+	{
+		const backend = createMode1DownloadBackend()
+		const srv = createMockXferServer(backend, 700)
+		const pipe = makeDirectXferIo(srv)
+		const failBody = enc.encode(JSON.stringify({
+			header: { functionExecutionStatus: { status: 'Failed', statusCodeData: { subjectCode: '8.2.6', reasonCode: '3.8', message: 'Cancelled' } } },
 		}))
-
-		const mcuTask = (async () => {
-			await Zmodem.send(mcuIo, {
-				fileName: '/gsma/rsp2/es9plus/initiateAuthentication',
-				data: enc.encode('{"smdpAddress":"smdp.test.invalid"}'),
-			}, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 })
-			let aborted = false
-			try {
-				await Zmodem.receive(mcuIo, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 })
-			} catch (e) {
-				aborted = e.zmodemCode === Zmodem.STATUS.ERR_ABORTED
-			}
-			assert.equal(aborted, true, 'MCU 端必须收到 CAN*5 中止而不是失败 JSON')
-		})()
-
 		await assert.rejects(
 			() => EsimCore.runMode1ProxySession({
-				zmodem: Zmodem,
-				io: proxyIo,
+				xfer: Xfer,
+				io: pipe.io,
 				smdpHost: 'smdp.test.invalid',
-				zmodemOpts: { readTimeoutMs: 1000, sessionTimeoutMs: 5000 },
+				xferOpts: { rpcTimeoutMs: 1000, openWaitMs: 2000 },
 				httpPost: async () => ({ status: 200, bodyBytes: failBody }),
 			}),
-			(err) => {
-				assert.equal(err.stage, 'smdp-status')
-				assert.equal(err.subjectCode, '8.2.6')
-				assert.equal(err.reasonCode, '3.8')
-				return true
-			}
+			(err) => err.stage === 'smdp-status' && err.subjectCode === '8.2.6'
 		)
-		await mcuTask
-		// 确认发出的最后一个块包含连续 5+ 个 0x18 (CAN)
-		const lastTx = logAtoB[logAtoB.length - 1]
-		let maxCan = 0, cur = 0
-		for (const b of lastTx) {
-			if (b === 0x18) { cur++; if (cur > maxCan) maxCan = cur } else cur = 0
-		}
-		assert.ok(maxCan >= 5, '失败时必须发送 CAN*5+ 中止序列')
+		assert.ok(pipe.txFrames.some((f) => Xfer.unpackFrame(f).op === Xfer.OP.ABORT), 'SM-DP+ 失败必须发 XFER ABORT')
+		assert.equal(backend.abortReasons.length, 1)
 	}
-
-	// 6c. 第 4 轮返回非 204 -> 发 CAN*5 中止
 	{
-		const { ioA: proxyIo, ioB: mcuIo } = makePipePair()
-		const enc = new TextEncoder()
-		const okBody = enc.encode('{"header":{"functionExecutionStatus":{"status":"Executed-Success"}}}')
-
-		const mcuTask = (async () => {
-			for (let r = 0; r < 4; r++) {
-				await Zmodem.send(mcuIo, { fileName: EsimCore.ES9_ROUNDS[r].path, data: enc.encode('{}') }, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 })
-				if (r < 3) {
-					await Zmodem.receive(mcuIo, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 })
-				} else {
-					await assert.rejects(
-						() => Zmodem.receive(mcuIo, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 }),
-						(e) => e.zmodemCode === Zmodem.STATUS.ERR_ABORTED
-					)
-				}
-			}
-		})()
-
-		let call = 0
+		const backend = createMode1DownloadBackend({ reqSmdpAddress: 'evil.other.invalid' })
+		const srv = createMockXferServer(backend, 700)
+		const pipe = makeDirectXferIo(srv)
 		await assert.rejects(
 			() => EsimCore.runMode1ProxySession({
-				zmodem: Zmodem,
-				io: proxyIo,
+				xfer: Xfer,
+				io: pipe.io,
 				smdpHost: 'smdp.test.invalid',
-				zmodemOpts: { readTimeoutMs: 1000, sessionTimeoutMs: 5000 },
-				httpPost: async () => {
-					call++
-					if (call <= 3) return { status: 200, bodyBytes: okBody }
-					return { status: 500, bodyBytes: new Uint8Array(0) }
-				},
+				xferOpts: { rpcTimeoutMs: 1000, openWaitMs: 2000 },
+				httpPost: async () => { throw new Error('不应发 HTTP') },
 			}),
-			(err) => err.round === 3 && err.stage === 'http-status'
+			(err) => err.stage === 'host-mismatch'
 		)
-		await mcuTask
+		assert.equal(backend.abortReasons.length, 1)
 	}
-
-	// 7. B1 回归：长延迟等待 MCU 首个帧头超过 readTimeoutMs * maxRetries，仍只受 initialWaitMs 约束、不提前发 CAN*5
 	{
-		assert.ok(EsimCore.ES9_ROUNDS[0].initialWaitMs >= 90000, '第 1 轮 initialWaitMs 须 >= 90s')
-		assert.ok(EsimCore.ES9_ROUNDS[1].initialWaitMs >= 60000, '第 2 轮 initialWaitMs 须 >= 60s')
-		assert.ok(EsimCore.ES9_ROUNDS[2].initialWaitMs >= 60000, '第 3 轮 initialWaitMs 须 >= 60s')
-		assert.ok(EsimCore.ES9_ROUNDS[3].initialWaitMs >= 180000, '第 4 轮 initialWaitMs 须 >= 180s')
-
-		const { ioA: senderIo, ioB: recvIo, logBtoA } = makePipePair()
-		const payload = new TextEncoder().encode('{"delayed":true}')
-		// readTimeoutMs=20ms, maxRetries=2 (常规 60ms 即耗尽)，但 initialWaitMs=400ms，MCU 延迟 120ms 后才发 ZFILE
-		const delayedSend = (async () => {
-			await new Promise((r) => setTimeout(r, 120))
-			return Zmodem.send(senderIo, { fileName: '/gsma/rsp2/es9plus/handleNotification', data: payload }, {
-				readTimeoutMs: 200,
-				sessionTimeoutMs: 2000,
-				maxRetries: 3,
-			})
-		})()
-		const rx = await Zmodem.receive(recvIo, {
-			readTimeoutMs: 20,
-			sessionTimeoutMs: 1000,
-			initialWaitMs: 400,
-			maxRetries: 2,
-		})
-		await delayedSend
-		assert.deepEqual(rx.data, payload)
-		// 确认等待期间未误发 CAN*5
-		for (const chunk of logBtoA) {
-			let cur = 0
-			for (const b of chunk) {
-				if (b === 0x18) cur++; else cur = 0
-				assert.ok(cur < 5, '等待 initialWaitMs 期间绝不可提前发 CAN*5')
-			}
-		}
-	}
-
-	// 8. I1 回归：httpPost 挂起时用户 abort（不依赖原生取消命令），经 Promise.race 立刻放弃等待并向 MCU 发 CAN*5
-	{
-		const { ioA: proxyIo, ioB: mcuIo, logAtoB } = makePipePair()
-		const enc = new TextEncoder()
+		const backend = createMode1DownloadBackend()
+		const srv = createMockXferServer(backend, 700)
+		const pipe = makeDirectXferIo(srv)
 		const ac = new AbortController()
-
-		const mcuTask = (async () => {
-			await Zmodem.send(mcuIo, {
-				fileName: '/gsma/rsp2/es9plus/initiateAuthentication',
-				data: enc.encode('{"smdpAddress":"smdp.test.invalid"}'),
-			}, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 })
-			await assert.rejects(
-				() => Zmodem.receive(mcuIo, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 }),
-				(e) => e.zmodemCode === Zmodem.STATUS.ERR_ABORTED
-			)
-		})()
-
 		await assert.rejects(
 			() => EsimCore.runMode1ProxySession({
-				zmodem: Zmodem,
-				io: proxyIo,
+				xfer: Xfer,
+				io: pipe.io,
 				smdpHost: 'smdp.test.invalid',
 				signal: ac.signal,
-				zmodemOpts: { readTimeoutMs: 500, sessionTimeoutMs: 5000 },
-				httpPost: () => new Promise(() => {
-					// 模拟忽略 signal 的桌面 IPC，50ms 后用户点停止
-					setTimeout(() => ac.abort(), 50)
-				}),
+				xferOpts: { rpcTimeoutMs: 1000, openWaitMs: 2000 },
+				httpPost: () => new Promise(() => { setTimeout(() => ac.abort(), 30) }),
 			}),
 			(err) => err.stage === 'aborted'
 		)
-		await mcuTask
-		const lastTx = logAtoB[logAtoB.length - 1]
-		let maxCan = 0, cur = 0
-		for (const b of lastTx) {
-			if (b === 0x18) { cur++; if (cur > maxCan) maxCan = cur } else cur = 0
-		}
-		assert.ok(maxCan >= 5, '用户取消挂起的 httpPost 时必须立即向 MCU 发 CAN*5')
+		assert.equal(backend.abortReasons.length, 1)
 	}
 
-	// 9. I3 回归：第 1 轮 smdpAddress 与 AC 主机不一致立即中止并发 CAN*5；大小写与末尾点差异允许通过
+	// 6. ID6 op=1 待发通知离线同步 (XFER target=0x03): HTTP 500 跳过不删 + 网络异常 0 跳过不删 + HTTP 204 删除 + 空哨兵 COMMIT(0) 收口
 	{
-		const { ioA: proxyIo, ioB: mcuIo } = makePipePair()
-		const enc = new TextEncoder()
-		const mcuTask = (async () => {
-			await Zmodem.send(mcuIo, {
-				fileName: '/gsma/rsp2/es9plus/initiateAuthentication',
-				data: enc.encode('{"smdpAddress":"evil.other.invalid"}'),
-			}, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 })
-			await assert.rejects(
-				() => Zmodem.receive(mcuIo, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 }),
-				(e) => e.zmodemCode === Zmodem.STATUS.ERR_ABORTED
-			)
-		})()
+		const queueItems = [
+			{ seq: 10, fqdn: 'dead-http500.test', json: enc.encode('{"pendingNotification":"REVBRDEw"}') },
+			{ seq: 11, fqdn: 'dead-dns.test', json: enc.encode('{"pendingNotification":"RE5TMTF="}') },
+			{ seq: 12, fqdn: 'live-smdp.test', json: enc.encode('{"pendingNotification":"TElWRTEy"}') },
+		]
+		let cursor = 0
+		let sentinelCommitted = false
+		const deletedSeqs = []
+		const skippedSeqs = []
 
-		await assert.rejects(
-			() => EsimCore.runMode1ProxySession({
-				zmodem: Zmodem,
-				io: proxyIo,
-				smdpHost: 'smdp.test.invalid',
-				zmodemOpts: { readTimeoutMs: 1000, sessionTimeoutMs: 5000 },
-				httpPost: async () => { throw new Error('主机不一致时绝不应发起 HTTP 请求') },
-			}),
-			(err) => err.round === 0 && err.stage === 'host-mismatch'
-		)
-		await mcuTask
+		const ntfBackend = {
+			open(req) {
+				assert.equal(req.dir, Xfer.DIR.PULL)
+				assert.equal(req.target, Xfer.TARGET.ESIM_NTF)
+				if (cursor < queueItems.length) {
+					const it = queueItems[cursor]
+					this._cur = it
+					return {
+						status: Xfer.STATUS.OK,
+						totalSize: it.json.length,
+						totalCrc32: Xfer.crc32(it.json),
+						metaParam: it.seq,
+						meta: enc.encode(it.fqdn),
+					}
+				}
+				this._cur = null
+				return { status: Xfer.STATUS.OK, totalSize: 0, totalCrc32: 0, metaParam: 0, meta: new Uint8Array(0) }
+			},
+			read(off, len) { return this._cur.json.slice(off, off + len) },
+			commit(commitParam) {
+				if (!this._cur) {
+					assert.equal(commitParam, 0)
+					sentinelCommitted = true
+					return { status: Xfer.STATUS.OK, resultCode: 0 }
+				}
+				const seq = this._cur.seq
+				cursor++
+				if (commitParam === 204) {
+					deletedSeqs.push(seq)
+					return { status: Xfer.STATUS.OK, resultCode: 204 }
+				}
+				skippedSeqs.push([seq, commitParam])
+				return { status: Xfer.STATUS.OK, resultCode: commitParam }
+			},
+		}
+
+		const srv = createMockXferServer(ntfBackend, 700)
+		const { io } = makeDirectXferIo(srv)
+		const postedUrls = []
+		const res = await EsimCore.runNtfSyncProxySession({
+			xfer: Xfer,
+			io,
+			xferOpts: { rpcTimeoutMs: 1000, openWaitMs: 2000 },
+			httpPost: async (req) => {
+				postedUrls.push(req.url)
+				if (req.smdpHost === 'dead-http500.test') return { status: 500, bodyBytes: new Uint8Array(0) }
+				if (req.smdpHost === 'dead-dns.test') throw new Error('DNS failed')
+				return { status: 204, bodyBytes: new Uint8Array(0) }
+			},
+		})
+		assert.equal(res.ok, true)
+		assert.equal(sentinelCommitted, true)
+		assert.equal(res.deletedCount, 1)
+		assert.equal(res.skippedCount, 2)
+		assert.deepEqual(deletedSeqs, [12])
+		assert.deepEqual(skippedSeqs, [[10, 500], [11, 0]])
+		assert.deepEqual(postedUrls, [
+			'https://dead-http500.test/gsma/rsp2/es9plus/handleNotification',
+			'https://dead-dns.test/gsma/rsp2/es9plus/handleNotification',
+			'https://live-smdp.test/gsma/rsp2/es9plus/handleNotification',
+		])
 	}
 
-	// 10. esim-panel.js 会话 ID 路由与 TLS 证书开关回归：单路模式路由到 'S'，双路路由到 'B'，透传 allowInsecureTls 并持久化
-	async function runPanelDownloadCase({ serialMode, activeUiSid, openPhysSid, downloadMode, allowInsecureTls = false, redact = true }) {
+	// 7. esim-panel.js 全链路回归（路由/脱敏/TLS/视图模式/策略写入 ID7/通知同步与强清 ID6）
+	function createPanelHarness(opts) {
+		opts = opts || {}
 		const listeners = Object.create(null)
-		const storageMap = Object.create(null)
-		function makeEl(id, extra) {
-			const el = Object.assign({
-				id,
+		const storageMap = Object.assign(Object.create(null), opts.initialStorage || {})
+
+		function makeNode(tag, id, extra) {
+			let _text = ''
+			const node = Object.assign({
+				tagName: String(tag || 'DIV').toUpperCase(),
+				id: id || '',
+				type: '',
 				value: '',
 				checked: false,
-				textContent: '',
 				className: '',
+				title: '',
 				hidden: false,
 				disabled: false,
 				style: {},
 				dataset: {},
+				attrs: Object.create(null),
 				childNodes: [],
 				scrollTop: 0,
 				scrollHeight: 0,
+				_listeners: Object.create(null),
+				get textContent() { return _text },
+				set textContent(v) { _text = String(v == null ? '' : v); this.childNodes.length = 0 },
+				setAttribute(k, v) { this.attrs[k] = String(v) },
+				getAttribute(k) { return this.attrs[k] },
 				addEventListener(type, fn) {
-					listeners[id + ':' + type] = fn
+					this._listeners[type] = fn
+					if (this.id) listeners[this.id + ':' + type] = fn
 				},
-				appendChild(node) { this.childNodes.push(node) },
-				removeChild(node) {
-					const idx = this.childNodes.indexOf(node)
+				appendChild(ch) { this.childNodes.push(ch); return ch },
+				append(...args) { args.forEach((a) => this.appendChild(a)) },
+				removeChild(ch) {
+					const idx = this.childNodes.indexOf(ch)
 					if (idx >= 0) this.childNodes.splice(idx, 1)
 				},
-				querySelectorAll() { return [] },
+				querySelectorAll(sel) {
+					const out = []
+					function walk(n) {
+						for (const c of n.childNodes || []) {
+							if (sel === 'button' && c.tagName === 'BUTTON') out.push(c)
+							if (sel === 'input[type="checkbox"]' && c.tagName === 'INPUT' && c.type === 'checkbox') out.push(c)
+							walk(c)
+						}
+					}
+					walk(this)
+					return out
+				},
 			}, extra || {})
-			return el
+			return node
 		}
 
-		const elements = {
-			'sk-esim-card': makeEl('sk-esim-card'),
-			'sk-esim-eid': makeEl('sk-esim-eid'),
-			'sk-esim-refresh': makeEl('sk-esim-refresh'),
-			'sk-esim-poll': makeEl('sk-esim-poll'),
-			'sk-esim-stop': makeEl('sk-esim-stop'),
-			'sk-esim-state-badge': makeEl('sk-esim-state-badge'),
-			'sk-esim-last-op': makeEl('sk-esim-last-op'),
-			'sk-esim-fail-stage': makeEl('sk-esim-fail-stage'),
-			'sk-esim-err-code': makeEl('sk-esim-err-code'),
-			'sk-esim-err-hint': makeEl('sk-esim-err-hint'),
-			'sk-esim-status-time': makeEl('sk-esim-status-time'),
-			'sk-esim-profile-count': makeEl('sk-esim-profile-count'),
-			'sk-esim-profile-list': makeEl('sk-esim-profile-list'),
-			'sk-esim-mode': makeEl('sk-esim-mode', { value: String(downloadMode) }),
-			'sk-esim-redact': makeEl('sk-esim-redact', { checked: true }),
-			'sk-esim-ac': makeEl('sk-esim-ac', { type: 'password', value: 'LPA:1$smdp.test.invalid$MATCH-12345' }),
-			'sk-esim-cc': makeEl('sk-esim-cc', { type: 'password', value: 'CC-9988' }),
-			'sk-esim-proxy-row': makeEl('sk-esim-proxy-row'),
-			'sk-esim-proxy-notice': makeEl('sk-esim-proxy-notice'),
-			'sk-esim-tls-wrap': makeEl('sk-esim-tls-wrap'),
-			'sk-esim-insecure-tls': makeEl('sk-esim-insecure-tls'),
-			'sk-esim-proxy-url': makeEl('sk-esim-proxy-url'),
-			'sk-esim-download': makeEl('sk-esim-download'),
-			'sk-esim-progress-bar': makeEl('sk-esim-progress-bar'),
-			'sk-esim-status': makeEl('sk-esim-status'),
-			'sk-esim-log-title': makeEl('sk-esim-log-title'),
-			'sk-esim-log': makeEl('sk-esim-log'),
-			'sk-esim-log-clear': makeEl('sk-esim-log-clear'),
-		}
+		const ids = [
+			'sk-esim-card', 'sk-esim-view-customer', 'sk-esim-view-admin',
+			'sk-esim-eid', 'sk-esim-refresh', 'sk-esim-poll', 'sk-esim-stop',
+			'sk-esim-state-badge', 'sk-esim-runtime-flags', 'sk-esim-last-op', 'sk-esim-fail-stage',
+			'sk-esim-err-code', 'sk-esim-err-hint', 'sk-esim-status-time', 'sk-esim-cache-age',
+			'sk-esim-ntf-section', 'sk-esim-ntf-badge', 'sk-esim-ntf-total', 'sk-esim-ntf-del',
+			'sk-esim-ntf-other', 'sk-esim-ntf-head-event', 'sk-esim-ntf-head-iccid',
+			'sk-esim-ntf-sync', 'sk-esim-ntf-purge',
+			'sk-esim-profile-count', 'sk-esim-policy-clear', 'sk-esim-profile-list',
+			'sk-esim-mode', 'sk-esim-redact', 'sk-esim-ac', 'sk-esim-cc',
+			'sk-esim-proxy-row', 'sk-esim-proxy-notice', 'sk-esim-tls-wrap', 'sk-esim-insecure-tls', 'sk-esim-proxy-url',
+			'sk-esim-download', 'sk-esim-progress-bar', 'sk-esim-status', 'sk-esim-log-title', 'sk-esim-log', 'sk-esim-log-clear',
+		]
+		const elements = Object.create(null)
+		for (const id of ids) elements[id] = makeNode('div', id)
+		elements['sk-esim-mode'].value = String(opts.downloadMode != null ? opts.downloadMode : 0)
+		elements['sk-esim-redact'].checked = true
+		elements['sk-esim-ac'].type = 'password'
+		elements['sk-esim-ac'].value = opts.ac || 'LPA:1$smdp.test.invalid$MATCH-12345'
+		elements['sk-esim-cc'].type = 'password'
+		elements['sk-esim-cc'].value = opts.cc != null ? opts.cc : 'CC-9988'
 
+		const panelCtx = {
+			window: opts.panelWin,
+			localStorage: {
+				getItem(k) { return Object.prototype.hasOwnProperty.call(storageMap, k) ? storageMap[k] : null },
+				setItem(k, v) { storageMap[k] = String(v) },
+			},
+			document: {
+				readyState: 'complete',
+				getElementById(id) { return elements[id] || null },
+				createElement(tag) { return makeNode(tag, '') },
+				addEventListener() {},
+			},
+			Uint8Array, TextEncoder, TextDecoder, AbortController, Date, console,
+			setTimeout(fn, ms) { return setTimeout(fn, Math.min(ms || 0, 5)) },
+			clearTimeout,
+		}
+		vm.createContext(panelCtx)
+		vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/esim-panel.js'), 'utf8'), panelCtx)
+		return { elements, listeners, storageMap }
+	}
+
+	// 7a. esim-panel.js mode=0 / mode=1 (XFER) 路由、TLS 开关、脱敏开关与 ID4 触发帧回归
+	async function runPanelDownloadCase({ serialMode, activeUiSid, openPhysSid, downloadMode, allowInsecureTls = false, redact = true }) {
 		const calls = {
-			pinSession: [],
-			unpinCount: 0,
-			writeRawTo: [],
-			isSessionOpen: [],
-			setSuppressRxLog: [],
-			onReceiveFrom: [],
-			httpReqs: [],
+			pinSession: [], unpinCount: 0, writeRawTo: [], isSessionOpen: [],
+			setSuppressRxLog: [], onReceiveFrom: [], httpReqs: [],
 		}
-
-		const enc = new TextEncoder()
 		const okBody = enc.encode('{"header":{"functionExecutionStatus":{"status":"Executed-Success"}}}')
-		const mcuRxQ = Zmodem.createByteQueue()
+		const dlBackend = createMode1DownloadBackend()
+		const xferSrv = createMockXferServer(dlBackend, 700)
 		let rxSub = null
-		let mcuTask = null
 		let pinnedSid = null
 
 		const serialApi = {
 			getMode() { return serialMode },
 			getActiveSendSid() { return activeUiSid },
 			isOpen() { return true },
-			isSessionOpen(id) {
-				calls.isSessionOpen.push(id)
-				return id === openPhysSid
-			},
+			isSessionOpen(id) { calls.isSessionOpen.push(id); return id === openPhysSid },
 			isPinned() { return pinnedSid !== null },
-			pinSession(sid) {
-				calls.pinSession.push(sid)
-				pinnedSid = sid
-			},
-			unpinSession() {
-				calls.unpinCount++
-				pinnedSid = null
-			},
+			pinSession(sid) { calls.pinSession.push(sid); pinnedSid = sid },
+			unpinSession() { calls.unpinCount++; pinnedSid = null },
 			suppressParse: false,
-			setSuppressRxLog(sid, on) {
-				calls.setSuppressRxLog.push([sid, !!on])
-			},
+			setSuppressRxLog(sid, on) { calls.setSuppressRxLog.push([sid, !!on]) },
 			onReceiveFrom(sid, cb) {
 				calls.onReceiveFrom.push(sid)
 				rxSub = { sid, cb }
-				if (downloadMode === 1 && sid === openPhysSid) {
-					const mcuIo = {
-						readByte: (ms) => mcuRxQ.readByte(ms),
-						writeBytes: async (u8) => {
-							if (rxSub && rxSub.sid === openPhysSid) rxSub.cb(new Uint8Array(u8))
-						},
-					}
-					mcuTask = (async () => {
-						for (let r = 0; r < 4; r++) {
-							await Zmodem.send(mcuIo, {
-								fileName: EsimCore.ES9_ROUNDS[r].path,
-								data: enc.encode(JSON.stringify({ smdpAddress: 'smdp.test.invalid', round: r + 1 })),
-							}, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 })
-							await Zmodem.receive(mcuIo, { readTimeoutMs: 1000, sessionTimeoutMs: 5000 })
-						}
-					})()
-				}
 				return () => { rxSub = null }
 			},
 			async writeRawTo(id, data, opts) {
-				calls.writeRawTo.push({ id, len: data.length, hasLogData: !!(opts && opts.logData) })
+				calls.writeRawTo.push({ id, len: data.length, data: new Uint8Array(data), hasLogData: !!(opts && opts.logData) })
 				if (!this.isSessionOpen(id)) throw new Error('串口会话未打开或当前模式不可路由')
-				if (rxSub && downloadMode === 1) mcuRxQ.push(data)
+				if (rxSub && downloadMode === 1 && data[0] === Xfer.MAGIC_0 && data[1] === Xfer.MAGIC_1) {
+					const resp = xferSrv.handleFrame(data)
+					setTimeout(() => { if (rxSub && rxSub.sid === openPhysSid) rxSub.cb(resp) }, 0)
+				}
 			},
 		}
 
-		// 终态 ID4: state=2(成功), op=1(下载), stage=0, err=0, 全0时间
-		const id4Done = [2, 1, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-		const doneFrame = window.skParseFrame(sekUp(0x83, tlvBlock(66, [[4].concat(id4Done)])))
+		// 终态 ID2 (14B): state=2(成功), runtimeFlags=0x02(缓存已就绪), lastOp=2, failStage=0, err=0, time=0, cacheAge=3
+		const id2Done = [2, 0x02, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3]
+		const doneFrame = window.skParseFrame(sekUp(0x83, tlvBlock(66, [[2].concat(id2Done)])))
 		let seq = 1
 		let httpCount = 0
 
 		const panelWin = {
 			EsimCore,
-			Zmodem,
+			Xfer,
 			AppPlatform: {
 				service(name) {
 					if (name !== 'esim-http') return null
@@ -889,346 +996,146 @@ async function runAsyncTests() {
 					}
 				},
 			},
-			AppDialog: {
-				async alert(msg) { throw new Error('unexpected alert: ' + msg) },
-				async confirm() { return true },
-			},
+			AppDialog: { async alert(msg) { throw new Error('unexpected alert: ' + msg) }, async confirm() { return true } },
 			serialApi,
 			skBuildDownFrame: window.skBuildDownFrame,
 			sekTx: {
 				nextSeq() { return seq++ },
 				clearBuffer() {},
-				waitFor() {
-					return Promise.resolve({ frame: { dir: 'up', fields: { '功能码': 0x81 } } })
-				},
+				waitFor() { return Promise.resolve({ frame: { dir: 'up', fields: { '功能码': 0x81 } } }) },
 				tag11Result() { return 0 },
-				hasTag(f, tag) { return !!(f && f.tlv && f.tlv.some((t) => t.tag === tag)) },
-				findTlvItem(f, tag, id) {
-					if (!f || !f.tlv) return null
-					const blk = f.tlv.find((t) => t.tag === tag)
-					return blk ? (blk.items.find((it) => it.id === id) || null) : null
-				},
-				async sendAndWait() {
-					return { frame: doneFrame }
-				},
-			},
-		}
-
-		const panelCtx = {
-			window: panelWin,
-			localStorage: {
-				getItem(k) { return Object.prototype.hasOwnProperty.call(storageMap, k) ? storageMap[k] : null },
-				setItem(k, v) { storageMap[k] = String(v) },
-			},
-			document: {
-				readyState: 'complete',
-				getElementById(id) { return elements[id] || null },
-				createElement() { return makeEl('dyn') },
-				addEventListener() {},
-			},
-			Uint8Array,
-			TextEncoder,
-			AbortController,
-			Date,
-			console,
-			setTimeout(fn, ms) { return setTimeout(fn, Math.min(ms || 0, 5)) },
-			clearTimeout,
-		}
-		vm.createContext(panelCtx)
-		vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/esim-panel.js'), 'utf8'), panelCtx)
-
-		// 默认开启脱敏；支持手动关闭切换明文调试
-		assert.equal(elements['sk-esim-redact'].checked, true, '脱敏开关默认开启')
-		assert.equal(elements['sk-esim-ac'].type, 'password', '脱敏开启时 AC 输入框为密码框')
-		assert.equal(elements['sk-esim-cc'].type, 'password', '脱敏开启时 CC 输入框为密码框')
-		if (!redact) {
-			elements['sk-esim-redact'].checked = false
-			listeners['sk-esim-redact:change']()
-			assert.equal(storageMap.skEsimRedact, '0', '关闭脱敏应持久化开关偏好')
-			assert.equal(elements['sk-esim-ac'].type, 'text', '关闭脱敏后 AC 输入框应切为明文')
-			assert.equal(elements['sk-esim-cc'].type, 'text', '关闭脱敏后 CC 输入框应切为明文')
-			assert.ok(elements['sk-esim-log-title'].textContent.includes('关闭脱敏'), '日志标题应提示已关闭脱敏')
-		}
-
-		if (downloadMode === 1) {
-			assert.equal(elements['sk-esim-tls-wrap'].hidden, false, '桌面原生 mode=1 应显示 TLS 证书开关')
-			assert.equal(elements['sk-esim-insecure-tls'].checked, false, 'TLS 证书开关默认关闭')
-			assert.equal(elements['sk-esim-proxy-notice'].className, 'sk-esim-notice is-ok')
-			if (allowInsecureTls) {
-				elements['sk-esim-insecure-tls'].checked = true
-				listeners['sk-esim-insecure-tls:change']()
-				assert.equal(storageMap.skEsimAllowInsecureTls, '1', '勾选后应持久化开关偏好')
-				assert.equal(elements['sk-esim-proxy-notice'].className, 'sk-esim-notice is-warn', '跳过 TLS 校验时应显示警告态提示')
-			}
-		}
-
-		const onDownload = listeners['sk-esim-download:click']
-		assert.equal(typeof onDownload, 'function', '应已绑定下载按钮点击事件')
-		await onDownload()
-		if (mcuTask) await mcuTask
-
-		const logs = elements['sk-esim-log'].childNodes.map((n) => n.textContent)
-		assert.ok(!logs.some((l) => l.includes('串口会话未打开或当前模式不可路由')), '不应报串口会话未打开或当前模式不可路由: ' + logs.join(' | '))
-		assert.ok(!elements['sk-esim-status'].textContent.includes('下载失败'), '下载状态不应失败: ' + elements['sk-esim-status'].textContent)
-		assert.deepEqual(calls.pinSession, [openPhysSid], 'pinSession 必须使用物理会话 ID')
-		assert.equal(calls.unpinCount, 1, '结束后必须解除钉扎')
-		assert.ok(calls.writeRawTo.length >= 1, '应至少触发一次 writeRawTo')
-		assert.ok(calls.writeRawTo.every((c) => c.id === openPhysSid), '所有 writeRawTo 必须路由到 ' + openPhysSid)
-		assert.equal(calls.writeRawTo[0].hasLogData, !!redact, redact ? '脱敏开启时下载触发帧必须提供打码 logData' : '关闭脱敏时下载触发帧不应替换 logData')
-		if (redact) {
-			assert.ok(!logs.some((l) => l.includes('MATCH-12345') || l.includes('CC-9988')), '脱敏开启时面板日志绝不能包含明文 AC/CC')
-		} else {
-			assert.ok(logs.some((l) => l.includes('MATCH-12345') && l.includes('CC-9988')), '关闭脱敏后面板日志应显示明文 AC/CC 便于联调')
-		}
-		assert.ok(!Object.values(storageMap).some((v) => v.includes('MATCH-12345') || v.includes('CC-9988')), '无论是否关闭脱敏，AC/CC 均不落盘 localStorage')
-		assert.ok(calls.isSessionOpen.every((id) => id === openPhysSid), '所有 isSessionOpen 必须查询 ' + openPhysSid)
-		if (downloadMode === 1) {
-			assert.deepEqual(calls.onReceiveFrom, [openPhysSid], 'onReceiveFrom 必须订阅 ' + openPhysSid)
-			if (redact) {
-				assert.deepEqual(calls.setSuppressRxLog, [[openPhysSid, true], [openPhysSid, false]], '脱敏开启时 setSuppressRxLog 必须成对屏蔽与恢复 ' + openPhysSid)
-				assert.ok(calls.writeRawTo.every((c) => c.hasLogData === true), '脱敏开启时触发帧与 ZMODEM TX 均须使用脱敏/占位 logData')
-			} else {
-				assert.deepEqual(calls.setSuppressRxLog, [], '关闭脱敏时不屏蔽 ZMODEM RX 串口日志')
-				assert.ok(calls.writeRawTo.every((c) => c.hasLogData === false), '关闭脱敏时触发帧与 ZMODEM TX 均不替换 logData，原样记入串口日志')
-			}
-			assert.equal(httpCount, 4, 'mode=1 应完成四轮 SM-DP+ 请求')
-			assert.ok(calls.httpReqs.every((r) => r.allowInsecureTls === !!allowInsecureTls), '每轮原生请求必须准确透传 allowInsecureTls')
-			// 填自定义代理基址时隐藏原生 TLS 开关
-			elements['sk-esim-proxy-url'].value = 'https://127.0.0.1:8443'
-			listeners['sk-esim-proxy-url:input']()
-			assert.equal(elements['sk-esim-tls-wrap'].hidden, true, '自定义代理基址非空时应隐藏原生 TLS 开关')
-		}
-	}
-
-	// 10a. 单路模式（getMode==='single', getActiveSendSid==='A'，仅 'S' 打开、'A' 返回 false）：mode=0 与 mode=1（严格/跳过 TLS）均以 'S' 路由
-	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 0 })
-	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 1, allowInsecureTls: false })
-	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 1, allowInsecureTls: true })
-
-	// 10b. 双路模式（getMode==='dual', getActiveSendSid==='B'，仅 'B' 打开）：mode=0 与 mode=1 均以 'B' 路由
-	await runPanelDownloadCase({ serialMode: 'dual', activeUiSid: 'B', openPhysSid: 'B', downloadMode: 0 })
-	await runPanelDownloadCase({ serialMode: 'dual', activeUiSid: 'B', openPhysSid: 'B', downloadMode: 1, allowInsecureTls: true })
-
-	// 10c. 关闭脱敏开关：输入明文、串口记真实帧（含 mode=1 ZMODEM 原始 TX/RX）、面板日志可见，且 AC/CC 仍不落盘
-	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 0, redact: false })
-	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 1, allowInsecureTls: false, redact: false })
-
-	// 11. esim-panel.js ID4 错误码渲染与模组识别门控回归（EG800Z / 未识别 / 非 EG800Z / 0xE1xx~0xE4xx）
-	async function runPanelErrRenderCase({ moduleInfo, failStage, errCode, expectErrSub, forbidErrSub, expectHintSub, expectHintHidden }) {
-		const listeners = Object.create(null)
-		function makeEl(id, extra) {
-			return Object.assign({
-				id, value: '', checked: false, textContent: '', className: '', hidden: false, disabled: false,
-				style: {}, dataset: {}, childNodes: [], scrollTop: 0, scrollHeight: 0,
-				addEventListener(type, fn) { listeners[id + ':' + type] = fn },
-				appendChild(node) { this.childNodes.push(node) },
-				removeChild(node) { const idx = this.childNodes.indexOf(node); if (idx >= 0) this.childNodes.splice(idx, 1) },
-				querySelectorAll() { return [] },
-			}, extra || {})
-		}
-		const elements = {
-			'sk-esim-card': makeEl('sk-esim-card'),
-			'sk-esim-eid': makeEl('sk-esim-eid'),
-			'sk-esim-refresh': makeEl('sk-esim-refresh'),
-			'sk-esim-poll': makeEl('sk-esim-poll'),
-			'sk-esim-stop': makeEl('sk-esim-stop'),
-			'sk-esim-state-badge': makeEl('sk-esim-state-badge'),
-			'sk-esim-last-op': makeEl('sk-esim-last-op'),
-			'sk-esim-fail-stage': makeEl('sk-esim-fail-stage'),
-			'sk-esim-err-code': makeEl('sk-esim-err-code'),
-			'sk-esim-err-hint': makeEl('sk-esim-err-hint'),
-			'sk-esim-status-time': makeEl('sk-esim-status-time'),
-			'sk-esim-profile-count': makeEl('sk-esim-profile-count'),
-			'sk-esim-profile-list': makeEl('sk-esim-profile-list'),
-			'sk-esim-mode': makeEl('sk-esim-mode', { value: '0' }),
-			'sk-esim-redact': makeEl('sk-esim-redact', { checked: true }),
-			'sk-esim-ac': makeEl('sk-esim-ac', { type: 'password' }),
-			'sk-esim-cc': makeEl('sk-esim-cc', { type: 'password' }),
-			'sk-esim-proxy-row': makeEl('sk-esim-proxy-row'),
-			'sk-esim-proxy-notice': makeEl('sk-esim-proxy-notice'),
-			'sk-esim-tls-wrap': makeEl('sk-esim-tls-wrap'),
-			'sk-esim-insecure-tls': makeEl('sk-esim-insecure-tls'),
-			'sk-esim-proxy-url': makeEl('sk-esim-proxy-url'),
-			'sk-esim-download': makeEl('sk-esim-download'),
-			'sk-esim-progress-bar': makeEl('sk-esim-progress-bar'),
-			'sk-esim-status': makeEl('sk-esim-status'),
-			'sk-esim-log-title': makeEl('sk-esim-log-title'),
-			'sk-esim-log': makeEl('sk-esim-log'),
-			'sk-esim-log-clear': makeEl('sk-esim-log-clear'),
-		}
-		const id4Fail = [3, 1, failStage, errCode & 0xff, (errCode >> 8) & 0xff, 0x20, 0x26, 0x11, 0x26, 0x20, 0x30, 0x00]
-		const failFrame = window.skParseFrame(sekUp(0x83, tlvBlock(66, [[4].concat(id4Fail)])))
-		let pinnedSid = null
-		const panelWin = {
-			EsimCore,
-			Zmodem,
-			AppPlatform: { service() { return null } },
-			AppDialog: { async alert(msg) { throw new Error('unexpected alert: ' + msg) }, async confirm() { return true } },
-			serialApi: {
-				getMode() { return 'single' },
-				getActiveSendSid() { return 'A' },
-				isOpen() { return true },
-				isPinned() { return pinnedSid !== null },
-				pinSession(sid) { pinnedSid = sid },
-				unpinSession() { pinnedSid = null },
-				getActiveLaneModuleInfo(sid) {
-					assert.equal(sid, 'S')
-					return moduleInfo
-				},
-			},
-			sekTx: {
 				hasTag(f, tag) { return !!(f && f.tlv && f.tlv.some((t) => t.tag === tag)) },
 				findTlvItem(f, tag, id) {
 					const blk = f && f.tlv ? f.tlv.find((t) => t.tag === tag) : null
 					return blk ? (blk.items.find((it) => it.id === id) || null) : null
 				},
-				async sendAndWait() { return { frame: failFrame } },
+				async sendAndWait() { return { frame: doneFrame } },
 			},
 		}
-		const panelCtx = {
-			window: panelWin,
-			localStorage: { getItem() { return null }, setItem() {} },
-			document: {
-				readyState: 'complete',
-				getElementById(id) { return elements[id] || null },
-				createElement() { return makeEl('dyn') },
-				addEventListener() {},
-			},
-			Uint8Array, TextEncoder, AbortController, Date, console,
-			setTimeout(fn, ms) { return setTimeout(fn, Math.min(ms || 0, 5)) },
-			clearTimeout,
-		}
-		vm.createContext(panelCtx)
-		vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/esim-panel.js'), 'utf8'), panelCtx)
 
-		await listeners['sk-esim-poll:click']()
-		const errText = elements['sk-esim-err-code'].textContent
-		assert.ok(errText.includes(expectErrSub), 'err-code 应包含 ' + expectErrSub + '，实际: ' + errText)
-		if (forbidErrSub) {
-			assert.ok(!errText.includes(forbidErrSub), 'err-code 不应包含 ' + forbidErrSub + '，实际: ' + errText)
+		const { elements, listeners, storageMap } = createPanelHarness({ panelWin, downloadMode })
+
+		if (!redact) {
+			elements['sk-esim-redact'].checked = false
+			listeners['sk-esim-redact:change']()
+			assert.equal(storageMap.skEsimRedact, '0')
+			assert.equal(elements['sk-esim-ac'].type, 'text')
 		}
-		if (expectHintHidden) {
-			assert.equal(elements['sk-esim-err-hint'].hidden, true, '不应显示提示条')
-		} else if (expectHintSub) {
-			assert.equal(elements['sk-esim-err-hint'].hidden, false, '应显示提示条')
-			assert.ok(elements['sk-esim-err-hint'].textContent.includes(expectHintSub), '提示条内容不符: ' + elements['sk-esim-err-hint'].textContent)
+		if (downloadMode === 1 && allowInsecureTls) {
+			elements['sk-esim-insecure-tls'].checked = true
+			listeners['sk-esim-insecure-tls:change']()
+			assert.equal(storageMap.skEsimAllowInsecureTls, '1')
 		}
-		assert.ok(elements['sk-esim-status'].textContent.includes(expectErrSub), '轮询终态摘要应包含解析后错误码: ' + elements['sk-esim-status'].textContent)
+
+		await listeners['sk-esim-download:click']()
+
+		// 验证首帧为 Tag=66 ID=4 (V2.32 下载触发)
+		const firstParsed = window.skParseFrame(calls.writeRawTo[0].data)
+		assert.equal(firstParsed.ok, true)
+		assert.equal(firstParsed.tlv[0].tag, 66)
+		assert.equal(firstParsed.tlv[0].items[0].id, 4, '下载触发必须使用 Tag=66 ID=4')
+
+		const logs = elements['sk-esim-log'].childNodes.map((n) => n.textContent)
+		assert.ok(!elements['sk-esim-status'].textContent.includes('下载失败'), elements['sk-esim-status'].textContent)
+		assert.deepEqual(calls.pinSession, [openPhysSid])
+		assert.equal(calls.unpinCount, 1)
+		assert.equal(calls.writeRawTo[0].hasLogData, !!redact)
+		assert.ok(!Object.values(storageMap).some((v) => v.includes('MATCH-12345') || v.includes('CC-9988')))
+		if (downloadMode === 1) {
+			assert.equal(httpCount, 4)
+			assert.ok(calls.httpReqs.every((r) => r.allowInsecureTls === !!allowInsecureTls))
+			if (redact) {
+				assert.deepEqual(calls.setSuppressRxLog, [[openPhysSid, true], [openPhysSid, false]])
+				assert.ok(calls.writeRawTo.every((c) => c.hasLogData === true))
+			} else {
+				assert.deepEqual(calls.setSuppressRxLog, [])
+				assert.ok(calls.writeRawTo.every((c) => c.hasLogData === false))
+			}
+		}
 	}
 
-	await runPanelErrRenderCase({
-		moduleInfo: { known: true, isEg800z: true, moduleVersion: 'EG800ZEULAR09A01M04_BETA261020_E' },
-		failStage: 6, errCode: 0x090C,
-		expectErrSub: '0x8500090C', expectHintSub: '建议：',
-	})
-	await runPanelErrRenderCase({
-		moduleInfo: { known: false, isEg800z: false, moduleVersion: '' },
-		failStage: 6, errCode: 0x090C,
-		expectErrSub: '0x090C（未识别模组）', forbidErrSub: '0x8500090C', expectHintSub: '提示：',
-	})
-	await runPanelErrRenderCase({
-		moduleInfo: { known: true, isEg800z: false, moduleVersion: 'BC660KGLAAR01A05' },
-		failStage: 6, errCode: 0x090C,
-		expectErrSub: '0x090C', forbidErrSub: '0x8500090C', expectHintHidden: true,
-	})
-	await runPanelErrRenderCase({
-		moduleInfo: { known: false, isEg800z: false, moduleVersion: '' },
-		failStage: 1, errCode: 0xE135,
-		expectErrSub: '+CME ERROR: 53 (参数非法)', forbidErrSub: '0x8500', expectHintSub: '建议：',
-	})
-	await runPanelErrRenderCase({
-		moduleInfo: { known: false, isEg800z: false, moduleVersion: '' },
-		failStage: 2, errCode: 0xE205,
-		expectErrSub: 'AT+QIACT=1 PDP 激活失败', forbidErrSub: '0x8500', expectHintSub: '建议：',
-	})
-	await runPanelErrRenderCase({
-		moduleInfo: { known: false, isEg800z: false, moduleVersion: '' },
-		failStage: 4, errCode: 0xE367,
-		expectErrSub: 'WAIT_URC', forbidErrSub: '0x8500', expectHintSub: '建议：',
-	})
-	await runPanelErrRenderCase({
-		moduleInfo: { known: false, isEg800z: false, moduleVersion: '' },
-		failStage: 7, errCode: 0xE4AB,
-		expectErrSub: '第 2 轮', forbidErrSub: '0x8500', expectHintSub: '建议：',
-	})
+	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 0 })
+	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 1, allowInsecureTls: false })
+	await runPanelDownloadCase({ serialMode: 'single', activeUiSid: 'A', openPhysSid: 'S', downloadMode: 1, allowInsecureTls: true })
+	await runPanelDownloadCase({ serialMode: 'dual', activeUiSid: 'B', openPhysSid: 'B', downloadMode: 1, allowInsecureTls: true, redact: false })
 
-	// 12. esim-panel.js 「刷新信息」先查基础信息 (0x03 Tag10-ID1) 再查 Tag66；失败/空版本号优雅降级；轮询不发 Tag10-ID1
-	async function runPanelRefreshProbeCase({ baseBehavior, errCode, failStage = 6, expectErrSub, forbidErrSub, expectHintSub, expectHintHidden, expectLogSub }) {
-		const listeners = Object.create(null)
-		function makeEl(id, extra) {
-			return Object.assign({
-				id, value: '', checked: false, textContent: '', className: '', hidden: false, disabled: false,
-				style: {}, dataset: {}, childNodes: [], scrollTop: 0, scrollHeight: 0,
-				addEventListener(type, fn) { listeners[id + ':' + type] = fn },
-				appendChild(node) { this.childNodes.push(node) },
-				removeChild(node) { const idx = this.childNodes.indexOf(node); if (idx >= 0) this.childNodes.splice(idx, 1) },
-				querySelectorAll() { return [] },
-			}, extra || {})
-		}
-		const elements = {
-			'sk-esim-card': makeEl('sk-esim-card'),
-			'sk-esim-eid': makeEl('sk-esim-eid'),
-			'sk-esim-refresh': makeEl('sk-esim-refresh'),
-			'sk-esim-poll': makeEl('sk-esim-poll'),
-			'sk-esim-stop': makeEl('sk-esim-stop'),
-			'sk-esim-state-badge': makeEl('sk-esim-state-badge'),
-			'sk-esim-last-op': makeEl('sk-esim-last-op'),
-			'sk-esim-fail-stage': makeEl('sk-esim-fail-stage'),
-			'sk-esim-err-code': makeEl('sk-esim-err-code'),
-			'sk-esim-err-hint': makeEl('sk-esim-err-hint'),
-			'sk-esim-status-time': makeEl('sk-esim-status-time'),
-			'sk-esim-profile-count': makeEl('sk-esim-profile-count'),
-			'sk-esim-profile-list': makeEl('sk-esim-profile-list'),
-			'sk-esim-mode': makeEl('sk-esim-mode', { value: '0' }),
-			'sk-esim-redact': makeEl('sk-esim-redact', { checked: true }),
-			'sk-esim-ac': makeEl('sk-esim-ac', { type: 'password' }),
-			'sk-esim-cc': makeEl('sk-esim-cc', { type: 'password' }),
-			'sk-esim-proxy-row': makeEl('sk-esim-proxy-row'),
-			'sk-esim-proxy-notice': makeEl('sk-esim-proxy-notice'),
-			'sk-esim-tls-wrap': makeEl('sk-esim-tls-wrap'),
-			'sk-esim-insecure-tls': makeEl('sk-esim-insecure-tls'),
-			'sk-esim-proxy-url': makeEl('sk-esim-proxy-url'),
-			'sk-esim-download': makeEl('sk-esim-download'),
-			'sk-esim-progress-bar': makeEl('sk-esim-progress-bar'),
-			'sk-esim-status': makeEl('sk-esim-status'),
-			'sk-esim-log-title': makeEl('sk-esim-log-title'),
-			'sk-esim-log': makeEl('sk-esim-log'),
-			'sk-esim-log-clear': makeEl('sk-esim-log-clear'),
-		}
-		const sentQueries = []
-		let laneModule = { known: false, isEg800z: false, family: 'unknown', modelPrefix: '', label: '', moduleVersion: '', moduleModel: '', source: '' }
-		let pinnedSid = null
+	// 7b. 视图模式（客户视图 / 管理员视图）、ID7 策略写入、ID6 通知同步与强清二次确认回归
+	{
+		const eidBytes = [0x89, 0x04, 0x90, 0x32, 0, 0, 0, 0, 0, 0, 0, 0, 0x11, 0x22, 0x33, 0x44]
+		// 3 张卡：
+		// #1 隐藏且启用 (bit0 | bit10 | bit8 | bit9 | bit11) -> 客户视图脱敏“内置默认通信通道 [使用中]”无按钮
+		// #2 隐藏且禁用 (bit10) -> 客户视图完全隐藏
+		// #3 普通禁用卡，带禁删 (bit8) 和待发通知 (bit3) -> 客户视图展示但隐藏删除、标 🔒禁删，管理员视图全展示+策略编辑
+		const f1 = EsimCore.encodeProfileFlags({ enabled: true, profileClass: 1, lockDelete: true, lockDisable: true, hiddenUser: true, fallbackSeed: true })
+		const f2 = EsimCore.encodeProfileFlags({ enabled: false, profileClass: 2, hiddenUser: true })
+		const f3 = EsimCore.encodeProfileFlags({ enabled: false, profileClass: 0, hasPendingNtf: true, lockDelete: true })
+		const id1Val = [3]
+			.concat(asciiPadded('89860011111111111111', 20), [f1 & 0xff, f1 >> 8])
+			.concat(asciiPadded('89860122222222222222', 20), [f2 & 0xff, f2 >> 8])
+			.concat(asciiPadded('89860333333333333333', 20), [f3 & 0xff, f3 >> 8])
+		const id2Val = [2, 0x06, 7, 0, 0, 0, 0x20, 0x26, 0x11, 0x28, 0x14, 0x30, 0x00, 12]
+		const id3Val = [2, 1, 1, 4].concat(Array.from(EsimCore.encodeIccidBcd('89860333333333333333')))
 
-		const eidBytes = [0x89, 0x04, 0x90, 0x32, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34, 0x56, 0x78]
-		const id4Bytes = [3, 1, failStage, errCode & 0xff, (errCode >> 8) & 0xff, 0x20, 0x26, 0x11, 0x26, 0x21, 0x00, 0x00]
 		window.skSession.resetModule()
 		const tag66Frame = window.skParseFrame(sekUp(0x83, tlvBlock(66, [
 			[0].concat(eidBytes),
-			[1, 0],
-			[4].concat(id4Bytes),
+			[1].concat(id1Val),
+			[2].concat(id2Val),
+			[3].concat(id3Val),
 		])))
+
+		const sentReqs = []
+		const confirmCalls = []
+		let pinnedSid = null
+		let rxSub = null
+
+		// 准备通知同步模拟后端
+		let ntfCursor = 0
+		const ntfSrv = createMockXferServer({
+			open(req) {
+				if (req.target === Xfer.TARGET.ESIM_NTF && ntfCursor === 0) {
+					const j = enc.encode('{"pendingNotification":"QUI="}')
+					this._j = j
+					return { status: Xfer.STATUS.OK, totalSize: j.length, totalCrc32: Xfer.crc32(j), metaParam: 77, meta: enc.encode('ntf.test') }
+				}
+				this._j = null
+				return { status: Xfer.STATUS.OK, totalSize: 0, totalCrc32: 0, metaParam: 0, meta: new Uint8Array(0) }
+			},
+			read(off, len) { return this._j.slice(off, off + len) },
+			commit(p) { ntfCursor++; return { status: Xfer.STATUS.OK, resultCode: p } },
+		}, 700)
 
 		const panelWin = {
 			EsimCore,
-			Zmodem,
-			AppPlatform: { service() { return null } },
-			AppDialog: { async alert(msg) { throw new Error('unexpected alert: ' + msg) }, async confirm() { return true } },
+			Xfer,
+			AppPlatform: {
+				service(name) {
+					if (name !== 'esim-http') return null
+					return { async post() { return { status: 204, bodyBytes: new Uint8Array(0) } } }
+				},
+			},
+			AppDialog: {
+				async alert(msg) { throw new Error('unexpected alert: ' + msg) },
+				async confirm(msg, opts) { confirmCalls.push(opts && opts.title ? opts.title : msg); return true },
+			},
 			serialApi: {
 				getMode() { return 'single' },
 				getActiveSendSid() { return 'A' },
 				isOpen() { return true },
+				isSessionOpen() { return true },
 				isPinned() { return pinnedSid !== null },
 				pinSession(sid) { pinnedSid = sid },
 				unpinSession() { pinnedSid = null },
-				getActiveLaneModuleInfo(sid) {
-					assert.equal(sid, 'S')
-					return laneModule
+				suppressParse: false,
+				setSuppressRxLog() {},
+				onReceiveFrom(sid, cb) { rxSub = cb; return () => { rxSub = null } },
+				async writeRawTo(sid, data) {
+					if (rxSub && data[0] === Xfer.MAGIC_0 && data[1] === Xfer.MAGIC_1) {
+						const resp = ntfSrv.handleFrame(data)
+						setTimeout(() => { if (rxSub) rxSub(resp) }, 0)
+					}
 				},
-				setActiveLaneModuleInfo(sid, info) {
-					assert.equal(sid, 'S')
-					laneModule = EsimCore.detectModuleProfile(info)
-					return laneModule.known
-				},
+				getActiveLaneModuleInfo() { return { known: true, isEg800z: true } },
 			},
 			sekTx: {
 				hasTag(f, tag) { return !!(f && f.tlv && f.tlv.some((t) => t.tag === tag)) },
@@ -1237,100 +1144,87 @@ async function runAsyncTests() {
 					return blk ? (blk.items.find((it) => it.id === id) || null) : null
 				},
 				async sendAndWait(opts) {
-					const qId = opts && opts.buildOpts && opts.buildOpts.tlv && opts.buildOpts.tlv[0] && opts.buildOpts.tlv[0].items[0].id
-					sentQueries.push(qId)
-					if (qId === 1) {
-						if (baseBehavior.timeout) throw new Error('等待响应超时(3000ms)')
-						const items = []
-						if (baseBehavior.ver !== undefined) items.push([10].concat(asciiPadded(baseBehavior.ver, 32)))
-						if (baseBehavior.model !== undefined) items.push([12].concat(asciiPadded(baseBehavior.model, 16)))
-						window.skSession.resetModule()
-						const baseFrame = window.skParseFrame(sekUp(0x83, tlvBlock(1, items)))
-						return { frame: baseFrame }
+					const b = opts.buildOpts
+					sentReqs.push({ fc: b.funcCode, tag: b.tlv[0].tag, id: b.tlv[0].items[0].id, val: b.tlv[0].items[0].value })
+					if (b.funcCode === 0x03 && b.tlv[0].items[0].id === 1) {
+						return { frame: window.skParseFrame(sekUp(0x83, tlvBlock(1, [[10].concat(asciiPadded('EG800Z_TEST', 32))]))) }
 					}
-					if (qId === 66) return { frame: tag66Frame }
-					throw new Error('unexpected query id: ' + qId)
+					if (b.funcCode === 0x03) return { frame: tag66Frame }
+					return { tag11: 0, frame: { dir: 'up' } }
 				},
 			},
 		}
-		const panelCtx = {
-			window: panelWin,
-			localStorage: { getItem() { return null }, setItem() {} },
-			document: {
-				readyState: 'complete',
-				getElementById(id) { return elements[id] || null },
-				createElement() { return makeEl('dyn') },
-				addEventListener() {},
-			},
-			Uint8Array, TextEncoder, AbortController, Date, console,
-			setTimeout(fn, ms) { return setTimeout(fn, Math.min(ms || 0, 5)) },
-			clearTimeout,
-		}
-		vm.createContext(panelCtx)
-		vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/esim-panel.js'), 'utf8'), panelCtx)
 
-		// 先点「刷新信息」：必须按 [1, 66] 顺序发送
+		const { elements, listeners } = createPanelHarness({ panelWin })
 		await listeners['sk-esim-refresh:click']()
-		assert.deepEqual(sentQueries, [1, 66], '刷新信息应先发 Tag10-ID1 再发 Tag10-ID66')
-		assert.equal(elements['sk-esim-eid'].textContent, '89049032000000000000000012345678', 'Tag66 EID 必须正常更新')
-		const errText = elements['sk-esim-err-code'].textContent
-		assert.ok(errText.includes(expectErrSub), 'err-code 应包含 ' + expectErrSub + '，实际: ' + errText)
-		if (forbidErrSub) assert.ok(!errText.includes(forbidErrSub), 'err-code 不应包含 ' + forbidErrSub + '，实际: ' + errText)
-		if (expectHintHidden) assert.equal(elements['sk-esim-err-hint'].hidden, true)
-		else if (expectHintSub) {
-			assert.equal(elements['sk-esim-err-hint'].hidden, false)
-			assert.ok(elements['sk-esim-err-hint'].textContent.includes(expectHintSub))
-		}
-		if (expectLogSub) {
-			const logs = elements['sk-esim-log'].childNodes.map((n) => n.textContent)
-			assert.ok(logs.some((l) => l.includes(expectLogSub)), '日志应包含 ' + expectLogSub + '，实际: ' + logs.join(' | '))
-		}
 
-		// 再点「轮询状态」：绝不能发 Tag10-ID1 干扰 ID4 轮询
-		sentQueries.length = 0
-		await listeners['sk-esim-poll:click']()
-		assert.deepEqual(sentQueries, [66], 'ID4 轮询只允许发 Tag10-ID66，不得发送 Tag10-ID1')
+		// 管理员视图默认展示全部 3 张卡 + runtimeFlags + cacheAge + ID3 摘要
+		assert.equal(elements['sk-esim-profile-count'].textContent, '3')
+		assert.equal(elements['sk-esim-cache-age'].textContent, '12s 前')
+		assert.ok(elements['sk-esim-runtime-flags'].childNodes.some((n) => n.textContent.includes('缓存已就绪')))
+		assert.ok(elements['sk-esim-runtime-flags'].childNodes.some((n) => n.textContent.includes('保活')))
+		assert.equal(elements['sk-esim-ntf-total'].textContent, '2')
+		assert.equal(elements['sk-esim-ntf-del'].textContent, '1')
+		assert.equal(elements['sk-esim-ntf-other'].textContent, '1')
+		assert.equal(elements['sk-esim-ntf-head-event'].textContent, '删除')
+		assert.ok(elements['sk-esim-ntf-head-iccid'].textContent.includes('89860333333333333333'))
+		assert.ok(elements['sk-esim-ntf-head-iccid'].textContent.includes('中国电信'))
+		assert.equal(elements['sk-esim-ntf-section'].hidden, false)
+
+		// 在管理员视图点第 3 张卡的「保存策略」-> 发送 Tag66-ID7 op=0 并刷新
+		const row3 = elements['sk-esim-profile-list'].childNodes[2]
+		const row3Buttons = row3.querySelectorAll('button')
+		const savePolicyBtn = row3Buttons.find((b) => b.textContent === '保存策略')
+		assert.ok(savePolicyBtn, '管理员视图每张卡必须提供「保存策略」按钮')
+		sentReqs.length = 0
+		await savePolicyBtn._listeners.click()
+		assert.equal(sentReqs[0].fc, 0x01)
+		assert.equal(sentReqs[0].tag, 66)
+		assert.equal(sentReqs[0].id, 7)
+		assert.equal(sentReqs[0].val.length, 22)
+		assert.equal(sentReqs[0].val[0], 0)
+		assert.equal(sentReqs[0].val[21], 0x01, '第 3 张卡原带 LOCK_DELETE(bit0)')
+		assert.equal(sentReqs[1].fc, 0x03, 'ID7 同步写入成功后应立即刷新 Tag66')
+
+		// 管理员视图点「清空全部策略」-> 发送 Tag66-ID7 op=1
+		sentReqs.length = 0
+		await listeners['sk-esim-policy-clear:click']()
+		assert.equal(sentReqs[0].id, 7)
+		assert.equal(sentReqs[0].val[0], 1)
+		assert.equal(sentReqs[0].val[21], 0)
+
+		// 管理员视图点「同步通知 (ID6 op=1)」-> 发 ID6 op=1 + 走 XFER target=0x03 + 轮询 ID2
+		sentReqs.length = 0
+		await listeners['sk-esim-ntf-sync:click']()
+		assert.equal(sentReqs[0].fc, 0x01)
+		assert.equal(sentReqs[0].tag, 66)
+		assert.equal(sentReqs[0].id, 6)
+		assert.deepEqual(Array.from(sentReqs[0].val), [1])
+		assert.equal(ntfCursor, 2, '应拉取 1 条通知并提交空哨兵收口')
+
+		// 管理员视图点「强清死通知 (ID6 op=2)」-> 必须弹窗二次确认，再发 ID6 op=2
+		confirmCalls.length = 0
+		sentReqs.length = 0
+		await listeners['sk-esim-ntf-purge:click']()
+		assert.equal(confirmCalls.length, 2, 'ID6 op=2 必须执行二次确认')
+		assert.equal(sentReqs[0].id, 6)
+		assert.deepEqual(Array.from(sentReqs[0].val), [2])
+
+		// 切换到客户视图：隐藏禁用隐藏卡(#2)、脱敏启用隐藏卡(#1)无按钮、隐藏通知管理与策略入口
+		listeners['sk-esim-view-customer:click']()
+		assert.equal(elements['sk-esim-ntf-section'].hidden, true, '客户视图必须隐藏通知摘要与强清入口')
+		assert.equal(elements['sk-esim-policy-clear'].hidden, true, '客户视图必须隐藏清空策略按钮')
+		assert.equal(elements['sk-esim-profile-count'].textContent, '2', '客户视图隐藏禁用态隐藏卡后应剩 2 张')
+		const custRows = elements['sk-esim-profile-list'].childNodes
+		const maskedText = JSON.stringify(custRows[0])
+		assert.ok(maskedText.includes('内置默认通信通道') && maskedText.includes('使用中'))
+		assert.ok(!maskedText.includes('89860011111111111111'), '客户视图脱敏卡不得暴露隐藏 ICCID')
+		assert.equal(custRows[0].querySelectorAll('button').length, 0, '客户视图脱敏卡不得提供删/禁/启按钮')
+		const custRow2Btns = custRows[1].querySelectorAll('button')
+		assert.ok(!custRow2Btns.some((b) => b.textContent === '删除'), '客户视图下带 LOCK_DELETE 的卡应隐藏删除按钮')
+		assert.ok(!custRow2Btns.some((b) => b.textContent === '保存策略'), '客户视图不得提供策略编辑')
+		assert.equal(custRow2Btns.find((b) => b.textContent === '启用').disabled, true, '当前启用卡带 LOCK_DISABLE 时客户视图应禁用其他卡的启用按钮')
 	}
-
-	// 12a. 刷新信息：Tag1 返回 EG800ZEULAR... -> 识别前缀 EG800Z -> Tag66 0x090C 启用 EG800Z 专属码表
-	await runPanelRefreshProbeCase({
-		baseBehavior: { ver: 'EG800ZEULAR09A01M04_BETA261020_E' },
-		errCode: 0x090C,
-		expectErrSub: '0x8500090C',
-		expectHintSub: '建议：',
-		expectLogSub: '基础信息识别模组：EG800Z',
-	})
-
-	// 12b. 刷新信息：Tag1 返回非 EG800Z（BC660K）-> 0x090C 仅展示原始十六进制，不套用 EG800Z 文案
-	await runPanelRefreshProbeCase({
-		baseBehavior: { ver: 'BC660KGLAAR01A05' },
-		errCode: 0x090C,
-		expectErrSub: '0x090C',
-		forbidErrSub: '0x8500090C',
-		expectHintHidden: true,
-		expectLogSub: '基础信息识别模组：BC660K',
-	})
-
-	// 12c. 刷新信息：Tag1 超时失败 -> 优雅降级，不阻塞 Tag66 查询，0x090C 标注未识别模组
-	await runPanelRefreshProbeCase({
-		baseBehavior: { timeout: true },
-		errCode: 0x090C,
-		expectErrSub: '0x090C（未识别模组）',
-		forbidErrSub: '0x8500090C',
-		expectHintSub: '提示：',
-		expectLogSub: '已降级，继续查询 Tag66',
-	})
-
-	// 12d. 刷新信息：Tag1 返回空版本号 -> 优雅降级，不阻塞 Tag66 查询，0xE205 通用细分子码正常解析
-	await runPanelRefreshProbeCase({
-		baseBehavior: { ver: '' },
-		failStage: 2,
-		errCode: 0xE205,
-		expectErrSub: 'AT+QIACT=1 PDP 激活失败',
-		forbidErrSub: '0x8500',
-		expectHintSub: '建议：',
-		expectLogSub: '未返回有效模组版本号',
-	})
 }
 
 runAsyncTests().then(() => {

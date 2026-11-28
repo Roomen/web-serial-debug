@@ -577,12 +577,25 @@
 		return parts.join(' ')
 	}
 
-	const ESIM_CLASS_MAP = { 0: '运营', 1: '预置/引导', 2: '测试', 3: '保留' }
-	const ESIM_MODE_MAP = { 0: '模组内联网', 1: '近端外部代理', 2: 'MCU自建HTTPS' }
-	const ESIM_OP_MAP = { 1: '启用(切卡)', 2: '禁用', 3: '删除' }
+	const ESIM_CLASS_MAP = { 0: '运营', 1: '预置/引导', 2: '测试', 3: '未知/保留' }
+	const ESIM_MODE_MAP = { 0: '模组内联网', 1: '近端XFER代理', 2: '预留/MCU自建HTTPS' }
+	const ESIM_OP_MAP = { 1: '启用切卡', 2: '禁用', 3: '删除' }
+	const ESIM_NTF_OP_MAP = { 1: '同步待发通知', 2: '强清本地死通知' }
+	const ESIM_NTF_EVENT_MAP = { 0: '无', 1: '安装', 2: '启用', 3: '禁用', 4: '删除' }
+	const ESIM_POLICY_OP_MAP = { 0: '设置策略', 1: '清空全部策略' }
 	const ESIM_STATE_MAP = { 0: '空闲', 1: '执行中', 2: '成功', 3: '失败', 4: '部分成功' }
-	const ESIM_LAST_OP_MAP = { 0: '无', 1: '下载(内网)', 2: '下载(外部代理)', 3: '下载(MCU-HTTPS)', 4: '启用Profile', 5: '禁用Profile', 6: '删除Profile' }
-	const ESIM_FAIL_STAGE_MAP = { 0: '无错误', 1: '参数错', 2: '前置条件不满足', 3: 'AT错误', 4: '超时', 5: 'HTTP/网络错误', 6: '模组下载错误码', 7: 'ZMODEM/近端中断' }
+	const ESIM_LAST_OP_MAP = {
+		0: '无',
+		1: '模组内联网下载',
+		2: '近端XFER代理下载',
+		3: 'MCU蜂窝HTTPS下载',
+		4: '启用切卡',
+		5: '禁用',
+		6: '删除',
+		7: '同步待发通知',
+		8: '强清本地死通知',
+	}
+	const ESIM_FAIL_STAGE_MAP = { 0: '无错误', 1: '参数错', 2: '前置条件不满足', 3: 'AT错误', 4: '超时', 5: 'HTTP/网络错误', 6: '模组下载错误码', 7: 'XFER/近端中断' }
 
 	function renderEsimEid(raw) {
 		if (!raw || raw.length < 16) return hexbytes(raw || []) + ' (不完整)'
@@ -603,10 +616,12 @@
 			}
 			const iccid = ascii(raw.subarray(off, off + 20)) || '(空ICCID)'
 			const flags = u16leRead(raw, off + 20)
-			const tags = [(flags & 0x01) ? '启用' : '禁用', ESIM_CLASS_MAP[(flags >> 1) & 0x03] || '保留']
-			if (flags & 0x08) tags.push('禁禁PPR')
-			if (flags & 0x10) tags.push('禁删PPR')
-			if (flags & 0x20) tags.push('回退卡')
+			const tags = [(flags & 0x0001) ? '启用' : '禁用', ESIM_CLASS_MAP[(flags >> 1) & 0x03] || '未知/保留']
+			if (flags & 0x0008) tags.push('有待发通知')
+			if (flags & 0x0100) tags.push('禁删')
+			if (flags & 0x0200) tags.push('禁停')
+			if (flags & 0x0400) tags.push('客户隐藏')
+			if (flags & 0x0800) tags.push('保底')
 			parts.push('#' + (i + 1) + ' ' + iccid + ' [' + tags.join(',') + ']')
 		}
 		return parts.join('; ')
@@ -631,15 +646,77 @@
 		return opName + '(' + op + ') ICCID=' + (iccid || '(空)')
 	}
 
+	function renderEsimNtfManage(raw) {
+		if (!raw || raw.length < 1) return '(不完整)'
+		const op = raw[0] & 0xff
+		const opName = ESIM_NTF_OP_MAP[op] != null ? ESIM_NTF_OP_MAP[op] : ('未知操作' + op)
+		return opName + '(' + op + ')'
+	}
+
+	function renderEsimPolicy(raw) {
+		if (!raw || raw.length < 22) return hexbytes(raw || []) + ' (不完整)'
+		const op = raw[0] & 0xff
+		const opName = ESIM_POLICY_OP_MAP[op] != null ? ESIM_POLICY_OP_MAP[op] : ('未知操作' + op)
+		const iccid = ascii(raw.subarray(1, 21))
+		const mask = raw[21] & 0xff
+		if (op === 1) return opName + '(1)'
+		const bits = []
+		if (mask & 0x01) bits.push('禁删')
+		if (mask & 0x02) bits.push('禁停')
+		if (mask & 0x04) bits.push('客户隐藏')
+		if (mask & 0x08) bits.push('保底')
+		const maskDesc = bits.length ? bits.join(',') : '解除保护(0)'
+		return opName + '(0) ICCID=' + (iccid || '(空)') + ' 策略:[' + maskDesc + '](0x' + mask.toString(16).toUpperCase().padStart(2, '0') + ')'
+	}
+
+	function decodeEsimIccidBcdLocal(bytes) {
+		if (W.EsimCore && typeof W.EsimCore.decodeIccidBcd === 'function') {
+			return W.EsimCore.decodeIccidBcd(bytes)
+		}
+		let allZero = true
+		for (let i = 0; i < bytes.length; i++) if (bytes[i] !== 0) { allZero = false; break }
+		if (allZero) return ''
+		let s = ''
+		for (let i = 0; i < bytes.length; i++) {
+			const b = bytes[i] & 0xff
+			const hi = (b >>> 4) & 0x0f
+			if (hi === 0x0f) break
+			s += hi.toString(16).toUpperCase()
+			const lo = b & 0x0f
+			if (lo === 0x0f) break
+			s += lo.toString(16).toUpperCase()
+		}
+		return s
+	}
+
+	function renderEsimNtfSummary(raw) {
+		if (!raw || raw.length < 14) return hexbytes(raw || []) + ' (不完整)'
+		const total = raw[0] & 0xff
+		if (total === 0xff) return '尚未读取(0xFF)'
+		const delCnt = raw[1] & 0xff
+		const otherCnt = raw[2] & 0xff
+		const ev = raw[3] & 0xff
+		const evName = ESIM_NTF_EVENT_MAP[ev] != null ? ESIM_NTF_EVENT_MAP[ev] : ('未知' + ev)
+		const iccid = ev === 0 ? '' : decodeEsimIccidBcdLocal(raw.subarray(4, 14))
+		return '总计:' + total + ' (删除:' + delCnt + ', 其他:' + otherCnt + ') 首条:' + evName + (iccid ? (' ICCID=' + iccid) : '')
+	}
+
 	function renderEsimStatus(raw, moduleInfo) {
-		if (!raw || raw.length < 12) return hexbytes(raw || []) + ' (不完整)'
+		if (!raw || raw.length < 14) return hexbytes(raw || []) + ' (不完整)'
 		const st = raw[0] & 0xff
-		const op = raw[1] & 0xff
-		const fs = raw[2] & 0xff
-		const err = u16leRead(raw, 3)
+		const rf = raw[1] & 0xff
+		const op = raw[2] & 0xff
+		const fs = raw[3] & 0xff
+		const err = u16leRead(raw, 4)
+		const age = raw[13] & 0xff
 		const stName = ESIM_STATE_MAP[st] != null ? ESIM_STATE_MAP[st] : ('未知' + st)
 		const opName = ESIM_LAST_OP_MAP[op] != null ? ESIM_LAST_OP_MAP[op] : ('未知' + op)
 		const fsName = ESIM_FAIL_STAGE_MAP[fs] != null ? ESIM_FAIL_STAGE_MAP[fs] : ('未知' + fs)
+		const rfTags = []
+		if (rf & 0x01) rfTags.push('刷新中')
+		if (rf & 0x02) rfTags.push('缓存就绪')
+		if (rf & 0x04) rfTags.push('续传保活60s')
+		const rfText = rfTags.length ? (' [' + rfTags.join(',') + ']') : ''
 		const mod = moduleInfo !== undefined ? moduleInfo : W.skSession.getModuleInfo()
 		let errText
 		if (W.EsimCore && typeof W.EsimCore.decodeModuleErrCode === 'function') {
@@ -648,8 +725,9 @@
 			const errHex = err.toString(16).toUpperCase().padStart(4, '0')
 			errText = err === 0 ? '0x0000' : ('0x' + errHex)
 		}
-		const timeText = bcdTimeOrEmpty(raw.subarray(5, 12))
-		return '状态:' + stName + ' 操作:' + opName + ' 失败阶段:' + fsName + ' 模组码:' + errText + ' 时间:' + timeText
+		const timeText = bcdTimeOrEmpty(raw.subarray(6, 13))
+		const ageText = age === 255 ? ((rf & 0x02) ? '≥255s前' : '未刷新') : (age + 's前')
+		return '状态:' + stName + rfText + ' 操作:' + opName + ' 失败阶段:' + fsName + ' 模组码:' + errText + ' 时间:' + timeText + ' 缓存:' + ageText
 	}
 
 	function esimVarItemLen(id, payload, j) {
@@ -660,7 +738,7 @@
 			const want = 1 + n * 22
 			return { need: Math.min(want, remain), partial: want > remain }
 		}
-		if (id === 2) {
+		if (id === 4) {
 			if (remain < 2) return { need: remain, partial: true }
 			const acLen = payload[j + 1] & 0xff
 			if (2 + acLen >= remain) return { need: remain, partial: true }
@@ -749,9 +827,12 @@
 				case 'faultRec': return renderFaultRec(raw)
 				case 'esimEid': return renderEsimEid(raw)
 				case 'esimProfiles': return renderEsimProfiles(raw)
+				case 'esimStatus': return renderEsimStatus(raw)
+				case 'esimNtfSummary': return renderEsimNtfSummary(raw)
 				case 'esimDownload': return renderEsimDownload(raw)
 				case 'esimManage': return renderEsimManage(raw)
-				case 'esimStatus': return renderEsimStatus(raw)
+				case 'esimNtfManage': return renderEsimNtfManage(raw)
+				case 'esimPolicy': return renderEsimPolicy(raw)
 			}
 		}
 		if (/YYYYMMDDhhmmss|YYMMDDhhmmss/.test(desc) || (def && def.unit === 'BCD' && (raw.length === 7 || raw.length === 6))) return bcdTime(raw)
@@ -1512,8 +1593,8 @@
 				if (p20.error) break
 				continue
 			}
-			// Tag66 eSIM 变长字段: ID1 Profile列表, ID2 下载触发(脱敏); ID0(16B)/ID3(21B)/ID4(12B) 走定长
-			if (tag === 66 && (id === 1 || id === 2)) {
+			// Tag66 eSIM 变长字段: ID1 Profile列表, ID4 下载触发(脱敏); ID0(16B)/ID2(14B)/ID3(14B)/ID5(21B)/ID6(1B)/ID7(22B) 走定长
+			if (tag === 66 && (id === 1 || id === 4)) {
 				const ev = esimVarItemLen(id, payload, j)
 				const raw = payload.subarray(j, j + ev.need)
 				j += ev.need
@@ -2071,7 +2152,7 @@
 		if (W.skSession.hasBase() && result.tlv && result.tlv.length) {
 			applyBaseToSeriesTlv(result.tlv)
 		}
-		// 统一按会话最新模组信息重渲染 Tag66-ID4（处理设备切换重置或同帧含 Tag1 的情况）
+		// 统一按会话最新模组信息重渲染 Tag66-ID2（处理设备切换重置或同帧含 Tag1 的情况）
 		if (result.tlv && result.tlv.length) {
 			applyModuleToEsimStatusTlv(result.tlv, W.skSession.getModuleInfo())
 		}
@@ -2093,8 +2174,8 @@
 			const items = tlv[i].items || []
 			for (let j = 0; j < items.length; j++) {
 				const it = items[j]
-				if (it.id !== 4 || it.partial || it.resultCode !== undefined) continue
-				if (!it.raw || it.raw.length < 12) continue
+				if (it.id !== 2 || it.partial || it.resultCode !== undefined) continue
+				if (!it.raw || it.raw.length < 14) continue
 				it.decoded = renderEsimStatus(Uint8Array.from(it.raw), moduleInfo)
 			}
 		}
@@ -2539,8 +2620,8 @@
 		const hasUnidentifiedModuleErr = !sm.known && tlv.some(function (t) {
 			if (t.tag !== 66) return false
 			return (t.items || []).some(function (it) {
-				if (it.id !== 4 || it.partial || it.resultCode !== undefined || !it.raw || it.raw.length < 12) return false
-				const err = u16leRead(it.raw, 3)
+				if (it.id !== 2 || it.partial || it.resultCode !== undefined || !it.raw || it.raw.length < 14) return false
+				const err = u16leRead(it.raw, 4)
 				return err >= 0x0001 && err <= 0x117f
 			})
 		})
@@ -2740,7 +2821,7 @@
 					set(pBase + idOff, 2, tip, itemGrp)
 					continue
 				}
-				if (tag === 66 && (id === 1 || id === 2)) {
+				if (tag === 66 && (id === 1 || id === 4)) {
 					const ev = esimVarItemLen(id, payload, j)
 					const rawb = payload.subarray(j, j + ev.need)
 					const tip = prefix + '数据域-' + tagName + ' ' + name + ' = ' + renderValue(def, rawb) + (ev.partial ? ' (不完整)' : '')

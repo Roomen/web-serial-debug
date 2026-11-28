@@ -1,4 +1,4 @@
-// eSIM (Tag=66) 核心编解码、状态字典与 mode=1 四轮 ES9+ ZMODEM 代理状态机
+// eSIM (Tag=66 V2.32 ID0~ID7) 核心编解码、状态/错误码字典、运营商识别与近端 XFER (0xA5 0x5A) 代理状态机
 // 纯逻辑模块：不碰 DOM、localStorage 或 serialApi，可在 Node 直接单测并在浏览器挂到 window.EsimCore
 ;(function (root) {
 	'use strict'
@@ -17,11 +17,37 @@
 		'Connection': 'close',
 	})
 
-	const PROFILE_CLASS_LABELS = { 0: '运营', 1: '预置/引导', 2: '测试', 3: '保留' }
-	const MODE_LABELS = { 0: '模组内联网 (mode=0)', 1: '近端外部代理 (mode=1)', 2: 'MCU自建HTTPS (mode=2)' }
+	const POLICY_BITS = Object.freeze({
+		LOCK_DELETE: 0x01,   // ID1 bit8  (0x0100): 禁止删除保护
+		LOCK_DISABLE: 0x02,  // ID1 bit9  (0x0200): 禁止禁用/切走保护
+		HIDDEN_USER: 0x04,   // ID1 bit10 (0x0400): 对普通客户隐藏
+		FALLBACK_SEED: 0x08, // ID1 bit11 (0x0800): 出厂保底/种子卡标记
+	})
+
+	const RUNTIME_FLAGS = Object.freeze({
+		CACHE_REFRESHING: 0x01, // bit0: 后台正在刷新 eSIM 缓存
+		BOOT_CACHE_READY: 0x02, // bit1: 开机后已完成至少一次实机缓存读取
+		NEAR_KEEPALIVE: 0x04,   // bit2: 处于近端 XFER 断连保活待续传窗口 (60s)
+	})
+
+	const PROFILE_CLASS_LABELS = { 0: '运营', 1: '预置/引导', 2: '测试', 3: '未知/保留' }
+	const MODE_LABELS = { 0: '模组内联网 (mode=0)', 1: '近端 XFER 代理 (mode=1)', 2: '预留/MCU自建HTTPS (mode=2)' }
 	const OP_LABELS = { 1: '启用(切卡)', 2: '禁用', 3: '删除' }
+	const NTF_OP_LABELS = { 1: '同步待发通知', 2: '强清本地死通知' }
+	const POLICY_OP_LABELS = { 0: '设置/更新策略', 1: '清空全部策略' }
+	const NTF_EVENT_LABELS = { 0: '无', 1: '安装', 2: '启用', 3: '禁用', 4: '删除' }
 	const STATE_LABELS = { 0: '空闲', 1: '执行中', 2: '成功', 3: '失败', 4: '部分成功' }
-	const LAST_OP_LABELS = { 0: '无', 1: '下载(内网)', 2: '下载(外部代理)', 3: '下载(MCU-HTTPS)', 4: '启用Profile', 5: '禁用Profile', 6: '删除Profile' }
+	const LAST_OP_LABELS = {
+		0: '无',
+		1: '模组内联网下载',
+		2: '近端 XFER 代理下载',
+		3: 'MCU 蜂窝 HTTPS 下载',
+		4: '启用切卡',
+		5: '禁用',
+		6: '删除',
+		7: '同步待发通知',
+		8: '强清本地死通知',
+	}
 	const FAIL_STAGE_LABELS = {
 		0: '无错误',
 		1: '参数错',
@@ -30,7 +56,7 @@
 		4: '超时',
 		5: 'HTTP/网络错误',
 		6: '模组下载错误码',
-		7: 'ZMODEM/近端中断',
+		7: 'XFER/近端中断',
 	}
 
 	// EG800Z +QESIM 低 16 位常见错误码及排查建议（高 16 位恒为 0x8500，仅识别到 EG800Z 模组时启用）
@@ -53,14 +79,15 @@
 		0x0018: { name: '网络/连接超时', hint: '蜂窝网络或 SM-DP+ 连接超时，请检查信号质量与网络环境' },
 		0x0019: { name: '网络错误', hint: '检查蜂窝网络注册、PDP 激活状态与信号质量' },
 		0x0102: { name: '启用失败：Profile 已处于启用态', hint: '目标卡已启用，无需重复启用' },
-		0x0105: { name: '启用失败：卡应用繁忙（需整机/模组断电重启）', hint: '软复位无效，必须对模组/整机断电重启后复测' },
+		0x0105: { name: '启用失败：STK 占用/卡应用繁忙', hint: '运营商 STK 菜单占用或卡应用繁忙，固件已尝试释放 STK；若仍失败请对模组/整机断电重启后复测' },
 		0x0203: { name: '禁用失败：PPR 策略禁止禁用', hint: '该 Profile 受 eUICC PPR 保护，不允许禁用' },
-		0x0204: { name: '禁用失败：卡应用繁忙', hint: '软复位无效，必须对模组/整机断电重启后复测' },
-		0x0302: { name: '删除失败：目标 Profile 仍处于启用态', hint: '请先禁用该 Profile 后再删除' },
+		0x0204: { name: '禁用失败：STK 占用/卡应用繁忙', hint: '运营商 STK 菜单占用或卡应用繁忙，若仍失败请对模组/整机断电重启后复测' },
+		0x0302: { name: '删除失败：禁止删除启用态 Profile', hint: '请先切走或禁用该 Profile 后再删除' },
 		0x0303: { name: '删除失败：PPR 策略禁止删除', hint: '该 Profile 受 eUICC PPR 保护，不允许删除' },
 		0x0704: { name: '认证服务器错误：无会话上下文', hint: '会话上下文已失效，请重新发起下载流程' },
-		0x0705: { name: '认证服务器错误：无效 OID（证书/OID 不匹配）', hint: '激活码含无效 OID 或证书不匹配，请向发卡侧核对 AC；勿盲目重试' },
+		0x0705: { name: '激活码无效：无效 OID 或证书不匹配', hint: '激活码无效或含不兼容 OID/证书，请向发卡侧核对 AC；勿盲目重试' },
 		0x0706: { name: 'eUICC Challenge 不匹配（复用旧会话响应）', hint: '不可复用旧会话响应；请重新发起流程，勿盲目重试' },
+		0x0802: { name: '删除失败：禁止删除启用态 Profile', hint: '请先切走或禁用该 Profile 后再删除' },
 		0x0909: { name: '安装失败：ICCID 已存在（重复下载同订单）', hint: '卡内已有相同 ICCID 的 Profile；勿盲目重试' },
 		0x090C: { name: '安装失败：PE 处理错误（卡内残留同订单 Profile 或空间冲突）', hint: '卡内可能残留同订单 Profile 或空间冲突，请先清理后再下发；勿盲目重试' },
 		0x0B03: { name: '客户端认证错误：eUICC 证书无效', hint: '请核对 eUICC 证书链与 SM-DP+ 环境（正式/测试 CI）是否匹配' },
@@ -81,7 +108,7 @@
 		53: { name: '参数非法', hint: '检查 AT 指令参数格式或长度（如大包回灌 totallen）' },
 	}
 
-	// 0xE2xx：mode=0 上电/入网与前置步骤失败
+	// 0xE2xx：上电/入网与前置步骤失败
 	const PRECOND_ERROR_HINTS = {
 		0xE201: { name: '模组上电失败（commuEnable）', hint: '检查模组供电、电源控制引脚与硬件连接' },
 		0xE202: { name: '模组未就绪或 AT+CFUN=1 失败', hint: '检查模组串口通信、启动状态与射频使能' },
@@ -90,7 +117,7 @@
 		0xE205: { name: 'AT+QIACT=1 PDP 激活失败（常见于 APN 错误或未签约）', hint: '核对设备 APN 配置及当前 Profile 的数据业务签约状态' },
 		0xE206: { name: 'AT+QIACT? PDP 激活查询超时/预算耗尽', hint: '检查蜂窝网络稳定性，稍后重试 PDP 激活' },
 		0xE207: { name: 'AT+CSQ/AT+QENG 信号查询失败', hint: '检查模组信号质量与驻网状态' },
-		0xE208: { name: 'mode=1 近端代理通道未就绪', hint: '检查近端通信通道状态及固件近端代理能力开关' },
+		0xE208: { name: '近端代理能力未启用或通道不可用', hint: '检查近端通信通道状态及固件近端代理能力开关' },
 	}
 
 	// 0xE3se：AT+QESIM 会话状态机内部错误
@@ -126,25 +153,67 @@
 		0xF: { name: '部分中止', hint: '流程中途异常中止，请核对 Profile 列表确认是否已落盘' },
 	}
 
-	// 0xE4rn：mode=1 近端 ZMODEM 传输失败
-	const ZMODEM_ERRORS = {
-		0x1: { name: '参数错', hint: '检查 ZMODEM 传输参数配置' },
-		0x2: { name: '读超时', hint: '等待对端 ZMODEM 数据超时，请检查近端代理状态与链路连接' },
-		0x3: { name: 'I/O 断开', hint: '近端通信链路断开（如 BLE 断连），请重连后刷新 ID4 核对终态' },
-		0x4: { name: 'CRC 校验错', hint: '传输发生误码，请检查串口参数或近端信号质量' },
-		0x5: { name: 'ZDLE 转义错', hint: '传输帧转义序列异常，可能存在字节丢失或链路干扰' },
-		0x6: { name: '子包超长溢出', hint: '单块 ZMODEM 子包超过固件接收缓冲上限' },
-		0x7: { name: 'EOF/长度错', hint: '实际传输长度与 ZFILE 声明长度不符' },
-		0x8: { name: '偏移错位', hint: '传输偏移不同步，请重新发起下载' },
-		0x9: { name: '不支持帧型', hint: '收到固件不支持的 ZMODEM 帧类型' },
+	// 0xE4rn：近端 XFER 传输失败（超时/断连/中止）
+	const XFER_ERRORS = {
+		0x1: { name: '参数错', hint: '检查 XFER 传输参数与目标编号' },
+		0x2: { name: '传输/等待超时', hint: '近端 XFER 交互空闲或总预算超时，请检查链路连接与代理响应' },
+		0x3: { name: '近端链路断开 (I/O)', hint: '近端通信链路断开（如 BLE 断连），请重连后刷新 ID2 核对终态' },
+		0x4: { name: 'CRC32 校验错', hint: '传输发生误码，请检查串口参数或近端信号质量' },
+		0x5: { name: '偏移错位', hint: '传输偏移不同步，请重新发起或重连后 QUERY 续传' },
+		0x6: { name: '分片超长溢出', hint: '单帧 XFER 块长超过通道/固件上限' },
+		0x7: { name: 'EOF/长度不符', hint: '实际传输长度与 OPEN 声明长度不一致' },
+		0x8: { name: '后端写入失败', hint: 'MCU 流式回灌后端返回错误，请检查模组状态与响应体' },
+		0x9: { name: '不支持帧型', hint: '收到固件不支持的 XFER 操作码' },
 		0xA: { name: '写入回调失败', hint: 'MCU 流式回灌写入回调失败，可能为模组返回错误或响应体异常' },
-		0xB: { name: '对端 CAN 取消（如 SM-DP+ 业务失败中止）', hint: '近端代理主动中止会话，请查看上位机操作日志中的 SM-DP+ 错误原因' },
+		0xB: { name: '近端代理主动中止 (ABORT)', hint: '上位机主动发送 XFER ABORT（如 SM-DP+ 业务失败或用户停止），请查看面板日志' },
 		0xC: { name: '重试耗尽', hint: '连续重传失败，请检查通信链路稳定性' },
-		0xD: { name: '协议违例', hint: 'ZMODEM 交互状态违例，请重新发起下载' },
-		0xE: { name: '未收到 ZFILE', hint: '未收到对端 ZFILE 文件头，请检查近端代理是否正常响应' },
+		0xD: { name: '协议违例', hint: 'XFER 交互状态违例，请重新发起任务' },
+		0xE: { name: '断连 60s 保活超时', hint: '近端链路断开超过 60s 未重连续传，MCU 已自动下电并结束会话，请刷新 ID2 核对' },
 	}
 
+	// ICCID 前缀 -> 运营商/地区识别表（按最长前缀优先匹配）
+	const ICCID_CARRIER_PREFIXES = [
+		{ prefix: '898600', name: '中国移动', code: 'CMCC' },
+		{ prefix: '898602', name: '中国移动', code: 'CMCC' },
+		{ prefix: '898604', name: '中国移动', code: 'CMCC' },
+		{ prefix: '898607', name: '中国移动', code: 'CMCC' },
+		{ prefix: '898608', name: '中国移动', code: 'CMCC' },
+		{ prefix: '898601', name: '中国联通', code: 'CUCC' },
+		{ prefix: '898606', name: '中国联通', code: 'CUCC' },
+		{ prefix: '898609', name: '中国联通', code: 'CUCC' },
+		{ prefix: '898603', name: '中国电信', code: 'CTCC' },
+		{ prefix: '898605', name: '中国电信', code: 'CTCC' },
+		{ prefix: '898611', name: '中国电信', code: 'CTCC' },
+		{ prefix: '898615', name: '中国广电', code: 'CBN' },
+		{ prefix: '89852', name: '中国香港', code: 'HK' },
+		{ prefix: '89853', name: '中国澳门', code: 'MO' },
+		{ prefix: '89886', name: '中国台湾', code: 'TW' },
+		{ prefix: '89882', name: '国际物联网', code: 'INTL' },
+		{ prefix: '89883', name: '国际物联网', code: 'INTL' },
+		{ prefix: '8965', name: '新加坡', code: 'SG' },
+		{ prefix: '8981', name: '日本', code: 'JP' },
+		{ prefix: '8982', name: '韩国', code: 'KR' },
+		{ prefix: '8944', name: '英国', code: 'UK' },
+		{ prefix: '8949', name: '德国', code: 'DE' },
+		{ prefix: '8933', name: '法国', code: 'FR' },
+		{ prefix: '8931', name: '荷兰', code: 'NL' },
+		{ prefix: '8901', name: '美国', code: 'US' },
+	]
+
 	const UNIDENTIFIED_MODULE_HINT = '未识别当前模组型号，暂不套用 EG800Z 专属错误码表；如需解析模组原码，请先查询基础数据（Tag1）获取模组版本号'
+
+	function identifyIccidCarrier(iccid) {
+		const s = String(iccid || '').trim().toUpperCase()
+		if (!s) return null
+		let best = null
+		for (let i = 0; i < ICCID_CARRIER_PREFIXES.length; i++) {
+			const it = ICCID_CARRIER_PREFIXES[i]
+			if (s.startsWith(it.prefix) && (!best || it.prefix.length > best.prefix.length)) {
+				best = it
+			}
+		}
+		return best ? { prefix: best.prefix, name: best.name, code: best.code } : null
+	}
 
 	function cleanModuleText(str) {
 		const s = String(str == null ? '' : str).replace(/\x00/g, '').trim()
@@ -258,7 +327,7 @@
 			}
 		}
 
-		// 2) 0xE2xx：mode=0 上电/入网与前置步骤失败
+		// 2) 0xE2xx：上电/入网与前置步骤失败
 		if ((code & 0xff00) === 0xe200) {
 			const info = PRECOND_ERROR_HINTS[code] || null
 			const name = info ? info.name : ('前置/入网步骤失败 (' + hex + ')')
@@ -296,26 +365,26 @@
 			}
 		}
 
-		// 4) 0xE4rn：mode=1 近端 ZMODEM 传输失败
+		// 4) 0xE4rn：近端 XFER 传输失败（超时/断连/中止）
 		if ((code & 0xff00) === 0xe400) {
 			const r = (code >>> 4) & 0x0f
 			const dir = (r >>> 3) & 0x01
 			const round = r & 0x07
-			const zCode = code & 0x0f
-			const dirLabel = dir === 0 ? 'MCU→Host 发请求' : 'Host→MCU 收响应'
-			const roundLabel = round >= 1 && round <= 4 ? ('第 ' + round + ' 轮') : (round === 0 ? '未知轮次' : ('轮次' + round))
-			const zInfo = ZMODEM_ERRORS[zCode] || null
-			const zName = zInfo ? zInfo.name : ('未知错误(0x' + zCode.toString(16).toUpperCase() + ')')
-			const name = 'ZMODEM ' + roundLabel + '·' + dirLabel + '：' + zName
+			const xCode = code & 0x0f
+			const dirLabel = dir === 0 ? 'PULL/请求' : 'PUSH/回灌'
+			const roundLabel = round >= 1 && round <= 4 ? ('第 ' + round + ' 轮') : (round === 0 ? '近端会话' : ('轮次' + round))
+			const xInfo = XFER_ERRORS[xCode] || null
+			const xName = xInfo ? xInfo.name : ('未知错误(0x' + xCode.toString(16).toUpperCase() + ')')
+			const name = 'XFER ' + roundLabel + '·' + dirLabel + '：' + xName
 			return {
 				code,
 				hex,
-				category: 'zmodem',
+				category: 'xfer',
 				qesimFullCode: '',
 				name,
-				hint: zInfo ? zInfo.hint : '',
+				hint: xInfo ? xInfo.hint : '',
 				displayText: hex + ' (' + name + ')',
-				detail: { dir, dirLabel, round, roundLabel, zmodemCode: zCode, zmodemName: zName },
+				detail: { dir, dirLabel, round, roundLabel, xferCode: xCode, xferName: xName },
 				module: mod,
 			}
 		}
@@ -383,31 +452,42 @@
 		if (atClass === 2) return 0 // 操作文件 -> 运营
 		if (atClass === 1) return 1 // 预置文件 -> 预置/引导
 		if (atClass === 0) return 2 // 测试文件 -> 测试
-		return 3 // 保留
+		return 3 // 未知/保留
 	}
 
+	// ID1 statusBits (uint16 LE):
+	// 低字节: bit0=enabled, bit2..1=profileClass, bit3=hasPendingNtf
+	// 高字节: bit8=LOCK_DELETE, bit9=LOCK_DISABLE, bit10=HIDDEN_USER, bit11=FALLBACK_SEED (policyMask << 8)
 	function decodeProfileFlags(flags) {
 		const f = flags & 0xffff
 		const profileClass = (f >>> 1) & 0x03
+		const policyMask = (f >>> 8) & 0x0f
 		return {
 			raw: f,
-			enabled: (f & 0x01) !== 0,
+			enabled: (f & 0x0001) !== 0,
 			profileClass,
-			profileClassLabel: PROFILE_CLASS_LABELS[profileClass] || '保留',
-			pprDisableBlocked: (f & 0x08) !== 0,
-			pprDeleteBlocked: (f & 0x10) !== 0,
-			fallback: (f & 0x20) !== 0,
+			profileClassLabel: PROFILE_CLASS_LABELS[profileClass] || '未知/保留',
+			hasPendingNtf: (f & 0x0008) !== 0,
+			policyMask,
+			lockDelete: (f & 0x0100) !== 0,
+			lockDisable: (f & 0x0200) !== 0,
+			hiddenUser: (f & 0x0400) !== 0,
+			fallbackSeed: (f & 0x0800) !== 0,
 		}
 	}
 
 	function encodeProfileFlags(info) {
 		info = info || {}
 		let f = 0
-		if (info.enabled) f |= 0x01
+		if (info.enabled) f |= 0x0001
 		f |= ((info.profileClass & 0x03) << 1)
-		if (info.pprDisableBlocked) f |= 0x08
-		if (info.pprDeleteBlocked) f |= 0x10
-		if (info.fallback) f |= 0x20
+		if (info.hasPendingNtf) f |= 0x0008
+		let pm = info.policyMask != null ? (Number(info.policyMask) & 0x0f) : 0
+		if (info.lockDelete) pm |= POLICY_BITS.LOCK_DELETE
+		if (info.lockDisable) pm |= POLICY_BITS.LOCK_DISABLE
+		if (info.hiddenUser) pm |= POLICY_BITS.HIDDEN_USER
+		if (info.fallbackSeed) pm |= POLICY_BITS.FALLBACK_SEED
+		f |= (pm << 8)
 		return f & 0xffff
 	}
 
@@ -436,6 +516,7 @@
 		return { ok: true, ac: s, smdpHost, matchingId, oid, warning }
 	}
 
+	// ID4 (Profile 下载触发): mode(1B) + acLen(1B) + ac + ccLen(1B) + cc
 	function encodeDownloadTrigger(opts) {
 		opts = opts || {}
 		const mode = Number(opts.mode)
@@ -460,7 +541,7 @@
 		return out
 	}
 
-	// 脱敏 Tag=66 ID=2 载荷：保留 mode/acLen/ccLen 结构，AC/CC 字节全清零，供日志 logData 使用
+	// 脱敏 Tag=66 ID=4 载荷：保留 mode/acLen/ccLen 结构，AC/CC 字节替换为 '*'，供日志 logData 使用
 	function redactDownloadValue(valBytes) {
 		const u8 = valBytes instanceof Uint8Array ? new Uint8Array(valBytes) : Uint8Array.from(valBytes || [])
 		if (u8.length < 2) return u8
@@ -474,6 +555,7 @@
 		return u8
 	}
 
+	// ID5 (单卡管理触发): op(1B: 1=启用切卡, 2=禁用, 3=删除) + iccid[20]
 	function encodeProfileManage(opts) {
 		opts = opts || {}
 		const op = Number(opts.op)
@@ -485,6 +567,103 @@
 		const out = new Uint8Array(21)
 		out[0] = op & 0xff
 		for (let i = 0; i < iccid.length; i++) out[1 + i] = iccid.charCodeAt(i) & 0xff
+		return out
+	}
+
+	// ID6 (通知队列操作触发): op(1B: 1=同步待发通知, 2=强制清空本地死通知)
+	function encodeNtfManage(opts) {
+		opts = opts || {}
+		const op = Number(opts.op)
+		if (op !== 1 && op !== 2) throw new Error('通知队列操作码必须为 1(同步待发通知) 或 2(强制清空本地死通知)')
+		return Uint8Array.from([op & 0xff])
+	}
+
+	// ID7 (卡管控策略配置): op(1B: 0=设置/更新, 1=清空全部) + iccid[20] + policyMask(1B)
+	function encodeProfilePolicy(opts) {
+		opts = opts || {}
+		const op = Number(opts.op)
+		if (op !== 0 && op !== 1) throw new Error('策略配置操作码必须为 0(设置/更新) 或 1(清空全部)')
+		const out = new Uint8Array(22)
+		out[0] = op & 0xff
+		if (op === 1) {
+			if (opts.policyMask != null && Number(opts.policyMask) !== 0) {
+				throw new Error('清空全部策略时 policyMask 必须为 0')
+			}
+			out[21] = 0
+			return out
+		}
+		const iccid = String(opts.iccid || '').trim()
+		if (!iccid || iccid.length > 20 || !/^[0-9A-Fa-f]{1,20}$/.test(iccid)) {
+			throw new Error('ICCID 格式无效（需为 1~20 位 ASCII 数字/十六进制字符）')
+		}
+		const mask = Number(opts.policyMask || 0)
+		if (!Number.isInteger(mask) || mask < 0 || (mask & 0xf0) !== 0) {
+			throw new Error('policyMask 高 4 位保留必须为 0（合法范围 0x00~0x0F）')
+		}
+		for (let i = 0; i < iccid.length; i++) out[1 + i] = iccid.charCodeAt(i) & 0xff
+		out[21] = mask & 0x0f
+		return out
+	}
+
+	function decodeProfilePolicy(raw) {
+		const u8 = raw instanceof Uint8Array ? raw : Uint8Array.from(raw || [])
+		if (u8.length < 22) return null
+		const op = u8[0] & 0xff
+		let iccid = ''
+		for (let i = 1; i < 21; i++) {
+			const c = u8[i] & 0xff
+			if (c === 0) break
+			iccid += String.fromCharCode(c)
+		}
+		const policyMask = u8[21] & 0xff
+		return {
+			op,
+			opLabel: POLICY_OP_LABELS[op] || ('未知(' + op + ')'),
+			iccid,
+			policyMask,
+			lockDelete: (policyMask & POLICY_BITS.LOCK_DELETE) !== 0,
+			lockDisable: (policyMask & POLICY_BITS.LOCK_DISABLE) !== 0,
+			hiddenUser: (policyMask & POLICY_BITS.HIDDEN_USER) !== 0,
+			fallbackSeed: (policyMask & POLICY_BITS.FALLBACK_SEED) !== 0,
+		}
+	}
+
+	function decodeIccidBcd(raw) {
+		const u8 = raw instanceof Uint8Array ? raw : Uint8Array.from(raw || [])
+		let allZero = true
+		for (let i = 0; i < u8.length; i++) {
+			if (u8[i] !== 0) { allZero = false; break }
+		}
+		if (allZero) return ''
+		let s = ''
+		for (let i = 0; i < u8.length; i++) {
+			const b = u8[i] & 0xff
+			const hi = (b >>> 4) & 0x0f
+			if (hi === 0x0f) break
+			s += hi.toString(16).toUpperCase()
+			const lo = b & 0x0f
+			if (lo === 0x0f) break
+			s += lo.toString(16).toUpperCase()
+		}
+		return s
+	}
+
+	function encodeIccidBcd(iccid) {
+		const out = new Uint8Array(10)
+		const s = String(iccid || '').trim().toUpperCase()
+		if (!s) return out
+		out.fill(0xff)
+		const n = Math.min(20, s.length)
+		for (let i = 0; i < n; i++) {
+			const v = parseInt(s[i], 16)
+			if (isNaN(v) || v > 14) throw new Error('无效的 ICCID BCD 字符: ' + s[i])
+			const byteIdx = i >>> 1
+			if ((i & 1) === 0) {
+				out[byteIdx] = (v << 4) | 0x0f
+			} else {
+				out[byteIdx] = (out[byteIdx] & 0xf0) | v
+			}
+		}
 		return out
 	}
 
@@ -523,22 +702,35 @@
 				iccid += String.fromCharCode(c)
 			}
 			const flags = (u8[off + 20] | (u8[off + 21] << 8)) & 0xffff
-			profiles.push(Object.assign({ index: i, iccid }, decodeProfileFlags(flags)))
+			const carrier = identifyIccidCarrier(iccid)
+			profiles.push(Object.assign({ index: i, iccid, carrier }, decodeProfileFlags(flags)))
 		}
 		return { count, profiles, truncated }
 	}
 
+	// ID2 (事务与缓存状态, 严格 14B):
+	// BYTE[0]=state, BYTE[1]=runtimeFlags, BYTE[2]=lastOp, BYTE[3]=failStage,
+	// BYTE[4..5]=moduleErrCode(LE), BYTE[6..12]=opTime(7B BCD), BYTE[13]=cacheAgeSec
 	function decodeStatus(raw, opts) {
 		const u8 = raw instanceof Uint8Array ? raw : Uint8Array.from(raw || [])
-		if (u8.length < 12) return null
+		if (u8.length < 14) return null
 		const state = u8[0] & 0xff
-		const lastOp = u8[1] & 0xff
-		const failStage = u8[2] & 0xff
-		const moduleErrCode = (u8[3] | (u8[4] << 8)) & 0xffff
+		const runtimeFlags = u8[1] & 0xff
+		const cacheRefreshing = (runtimeFlags & RUNTIME_FLAGS.CACHE_REFRESHING) !== 0
+		const bootCacheReady = (runtimeFlags & RUNTIME_FLAGS.BOOT_CACHE_READY) !== 0
+		const nearKeepaliveActive = (runtimeFlags & RUNTIME_FLAGS.NEAR_KEEPALIVE) !== 0
+		const runtimeFlagsLabels = []
+		if (cacheRefreshing) runtimeFlagsLabels.push('后台刷新中')
+		if (bootCacheReady) runtimeFlagsLabels.push('缓存已就绪')
+		if (nearKeepaliveActive) runtimeFlagsLabels.push('近端续传保活中(60s)')
+
+		const lastOp = u8[2] & 0xff
+		const failStage = u8[3] & 0xff
+		const moduleErrCode = (u8[4] | (u8[5] << 8)) & 0xffff
 		let allZeroTime = true
 		let validBcd = true
 		let d = ''
-		for (let i = 5; i < 12; i++) {
+		for (let i = 6; i < 13; i++) {
 			const b = u8[i] & 0xff
 			if (b !== 0) allZeroTime = false
 			const hi = (b >>> 4) & 0x0f
@@ -549,10 +741,20 @@
 		const timeText = (!allZeroTime && validBcd)
 			? (d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) + ' ' + d.slice(8, 10) + ':' + d.slice(10, 12) + ':' + d.slice(12, 14))
 			: ''
+		const cacheAgeSec = u8[13] & 0xff
+		const cacheAgeText = cacheAgeSec === 255
+			? (bootCacheReady ? '≥255s 前' : '尚未刷新')
+			: (cacheAgeSec + 's 前')
+
 		const errDecoded = decodeModuleErrCode(moduleErrCode, opts)
 		return {
 			state,
 			stateLabel: STATE_LABELS[state] || ('未知(' + state + ')'),
+			runtimeFlags,
+			cacheRefreshing,
+			bootCacheReady,
+			nearKeepaliveActive,
+			runtimeFlagsLabels,
 			lastOp,
 			lastOpLabel: LAST_OP_LABELS[lastOp] || ('未知(' + lastOp + ')'),
 			failStage,
@@ -567,6 +769,34 @@
 			errDetail: errDecoded.detail,
 			moduleInfo: errDecoded.module,
 			timeText,
+			cacheAgeSec,
+			cacheAgeText,
+		}
+	}
+
+	// ID3 (待发通知摘要, 严格 14B):
+	// BYTE[0]=totalCount(0xFF=尚未读取), BYTE[1]=deleteCount, BYTE[2]=otherCount,
+	// BYTE[3]=headEvent(0无/1安装/2启用/3禁用/4删除), BYTE[4..13]=headIccidBcd[10]
+	function decodeNtfSummary(raw) {
+		const u8 = raw instanceof Uint8Array ? raw : Uint8Array.from(raw || [])
+		if (u8.length < 14) return null
+		const totalCount = u8[0] & 0xff
+		const unread = totalCount === 0xff
+		const deleteCount = u8[1] & 0xff
+		const otherCount = u8[2] & 0xff
+		const headEvent = u8[3] & 0xff
+		const headEventLabel = NTF_EVENT_LABELS[headEvent] || ('未知(' + headEvent + ')')
+		const headIccid = headEvent === 0 ? '' : decodeIccidBcd(u8.subarray(4, 14))
+		const headCarrier = headIccid ? identifyIccidCarrier(headIccid) : null
+		return {
+			unread,
+			totalCount,
+			deleteCount,
+			otherCount,
+			headEvent,
+			headEventLabel,
+			headIccid,
+			headCarrier,
 		}
 	}
 
@@ -575,10 +805,10 @@
 		const list = Array.isArray(allProfiles) ? allProfiles : []
 		if (op === 3) {
 			if (target.enabled) {
-				return { allowed: false, reason: '只能删除禁用态 Profile，请先禁用该卡后再删除（否则模组会拒绝并返回 85000302）' }
+				return { allowed: false, reason: '只能删除禁用态 Profile，请先切走或禁用该卡后再删除' }
 			}
-			if (target.pprDeleteBlocked) {
-				return { allowed: false, reason: '该 Profile 标记为禁止删除 (PPR)' }
+			if (target.lockDelete) {
+				return { allowed: false, reason: '该 Profile 已启用「禁止删除保护」(bit8 LOCK_DELETE)' }
 			}
 			return { allowed: true, confirm: '确认永久删除禁用态 Profile（ICCID: ' + target.iccid + '）？删除操作最长可能耗时 60 秒。' }
 		}
@@ -586,13 +816,22 @@
 			if (target.enabled) {
 				return { allowed: true, confirm: '该 Profile 当前已处于启用态，模组执行启用会返回失败码 85000102。仍要继续发送吗？' }
 			}
+			const lockedOther = list.find(function (p) {
+				return p && p.enabled && p.lockDisable && p.iccid !== target.iccid
+			})
+			if (lockedOther) {
+				return {
+					allowed: false,
+					reason: '当前启用卡（' + lockedOther.iccid + '）已配置「禁止禁用/切走保护」(bit9 LOCK_DISABLE)，启用目标卡会将其切走，已被阻止',
+				}
+			}
 			return { allowed: true, confirm: '确认切卡并启用 Profile（ICCID: ' + target.iccid + '）？' }
 		}
 		if (op === 2) {
-			if (target.pprDisableBlocked) {
-				return { allowed: false, reason: '该 Profile 标记为禁止禁用 (PPR)' }
+			if (target.lockDisable) {
+				return { allowed: false, reason: '该 Profile 已启用「禁止禁用/切走保护」(bit9 LOCK_DISABLE)' }
 			}
-			const enabledCount = list.filter(p => p && p.enabled).length
+			const enabledCount = list.filter(function (p) { return p && p.enabled }).length
 			if (target.enabled && enabledCount <= 1) {
 				return { allowed: true, confirm: '警告：该卡是当前唯一启用的 Profile，禁用后设备将无可用蜂窝卡（远端通道会拒绝此操作）。确认继续禁用吗？' }
 			}
@@ -602,6 +841,7 @@
 	}
 
 	function utf8Decode(bytes) {
+		if (!bytes || !bytes.length) return ''
 		if (typeof TextDecoder !== 'undefined') return new TextDecoder('utf-8').decode(bytes)
 		let s = ''
 		for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i])
@@ -642,17 +882,17 @@
 		return String(h || '').trim().toLowerCase().replace(/\.+$/, '')
 	}
 
-	function raceWithSignal(promise, signal, abortedStatus) {
+	function raceWithSignal(promise, signal, abortedCode) {
 		if (!signal) return promise
 		if (signal.aborted) {
 			const err = new Error('用户已取消操作')
-			err.zmodemCode = abortedStatus
+			err.xferCode = abortedCode
 			return Promise.reject(err)
 		}
 		return new Promise(function (resolve, reject) {
 			function onAbort() {
 				const err = new Error('用户已取消操作')
-				err.zmodemCode = abortedStatus
+				err.xferCode = abortedCode
 				reject(err)
 			}
 			signal.addEventListener('abort', onAbort, { once: true })
@@ -669,30 +909,48 @@
 		})
 	}
 
-	// mode=1 近端外部代理 + ZMODEM 四轮 ES9+ 透传状态机
+	function createSidGen(initial) {
+		let cur = ((initial || 1) & 0xffff) || 1
+		return function nextSid() {
+			const v = cur
+			cur = (cur + 1) & 0xffff
+			if (cur === 0) cur = 1
+			return v
+		}
+	}
+
+	// mode=1 近端外部代理 + XFER (0xA5 0x5A) 四轮 ES9+ 透传状态机
 	// 严格契约：
-	// - 第 1~3 轮：ZMODEM 收 MCU 请求 -> HTTPS POST SM-DP+ -> 校验 HTTP 200 且 Executed-Success -> ZMODEM 回传纯 JSON 原始字节 (expectedSize > 0)
-	// - 第 4 轮 handleNotification：ZMODEM 收 MCU 通知 -> HTTPS POST SM-DP+ -> 校验 HTTP 204 -> ZMODEM 发空传输 (expectedSize == 0)
-	// - 任一失败、主机不一致或用户中止，链路仍在时立即发 CAN*5 中止序列，绝不把失败响应回灌给模组
+	// - 第 1~3 轮：XFER PULL(target=0x01) 拉取 ES9+ 请求 -> HTTPS POST SM-DP+ -> 校验 HTTP 200 且 Executed-Success -> XFER PUSH(target=0x02, commitParam=200) 回灌纯 JSON（支持 60s 断连保活 QUERY 续传）
+	// - 第 4 轮 handleNotification：XFER PULL(target=0x01) -> HTTPS POST SM-DP+ -> 校验 HTTP 204 -> XFER PUSH(target=0x02, totalSize=0, commitParam=204)
+	// - 任一失败、主机不一致或用户中止，链路仍在时发 XFER ABORT(0x06)，绝不把失败响应回灌给模组
 	async function runMode1ProxySession(opts) {
 		opts = opts || {}
-		const zmodem = opts.zmodem || root.Zmodem
-		if (!zmodem) throw new Error('Zmodem 模块未就绪')
+		const xfer = opts.xfer || root.Xfer
+		if (!xfer) throw new Error('Xfer 模块未就绪')
 		const io = opts.io
 		const httpPost = opts.httpPost
-		if (!io || typeof httpPost !== 'function') throw new Error('缺少 ZMODEM I/O 或 HTTPS 代理实现')
+		if (!io || typeof httpPost !== 'function') throw new Error('缺少 XFER I/O 或 HTTPS 代理实现')
 		const lockedHost = String(opts.smdpHost || '').trim()
 		const lockedHostNorm = normalizeHost(lockedHost)
 		const proxyBaseUrl = String(opts.proxyBaseUrl || '').trim()
 		const onEvent = typeof opts.onEvent === 'function' ? opts.onEvent : function () {}
-		const zOpts = Object.assign({ readTimeoutMs: 5000, sessionTimeoutMs: 120000, maxRetries: 5 }, opts.zmodemOpts || {})
-		if (opts.signal) zOpts.signal = opts.signal
+		const xOpts = Object.assign({
+			reqMaxChunk: xfer.MAX_CHUNK_LEN,
+			rpcTimeoutMs: 5000,
+			pollIntervalMs: 300,
+			maxRetries: 5,
+			keepaliveMs: 60000,
+		}, opts.xferOpts || {})
+		if (opts.signal) xOpts.signal = opts.signal
+		if (typeof opts.waitReconnect === 'function') xOpts.waitReconnect = opts.waitReconnect
 		const roundWaitOverrides = Array.isArray(opts.roundInitialWaitMs) ? opts.roundInitialWaitMs : null
+		const nextSid = createSidGen(opts.initialSessionId || 0x1001)
 
 		const roundResults = []
 
-		async function abortAndThrow(roundIdx, stage, message, extra) {
-			await zmodem.sendAbort(io)
+		async function abortAndThrow(roundIdx, sid, stage, message, extra) {
+			await xfer.sendAbort(io, sid, 0x0B)
 			const err = new Error(message)
 			err.round = roundIdx
 			err.stage = stage
@@ -705,24 +963,37 @@
 			const spec = ES9_ROUNDS[i]
 			onEvent({ type: 'round-start', round: i, path: spec.path, label: spec.label })
 
-			// 1) ZMODEM 接收 MCU 发来的本轮 ES9+ 请求（按轮次配置独立 initialWaitMs，不计入 maxRetries）
-			const initWait = roundWaitOverrides && roundWaitOverrides[i] != null
+			// 1) XFER PULL (target=0x01 ESIM_REQ) 拉取本轮 ES9+ 请求 JSON
+			const pullSid = nextSid()
+			const openWaitMs = roundWaitOverrides && roundWaitOverrides[i] != null
 				? roundWaitOverrides[i]
-				: (zOpts.initialWaitMs != null ? zOpts.initialWaitMs : spec.initialWaitMs)
-			const rxOpts = Object.assign({}, zOpts, { initialWaitMs: initWait })
+				: (xOpts.openWaitMs != null ? xOpts.openWaitMs : spec.initialWaitMs)
+
 			let rx
 			try {
-				rx = await zmodem.receive(io, rxOpts)
+				rx = await xfer.pull(io, Object.assign({}, xOpts, {
+					target: xfer.TARGET.ESIM_REQ,
+					sessionId: pullSid,
+					openWaitMs,
+					retryNoSession: i === 0,
+					commitParam: 0,
+					onOpenWait: typeof opts.onOpenWait === 'function'
+						? function (info) { return opts.onOpenWait(Object.assign({ round: i }, info)) }
+						: undefined,
+				}))
 			} catch (e) {
-				if (!e || e.zmodemCode !== zmodem.STATUS.ERR_IO) {
-					await zmodem.sendAbort(io)
+				if (!e || e.xferCode !== xfer.ERR.ERR_IO) {
+					await xfer.sendAbort(io, pullSid, 0x0B)
 				}
-				const msg = '第 ' + (i + 1) + ' 轮接收 MCU 请求失败: ' + (e && e.message ? e.message : e)
-				onEvent({ type: 'error', round: i, stage: 'zmodem-rx', message: msg })
+				const msg = '第 ' + (i + 1) + ' 轮 XFER PULL 失败: ' + (e && e.message ? e.message : e)
+				onEvent({ type: 'error', round: i, stage: 'xfer-pull', message: msg })
 				throw e
 			}
-			if (rx.fileName !== spec.path) {
-				await abortAndThrow(i, 'round-order', '第 ' + (i + 1) + ' 轮路径不匹配: 期望 ' + spec.path + '，实际 ' + rx.fileName)
+
+			const rxPath = utf8Decode(rx.meta).trim()
+			const rxRound = rx.metaParam
+			if ((rxRound !== 0 && rxRound !== i + 1) || rxPath !== spec.path) {
+				await abortAndThrow(i, nextSid(), 'round-order', '第 ' + (i + 1) + ' 轮轮次/路径不匹配: 期望 round=' + (i + 1) + ' ' + spec.path + '，实际 round=' + rxRound + ' ' + rxPath)
 			}
 
 			// 整次会话锁定 AC 中的 SM-DP+ 主机；若第 1 轮 smdpAddress 与 AC 主机不一致直接中止
@@ -735,7 +1006,7 @@
 			} catch (e) {}
 
 			if (i === 0 && reqSmdpAddress && lockedHostNorm && normalizeHost(reqSmdpAddress) !== lockedHostNorm) {
-				await abortAndThrow(i, 'host-mismatch', '第 1 轮 SM-DP+ 主机不一致：激活码为 ' + lockedHost + '，设备请求为 ' + reqSmdpAddress, {
+				await abortAndThrow(i, nextSid(), 'host-mismatch', '第 1 轮 SM-DP+ 主机不一致：激活码为 ' + lockedHost + '，设备请求为 ' + reqSmdpAddress, {
 					expectedHost: lockedHost,
 					actualHost: reqSmdpAddress,
 				})
@@ -744,27 +1015,27 @@
 			const host = lockedHost || reqSmdpAddress
 			let url
 			try {
-				url = buildSmdpUrl(host, rx.fileName, proxyBaseUrl)
+				url = buildSmdpUrl(host, rxPath, proxyBaseUrl)
 			} catch (e) {
-				await abortAndThrow(i, 'url', e.message)
+				await abortAndThrow(i, nextSid(), 'url', e.message)
 			}
 
 			onEvent({ type: 'http-start', round: i, path: spec.path, reqBytes: rx.data.length })
 
-			// 2) HTTPS POST 转发给 SM-DP+（逐字节转发，不重排 JSON；经 Promise.race 响应 signal 取消并立刻发 CAN*5）
+			// 2) HTTPS POST 转发给 SM-DP+（逐字节转发，不重排 JSON；支持 signal 立即取消并发 XFER ABORT）
 			let resp
 			try {
 				resp = await raceWithSignal(httpPost({
 					url,
 					smdpHost: host,
-					path: rx.fileName,
+					path: rxPath,
 					headers: ES9_HEADERS,
 					bodyBytes: rx.data,
 					signal: opts.signal,
-				}), opts.signal, zmodem.STATUS.ERR_ABORTED)
+				}), opts.signal, xfer.ERR.ERR_ABORTED)
 			} catch (e) {
-				const isAbort = (opts.signal && opts.signal.aborted) || (e && e.zmodemCode === zmodem.STATUS.ERR_ABORTED)
-				await abortAndThrow(i, isAbort ? 'aborted' : 'http-network', isAbort
+				const isAbort = (opts.signal && opts.signal.aborted) || (e && e.xferCode === xfer.ERR.ERR_ABORTED)
+				await abortAndThrow(i, nextSid(), isAbort ? 'aborted' : 'http-network', isAbort
 					? '第 ' + (i + 1) + ' 轮请求 SM-DP+ 已被用户取消'
 					: '第 ' + (i + 1) + ' 轮请求 SM-DP+ 失败: ' + (e && e.message ? e.message : e))
 			}
@@ -776,24 +1047,25 @@
 
 			onEvent({ type: 'http-done', round: i, path: spec.path, httpStatus, respBytes: bodyBytes.length })
 
-			// 3) 严格校验 HTTP 状态码与业务执行状态
+			// 3) 严格校验 HTTP 状态码与业务执行状态，并用 XFER PUSH (target=0x02 ESIM_RSP) 回灌
+			const pushSid = nextSid()
 			if (i < 3) {
 				if (httpStatus !== 200) {
-					await abortAndThrow(i, 'http-status', '第 ' + (i + 1) + ' 轮 SM-DP+ 返回非 200 状态码: HTTP ' + httpStatus, { httpStatus })
+					await abortAndThrow(i, pushSid, 'http-status', '第 ' + (i + 1) + ' 轮 SM-DP+ 返回非 200 状态码: HTTP ' + httpStatus, { httpStatus })
 				}
 				if (bodyBytes.length === 0) {
-					await abortAndThrow(i, 'http-body', '第 ' + (i + 1) + ' 轮 SM-DP+ 返回空响应体', { httpStatus })
+					await abortAndThrow(i, pushSid, 'http-body', '第 ' + (i + 1) + ' 轮 SM-DP+ 返回空响应体', { httpStatus })
 				}
 				let parsedJson
 				try {
 					parsedJson = JSON.parse(utf8Decode(bodyBytes))
 				} catch (e) {
-					await abortAndThrow(i, 'http-json', '第 ' + (i + 1) + ' 轮 SM-DP+ 响应不是合法 JSON', { httpStatus })
+					await abortAndThrow(i, pushSid, 'http-json', '第 ' + (i + 1) + ' 轮 SM-DP+ 响应不是合法 JSON', { httpStatus })
 				}
 				const fes = extractSmdpFailure(parsedJson)
 				if (!fes.ok) {
 					const detail = [fes.status, fes.subjectCode ? ('subjectCode=' + fes.subjectCode) : '', fes.reasonCode ? ('reasonCode=' + fes.reasonCode) : '', fes.message].filter(Boolean).join(' / ')
-					await abortAndThrow(i, 'smdp-status', '第 ' + (i + 1) + ' 轮 SM-DP+ 业务失败: ' + detail, {
+					await abortAndThrow(i, pushSid, 'smdp-status', '第 ' + (i + 1) + ' 轮 SM-DP+ 业务失败: ' + detail, {
 						httpStatus,
 						subjectCode: fes.subjectCode,
 						reasonCode: fes.reasonCode,
@@ -801,37 +1073,57 @@
 					})
 				}
 
-				// 4) ZMODEM 回传原始 JSON body 字节（expectedSize > 0，不含 HTTP 头）
-				onEvent({ type: 'zmodem-tx-start', round: i, totalBytes: bodyBytes.length })
+				onEvent({ type: 'xfer-tx-start', round: i, totalBytes: bodyBytes.length })
+				let pushRes
 				try {
-					await zmodem.send(io, { fileName: spec.path, data: bodyBytes }, Object.assign({}, zOpts, {
+					pushRes = await xfer.push(io, Object.assign({}, xOpts, {
+						target: xfer.TARGET.ESIM_RSP,
+						sessionId: pushSid,
+						data: bodyBytes,
+						commitParam: 200,
 						onProgress: function (p) {
-							onEvent({ type: 'zmodem-tx-progress', round: i, transferredBytes: p.transferredBytes, totalBytes: p.totalBytes })
-						}
+							onEvent({ type: 'xfer-tx-progress', round: i, transferredBytes: p.transferredBytes, totalBytes: p.totalBytes })
+						},
+						onEvent: function (ev) {
+							onEvent(Object.assign({ round: i }, ev))
+						},
 					}))
 				} catch (e) {
-					if (!e || e.zmodemCode !== zmodem.STATUS.ERR_IO) {
-						await zmodem.sendAbort(io)
+					if (!e || e.xferCode !== xfer.ERR.ERR_IO) {
+						await xfer.sendAbort(io, pushSid, 0x0B)
 					}
-					const msg = '第 ' + (i + 1) + ' 轮回传响应给 MCU 失败: ' + (e && e.message ? e.message : e)
-					onEvent({ type: 'error', round: i, stage: 'zmodem-tx', message: msg })
+					const msg = '第 ' + (i + 1) + ' 轮 XFER PUSH 回灌失败: ' + (e && e.message ? e.message : e)
+					onEvent({ type: 'error', round: i, stage: 'xfer-push', message: msg })
 					throw e
 				}
-				roundResults.push({ round: i, path: spec.path, httpStatus, reqBytes: rx.data.length, respBytes: bodyBytes.length })
+				roundResults.push({
+					round: i,
+					path: spec.path,
+					httpStatus,
+					reqBytes: rx.data.length,
+					respBytes: bodyBytes.length,
+					agreedChunk: pushRes.agreedChunk,
+					resumedCount: pushRes.resumedCount,
+				})
 			} else {
-				// 第 4 轮 handleNotification：期望 HTTP 204，发 expectedSize == 0 空 ZMODEM 传输
+				// 第 4 轮 handleNotification：期望 HTTP 204，直接 OPEN(PUSH, totalSize=0) + COMMIT(204)
 				if (httpStatus !== 204) {
-					await abortAndThrow(i, 'http-status', '第 4 轮 handleNotification 期望 HTTP 204，实际 HTTP ' + httpStatus, { httpStatus })
+					await abortAndThrow(i, pushSid, 'http-status', '第 4 轮 handleNotification 期望 HTTP 204，实际 HTTP ' + httpStatus, { httpStatus })
 				}
-				onEvent({ type: 'zmodem-tx-start', round: i, totalBytes: 0 })
+				onEvent({ type: 'xfer-tx-start', round: i, totalBytes: 0 })
 				try {
-					await zmodem.send(io, { fileName: spec.path, data: new Uint8Array(0) }, zOpts)
+					await xfer.push(io, Object.assign({}, xOpts, {
+						target: xfer.TARGET.ESIM_RSP,
+						sessionId: pushSid,
+						data: new Uint8Array(0),
+						commitParam: 204,
+					}))
 				} catch (e) {
-					if (!e || e.zmodemCode !== zmodem.STATUS.ERR_IO) {
-						await zmodem.sendAbort(io)
+					if (!e || e.xferCode !== xfer.ERR.ERR_IO) {
+						await xfer.sendAbort(io, pushSid, 0x0B)
 					}
-					const msg = '第 4 轮空传输确认失败: ' + (e && e.message ? e.message : e)
-					onEvent({ type: 'error', round: i, stage: 'zmodem-tx', message: msg })
+					const msg = '第 4 轮空 PUSH + COMMIT(204) 失败: ' + (e && e.message ? e.message : e)
+					onEvent({ type: 'error', round: i, stage: 'xfer-push', message: msg })
 					throw e
 				}
 				roundResults.push({ round: i, path: spec.path, httpStatus: 204, reqBytes: rx.data.length, respBytes: 0 })
@@ -844,12 +1136,115 @@
 		return { ok: true, rounds: roundResults }
 	}
 
+	// ID6 op=1 离线近端待发通知同步 (XFER target=0x03 ESIM_NTF)
+	// 循环 OPEN(PULL) -> PULL 拉取 {"pendingNotification":"..."} -> HTTPS POST handleNotification -> COMMIT(httpStatus)
+	// 204 删除，非 204（含网络/TLS失败记 0）跳过继续；遇到 totalSize=0, metaParam=0, metaLen=0 哨兵发 COMMIT(0) 结束
+	async function runNtfSyncProxySession(opts) {
+		opts = opts || {}
+		const xfer = opts.xfer || root.Xfer
+		if (!xfer) throw new Error('Xfer 模块未就绪')
+		const io = opts.io
+		const httpPost = opts.httpPost
+		if (!io || typeof httpPost !== 'function') throw new Error('缺少 XFER I/O 或 HTTPS 代理实现')
+		const proxyBaseUrl = String(opts.proxyBaseUrl || '').trim()
+		const onEvent = typeof opts.onEvent === 'function' ? opts.onEvent : function () {}
+		const maxItems = Math.max(1, opts.maxItems || 64)
+		const xOpts = Object.assign({
+			reqMaxChunk: xfer.MAX_CHUNK_LEN,
+			rpcTimeoutMs: 5000,
+			openWaitMs: 60000,
+			pollIntervalMs: 300,
+			maxRetries: 5,
+		}, opts.xferOpts || {})
+		if (opts.signal) xOpts.signal = opts.signal
+		const nextSid = createSidGen(opts.initialSessionId || 0x3001)
+
+		const items = []
+		let deletedCount = 0
+		let skippedCount = 0
+
+		for (let idx = 0; idx < maxItems; idx++) {
+			const sid = nextSid()
+			let rx
+			try {
+				rx = await xfer.pull(io, Object.assign({}, xOpts, {
+					target: xfer.TARGET.ESIM_NTF,
+					sessionId: sid,
+					deferCommit: true,
+					retryNoSession: idx === 0,
+				}))
+			} catch (e) {
+				if (!e || e.xferCode !== xfer.ERR.ERR_IO) {
+					await xfer.sendAbort(io, sid, 0x0B)
+				}
+				const msg = '拉取待发通知失败: ' + (e && e.message ? e.message : e)
+				onEvent({ type: 'error', stage: 'ntf-pull', message: msg })
+				throw e
+			}
+
+			const fqdn = utf8Decode(rx.meta).trim()
+			const seq = rx.metaParam
+
+			// 空哨兵：全部拉取完毕，发 COMMIT(0) 结束会话
+			if (rx.totalSize === 0 && seq === 0 && !fqdn) {
+				await rx.commit(0)
+				onEvent({ type: 'ntf-sync-done', items, deletedCount, skippedCount })
+				return { ok: true, items, deletedCount, skippedCount }
+			}
+
+			onEvent({ type: 'ntf-item-start', index: idx, seq, fqdn, bytes: rx.data.length })
+
+			let httpStatus = 0
+			let errMsg = ''
+			try {
+				const url = buildSmdpUrl(fqdn, '/gsma/rsp2/es9plus/handleNotification', proxyBaseUrl)
+				const resp = await raceWithSignal(httpPost({
+					url,
+					smdpHost: fqdn,
+					path: '/gsma/rsp2/es9plus/handleNotification',
+					headers: ES9_HEADERS,
+					bodyBytes: rx.data,
+					signal: opts.signal,
+				}), opts.signal, xfer.ERR.ERR_ABORTED)
+				httpStatus = (Number(resp && resp.status) || 0) & 0xffff
+			} catch (e) {
+				const isAbort = (opts.signal && opts.signal.aborted) || (e && e.xferCode === xfer.ERR.ERR_ABORTED)
+				if (isAbort) {
+					await xfer.sendAbort(io, sid, 0x0B)
+					const err = new Error('同步待发通知已被用户取消')
+					err.stage = 'aborted'
+					onEvent({ type: 'error', stage: 'aborted', message: err.message })
+					throw err
+				}
+				// 单条 SM-DP+ 不可达/失败：不中止队列，COMMIT(0) 跳过继续下一条
+				httpStatus = 0
+				errMsg = e && e.message ? e.message : String(e)
+			}
+
+			const commitRes = await rx.commit(httpStatus)
+			const deleted = httpStatus === 204 && commitRes && commitRes.resultCode === 204
+			if (deleted) deletedCount++
+			else skippedCount++
+
+			const rec = { seq, fqdn, httpStatus, deleted, error: errMsg }
+			items.push(rec)
+			onEvent(Object.assign({ type: 'ntf-item-done', index: idx }, rec))
+		}
+
+		throw new Error('待发通知数量超出单次同步上限 (' + maxItems + ')')
+	}
+
 	const api = {
 		ES9_ROUNDS,
 		ES9_HEADERS,
+		POLICY_BITS,
+		RUNTIME_FLAGS,
 		PROFILE_CLASS_LABELS,
 		MODE_LABELS,
 		OP_LABELS,
+		NTF_OP_LABELS,
+		POLICY_OP_LABELS,
+		NTF_EVENT_LABELS,
 		STATE_LABELS,
 		LAST_OP_LABELS,
 		FAIL_STAGE_LABELS,
@@ -858,7 +1253,9 @@
 		PRECOND_ERROR_HINTS,
 		QESIM_FSM_STATES,
 		QESIM_FSM_ERRORS,
-		ZMODEM_ERRORS,
+		XFER_ERRORS,
+		ICCID_CARRIER_PREFIXES,
+		identifyIccidCarrier,
 		detectModuleProfile,
 		decodeModuleErrCode,
 		mapAtProfileClassToId1,
@@ -868,13 +1265,20 @@
 		encodeDownloadTrigger,
 		redactDownloadValue,
 		encodeProfileManage,
+		encodeNtfManage,
+		encodeProfilePolicy,
+		decodeProfilePolicy,
+		decodeIccidBcd,
+		encodeIccidBcd,
 		decodeEid,
 		decodeProfileList,
 		decodeStatus,
+		decodeNtfSummary,
 		validateProfileAction,
 		extractSmdpFailure,
 		buildSmdpUrl,
 		runMode1ProxySession,
+		runNtfSyncProxySession,
 	}
 
 	if (typeof module !== 'undefined' && module.exports) module.exports = api
